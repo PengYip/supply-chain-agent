@@ -1,0 +1,14 @@
+{
+  "pdf_info": [
+    {
+      "page_idx": 0,
+      "preproc_blocks": [
+        { "type": "text", "bbox": [72, 110, 300, 30], "lines": [{ "text": "合同号: HT-2024-001", "bbox": [72,110,300,30] }] },
+        { "type": "table", "bbox": [72, 200, 460, 60], "blocks": [
+          { "type": "table_row", "bbox": [72,200,460,30], "lines": [{"text":"标的物: 0#柴油", "bbox":[72,200,200,30]}] }
+        ]}
+      ],
+      "statistics": { "max_bbox_score": 0.93 }
+    }
+  ]
+}
