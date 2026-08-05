@@ -1,0 +1,45 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+.vercel
+
+# Secrets - never commit
+.env
+.env.*
+!.env.example
+
+# SessionStore SQLite (file-backed, WAL) - runtime state, never commit
+server/data/*.db
+server/data/*.db-wal
+server/data/*.db-shm
+!.env.example
+
+# Pipeline runtime: document-entry SQLite (file-backed dev DB)
+server/pipeline.db
+server/pipeline.db-wal
+server/pipeline.db-shm
+
+# Subagent-Driven Development scratch (progress ledger etc.)
+.superpowers/

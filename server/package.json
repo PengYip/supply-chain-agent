@@ -1,0 +1,28 @@
+{
+  "name": "supply-chain-agent-server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^2.0.0",
+    "@hono/node-server": "^2.0.12",
+    "@langfuse/otel": "^5.10.0",
+    "@opentelemetry/sdk-node": "^0.221.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "ai": "^6.0.0",
+    "better-sqlite3": "^11.10.0",
+    "dotenv": "^16.4.5",
+    "hono": "^4.13.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.23.5",
+    "typescript": "^5.6.0"
+  }
+}
