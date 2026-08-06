@@ -53,12 +53,13 @@ export function buildGatedTools(role: Role, deps?: HarnessDeps): Record<string, 
 }
 
 // Process-wide DbContext for the doc-entry pipeline tools. Created once (lazy)
-// and migrated; the default createDb() uses an in-memory SQLite database. A
-// later phase can swap in a file-backed DB by passing a path to createDb.
+// and migrated. File-backed so doc-entry persistence survives restart (gitignored
+// at server/pipeline.db*). TODO(prod): make the path configurable via env
+// (e.g. SUPPLY_CHAIN_DB_PATH) and pick a deployment-appropriate location.
 let harnessCtx: DbContext | null = null;
 function getHarnessDbContext(): DbContext {
   if (!harnessCtx) {
-    harnessCtx = createDb();
+    harnessCtx = createDb('pipeline.db');
     migrate(harnessCtx.sqlite);
   }
   return harnessCtx;
