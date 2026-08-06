@@ -1,4 +1,4 @@
-import { streamText, stepCountIs, type Tool, type ModelMessage } from 'ai';
+import { streamText, stepCountIs, type Tool, type ModelMessage, type LanguageModel } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { env } from '../env.js';
 import { getToolsForRole, type Role, type HarnessDeps } from './roleToolRegistry.js';
@@ -68,6 +68,18 @@ export interface RunStreamOpts {
   messages: ModelMessage[];
   role: Role;
   auditTraceId: string;
+  /**
+   * Optional injected language model (testability seam). When omitted, runStream
+   * constructs the real DeepSeek model via openai.chat(env.OPENAI_MODEL) exactly
+   * as before -- production behavior is unchanged.
+   */
+  model?: LanguageModel;
+  /**
+   * Optional injected harness deps (testability seam). When omitted, runStream
+   * uses the process-wide harness DbContext + the resolved model -- production
+   * behavior is unchanged. When `model` is injected, no OpenAI client is built.
+   */
+  deps?: HarnessDeps;
 }
 
 // Scan a turn's response messages for v6 tool-approval-request parts (emitted
@@ -124,24 +136,38 @@ export function recordL2PendingFromResponse(
 
 // Create the streamText result for one agent turn. Caller is responsible for
 // session persistence and for returning result.toUIMessageStreamResponse().
-export function runStream({ messages, role, auditTraceId }: RunStreamOpts) {
-  const openai = createOpenAI({
-    baseURL: env.OPENAI_BASE_URL,
-    apiKey: env.OPENAI_API_KEY,
-  });
+//
+// Testability seam (H1): `model` and `deps` are optional. When omitted, runStream
+// uses the real DeepSeek model + the process-wide harness DbContext -- identical
+// to pre-H1 behavior. When supplied (tests), no OpenAI client is constructed and
+// no network/env is required, so the agent loop can be exercised offline against
+// a canned fake model + in-memory DbContext.
+export function runStream({ messages, role, auditTraceId, model, deps }: RunStreamOpts) {
+  // Production default: real DeepSeek model. If a model was injected, skip
+  // building the OpenAI client so tests need no API key / network.
+  const resolvedModel =
+    model ??
+    createOpenAI({
+      baseURL: env.OPENAI_BASE_URL,
+      apiKey: env.OPENAI_API_KEY,
+    }).chat(env.OPENAI_MODEL);
   // Reuse the same model handle for both the agent loop and extract_fields so
   // there is a single DeepSeek client per turn.
-  const model = openai.chat(env.OPENAI_MODEL);
-  const tools = buildGatedTools(role, { ctx: getHarnessDbContext(), extraction: { model } });
+  const tools = buildGatedTools(
+    role,
+    deps ?? { ctx: getHarnessDbContext(), extraction: { model: resolvedModel } },
+  );
   return streamText({
     // Chat Completions API (.chat) -- DeepSeek's Responses-API compatibility
     // corrupts tool-call id correlation.
-    model,
+    model: resolvedModel,
     system: SYSTEM_PROMPT,
     messages,
     tools,
     stopWhen: stepCountIs(5),
     // AI SDK 6 option name is `experimental_telemetry` (v7 renames to `telemetry`).
+    // In tests no OTel exporter is registered (instrumentation.ts is not loaded),
+    // so these spans are no-op and emit no network traffic.
     experimental_telemetry: {
       isEnabled: true,
       recordInputs: true,
