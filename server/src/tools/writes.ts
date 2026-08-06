@@ -2,7 +2,6 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { linkDocumentToContract, recordPayment } from '../data/seed.js';
-import { auditRecorder } from '../harness/auditRecorder.js';
 import {
   recordPendingApproval,
   isAuthorized,
@@ -12,20 +11,9 @@ import { getSessionContext } from '../harness/sessionContext.js';
 // NOTE: AI SDK 6 uses `inputSchema` (not v5 `parameters`).
 // Permission gating (L2/L3) is applied by the chat route via PermissionGate,
 // not hardcoded here, so the gate stays the single source of truth.
-
-function recordCall(
-  toolName: string,
-  args: unknown,
-  result: unknown,
-  start: number,
-): void {
-  auditRecorder.recordToolCall({
-    toolName,
-    args,
-    result,
-    durationMs: Date.now() - start,
-  });
-}
+//
+// H4: per-tool audit recording was removed -- every tool call is now wrapped
+// centrally by `withAudit` in src/harness/agent.ts (buildGatedTools).
 
 // ---- link_document (L2: write, needs user confirmation) ---------------------
 
@@ -41,7 +29,6 @@ export const linkDocument = tool({
     '把单据（提单/发票等）挂接到指定合同。属于写操作，需用户确认后才会真正执行。',
   inputSchema: linkDocumentSchema,
   execute: async ({ contractNo, documentId }) => {
-    const start = Date.now();
     const res = linkDocumentToContract(contractNo, documentId);
     const result = res.ok
       ? {
@@ -52,7 +39,6 @@ export const linkDocument = tool({
           linkedAt: res.linkedAt,
         }
       : { ok: false as const, reason: res.reason };
-    recordCall('link_document', { contractNo, documentId }, result, start);
     return result;
   },
 });
@@ -85,7 +71,6 @@ export const createPayment = tool({
     '对合同发起付款。属于资金类不可逆操作，必须经财务主管外部审批（飞书审批流）。首次调用会返回 blocked 与审批票据号 ticketId；审批通过后，带上 authorizedTicketId 重新调用才会真正执行付款。',
   inputSchema: createPaymentSchema,
   execute: async ({ contractNo, amount, authorizedTicketId }) => {
-    const start = Date.now();
     const sessionId = getSessionContext();
 
     // Case 1: first call, no authorization yet -> block + open a ticket.
@@ -109,7 +94,6 @@ export const createPayment = tool({
         amount,
         message: `付款操作需财务主管审批，已生成审批工单 ${ticketId}。请等待飞书审批通过后，带上该票据号重新发起以完成付款。合同 ${contractNo}，金额 ${amount} 元。`,
       };
-      recordCall('create_payment', { contractNo, amount }, result, start);
       return result;
     }
 
@@ -122,12 +106,6 @@ export const createPayment = tool({
         authorizedTicketId,
         message: `授权票据 ${authorizedTicketId} 无效或未审批通过，无法执行付款。`,
       };
-      recordCall(
-        'create_payment',
-        { contractNo, amount, authorizedTicketId },
-        result,
-        start,
-      );
       return result;
     }
 
@@ -143,12 +121,6 @@ export const createPayment = tool({
       paidAt: payment.paidAt,
       message: `付款已执行。付款单号 ${payment.paymentId}，合同 ${payment.contractNo}，金额 ${payment.amount} 元，授权票据 ${payment.authorizedTicketId}。`,
     };
-    recordCall(
-      'create_payment',
-      { contractNo, amount, authorizedTicketId },
-      result,
-      start,
-    );
     return result;
   },
 });

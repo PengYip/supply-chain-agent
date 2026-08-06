@@ -6,25 +6,13 @@ import {
   type Contract,
   type Order,
 } from '../data/seed.js';
-import { auditRecorder } from '../harness/auditRecorder.js';
 
 // NOTE: AI SDK 6 renamed the tool schema field `parameters` -> `inputSchema`
 // (v5 used `parameters`). The execute signature is `async (input, options)`.
-
-// Single audit-recording helper used by every tool's execute.
-function recordCall(
-  toolName: string,
-  args: unknown,
-  result: unknown,
-  start: number,
-): void {
-  auditRecorder.recordToolCall({
-    toolName,
-    args,
-    result,
-    durationMs: Date.now() - start,
-  });
-}
+//
+// H4: per-tool audit recording was removed -- every tool call is now wrapped
+// centrally by `withAudit` in src/harness/agent.ts (buildGatedTools), so this
+// file no longer needs its own recordCall helper or auditRecorder import.
 
 // ---- query_contract ---------------------------------------------------------
 
@@ -37,12 +25,10 @@ export const queryContract = tool({
     '按合同号查询合同基本信息、金额、状态、对方客商。用于任何关于具体合同的问题。',
   inputSchema: contractSchema,
   execute: async ({ contractNo }) => {
-    const start = Date.now();
     const contract: Contract | undefined = findContract(contractNo);
     const result = contract
       ? { ...contract }
       : { notFound: true, contractNo };
-    recordCall('query_contract', { contractNo }, result, start);
     return result;
   },
 });
@@ -58,13 +44,11 @@ export const queryOrders = tool({
     '查询某合同号下的所有订单及执行状态、发货、发票情况（含是否缺发票号）。',
   inputSchema: ordersSchema,
   execute: async ({ contractNo }) => {
-    const start = Date.now();
     const contract = findContract(contractNo);
     const list: Order[] = contract ? findOrdersByContract(contractNo) : [];
     const result = contract
       ? { contractNo: contract.contractNo, count: list.length, orders: list }
       : { notFound: true, contractNo, count: 0, orders: list };
-    recordCall('query_orders', { contractNo }, result, start);
     return result;
   },
 });
@@ -80,11 +64,9 @@ export const crossCheck = tool({
     '对账核对：对比我方账面与对方回执的数量差异。用于对账场景，判断差异是否超阈值。',
   inputSchema: crossCheckSchema,
   execute: async ({ contractNo }) => {
-    const start = Date.now();
     const contract = findContract(contractNo);
     if (!contract) {
       const result = { notFound: true, contractNo };
-      recordCall('cross_check', { contractNo }, result, start);
       return result;
     }
     const list = findOrdersByContract(contractNo);
@@ -104,7 +86,6 @@ export const crossCheck = tool({
       hasAnomaly: Math.abs(ratio) > threshold,
       unit: contract.unit,
     };
-    recordCall('cross_check', { contractNo }, result, start);
     return result;
   },
 });

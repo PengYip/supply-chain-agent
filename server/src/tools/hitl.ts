@@ -2,30 +2,18 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { findDocument, type OcrField } from '../data/seed.js';
-import { auditRecorder } from '../harness/auditRecorder.js';
 
 // HITL tools (T3 + T4). Both L1 (auto-execute, no approval gate).
 // AI SDK 6 uses `inputSchema` (not v5 `parameters`).
-
-function recordCall(
-  toolName: string,
-  args: unknown,
-  result: unknown,
-  start: number,
-): void {
-  auditRecorder.recordToolCall({
-    toolName,
-    args,
-    result,
-    durationMs: Date.now() - start,
-  });
-}
+//
+// H4: per-tool audit recording was removed -- every tool call is now wrapped
+// centrally by `withAudit` in src/harness/agent.ts (buildGatedTools).
 
 // ---- T3: escalate_to_human (uncertainty fallback, L1) -----------------------
 //
 // Zero-hallucination backstop: when the model hits a data conflict / missing
 // data / low confidence / rule boundary, it calls this instead of guessing.
-// No write side effect -- just records an audit entry and issues a ticket id.
+// No write side effect -- just issues a ticket id (audit is centralized).
 
 const escalateSchema = z.object({
   issue: z
@@ -49,7 +37,6 @@ export const escalateToHuman = tool({
     '不确定回退：当遇到数据冲突、置信度低、数据缺失或业务规则边界情况无法确定时，转人工处理。不要自行编造或猜测，调用本工具生成人工处理工单。',
   inputSchema: escalateSchema,
   execute: async ({ issue, category, context, severity }) => {
-    const start = Date.now();
     const ticketId = `ESC-${randomUUID().slice(0, 8)}`;
     const result = {
       ok: true as const,
@@ -62,12 +49,6 @@ export const escalateToHuman = tool({
       context: context ?? {},
       createdAt: new Date().toISOString(),
     };
-    recordCall(
-      'escalate_to_human',
-      { issue, category, severity, context },
-      result,
-      start,
-    );
     return result;
   },
 });
@@ -104,11 +85,9 @@ export const verifyDocumentFields = tool({
     '单据字段 OCR 核验：对提单/发票等单据做字段级 OCR 置信度核验，高置信度字段自动接受，低置信度字段标记 needsReview 建议人工复核。',
   inputSchema: verifySchema,
   execute: async ({ documentId, expectedFields }) => {
-    const start = Date.now();
     const doc = findDocument(documentId);
     if (!doc) {
       const result = { ok: false as const, status: 'not_found' as const, documentId };
-      recordCall('verify_document_fields', { documentId, expectedFields }, result, start);
       return result;
     }
 
@@ -147,7 +126,6 @@ export const verifyDocumentFields = tool({
       fields,
       needsManualReview: fields.some((f) => f.needsReview),
     };
-    recordCall('verify_document_fields', { documentId, expectedFields }, result, start);
     return result;
   },
 });

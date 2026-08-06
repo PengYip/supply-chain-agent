@@ -4,6 +4,7 @@ import { env } from '../env.js';
 import { getToolsForRole, type Role, type HarnessDeps } from './roleToolRegistry.js';
 import { getPermission } from './permissionGate.js';
 import { recordPendingApproval } from './sessionStore.js';
+import { auditRecorder } from './auditRecorder.js';
 import { createDb, migrate, type DbContext } from '../pipeline/db/client.js';
 
 // Shared agent configuration so /api/chat and /api/approval/callback run the
@@ -35,18 +36,38 @@ export const SYSTEM_PROMPT = [
 //
 // T9: doc-entry tools (ingest/extract/bind) are appended by getToolsForRole when
 // a DbContext is supplied via deps. bind_document carries needsApproval (L2).
+//
+// H4: centralized audit wrapper. Every tool's execute is wrapped here -- the
+// single choke point through which all tools (existing 7 + 3 doc-entry) flow --
+// so each call emits a uniform auditRecorder record. The per-tool recordCall
+// helpers that previously lived in tools/{queries,writes,hitl}.ts were removed
+// to avoid double-recording. The wrapper is transparent: same input/output/
+// errors (it records on success right before returning, matching the prior
+// per-tool semantics; on throw the error propagates and no record is emitted,
+// exactly as before).
+function withAudit(name: string, execute: Tool['execute']): Tool['execute'] {
+  if (!execute) return execute;
+  return async (input: any, options: any) => {
+    const start = Date.now();
+    const result = await execute(input, options);
+    auditRecorder.recordToolCall({ toolName: name, args: input, result, durationMs: Date.now() - start });
+    return result;
+  };
+}
+
 export function buildGatedTools(role: Role, deps?: HarnessDeps): Record<string, Tool> {
   const list = getToolsForRole(role, deps);
   const gated: Record<string, Tool> = {};
   for (const t of list) {
     const name = t.name;
+    const audited: Tool = { ...t, execute: withAudit(name, t.execute) };
     // L2 via the permission gate (source of truth) OR a literal boolean
     // needsApproval stamped at registration (e.g. bind_document). `=== true`
     // avoids matching Tool's needsApproval-function form.
     if (getPermission(name) === 'L2' || t.needsApproval === true) {
-      gated[name] = { ...t, needsApproval: true };
+      gated[name] = { ...audited, needsApproval: true };
     } else {
-      gated[name] = t;
+      gated[name] = audited;
     }
   }
   return gated;
