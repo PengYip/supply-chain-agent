@@ -55,6 +55,12 @@ const GROUNDED_EXTRACTION_PROMPT = [
   '从给定 BlockModel 中抽取业务字段。每个字段的值必须严格来自原文, 并给出精确的 sourceSpans (blockId + 在 block.text 中的字符起止)。',
   '若某字段在原文中不存在, 不要列入 fields。',
   'llmConsistency 是你对本次抽取整体内部一致性的自评 (0..1)。',
+  // DeepSeek's JSON-mode response_format requires the prompt to contain "json".
+  '严格以 JSON 格式输出, 不要包含任何注释或解释文字。',
+  // JSON mode (no structured-output enforcement) lets the model pick a shape;
+  // force the record form (object keyed by field name) that the schema requires.
+  '输出结构 (fields 必须是 JSON 对象, 以字段名为键; 严禁使用数组):',
+  '{"fields": {"合同号": {"value": "HT-2024-001", "sourceSpans": [{"blockId": "b0", "start": 0, "end": 11}]}}, "llmConsistency": 0.95}',
 ].join('\n');
 
 function blocksToPrompt(blockModel: BlockModel): string {
@@ -103,6 +109,12 @@ export async function extractGroundedFields(
     schema: GroundedExtractionSchema,
     system: GROUNDED_EXTRACTION_PROMPT,
     prompt: blocksToPrompt(input.blockModel),
+    // DeepSeek's OpenAI-compatible API rejects response_format=json_schema
+    // ("This response_format type is unavailable now"). Force JSON mode
+    // (response_format=json_object + schema-in-prompt) via structuredOutputs:false.
+    // This is the standard OpenAI-compatible-provider setting; it is a no-op for
+    // providers that do not honor providerOptions.openai.
+    providerOptions: { openai: { structuredOutputs: false } },
   });
 
   const grounded: GroundedField[] = Object.entries(object.fields).map(([name, v]) => ({

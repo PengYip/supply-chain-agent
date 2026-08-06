@@ -1,0 +1,18 @@
+{
+  "pdf_info": [
+    {
+      "page_idx": 0,
+      "preproc_blocks": [
+        { "type": "text", "bbox": [72,110,300,30], "lines": [{"text":"合同号: HT-2024-002","bbox":[72,110,300,30]}] },
+        { "type": "text", "bbox": [72,150,300,30], "lines": [{"text":"甲方: 华盛集团","bbox":[72,150,300,30]}] },
+        { "type": "text", "bbox": [72,180,300,30], "lines": [{"text":"乙方: 中石油","bbox":[72,180,300,30]}] },
+        { "type": "text", "bbox": [72,210,300,30], "lines": [{"text":"标的物: 92#汽油","bbox":[72,210,300,30]}] },
+        { "type": "text", "bbox": [72,240,300,30], "lines": [{"text":"数量: 500","bbox":[72,240,300,30]}] },
+        { "type": "text", "bbox": [72,270,300,30], "lines": [{"text":"单位: 吨","bbox":[72,270,300,30]}] },
+        { "type": "text", "bbox": [72,300,300,30], "lines": [{"text":"金额: 3 9X0 000","bbox":[72,300,300,30]}], "statistics": {"max_bbox_score": 0.6} },
+        { "type": "text", "bbox": [72,330,300,30], "lines": [{"text":"签订日: 2024-07-15","bbox":[72,330,300,30]}] }
+      ],
+      "statistics": { "max_bbox_score": 0.9 }
+    }
+  ]
+}
