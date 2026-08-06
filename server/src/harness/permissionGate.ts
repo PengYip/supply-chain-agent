@@ -50,9 +50,13 @@ registerPermission('query_orders', 'L1');
 registerPermission('cross_check', 'L1');
 registerPermission('escalate_to_human', 'L1'); // T3: uncertainty fallback
 registerPermission('verify_document_fields', 'L1'); // T4: document OCR check
+// T9: document-entry pipeline tools
+registerPermission('ingest_document', 'L1'); // T9: parse + persist BlockModel
+registerPermission('extract_fields', 'L1'); // T9: grounded field extraction
 // L2 write confirm
 registerPermission('link_document', 'L2');
 registerPermission('advance_contract_stage', 'L2');
+registerPermission('bind_document', 'L2'); // T9: bind document to contract
 // L3 external approval
 registerPermission('create_payment', 'L3');
 registerPermission('refund_payment', 'L3');
