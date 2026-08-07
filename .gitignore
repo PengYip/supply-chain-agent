@@ -49,4 +49,6 @@ server/pipeline.db-shm
 # are committed (under server/test/pipeline/fixtures/).
 examples/
 server/eval/contracts/real-mineru-out/
+server/eval/contracts/invoice-mineru-out/
+server/eval/contracts/*-mineru-out/
 
