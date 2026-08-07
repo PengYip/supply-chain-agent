@@ -1,18 +1,37 @@
 import type { Block, BlockModel, BBox, DocType } from './types.js';
 
-// TODO(real-sample): No real scanned contract PDF + no MinerU CLI available in this
-// environment (`which mineru` / `uv pip show mineru` both negative). Normalizer is
-// implemented against the ASSUMED MinerU JSON shape documented below and unit-tested
-// against test/pipeline/fixtures/mineru-sample.json. When a real sample is captured,
-// re-run the Step-1 spike, diff the shape, and adjust fromBlock/mapType/textOf as needed.
+// MinerU real output shape (validated against MinerU 3.4.4 pipeline-backend
+// `<doc>_middle.json`, captured 2026-08-07 via `uvx --from 'mineru[pipeline]' --with six
+// mineru -p <pdf> -o <out> -b pipeline -m auto -l ch`):
+//   {
+//     pdf_info: [{
+//       page_idx, page_size,
+//       preproc_blocks: [{
+//         type: 'title'|'text'|'table'|'image'|'table_body'|...,
+//         bbox: [x0, y0, x1, y1],          // CORNER coordinates, not [x,y,w,h]
+//         score: 0..1,                       // per-block OCR confidence (real output)
+//         lines: [{ bbox, spans: [{
+//           type: 'text'|'table', content?: string, html?: string, bbox, score
+//         }] }],
+//         blocks: [ ...nested MinerUBlock[] ] // e.g. table -> table_body children
+//       }],
+//       discarded_blocks, para_blocks
+//       // NOTE: NO page-level `statistics.max_bbox_score` in real 3.4.4 output.
+//     }],
+//     _backend, _version_name
+//   }
 //
-// MinerU spike output shape (ASSUMED 2026-08-05; adjust if real sample differs):
-//   { pdf_info: [{ page_idx, preproc_blocks: [{type, bbox, lines:[{text,bbox}] | blocks:[...]}], statistics:{max_bbox_score} }] }
-// Each page's per-block OCR confidence is taken from statistics.max_bbox_score
-// (page-level proxy). If a finer per-block score exists, prefer it here.
+// Differences from the EARLIER ASSUMED shape (pre-H2), now corrected:
+//   - text lives in line.spans[].content (NOT line.text); table spans carry html.
+//   - per-block `score` is the OCR confidence (real output has no page statistics).
+//   - bbox is [x0,y0,x1,y1] corners -> BBox {x,y,w=x1-x0,h=y1-y0}.
+// The legacy assumed-shape (`line.text` + page `statistics`) is still tolerated:
+// spans/content is tried first, then line.text; block.score is tried first, then
+// page statistics, then 0.9.
 
-interface MinerULine { text: string; bbox?: number[] }
-interface MinerUBlock { type: string; bbox?: number[]; lines?: MinerULine[]; blocks?: MinerUBlock[] }
+interface MinerUSpan { content?: string; html?: string; type?: string; bbox?: number[]; score?: number }
+interface MinerULine { text?: string; bbox?: number[]; spans?: MinerUSpan[] }
+interface MinerUBlock { type: string; bbox?: number[]; score?: number; lines?: MinerULine[]; blocks?: MinerUBlock[] }
 interface MinerUPage { page_idx: number; preproc_blocks?: MinerUBlock[]; statistics?: { max_bbox_score?: number } }
 interface MinerUOutput { pdf_info?: MinerUPage[] }
 
@@ -23,42 +42,52 @@ export interface NormalizeInput {
   minerUOutput: unknown;
 }
 
+// MinerU bbox is corner coordinates [x0,y0,x1,y1]; convert to BBox {x,y,w,h}.
 function toBBox(n: number[] | undefined): BBox | null {
   if (!n || n.length < 4) return null;
   // Length guard above guarantees indices 0..3 exist; defaults satisfy
   // noUncheckedIndexedAccess and never fire at runtime.
-  const [x = 0, y = 0, w = 0, h = 0] = n;
-  return { x, y, w, h };
+  const [x0 = 0, y0 = 0, x1 = 0, y1 = 0] = n;
+  return { x: x0, y: y0, w: Math.abs(x1 - x0), h: Math.abs(y1 - y0) };
 }
 
+// Extract a block's text: prefer the real 3.4.4 form (line.spans[].content,
+// falling back to a table span's html), then the legacy assumed form (line.text);
+// finally fold nested children (table containers) so Block.text is non-empty.
 function textOf(b: MinerUBlock): string {
-  const own = (b.lines ?? []).map((l) => l.text).join('');
+  const own = (b.lines ?? [])
+    .flatMap((l) => {
+      if (l.spans && l.spans.length) {
+        return l.spans.map((s) => s.content ?? s.html ?? '');
+      }
+      return [l.text ?? '']; // legacy assumed-shape fallback
+    })
+    .join('');
   if (own) return own;
-  // Container block (e.g. "table") carries no lines of its own; fold its children's
-  // text so the resulting Block.text is non-empty and usable for span offsets.
   return (b.blocks ?? []).map((c) => textOf(c)).join('');
 }
 
-function fromBlock(b: MinerUBlock, page: number, conf: number, counter: { n: number }): Block {
+function fromBlock(b: MinerUBlock, page: number, fallbackConf: number, counter: { n: number }): Block {
   const id = `b${counter.n++}`;
+  // Prefer the block's own per-block score (real 3.4.4); fall back to page-level.
   const block: Block = {
     id,
     type: mapType(b.type),
     text: textOf(b),
     page,
     bbox: toBBox(b.bbox),
-    ocrConfidence: clamp01(conf),
+    ocrConfidence: clamp01(b.score ?? fallbackConf),
   };
   if (b.blocks && b.blocks.length) {
-    block.children = b.blocks.map((c) => fromBlock(c, page, conf, counter));
+    block.children = b.blocks.map((c) => fromBlock(c, page, fallbackConf, counter));
   }
   return block;
 }
 
 function mapType(t: string): Block['type'] {
   if (t === 'table_row') return 'table_row';
-  if (t === 'table') return 'text'; // container; children carry rows
   if (t === 'image') return 'figure';
+  // 'table'/'table_body'/'title'/'text' -> 'text' (containers fold children).
   return 'text';
 }
 
@@ -75,9 +104,10 @@ export function normalizeMinerUOutput(input: NormalizeInput): BlockModel {
   const counter = { n: 0 };
   const blocks: Block[] = [];
   for (const page of out.pdf_info) {
-    const conf = clamp01(page.statistics?.max_bbox_score ?? 0.9);
+    // Real 3.4.4 has no page statistics -> 0.9 fallback; per-block score wins in fromBlock.
+    const fallbackConf = clamp01(page.statistics?.max_bbox_score ?? 0.9);
     for (const b of page.preproc_blocks ?? []) {
-      blocks.push(fromBlock(b, page.page_idx + 1, conf, counter));
+      blocks.push(fromBlock(b, page.page_idx + 1, fallbackConf, counter));
     }
   }
   return {

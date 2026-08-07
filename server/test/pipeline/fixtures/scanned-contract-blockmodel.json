@@ -6,41 +6,42 @@
     {
       "id": "b0",
       "type": "text",
-      "text": "合同号: HT-2024-001",
+      "text": "采购合同",
       "page": 1,
-      "bbox": {
-        "x": 72,
-        "y": 110,
-        "w": 300,
-        "h": 30
-      },
-      "ocrConfidence": 0.93
+      "bbox": { "x": 72, "y": 60, "w": 228, "h": 30 },
+      "ocrConfidence": 0.95
     },
     {
       "id": "b1",
       "type": "text",
-      "text": "标的物: 0#柴油",
+      "text": "合同号: HT-2024-001",
       "page": 1,
-      "bbox": {
-        "x": 72,
-        "y": 200,
-        "w": 460,
-        "h": 60
-      },
-      "ocrConfidence": 0.93,
+      "bbox": { "x": 72, "y": 110, "w": 228, "h": 30 },
+      "ocrConfidence": 0.93
+    },
+    {
+      "id": "b2",
+      "type": "text",
+      "text": "金额: 2860000",
+      "page": 1,
+      "bbox": { "x": 72, "y": 150, "w": 228, "h": 30 },
+      "ocrConfidence": 0.91
+    },
+    {
+      "id": "b3",
+      "type": "text",
+      "text": "<table><tr><td>标的物</td><td>数量</td></tr><tr><td>0#柴油</td><td>1000</td></tr></table>",
+      "page": 1,
+      "bbox": { "x": 72, "y": 200, "w": 388, "h": 60 },
+      "ocrConfidence": 0.97,
       "children": [
         {
-          "id": "b2",
-          "type": "table_row",
-          "text": "标的物: 0#柴油",
+          "id": "b4",
+          "type": "text",
+          "text": "<table><tr><td>标的物</td><td>数量</td></tr><tr><td>0#柴油</td><td>1000</td></tr></table>",
           "page": 1,
-          "bbox": {
-            "x": 72,
-            "y": 200,
-            "w": 460,
-            "h": 30
-          },
-          "ocrConfidence": 0.93
+          "bbox": { "x": 72, "y": 200, "w": 388, "h": 60 },
+          "ocrConfidence": 0.97
         }
       ]
     }

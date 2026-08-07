@@ -43,3 +43,10 @@ server/pipeline.db-shm
 
 # Subagent-Driven Development scratch (progress ledger etc.)
 .superpowers/
+
+# H2 real-sample MinerU spike: real contract PDFs + raw MinerU output contain
+# real customer data -- never commit. Only redacted/synthetic shape fixtures
+# are committed (under server/test/pipeline/fixtures/).
+examples/
+server/eval/contracts/real-mineru-out/
+

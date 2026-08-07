@@ -1,0 +1,43 @@
+{
+  "_backend": "pipeline",
+  "_version_name": "mineru-3.4.4",
+  "pdf_info": [
+    {
+      "page_idx": 0,
+      "page_size": [595, 842],
+      "preproc_blocks": [
+        {
+          "type": "title",
+          "bbox": [258, 99, 353, 118],
+          "score": 0.9334,
+          "index": 2,
+          "level": 2,
+          "lines": [
+            {
+              "bbox": [259, 97, 352, 119],
+              "spans": [
+                { "bbox": [259, 97, 352, 119], "type": "text", "content": "合同标题", "score": 1 }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "bbox": [70, 200, 540, 230],
+          "score": 0.95,
+          "index": 5,
+          "lines": [
+            {
+              "bbox": [70, 200, 540, 230],
+              "spans": [
+                { "bbox": [70, 200, 540, 230], "type": "text", "content": "合同编号: DEMO-001", "score": 0.95 }
+              ]
+            }
+          ]
+        }
+      ],
+      "discarded_blocks": [],
+      "para_blocks": []
+    }
+  ]
+}
