@@ -31,24 +31,27 @@ dist-ssr
 !.env.example
 
 # SessionStore SQLite (file-backed, WAL) - runtime state, never commit
-server/data/*.db
-server/data/*.db-wal
-server/data/*.db-shm
+apps/server/data/*.db
+apps/server/data/*.db-wal
+apps/server/data/*.db-shm
 !.env.example
 
 # Pipeline runtime: document-entry SQLite (file-backed dev DB)
-server/pipeline.db
-server/pipeline.db-wal
-server/pipeline.db-shm
+apps/server/pipeline.db
+apps/server/pipeline.db-wal
+apps/server/pipeline.db-shm
+
+# Ingest root: runtime upload dir populated by ingest_document tool (INGEST_ROOT)
+apps/server/ingest-root/
 
 # Subagent-Driven Development scratch (progress ledger etc.)
 .superpowers/
 
 # H2 real-sample MinerU spike: real contract PDFs + raw MinerU output contain
 # real customer data -- never commit. Only redacted/synthetic shape fixtures
-# are committed (under server/test/pipeline/fixtures/).
+# are committed (under apps/server/test/pipeline/fixtures/).
 examples/
-server/eval/contracts/real-mineru-out/
-server/eval/contracts/invoice-mineru-out/
-server/eval/contracts/*-mineru-out/
+apps/server/eval/contracts/real-mineru-out/
+apps/server/eval/contracts/invoice-mineru-out/
+apps/server/eval/contracts/*-mineru-out/
 

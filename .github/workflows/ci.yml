@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: self-hosted
+    env:
+      # env.ts (zod) requires OPENAI_API_KEY to parse; unit tests don't call the API
+      OPENAI_API_KEY: ci-dummy-key
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build (web + server)
+        run: npm run build
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test (server)
+        run: npm test
+
+  # NOTE: Postgres integration tests (11) currently skip without DB_BACKEND=postgres.
+  # To enable them, add a pgvector service container and set DB_BACKEND=postgres + DB_* creds.

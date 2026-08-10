@@ -1,38 +1,22 @@
 {
-  "name": "supply-chain-agent-prototype",
+  "name": "supply-chain-agent",
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
-    "dev": "vite",
-    "dev:server": "npm --prefix server run dev",
-    "dev:all": "concurrently \"npm run dev\" \"npm run dev:server\"",
-    "build": "tsc -b && vite build",
+    "dev": "npm run dev --workspace apps/web",
+    "dev:server": "npm run dev --workspace apps/server",
+    "dev:all": "concurrently \"npm run dev --workspace apps/web\" \"npm run dev --workspace apps/server\"",
+    "build": "npm run build --workspace apps/web && npm run build --workspace apps/server",
     "lint": "oxlint",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@ai-sdk/react": "^4.0.53",
-    "ai": "^6.0.241",
-    "autoprefixer": "^10.5.4",
-    "clsx": "^2.1.1",
-    "lucide-react": "^1.27.0",
-    "postcss": "^8.5.25",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "react-markdown": "^10.1.0",
-    "react-router-dom": "^7.18.2",
-    "remark-gfm": "^4.0.1",
-    "tailwindcss": "^3.4.19"
+    "preview": "npm run preview --workspace apps/web",
+    "test": "npm test --workspace apps/server"
   },
   "devDependencies": {
-    "@types/node": "^24.13.2",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.3",
     "concurrently": "^10.0.4",
-    "oxlint": "^1.71.0",
-    "typescript": "~6.0.2",
-    "vite": "^8.1.1"
+    "oxlint": "^1.71.0"
   }
 }

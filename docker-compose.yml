@@ -1,0 +1,36 @@
+# ===========================================================================
+# DISK-GATED PREP (Postgres + pgvector migration). NOT YET RUNNABLE as-is.
+# ===========================================================================
+# This compose file will NOT start until the C: drive has free space:
+#   * Docker Desktop itself, its WSL distros, and per-container image/layer
+#     caches live on C: by default. With C: at 100% full, `docker compose up`
+#     fails before this container ever pulls.
+#   * Free 15-20GB on C: (npm/uv cache clean, docker system prune, cleanmgr), OR
+#     relocate Docker Desktop's data root to D: first
+#     (wsl --export docker-desktop ... ; wsl --import ... D:\docker-data ...).
+# See docs/postgres-migration-runbook.md for the exact steps.
+#
+# pgvector/pgvector:pg16 = Postgres 16 with the pgvector extension preinstalled.
+# The data volume is mapped to D: (D:/pgdata) so the database files stay off the
+# full C: drive even after Docker Desktop is able to run.
+# ===========================================================================
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: sca-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: sca
+      POSTGRES_PASSWORD: sca_dev_password
+      POSTGRES_DB: sca
+    volumes:
+      # Keep Postgres data on D: (C: is full). Create D:/pgdata before first run.
+      - D:/pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sca -d sca"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
