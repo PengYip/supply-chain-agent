@@ -43,7 +43,7 @@ app.route('/api', statusRoute);
 // Production: serve frontend static files from apps/web/dist on the same port.
 // Same-origin => no CORS needed; dev mode uses Vite on :5173 with /api proxy.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const webDist = path.resolve(__dirname, '../../../web/dist');
+const webDist = path.resolve(__dirname, '../../web/dist');
 app.use('*', serveStatic({ root: webDist }));
 
 const port = env.PORT;
