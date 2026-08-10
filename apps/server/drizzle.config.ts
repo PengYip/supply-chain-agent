@@ -12,14 +12,14 @@
 import { defineConfig } from 'drizzle-kit';
 
 export default defineConfig({
-  schema: './src/pipeline/db/postgres-schema.ts',
+  schema: ['./src/pipeline/db/postgres-schema.ts', './src/lib/auth-schema.ts'],
   out: './drizzle/postgres',
   dialect: 'postgresql',
   // Credential defaults match docker-compose.yml; override with DATABASE_URL.
   dbCredentials: {
     url:
       process.env.DATABASE_URL ??
-      'postgresql://sca:sca_dev_password@localhost:5432/sca',
+      'postgresql://sca:sca_dev_password@localhost:5433/sca',
   },
   // customTypes (vector / tsvector) emit raw SQL; the HNSW + GIN indexes and the
   // GENERATED tsvector column are layered on via a hand-edited SQL migration in
