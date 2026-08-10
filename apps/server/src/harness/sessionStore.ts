@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   role TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  metadata_json TEXT
+  metadata_json TEXT,
+  user_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS session_messages (
@@ -56,6 +57,15 @@ CREATE TABLE IF NOT EXISTS authorized_tickets (
   authorized_at TEXT NOT NULL
 );
 `);
+
+// Phase 2: add user_id to pre-existing dev databases (CREATE TABLE IF NOT EXISTS
+// does not add columns to an already-existing table). Idempotent + guarded.
+{
+  const cols = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === 'user_id')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN user_id TEXT');
+  }
+}
 
 // ---- types ----
 
@@ -92,6 +102,7 @@ interface SessionRow {
   created_at: string;
   updated_at: string;
   metadata_json: string | null;
+  user_id: string | null;
 }
 
 interface MessageRow {
@@ -102,9 +113,12 @@ interface MessageRow {
 // ---- prepared statements ----
 
 const stmtInsertSession = db.prepare(
-  'INSERT INTO sessions (id, role, created_at, updated_at) VALUES (?, ?, ?, ?)',
+  'INSERT INTO sessions (id, role, created_at, updated_at, user_id) VALUES (?, ?, ?, ?, ?)',
 );
 const stmtGetSession = db.prepare('SELECT * FROM sessions WHERE id = ?');
+const stmtListSessionsForUser = db.prepare(
+  'SELECT id, role, created_at FROM sessions WHERE user_id = ? ORDER BY created_at DESC',
+);
 const stmtTouchSession = db.prepare(
   'UPDATE sessions SET updated_at = ? WHERE id = ?',
 );
@@ -140,11 +154,33 @@ const stmtHasTicket = db.prepare(
 
 // ---- API ----
 
-export function createSession(role: Role): SessionInfo {
+export function createSession(role: Role, userId?: string | null): SessionInfo {
   const id = randomUUID();
   const now = new Date().toISOString();
-  stmtInsertSession.run(id, role, now, now);
+  stmtInsertSession.run(id, role, now, now, userId ?? null);
   return { id, role };
+}
+
+/** List chat sessions owned by a user (Phase 2 data isolation). */
+export function listSessionsForUser(
+  userId: string,
+): Array<{ id: string; role: Role; createdAt: string }> {
+  const rows = stmtListSessionsForUser.all(userId) as Array<{
+    id: string;
+    role: Role;
+    created_at: string;
+  }>;
+  return rows.map((r) => ({ id: r.id, role: r.role, createdAt: r.created_at }));
+}
+
+/**
+ * Owner check for data isolation. Returns true iff the session exists AND its
+ * user_id matches. A legacy session (user_id NULL, pre-Phase-2) is treated as
+ * NOT owned by any authenticated user.
+ */
+export function sessionBelongsTo(id: string, userId: string): boolean {
+  const row = stmtGetSession.get(id) as SessionRow | undefined;
+  return !!row && row.user_id === userId;
 }
 
 export function loadSession(id: string): LoadedSession | null {

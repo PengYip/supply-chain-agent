@@ -11,6 +11,7 @@ import { env } from './env.js';
 import { chatRoute } from './routes/chat.js';
 import { approvalCallback } from './routes/approvalCallback.js';
 import { statusRoute } from './routes/status.js';
+import { sessionsRoute } from './routes/sessions.js';
 import { listToolNames, type Role } from './harness/roleToolRegistry.js';
 import { auth } from './lib/auth.js';
 import {
@@ -60,6 +61,9 @@ app.use('/api/approval/*', requireAuth);
 app.route('/api', chatRoute);
 app.route('/api', approvalCallback);
 app.route('/api', statusRoute);
+// Phase 2: chat-session list/create/history, scoped to the auth user.
+// /api/sessions/:id/status (statusRoute) is a distinct 3-segment path; no clash.
+app.route('/api/sessions', sessionsRoute);
 
 // Production: serve frontend static files from apps/web/dist on the same port.
 // Same-origin => no CORS needed; dev mode uses Vite on :5173 with /api proxy.

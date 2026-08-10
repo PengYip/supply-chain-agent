@@ -2,14 +2,15 @@ import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react'
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport, generateId, lastAssistantMessageIsCompleteWithApprovalResponses, lastAssistantMessageIsCompleteWithToolCalls, parseJsonEventStream, readUIMessageStream, uiMessageChunkSchema } from 'ai'
 import type { UIMessage, UIMessageChunk } from 'ai'
-import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle } from 'lucide-react'
+import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, LogOut } from 'lucide-react'
 import { RealMessageItem, ErrorMessage } from './RealMessageItem'
 import { AgentStatusBar } from './AgentStatusBar'
 import { useAgentStatus } from '../hooks/useAgentStatus'
 import { buildRenderItems } from '../utils/realChatUtils'
+import { authClient } from '../lib/auth'
 import clsx from 'clsx'
 
-export const RealChatView: React.FC = () => {
+export const RealChatView: React.FC<{ onSignOut?: () => void }> = ({ onSignOut }) => {
   const [input, setInput] = useState('')
   // sessionIdRef is read synchronously by the transport headers callback
   // (must be a ref, not state). We mirror it into `sessionId` state purely so
@@ -199,6 +200,21 @@ export const RealChatView: React.FC = () => {
             : status === 'error' ? '出错'
             : '就绪'}
           </span>
+          <button
+            type="button"
+            title="退出登录"
+            onClick={async () => {
+              try {
+                await authClient.signOut()
+              } catch {
+                /* best-effort */
+              }
+              onSignOut?.()
+            }}
+            className="p-1.5 rounded-lg hover:bg-bgGray text-textGray hover:text-textDark"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </div>
 

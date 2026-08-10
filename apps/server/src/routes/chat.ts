@@ -8,10 +8,12 @@ import {
   createSession,
   loadSession,
   appendMessages,
+  sessionBelongsTo,
 } from '../harness/sessionStore.js';
 import { setSessionContext } from '../harness/sessionContext.js';
+import type { AuthEnv } from '../lib/auth-middleware.js';
 
-export const chatRoute = new Hono();
+export const chatRoute = new Hono<AuthEnv>();
 
 // AI SDK 6 `useChat` posts UIMessages in the `parts` format
 // ({ id, role, parts: [...] }), NOT the legacy { role, content: string }.
@@ -45,11 +47,15 @@ chatRoute.post('/chat', async (c) => {
 
   const { messages, role } = parsed.data;
 
-  // Session: reuse x-session-id if it exists, else create. Sets the request
-  // context so L3 tool execute can attribute pending tickets to this session.
+  // Session: reuse x-session-id if it exists AND belongs to the authenticated
+  // user (Phase 2 data isolation), else create a new one owned by the user.
+  // Sets the request context so L3 tool execute can attribute pending tickets.
+  const user = c.get('user');
+  const userId = user?.id ?? null;
   const headerId = c.req.header('x-session-id');
-  const loaded = headerId ? loadSession(headerId) : null;
-  const sessionId = loaded?.id ?? createSession(role as Role).id;
+  const candidate = headerId && userId ? (sessionBelongsTo(headerId, userId) ? loadSession(headerId) : null) : null;
+  const loaded = headerId && !userId ? loadSession(headerId) : candidate;
+  const sessionId = loaded?.id ?? createSession(role as Role, userId).id;
   const priorMessages = loaded?.messages ?? [];
   setSessionContext(sessionId);
 
