@@ -1,4 +1,4 @@
-name: CI
+name: CI/CD
 
 on:
   push:
@@ -31,6 +31,28 @@ jobs:
 
       - name: Test (server)
         run: npm test
+
+  deploy:
+    needs: ci
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: self-hosted
+    steps:
+      - name: Deploy to ubuntu-server
+        run: |
+          export NVM_DIR=$HOME/.nvm
+          . $NVM_DIR/nvm.sh
+          nvm use 20
+          which pm2 || npm install -g pm2
+          DEPLOY_DIR="$HOME/supply-chain-agent"
+          if [ ! -d "$DEPLOY_DIR" ]; then
+            git clone git@github.com:PengYip/supply-chain-agent.git "$DEPLOY_DIR"
+          fi
+          cd "$DEPLOY_DIR"
+          git pull origin main
+          npm install
+          npm run build
+          pm2 reload sca-server || pm2 start ecosystem.config.cjs
+          pm2 save
 
   # NOTE: Postgres integration tests (11) currently skip without DB_BACKEND=postgres.
   # To enable them, add a pgvector service container and set DB_BACKEND=postgres + DB_* creds.

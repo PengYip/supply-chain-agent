@@ -4,6 +4,9 @@ import './instrumentation.js';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { serveStatic } from '@hono/node-server/serve-static';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { env } from './env.js';
 import { chatRoute } from './routes/chat.js';
 import { approvalCallback } from './routes/approvalCallback.js';
@@ -36,6 +39,12 @@ app.get('/api/health', (c) =>
 app.route('/api', chatRoute);
 app.route('/api', approvalCallback);
 app.route('/api', statusRoute);
+
+// Production: serve frontend static files from apps/web/dist on the same port.
+// Same-origin => no CORS needed; dev mode uses Vite on :5173 with /api proxy.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const webDist = path.resolve(__dirname, '../../../web/dist');
+app.use('*', serveStatic({ root: webDist }));
 
 const port = env.PORT;
 
