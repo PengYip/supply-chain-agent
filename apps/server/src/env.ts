@@ -30,6 +30,11 @@ const EnvSchema = z.object({
   // real bge-m3 embeddings are deferred to deployment (no model pull needed).
   OLLAMA_BASE_URL: z.string().url().optional(),
   OLLAMA_EMBED_MODEL: z.string().default('bge-m3'),
+  // Better Auth (Phase 1). secret signs session cookies/JWTs; in production set
+  // a strong random value via .env. baseURL is the canonical origin (same :3001
+  // as the Hono server in prod; the dev Vite proxy forwards /api/auth/* too).
+  BETTER_AUTH_SECRET: z.string().default('dev-only-better-auth-secret-change-me'),
+  BETTER_AUTH_URL: z.string().url().default('http://localhost:3001'),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

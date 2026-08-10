@@ -12,10 +12,17 @@ import { chatRoute } from './routes/chat.js';
 import { approvalCallback } from './routes/approvalCallback.js';
 import { statusRoute } from './routes/status.js';
 import { listToolNames, type Role } from './harness/roleToolRegistry.js';
+import { auth } from './lib/auth.js';
+import {
+  attachSession,
+  requireAuth,
+  type AuthEnv,
+} from './lib/auth-middleware.js';
 
 const DEFAULT_ROLE: Role = 'trader';
 
-const app = new Hono();
+// AuthEnv gives the auth middlewares a typed `user` slot on the context.
+const app = new Hono<AuthEnv>();
 
 // Allow the Vite dev server (http://localhost:5173) to call the API directly.
 app.use(
@@ -24,8 +31,17 @@ app.use(
     origin: 'http://localhost:5173',
     allowMethods: ['GET', 'POST', 'OPTIONS'],
     allowHeaders: ['Content-Type'],
+    // Cookies must be sent cross-origin in dev (Vite :5173 -> API :3001).
+    credentials: true,
   }),
 );
+
+// Better Auth owns ALL auth routes (sign-up/sign-in/sign-out/session/admin/etc.).
+// Same-origin in production (:3001) -> cookie flows natively.
+app.on(['POST', 'GET'], '/api/auth/*', (c) => auth.handler(c.req.raw));
+
+// Resolve the session on EVERY request (populates c.get('user'), or null).
+app.use('*', attachSession);
 
 app.get('/api/health', (c) =>
   c.json({
@@ -35,6 +51,11 @@ app.get('/api/health', (c) =>
     tools: listToolNames(DEFAULT_ROLE),
   }),
 );
+
+// Protect all other /api routes (health stays public).
+app.use('/api/chat/*', requireAuth);
+app.use('/api/sessions/*', requireAuth);
+app.use('/api/approval/*', requireAuth);
 
 app.route('/api', chatRoute);
 app.route('/api', approvalCallback);
