@@ -35,6 +35,13 @@ const EnvSchema = z.object({
   // as the Hono server in prod; the dev Vite proxy forwards /api/auth/* too).
   BETTER_AUTH_SECRET: z.string().default('dev-only-better-auth-secret-change-me'),
   BETTER_AUTH_URL: z.string().url().default('http://localhost:3001'),
+  // MinIO object store (Phase 3) for uploaded source documents. The upload route
+  // stores files under users/<userId>/ and bridges them into the ingest pipeline.
+  MINIO_ENDPOINT: z.string().default('localhost'),
+  MINIO_PORT: z.coerce.number().int().positive().default(9000),
+  MINIO_ACCESS_KEY: z.string().default('minio'),
+  MINIO_SECRET_KEY: z.string().default('miniosecret'),
+  MINIO_BUCKET: z.string().default('sca-files'),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react'
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport, generateId, lastAssistantMessageIsCompleteWithApprovalResponses, lastAssistantMessageIsCompleteWithToolCalls, parseJsonEventStream, readUIMessageStream, uiMessageChunkSchema } from 'ai'
 import type { UIMessage, UIMessageChunk } from 'ai'
-import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, LogOut } from 'lucide-react'
+import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, LogOut, Paperclip } from 'lucide-react'
 import { RealMessageItem, ErrorMessage } from './RealMessageItem'
 import { AgentStatusBar } from './AgentStatusBar'
 import { useAgentStatus } from '../hooks/useAgentStatus'
@@ -12,6 +12,41 @@ import clsx from 'clsx'
 
 export const RealChatView: React.FC<{ onSignOut?: () => void }> = ({ onSignOut }) => {
   const [input, setInput] = useState('')
+
+  // Phase 3: file upload state. Uploads POST to /api/files (MinIO + ingest bridge).
+  const [uploadState, setUploadState] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle')
+  const [uploadMsg, setUploadMsg] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploadState('uploading')
+    setUploadMsg(null)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch('/api/files', {
+        method: 'POST',
+        body: fd,
+        credentials: 'include',
+      })
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string; detail?: string }
+        throw new Error(j.error || j.detail || `upload failed (${res.status})`)
+      }
+      const data = (await res.json()) as { docId?: string; filename?: string }
+      setUploadState('success')
+      setUploadMsg(
+        `已上传: ${data.filename ?? file.name}${data.docId ? ` (docId ${data.docId})` : ''}`,
+      )
+    } catch (err) {
+      setUploadState('error')
+      setUploadMsg(err instanceof Error ? err.message : String(err))
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }, [])
   // sessionIdRef is read synchronously by the transport headers callback
   // (must be a ref, not state). We mirror it into `sessionId` state purely so
   // AgentStatusBar / useAgentStatus can react to it once the chat response
@@ -318,6 +353,26 @@ export const RealChatView: React.FC<{ onSignOut?: () => void }> = ({ onSignOut }
             </div>
           )}
           <form onSubmit={onSubmit} className="flex items-end gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              onChange={handleFileUpload}
+              accept=".pdf,.txt,.md,.docx,.json"
+            />
+            <button
+              type="button"
+              title="上传文件"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadState === 'uploading'}
+              className="h-10 w-10 shrink-0 rounded-lg border border-borderGray flex items-center justify-center text-textGray hover:text-textDark hover:bg-bgGray disabled:opacity-50"
+            >
+              {uploadState === 'uploading' ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Paperclip className="w-4 h-4" />
+              )}
+            </button>
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -347,6 +402,21 @@ export const RealChatView: React.FC<{ onSignOut?: () => void }> = ({ onSignOut }
           <div className="mt-2 text-[11px] text-textGray">
             L2 写操作（link_document / advance_contract_stage）需确认后执行；L3 资金操作（create_payment / refund_payment / modify_contract）需外部审批，不能在对话内直接完成。
           </div>
+          {uploadMsg && (
+            <div
+              className={clsx(
+                'mt-2 text-[11px] flex items-center gap-1.5',
+                uploadState === 'error' ? 'text-danger' : 'text-success',
+              )}
+            >
+              {uploadState === 'error' ? (
+                <AlertCircle className="w-3 h-3 shrink-0" />
+              ) : (
+                <ShieldCheck className="w-3 h-3 shrink-0" />
+              )}
+              <span className="break-all">{uploadMsg}</span>
+            </div>
+          )}
         </div>
       </div>
     </div>

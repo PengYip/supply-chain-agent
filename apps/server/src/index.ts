@@ -12,6 +12,8 @@ import { chatRoute } from './routes/chat.js';
 import { approvalCallback } from './routes/approvalCallback.js';
 import { statusRoute } from './routes/status.js';
 import { sessionsRoute } from './routes/sessions.js';
+import { filesRoute } from './routes/files.js';
+import { ensureBucket } from './lib/minio.js';
 import { listToolNames, type Role } from './harness/roleToolRegistry.js';
 import { auth } from './lib/auth.js';
 import {
@@ -65,6 +67,9 @@ app.route('/api', statusRoute);
 // /api/sessions/:id/status (statusRoute) is a distinct 3-segment path; no clash.
 app.route('/api/sessions', sessionsRoute);
 
+// Phase 3: file upload (MinIO) + ingest bridge, scoped to the auth user.
+app.route('/api/files', filesRoute);
+
 // Production: serve frontend static files from apps/web/dist on the same port.
 // Same-origin => no CORS needed; dev mode uses Vite on :5173 with /api proxy.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -72,6 +77,10 @@ const webDist = path.resolve(__dirname, '../../web/dist');
 app.use('*', serveStatic({ root: webDist }));
 
 const port = env.PORT;
+
+// Phase 3: ensure the MinIO bucket exists before serving. Best-effort -- if
+// MinIO is unreachable, uploads 5xx but auth/chat/recall still work.
+void ensureBucket();
 
 serve({ fetch: app.fetch, port }, (info) => {
   console.log(`Server running on http://localhost:${info.port}`);

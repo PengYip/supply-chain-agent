@@ -13,7 +13,7 @@ import { linkDocumentToContract } from '../../data/seed.js';
 import { tagExternal, assertWithinRoot } from '../../harness/injectionDefense.js';
 import type { Embedder } from '../embedder.js';
 import { isVecReady, saveChunkVectors } from '../db/vecStore.js';
-import type { DocType, SourceSpan } from '../types.js';
+import type { DocType, Modality, SourceSpan } from '../types.js';
 import type { SpanMatchStrength } from '../spanValidator.js';
 
 export interface ToolDeps {
@@ -38,6 +38,54 @@ function ensureFk(ctx: DbContext): void {
   }
 }
 
+/**
+ * Reusable ingest pipeline (Phase 3 bridge): parse -> persist BlockModel ->
+ * chunk -> index (FTS5 always; vectors when an embedder is wired and the vector
+ * backend is ready). Called by BOTH the ingest_document tool and the /api/files
+ * upload route so there is ONE ingest path. Returns the new docId + block count.
+ */
+export interface IngestOptions {
+  ctx: DbContext;
+  sourcePath: string;
+  docType: DocType;
+  modality: Modality;
+  embedder?: Embedder;
+}
+
+export async function ingestFile(opts: IngestOptions): Promise<{
+  docId: string;
+  blockCount: number;
+  modality: string;
+}> {
+  const { ctx, sourcePath, docType, modality, embedder } = opts;
+  ensureFk(ctx);
+  // Path allowlist (injection defense): reject anything outside INGEST_ROOT.
+  const safePath = assertWithinRoot(sourcePath);
+  const docId = newDocId();
+  const blockModel =
+    modality === 'scanned'
+      ? await ingestWithMinerU(safePath, docType, docId)
+      : await ingestWithDigital(safePath, docType, docId);
+  await saveDocument(ctx, blockModel);
+  const chunks = chunkBlockModel(blockModel);
+  const chunkRowIds = await saveChunks(ctx, docId, chunks);
+  if (embedder && (await isVecReady(ctx))) {
+    try {
+      const vecs = await embedder.embed(chunks.map((c) => c.text));
+      await saveChunkVectors(
+        ctx,
+        chunkRowIds.map((id, i) => ({ chunkRowId: id, vec: vecs[i] ?? [] })),
+      );
+    } catch (e) {
+      console.warn(
+        '[ingest] vector embedding skipped; FTS5 recall still available:',
+        (e as Error).message,
+      );
+    }
+  }
+  return { docId, blockCount: blockModel.blocks.length, modality: blockModel.modality };
+}
+
 export function buildIngestDocumentTool(deps: ToolDeps) {
   return tool({
     description:
@@ -48,45 +96,13 @@ export function buildIngestDocumentTool(deps: ToolDeps) {
       modality: z.enum(['digital', 'scanned']),
     }),
     execute: async ({ sourceUri, docType, modality }) => {
-      ensureFk(deps.ctx);
-      // Path allowlist (injection defense): reject anything outside INGEST_ROOT
-      // before handing the path to the adapter. Blocks ../../etc/passwd and
-      // absolute paths outside the root. Pass the resolved absolute path on.
-      const safePath = assertWithinRoot(sourceUri);
-      const docId = newDocId();
-      const dt = docType as DocType;
-      const blockModel =
-        modality === 'scanned'
-          ? await ingestWithMinerU(safePath, dt, docId)
-          : await ingestWithDigital(safePath, dt, docId);
-      // Re-ingest guard: docId is freshly generated per call (timestamp + random),
-      // so a duplicate-PK constraint is structurally impossible (append-only audit).
-      // saveDocument propagates any error rather than silently swallowing.
-      await saveDocument(deps.ctx, blockModel);
-      // L4 recall index: chunk the BlockModel into the FTS5-backed doc_chunk
-      // table so recall_documents can BM25-match against it later. Re-ingest safe
-      // (fresh docId -> fresh chunk rows; no upsert needed).
-      const chunks = chunkBlockModel(blockModel);
-      const chunkRowIds = await saveChunks(deps.ctx, docId, chunks);
-      // L4 vector index (sqlite-vec / pgvector): embed each chunk and store under
-      // its doc_chunk rowid. Populated only when an embedder is wired AND the
-      // vector backend is ready; otherwise FTS5 keyword recall alone is
-      // sufficient. A failure here must NOT break ingest (FTS5 still works).
-      if (deps.embedder && await isVecReady(deps.ctx)) {
-        try {
-          const vecs = await deps.embedder.embed(chunks.map((c) => c.text));
-          await saveChunkVectors(
-            deps.ctx,
-            chunkRowIds.map((id, i) => ({ chunkRowId: id, vec: vecs[i] ?? [] })),
-          );
-        } catch (e) {
-          console.warn(
-            '[ingest_document] vector embedding skipped; FTS5 recall still available:',
-            (e as Error).message,
-          );
-        }
-      }
-      return { docId, blockCount: blockModel.blocks.length, modality: blockModel.modality };
+      return ingestFile({
+        ctx: deps.ctx,
+        sourcePath: sourceUri,
+        docType: docType as DocType,
+        modality: modality as Modality,
+        embedder: deps.embedder,
+      });
     },
   });
 }
