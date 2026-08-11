@@ -206,7 +206,7 @@ export const RealChatView: React.FC<{
         new TransformStream({
           transform(chunk, controller) {
             if (!chunk.success) {
-              controller.error(chunk.error)
+              controller.error((chunk as { error: unknown }).error)
               return
             }
             controller.enqueue(chunk.value as UIMessageChunk)

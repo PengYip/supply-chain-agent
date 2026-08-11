@@ -30,10 +30,11 @@ function App() {
 
   const addToConversation = useCallback((file: FileEntry) => {
     if (!file.docId) return;
+    const docId = file.docId;
     setContextFiles((prev) =>
       prev.some((f) => f.key === file.key)
         ? prev
-        : [...prev, { docId: file.docId, filename: file.name, key: file.key }],
+        : [...prev, { docId, filename: file.name, key: file.key }],
     );
   }, []);
 
