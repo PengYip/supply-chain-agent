@@ -136,9 +136,21 @@ approvalCallback.post('/approval/callback', async (c) => {
       return c.json({ ok: false, status: 'denied', ticketId });
     }
     addAuthorizedTicket(ticketId, pending.session_id);
-    const instruction =
-      `外部审批已通过（票据 ${ticketId}，理由：${reason ?? '财务已审批'}）。` +
-      `请立即调用 create_payment 并传入 authorizedTicketId=${ticketId} 续跑付款以真正执行。`;
+    // Resume instruction is tool-specific: escalate_to_human is a generic human
+    // review (model should just continue from human feedback), every other L3
+    // ticket today is create_payment (must re-run create_payment with the
+    // authorizedTicketId to truly execute).
+    const pendingToolName = pending.tool_name;
+    let instruction: string;
+    if (pendingToolName === 'escalate_to_human') {
+      instruction =
+        `人工已复核工单 ${ticketId}（理由：${reason ?? '已处理'}）。` +
+        `请根据人工判断继续处理用户之前的请求。如果人工反馈解决了不确定性，请直接回答用户；如果需要执行后续操作，请继续。`;
+    } else {
+      instruction =
+        `外部审批已通过（票据 ${ticketId}，理由：${reason ?? '财务已审批'}）。` +
+        `请立即调用 create_payment 并传入 authorizedTicketId=${ticketId} 续跑付款以真正执行。`;
+    }
     appendMessages(pending.session_id, [
       { role: 'user', content: instruction } as ModelMessage,
     ]);

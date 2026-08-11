@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { findDocument, type OcrField } from '../data/seed.js';
 import { tagExternal } from '../harness/injectionDefense.js';
+import { recordPendingApproval } from '../harness/sessionStore.js';
+import { getSessionContext } from '../harness/sessionContext.js';
 
 // HITL tools (T3 + T4). Both L1 (auto-execute, no approval gate).
 // AI SDK 6 uses `inputSchema` (not v5 `parameters`).
@@ -10,7 +12,11 @@ import { tagExternal } from '../harness/injectionDefense.js';
 // H4: per-tool audit recording was removed -- every tool call is now wrapped
 // centrally by `withAudit` in src/harness/agent.ts (buildGatedTools).
 
-// ---- T3: escalate_to_human (uncertainty fallback, L1) -----------------------
+// ---- T3: escalate_to_human (uncertainty fallback, L1 in tool registry but
+// uses the L3 approval pattern so the frontend renders an approval card with a
+// resume path. Mirrors create_payment: register a pending ticket in
+// sessionStore, then return `blocked` + `requires_external_approval` so the
+// mock 飞书 callback can resume the conversation after human review.)
 //
 // Zero-hallucination backstop: when the model hits a data conflict / missing
 // data / low confidence / rule boundary, it calls this instead of guessing.
@@ -38,17 +44,26 @@ export const escalateToHuman = tool({
     '不确定回退：当遇到数据冲突、置信度低、数据缺失或业务规则边界情况无法确定时，转人工处理。不要自行编造或猜测，调用本工具生成人工处理工单。',
   inputSchema: escalateSchema,
   execute: async ({ issue, category, context, severity }) => {
+    const sessionId = getSessionContext();
     const ticketId = `ESC-${randomUUID().slice(0, 8)}`;
+    if (sessionId) {
+      recordPendingApproval({
+        sessionId,
+        level: 'L3',
+        toolName: 'escalate_to_human',
+        input: { issue, category, severity, context: context ?? {} },
+        ticketId,
+      });
+    }
     const result = {
-      ok: true as const,
-      status: 'escalated' as const,
+      ok: false as const,
+      status: 'blocked' as const,
+      reason: 'requires_external_approval' as const,
       ticketId,
-      message: `已生成人工处理工单 ${ticketId}，请稍候人工介入。`,
+      message: `已生成人工处理工单 ${ticketId}，等待人工复核通过后将继续处理。问题类别：${category}，严重程度：${severity}。`,
       issue,
       category,
       severity,
-      context: context ?? {},
-      createdAt: new Date().toISOString(),
     };
     return result;
   },
