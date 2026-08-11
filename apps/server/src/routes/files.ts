@@ -114,12 +114,12 @@ filesRoute.get('/', requireRole('admin', 'trader', 'viewer'), async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const prefix = `users/${user.id}/`;
-  const files: Array<{ name: string; size: number; lastModified?: string }> = [];
+  const files: Array<{ key: string; size: number; lastModified?: string }> = [];
   const stream = minioClient.listObjectsV2(MINIO_BUCKET, prefix, true);
   try {
     for await (const obj of stream) {
       files.push({
-        name: obj.name ?? '',
+        key: obj.name ?? '',
         size: obj.size ?? 0,
         lastModified: obj.lastModified?.toISOString(),
       });

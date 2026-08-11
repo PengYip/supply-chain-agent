@@ -13,7 +13,10 @@ export function useFiles() {
   const refresh = useCallback(async () => {
     try {
       const res = await fetch('/api/files');
-      if (res.ok) setFiles(await res.json());
+      if (res.ok) {
+        const data = await res.json();
+        setFiles(Array.isArray(data) ? data : (data.files ?? []));
+      }
     } catch { /* ignore */ }
     setLoading(false);
   }, []);
