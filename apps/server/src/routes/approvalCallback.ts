@@ -9,11 +9,13 @@ import {
   addAuthorizedTicket,
   loadSession,
   appendMessages,
+  sessionBelongsTo,
 } from '../harness/sessionStore.js';
 import { setSessionContext } from '../harness/sessionContext.js';
 import type { Role } from '../harness/roleToolRegistry.js';
+import type { AuthEnv } from '../lib/auth-middleware.js';
 
-export const approvalCallback = new Hono();
+export const approvalCallback = new Hono<AuthEnv>();
 
 const CallbackSchema = z
   .object({
@@ -107,12 +109,28 @@ approvalCallback.post('/approval/callback', async (c) => {
 
   const { ticketId, approvalId, approved, reason } = parsed.data;
 
+  // Phase 2 ownership gate: the authenticated user must own the session the
+  // pending approval belongs to. /api/approval/* is requireAuth-gated in
+  // index.ts, so a user is always attached here. External systems that need to
+  // post webhooks without a user session would use a separate, separately-
+  // authenticated route (not this one).
+  const user = c.get('user');
+  const assertOwnership = (sessionId: string): Response | null => {
+    if (!user) return c.json({ error: 'unauthorized' }, 401);
+    if (!sessionBelongsTo(sessionId, user.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    return null;
+  };
+
   // ---- L3: external approval ticket ----
   if (ticketId) {
     const pending = getPending(ticketId);
     if (!pending) {
       return c.json({ error: 'ticket not found', ticketId }, 404);
     }
+    const forbidden = assertOwnership(pending.session_id);
+    if (forbidden) return forbidden;
     resolveApproval(ticketId, approved ? 'approved' : 'denied');
     if (!approved) {
       return c.json({ ok: false, status: 'denied', ticketId });
@@ -139,6 +157,10 @@ approvalCallback.post('/approval/callback', async (c) => {
   const pending = getPending(id);
   if (!pending) {
     return c.json({ error: 'approval not found', approvalId: id }, 404);
+  }
+  {
+    const forbidden = assertOwnership(pending.session_id);
+    if (forbidden) return forbidden;
   }
   resolveApproval(id, approved ? 'approved' : 'denied');
   if (!approved) {

@@ -37,6 +37,9 @@ export interface RecallToolDeps {
   /** Embedder for vector/hybrid strategies. Defaults to a deterministic test
    *  embedder when unset (no Ollama needed); see roleToolRegistry/agent wiring. */
   embedder?: Embedder;
+  /** Phase 2 business-data isolation: only recall chunks owned by this user.
+   *  Empty/undefined = unscoped (legacy/tests; no filtering). */
+  userId?: string;
 }
 
 /** RRF constant (standard 60 from the original TREC paper). */
@@ -149,7 +152,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
       const effective = await resolveStrategy(strategy, deps.ctx);
 
       // FTS path (always cheap; also feeds hybrid).
-      const ftsHits = await searchChunks(deps.ctx, query, limit);
+      const ftsHits = await searchChunks(deps.ctx, query, limit, deps.userId);
 
       if (effective === 'fts') {
         return {
@@ -183,6 +186,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
           const meta = await getChunkMetaByRowids(
             deps.ctx,
             knn.map((k) => k.chunkRowId),
+            deps.userId,
           );
           return {
             query,
@@ -207,6 +211,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
         const meta = await getChunkMetaByRowids(
           deps.ctx,
           knn.map((k) => k.chunkRowId),
+          deps.userId,
         );
         const fused = reciprocalRankFusion(ftsHits, knn, meta, limit);
         return {

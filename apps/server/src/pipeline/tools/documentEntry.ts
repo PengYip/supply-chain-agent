@@ -23,6 +23,9 @@ export interface ToolDeps {
    *  sqlite-vec is unavailable on the connection, ingest skips vector population
    *  and only the FTS5 keyword index (Task 6 v1) is populated. */
   embedder?: Embedder;
+  /** Phase 2 business-data isolation: stamp + filter rows by this user. When
+   *  unset or empty, the unscoped (legacy/test) path is used -- no filtering. */
+  userId?: string;
 }
 
 const newDocId = () => `DOC-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -50,6 +53,8 @@ export interface IngestOptions {
   docType: DocType;
   modality: Modality;
   embedder?: Embedder;
+  /** Phase 2: owning user for the new document + its chunks. */
+  userId?: string;
 }
 
 export async function ingestFile(opts: IngestOptions): Promise<{
@@ -57,7 +62,7 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   blockCount: number;
   modality: string;
 }> {
-  const { ctx, sourcePath, docType, modality, embedder } = opts;
+  const { ctx, sourcePath, docType, modality, embedder, userId } = opts;
   ensureFk(ctx);
   // Path allowlist (injection defense): reject anything outside INGEST_ROOT.
   const safePath = assertWithinRoot(sourcePath);
@@ -66,7 +71,7 @@ export async function ingestFile(opts: IngestOptions): Promise<{
     modality === 'scanned'
       ? await ingestWithMinerU(safePath, docType, docId)
       : await ingestWithDigital(safePath, docType, docId);
-  await saveDocument(ctx, blockModel);
+  await saveDocument(ctx, blockModel, userId);
   const chunks = chunkBlockModel(blockModel);
   const chunkRowIds = await saveChunks(ctx, docId, chunks);
   if (embedder && (await isVecReady(ctx))) {
@@ -102,6 +107,7 @@ export function buildIngestDocumentTool(deps: ToolDeps) {
         docType: docType as DocType,
         modality: modality as Modality,
         embedder: deps.embedder,
+        userId: deps.userId,
       });
     },
   });
@@ -116,7 +122,7 @@ export function buildExtractFieldsTool(deps: ToolDeps) {
       docType: z.enum(['合同', '发票', '提单', '装箱单', '其他']),
     }),
     execute: async ({ docId, docType }) => {
-      const blockModel = await loadDocument(deps.ctx, docId);
+      const blockModel = await loadDocument(deps.ctx, docId, deps.userId);
       if (!blockModel) return { status: 'error' as const, reason: 'document_not_found' };
       if (!deps.extraction) {
         return { status: 'error' as const, reason: 'extraction_model_not_configured' };
@@ -136,14 +142,18 @@ export function buildExtractFieldsTool(deps: ToolDeps) {
       const pendingManual = result.fields
         .filter((f) => !f.needsReview && !f.autoAccepted)
         .map((f) => f.name);
-      const extractionId = await saveExtraction(deps.ctx, {
-        documentId: docId,
-        docType: docType as DocType,
-        fields,
-        fieldMeta,
-        overallConfidence: result.overallConfidence,
-        needsReview,
-      });
+      const extractionId = await saveExtraction(
+        deps.ctx,
+        {
+          documentId: docId,
+          docType: docType as DocType,
+          fields,
+          fieldMeta,
+          overallConfidence: result.overallConfidence,
+          needsReview,
+        },
+        deps.userId,
+      );
       // Injection defense (output:tagged): the field VALUES and citedText are
       // strings read straight from an untrusted document -- an attacker could
       // embed prompt-injection text in them. Wrap every external-derived STRING
@@ -184,12 +194,16 @@ export function buildBindDocumentTool(deps: ToolDeps) {
     }),
     execute: async ({ documentId, contractNo, relation, confidence, sourceSpan }) => {
       ensureFk(deps.ctx);
-      const blockModel = await loadDocument(deps.ctx, documentId);
+      const blockModel = await loadDocument(deps.ctx, documentId, deps.userId);
       if (!blockModel) return { ok: false as const, reason: 'document_not_found' };
-      const bindingId = await saveBinding(deps.ctx, {
-        documentId, contractNo, relation,
-        sourceRefs: [sourceSpan], confidence, createdBy: 'trader-agent',
-      });
+      const bindingId = await saveBinding(
+        deps.ctx,
+        {
+          documentId, contractNo, relation,
+          sourceRefs: [sourceSpan], confidence, createdBy: 'trader-agent',
+        },
+        deps.userId,
+      );
       // T8 deviation (per cross-task directive): bind extends the existing
       // link_document — also reflect the binding in the in-memory contract graph.
       const linkRes = linkDocumentToContract(contractNo, documentId);

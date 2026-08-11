@@ -9,8 +9,10 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AuthEnv } from '../lib/auth-middleware.js';
+import { requireRole } from '../lib/auth-middleware.js';
 import {
   createSession,
+  deleteSession,
   listSessionsForUser,
   loadSession,
   sessionBelongsTo,
@@ -24,7 +26,8 @@ const CreateBody = z.object({
 });
 
 // List the current user's chat sessions (newest first).
-sessionsRoute.get('/', (c) => {
+// Phase 4 RBAC: admin/trader can manage sessions; viewer is read-only (list only).
+sessionsRoute.get('/', requireRole('admin', 'trader', 'viewer'), (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const rows = listSessionsForUser(user.id);
@@ -34,7 +37,8 @@ sessionsRoute.get('/', (c) => {
 });
 
 // Create a new chat session owned by the current user.
-sessionsRoute.post('/', async (c) => {
+// Phase 4 RBAC: only admin/trader may create sessions (viewer cannot).
+sessionsRoute.post('/', requireRole('admin', 'trader'), async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   let body: unknown;
@@ -64,4 +68,24 @@ sessionsRoute.get('/:id', (c) => {
   const loaded = loadSession(id);
   if (!loaded) return c.json({ error: 'not found' }, 404);
   return c.json({ id: loaded.id, role: loaded.role, messages: loaded.messages });
+});
+
+// Delete a session -- only if the authenticated user owns it. Also cascades to
+// messages, pending approvals, and authorized tickets (see deleteSession).
+// Returns 404 (existence hidden) for both unknown and not-owned ids.
+// Phase 4 RBAC: only admin/trader may delete sessions (viewer cannot).
+sessionsRoute.delete('/:id', requireRole('admin', 'trader'), (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const id = c.req.param('id');
+  // Ownership check: distinguish not-found from forbidden. The brief asks for a
+  // 403 'forbidden' on not-owned and a 404 'not_found' on missing.
+  const loaded = loadSession(id);
+  if (!loaded) return c.json({ error: 'not_found' }, 404);
+  if (!sessionBelongsTo(id, user.id)) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const removed = deleteSession(id);
+  if (!removed) return c.json({ error: 'not_found' }, 404);
+  return c.json({ ok: true });
 });

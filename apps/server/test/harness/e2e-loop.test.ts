@@ -9,9 +9,9 @@ import { env } from '../../src/env.js';
 /**
  * H1: end-to-end agent-loop stub test.
  *
- * Exercises runStream -> streamText with the FULL 10-tool trader toolset against
+ * Exercises runStream -> streamText with the FULL 12-tool trader toolset against
  * a deterministic fake LanguageModelV2 (no network). Asserts:
- *  (a) the 10-tool trader toolset is folded into the live streamText call;
+ *  (a) the 12-tool trader toolset is folded into the live streamText call;
  *  (b) bind_document carries needsApproval (L2) in the gated toolset;
  *  (c) a canned tool call actually routes to the matching tool's execute;
  *  (d) the stream + telemetry path completes without throwing.
@@ -73,7 +73,7 @@ function createFakeModel(opts: FakeModelOptions) {
 }
 
 describe('agent e2e loop (stub model)', () => {
-  it('routes a canned tool call through the 10-tool trader toolset offline', async () => {
+  it('routes a canned tool call through the 12-tool trader toolset offline', async () => {
     const ctx = createDb(':memory:');
     migrate(ctx.sqlite);
     // ingest_document now enforces a path allowlist against env.INGEST_ROOT, so
@@ -111,8 +111,8 @@ describe('agent e2e loop (stub model)', () => {
     expect(threw).toBe(false);
 
     // (a) the live streamText call received the full trader toolset (base 7 +
-    // 3 doc-entry + recall_documents = 11).
-    expect(capturedNames).toHaveLength(11);
+    // 3 doc-entry + recall_documents + execute_code = 12).
+    expect(capturedNames).toHaveLength(12);
     for (const n of ['ingest_document', 'extract_fields', 'bind_document', 'query_contract', 'create_payment', 'recall_documents']) {
       expect(capturedNames).toContain(n);
     }

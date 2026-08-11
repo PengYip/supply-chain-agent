@@ -42,6 +42,12 @@ const EnvSchema = z.object({
   MINIO_ACCESS_KEY: z.string().default('minio'),
   MINIO_SECRET_KEY: z.string().default('miniosecret'),
   MINIO_BUCKET: z.string().default('sca-files'),
+  // CubeSandbox code execution (execute_code tool). Points at a deployed
+  // CubeSandbox instance whose cube-api speaks the E2B-compatible REST protocol.
+  // Defaults target the dev cluster on ubuntu-server; override via .env for prod.
+  CUBE_API_URL: z.string().url().default('http://172.18.10.150:3040'),
+  CUBE_SANDBOX_DOMAIN: z.string().default('cube.app'),
+  CUBE_TEMPLATE_ALIAS: z.string().default('sca-code'),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

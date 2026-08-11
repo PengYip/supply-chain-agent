@@ -151,6 +151,10 @@ const stmtInsertTicket = db.prepare(
 const stmtHasTicket = db.prepare(
   'SELECT ticket_id FROM authorized_tickets WHERE ticket_id = ? AND session_id = ?',
 );
+const stmtDeleteSession = db.prepare('DELETE FROM sessions WHERE id = ?');
+const stmtDeleteSessionMessages = db.prepare('DELETE FROM session_messages WHERE session_id = ?');
+const stmtDeleteSessionPending = db.prepare('DELETE FROM pending_approvals WHERE session_id = ?');
+const stmtDeleteSessionTickets = db.prepare('DELETE FROM authorized_tickets WHERE session_id = ?');
 
 // ---- API ----
 
@@ -189,6 +193,25 @@ export function loadSession(id: string): LoadedSession | null {
   const rows = stmtListMessages.all(id) as MessageRow[];
   const messages = rows.map((r) => JSON.parse(r.model_message_json) as ModelMessage);
   return { id: row.id, role: row.role, messages };
+}
+
+/**
+ * Delete a chat session and all of its dependent rows (messages, pending
+ * approvals, authorized tickets). Returns true if the session existed (and was
+ * deleted), false if it was already gone. Callers MUST verify ownership first
+ * (sessionBelongsTo) -- this fn does not re-check.
+ */
+export function deleteSession(id: string): boolean {
+  const row = stmtGetSession.get(id) as SessionRow | undefined;
+  if (!row) return false;
+  const tx = db.transaction(() => {
+    stmtDeleteSessionMessages.run(id);
+    stmtDeleteSessionPending.run(id);
+    stmtDeleteSessionTickets.run(id);
+    stmtDeleteSession.run(id);
+  });
+  tx();
+  return true;
 }
 
 export function appendMessages(sessionId: string, msgs: ModelMessage[]): void {

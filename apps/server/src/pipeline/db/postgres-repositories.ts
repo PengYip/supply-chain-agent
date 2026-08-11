@@ -27,22 +27,30 @@ import type {
   ChunkMeta,
 } from './repositories.js';
 
+// Phase 2 business-data isolation: same convention as repositories.ts -- a
+// normalized '' means "unscoped" (legacy/tests) and the filter is skipped.
+function effectiveUserId(userId?: string): string {
+  return userId && userId.length > 0 ? userId : '';
+}
+
 const rid = (p: string) =>
   `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
 export async function saveDocumentPg(
   ctx: PostgresDbContext,
   model: BlockModel,
+  userId?: string,
 ): Promise<string> {
   await ctx.pool.query(
-    `INSERT INTO documents (id, doc_type, modality, source_uri, block_model)
-     VALUES ($1, $2, $3, $4, $5)`,
+    `INSERT INTO documents (id, doc_type, modality, source_uri, block_model, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
     [
       model.docId,
       model.docType,
       model.modality,
       model.sourceUri,
       JSON.stringify(model),
+      effectiveUserId(userId),
     ],
   );
   return model.docId;
@@ -51,11 +59,18 @@ export async function saveDocumentPg(
 export async function loadDocumentPg(
   ctx: PostgresDbContext,
   docId: string,
+  userId?: string,
 ): Promise<BlockModel | null> {
-  const res = await ctx.pool.query(
-    'SELECT block_model FROM documents WHERE id = $1',
-    [docId],
-  );
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        'SELECT block_model FROM documents WHERE id = $1 AND user_id = $2',
+        [docId, uid],
+      )
+    : await ctx.pool.query(
+        'SELECT block_model FROM documents WHERE id = $1',
+        [docId],
+      );
   if (res.rowCount === 0 || !res.rows[0]) return null;
   // jsonb auto-parsed to object by node-postgres.
   return res.rows[0].block_model as BlockModel;
@@ -64,12 +79,13 @@ export async function loadDocumentPg(
 export async function saveExtractionPg(
   ctx: PostgresDbContext,
   input: ExtractionInput,
+  userId?: string,
 ): Promise<string> {
   const id = rid('EX');
   await ctx.pool.query(
     `INSERT INTO extractions
-       (id, document_id, doc_type, fields, field_meta, overall_confidence, needs_review)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+       (id, document_id, doc_type, fields, field_meta, overall_confidence, needs_review, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
     [
       id,
       input.documentId,
@@ -78,6 +94,7 @@ export async function saveExtractionPg(
       JSON.stringify(input.fieldMeta),
       input.overallConfidence,
       input.needsReview,
+      effectiveUserId(userId),
     ],
   );
   return id;
@@ -86,12 +103,13 @@ export async function saveExtractionPg(
 export async function saveBindingPg(
   ctx: PostgresDbContext,
   input: BindingInput,
+  userId?: string,
 ): Promise<string> {
   const id = rid('BD');
   await ctx.pool.query(
     `INSERT INTO bindings
-       (id, document_id, contract_no, relation, source_refs, confidence, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+       (id, document_id, contract_no, relation, source_refs, confidence, created_by, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
     [
       id,
       input.documentId,
@@ -100,6 +118,7 @@ export async function saveBindingPg(
       JSON.stringify(input.sourceRefs),
       input.confidence,
       input.createdBy,
+      effectiveUserId(userId),
     ],
   );
   return id;
@@ -170,24 +189,34 @@ export async function searchChunksPg(
   ctx: PostgresDbContext,
   query: string,
   limit: number,
+  userId?: string,
 ): Promise<ChunkMatch[]> {
   const trimmed = query.trim();
   if (!trimmed) return [];
   const safeLimit = limit > 0 ? Math.floor(limit) : 5;
+  const uid = effectiveUserId(userId);
+  // Phase 2: when userId is in scope, JOIN documents and filter on user_id so
+  // recall only returns the caller's chunks. Unscoped path (uid === '') keeps
+  // the pre-isolation query shape.
+  const join = uid ? 'JOIN documents AS d ON d.id = c.document_id' : '';
+  const userFilter = uid ? 'AND d.user_id = $3' : '';
+  const params = uid ? [trimmed, safeLimit, uid] : [trimmed, safeLimit];
   let res;
   try {
     res = await ctx.pool.query(
       `SELECT
-         id              AS "chunkRowId",
-         document_id     AS "documentId",
-         chunk_index     AS "chunkIndex",
-         ts_headline('simple', chunk_text, plainto_tsquery('simple', $1)) AS snippet,
-         ts_rank(fts_vector, plainto_tsquery('simple', $1)) AS rank
-       FROM doc_chunk
-       WHERE fts_vector @@ plainto_tsquery('simple', $1)
+         c.id            AS "chunkRowId",
+         c.document_id   AS "documentId",
+         c.chunk_index   AS "chunkIndex",
+         ts_headline('simple', c.chunk_text, plainto_tsquery('simple', $1)) AS snippet,
+         ts_rank(c.fts_vector, plainto_tsquery('simple', $1)) AS rank
+       FROM doc_chunk AS c
+       ${join}
+       WHERE c.fts_vector @@ plainto_tsquery('simple', $1)
+       ${userFilter}
        ORDER BY rank DESC
        LIMIT $2`,
-      [trimmed, safeLimit],
+      params,
     );
   } catch {
     // Missing fts_vector/GIN (un-migrated) -> surface as no matches, never throw.
@@ -210,15 +239,25 @@ export async function searchChunksPg(
 export async function getChunkMetaByRowidsPg(
   ctx: PostgresDbContext,
   rowids: number[],
+  userId?: string,
 ): Promise<Map<number, ChunkMeta>> {
   const out = new Map<number, ChunkMeta>();
   if (rowids.length === 0) return out;
-  const res = await ctx.pool.query(
-    `SELECT id, document_id, chunk_index, chunk_text
-     FROM doc_chunk
-     WHERE id = ANY($1)`,
-    [rowids],
-  );
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT c.id, c.document_id, c.chunk_index, c.chunk_text
+         FROM doc_chunk AS c
+         JOIN documents AS d ON d.id = c.document_id
+         WHERE c.id = ANY($1) AND d.user_id = $2`,
+        [rowids, uid],
+      )
+    : await ctx.pool.query(
+        `SELECT id, document_id, chunk_index, chunk_text
+         FROM doc_chunk
+         WHERE id = ANY($1)`,
+        [rowids],
+      );
   for (const r of res.rows) {
     out.set(Number(r.id), {
       documentId: r.document_id,

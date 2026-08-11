@@ -52,6 +52,11 @@ chatRoute.post('/chat', async (c) => {
   // Sets the request context so L3 tool execute can attribute pending tickets.
   const user = c.get('user');
   const userId = user?.id ?? null;
+  // Phase 4 RBAC: map the authenticated user's role to the agent role. For now
+  // every authenticated user runs the trader agent (admin/trader/undefined -> all
+  // map to 'trader'); viewer->agent-role isolation is a future enhancement. The
+  // route is already requireAuth-gated in index.ts, so a user is always attached.
+  const agentRole: Role = (user?.role === 'admin' || user?.role === 'trader' || !user?.role) ? 'trader' : 'trader';
   const headerId = c.req.header('x-session-id');
   const candidate = headerId && userId ? (sessionBelongsTo(headerId, userId) ? loadSession(headerId) : null) : null;
   const loaded = headerId && !userId ? loadSession(headerId) : candidate;
@@ -83,8 +88,9 @@ chatRoute.post('/chat', async (c) => {
   try {
     const result = runStream({
       messages: [...priorMessages, ...newModelMessages],
-      role: role as Role,
+      role: agentRole,
       auditTraceId,
+      userId: userId ?? undefined,
     });
 
     // After the stream completes, persist the assistant response messages and

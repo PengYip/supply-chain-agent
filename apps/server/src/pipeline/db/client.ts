@@ -44,6 +44,7 @@ export function migrate(sqlite: Database.Database): void {
       modality TEXT NOT NULL,
       source_uri TEXT NOT NULL,
       block_model TEXT NOT NULL,
+      user_id TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS extractions (
@@ -54,6 +55,7 @@ export function migrate(sqlite: Database.Database): void {
       field_meta TEXT NOT NULL,
       overall_confidence REAL NOT NULL,
       needs_review INTEGER NOT NULL DEFAULT 0,
+      user_id TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS bindings (
@@ -64,10 +66,14 @@ export function migrate(sqlite: Database.Database): void {
       source_refs TEXT NOT NULL,
       confidence REAL NOT NULL,
       created_by TEXT NOT NULL,
+      user_id TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_bindings_contract ON bindings(contract_no);
     CREATE INDEX IF NOT EXISTS idx_extractions_doc ON extractions(document_id);
+    CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
+    CREATE INDEX IF NOT EXISTS idx_extractions_user ON extractions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_bindings_user ON bindings(user_id);
 
     -- L4 document recall index (Task 6 v1, SQLite/FTS5 path). Keyword BM25 recall
     -- over chunked document text. Postgres+pgvector and sqlite-vec/semantic paths
@@ -90,4 +96,19 @@ export function migrate(sqlite: Database.Database): void {
       content_rowid='id'
     );
   `);
+
+  // Phase 2 business-data isolation: add user_id to pre-existing dev databases.
+  // CREATE TABLE IF NOT EXISTS does not add columns to an already-existing table,
+  // so ALTER is needed for databases created before the user_id columns landed.
+  // Guarded per-table (duplicate column -> SQLITE_ERROR) so re-running is safe.
+  for (const tbl of ['documents', 'extractions', 'bindings']) {
+    const cols = sqlite.prepare(`PRAGMA table_info(${tbl})`).all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'user_id')) {
+      try {
+        sqlite.exec(`ALTER TABLE ${tbl} ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`);
+      } catch {
+        // Column may have been added concurrently; safe to ignore.
+      }
+    }
+  }
 }

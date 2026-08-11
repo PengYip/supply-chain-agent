@@ -114,6 +114,18 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'tagged', budget: 'summary', signal: 'counter',
     persist: 'vector', risk: { level: 'L1', injection: 'external' },
   },
+  execute_code: {
+    // Executes arbitrary Python in an isolated sandbox. stdout/stderr/results
+    // may contain arbitrary text (user code can print anything, including
+    // prompt-injection payloads) -> output 'tagged'. budget 'summary': code
+    // output can be large (e.g. printing a big dataframe) and benefits from
+    // compression. signal 'counter' (a read-like computation). persist 'session'
+    // (ephemeral: no business state is mutated). risk L1 (auto-execute: the
+    // sandbox is isolated, no real-world side effects) but injection 'external'
+    // (user-supplied code runs inside).
+    output: 'tagged', budget: 'summary', signal: 'counter',
+    persist: 'session', risk: { level: 'L1', injection: 'external' },
+  },
 };
 
 /** True iff a contract exists for the given tool name. */

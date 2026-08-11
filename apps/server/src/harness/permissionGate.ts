@@ -54,6 +54,7 @@ registerPermission('verify_document_fields', 'L1'); // T4: document OCR check
 registerPermission('ingest_document', 'L1'); // T9: parse + persist BlockModel
 registerPermission('extract_fields', 'L1'); // T9: grounded field extraction
 registerPermission('recall_documents', 'L1'); // T6: FTS5 keyword recall over chunks
+registerPermission('execute_code', 'L1'); // CubeSandbox: isolated Python execution
 // L2 write confirm
 registerPermission('link_document', 'L2');
 registerPermission('advance_contract_stage', 'L2');

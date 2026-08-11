@@ -65,15 +65,23 @@ const nowTs = () => timestamp({ withTimezone: true }).defaultNow().notNull();
 // ---- Mirror of the SQLite pipeline schema (db/schema.ts) -------------------
 
 /** documents: one ingested source file's BlockModel. Mirrors SQLite documents. */
-export const documents = pgTable('documents', {
-  id: text('id').primaryKey(),
-  docType: text('doc_type').notNull(),
-  modality: text('modality').notNull(),
-  sourceUri: text('source_uri').notNull(),
-  // SQLite stores this as TEXT(JSON); Postgres uses JSONB for structured query.
-  blockModel: jsonb('block_model').notNull(),
-  createdAt: nowTs(),
-});
+export const documents = pgTable(
+  'documents',
+  {
+    id: text('id').primaryKey(),
+    docType: text('doc_type').notNull(),
+    modality: text('modality').notNull(),
+    sourceUri: text('source_uri').notNull(),
+    // SQLite stores this as TEXT(JSON); Postgres uses JSONB for structured query.
+    blockModel: jsonb('block_model').notNull(),
+    // Phase 2 business-data isolation: owning user ('' = legacy / unscoped).
+    userId: text('user_id').notNull().default(''),
+    createdAt: nowTs(),
+  },
+  (t) => ({
+    userIdx: index('idx_documents_user').on(t.userId),
+  }),
+);
 
 /** extractions: grounded field extractions off a document. Mirrors SQLite extractions. */
 export const extractions = pgTable(
@@ -89,10 +97,12 @@ export const extractions = pgTable(
     // SQLite REAL -> Postgres numeric (avoids float64 precision drift on confidence).
     overallConfidence: numeric('overall_confidence', { precision: 5, scale: 4 }).notNull(),
     needsReview: boolean('needs_review').notNull().default(false),
+    userId: text('user_id').notNull().default(''),
     createdAt: nowTs(),
   },
   (t) => ({
     docIdx: index('idx_extractions_doc').on(t.documentId),
+    userIdx: index('idx_extractions_user').on(t.userId),
   }),
 );
 
@@ -109,10 +119,12 @@ export const bindings = pgTable(
     sourceRefs: jsonb('source_refs').notNull(),
     confidence: numeric('confidence', { precision: 5, scale: 4 }).notNull(),
     createdBy: text('created_by').notNull(),
+    userId: text('user_id').notNull().default(''),
     createdAt: nowTs(),
   },
   (t) => ({
     contractIdx: index('idx_bindings_contract').on(t.contractNo),
+    userIdx: index('idx_bindings_user').on(t.userId),
   }),
 );
 

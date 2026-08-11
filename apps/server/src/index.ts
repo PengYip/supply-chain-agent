@@ -32,7 +32,7 @@ app.use(
   '/api/*',
   cors({
     origin: 'http://localhost:5173',
-    allowMethods: ['GET', 'POST', 'OPTIONS'],
+    allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type'],
     // Cookies must be sent cross-origin in dev (Vite :5173 -> API :3001).
     credentials: true,

@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 import { requireAuth } from '../lib/auth-middleware.js';
+import { requireRole } from '../lib/auth-middleware.js';
 import { minioClient, MINIO_BUCKET } from '../lib/minio.js';
 import { env } from '../env.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
@@ -44,7 +45,8 @@ function strField(v: unknown, fallback: string): string {
 }
 
 /** Upload a file -> MinIO -> INGEST_ROOT -> ingest pipeline. */
-filesRoute.post('/', async (c) => {
+// Phase 4 RBAC: only admin/trader may upload files (viewer cannot).
+filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
 
@@ -107,7 +109,8 @@ filesRoute.post('/', async (c) => {
 });
 
 /** List the current user's uploaded files (metadata only). */
-filesRoute.get('/', async (c) => {
+// Phase 4 RBAC: admin/trader/viewer may list (read-only access for viewer).
+filesRoute.get('/', requireRole('admin', 'trader', 'viewer'), async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const prefix = `users/${user.id}/`;

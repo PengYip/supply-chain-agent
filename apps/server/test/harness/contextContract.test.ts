@@ -25,6 +25,7 @@ const EXPECTED_TOOLS = [
   'extract_fields',
   'bind_document',
   'recall_documents',
+  'execute_code',
 ] as const;
 
 describe('tool-context contract registry', () => {
@@ -74,9 +75,10 @@ describe('contract injection-exposure mapping (integration point 1)', () => {
   it('marks tools that RETURN external-derived content as output tagged', () => {
     // extract_fields + verify_document_fields return field/OCR strings derived
     // from uploaded documents, and recall_documents returns BM25 snippets of
-    // ingested doc text -> all must be wrapped in <external_content>.
+    // ingested doc text -> all must be wrapped in <external_content>. execute_code
+    // runs user-supplied Python whose stdout can carry injection payloads too.
     expect(getTaggedOutputTools().sort()).toEqual(
-      ['extract_fields', 'recall_documents', 'verify_document_fields'].sort(),
+      ['execute_code', 'extract_fields', 'recall_documents', 'verify_document_fields'].sort(),
     );
   });
 
@@ -84,8 +86,9 @@ describe('contract injection-exposure mapping (integration point 1)', () => {
     // ingest_document returns only a {docId,...} handle (output raw) but still
     // parsed an untrusted file -> injection external. extract/verify both handle
     // AND return external content. recall_documents reads back that doc text.
+    // execute_code runs untrusted user code (injection external).
     expect(getExternalHandlingTools().sort()).toEqual(
-      ['extract_fields', 'ingest_document', 'recall_documents', 'verify_document_fields'].sort(),
+      ['execute_code', 'extract_fields', 'ingest_document', 'recall_documents', 'verify_document_fields'].sort(),
     );
   });
 

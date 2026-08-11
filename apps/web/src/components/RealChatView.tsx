@@ -10,7 +10,7 @@ import { buildRenderItems } from '../utils/realChatUtils'
 import { authClient } from '../lib/auth'
 import clsx from 'clsx'
 
-export const RealChatView: React.FC<{ onSignOut?: () => void }> = ({ onSignOut }) => {
+export const RealChatView: React.FC<{ onSignOut?: () => void; sessionId?: string | null }> = ({ onSignOut, sessionId }) => {
   const [input, setInput] = useState('')
 
   // Phase 3: file upload state. Uploads POST to /api/files (MinIO + ingest bridge).
@@ -53,14 +53,14 @@ export const RealChatView: React.FC<{ onSignOut?: () => void }> = ({ onSignOut }
   // returns the id in the `x-session-id` header. The server reuses this id
   // for every request on this session, so the polled status path matches.
   const sessionIdRef = useRef<string | null>(null)
-  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [liveSessionId, setLiveSessionId] = useState<string | null>(null)
 
   const fetchWrapper = useCallback<typeof fetch>(async (input, init) => {
     const res = await fetch(input, init)
     const sid = res.headers.get('x-session-id')
     if (sid && sid !== sessionIdRef.current) {
       sessionIdRef.current = sid
-      setSessionId(sid)
+      setLiveSessionId(sid)
     }
     return res
   }, [])
@@ -77,6 +77,29 @@ export const RealChatView: React.FC<{ onSignOut?: () => void }> = ({ onSignOut }
       lastAssistantMessageIsCompleteWithApprovalResponses({ messages }) ||
       lastAssistantMessageIsCompleteWithToolCalls({ messages }),
   })
+
+  // Load session history when the externally-provided sessionId changes.
+  // Also seed sessionIdRef so the very first outbound chat request carries the
+  // correct x-session-id header (the backend then associates messages with it).
+  useEffect(() => {
+    if (!sessionId) return
+    sessionIdRef.current = sessionId
+    setLiveSessionId(sessionId)
+    let cancelled = false
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return
+        const msgs = (data as { messages?: UIMessage[] }).messages
+        if (Array.isArray(msgs) && msgs.length > 0) {
+          setMessages(msgs)
+        }
+      })
+      .catch(() => { /* ignore */ })
+    return () => {
+      cancelled = true
+    }
+  }, [sessionId, setMessages])
 
   const handleApprove = (id: string) =>
     addToolApprovalResponse({ id, approved: true, reason: '用户确认执行' })
@@ -196,7 +219,7 @@ export const RealChatView: React.FC<{ onSignOut?: () => void }> = ({ onSignOut }
   const bottomRef = useRef<HTMLDivElement>(null)
 
   // Poll agent status only while a real session exists (real mode only).
-  const agentStatus = useAgentStatus(sessionId)
+  const agentStatus = useAgentStatus(liveSessionId)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -254,7 +277,7 @@ export const RealChatView: React.FC<{ onSignOut?: () => void }> = ({ onSignOut }
       </div>
 
       {/* Agent status strip (real mode only) */}
-      <AgentStatusBar sessionId={sessionId} status={agentStatus} />
+      <AgentStatusBar sessionId={liveSessionId} status={agentStatus} />
 
       {/* Messages */}
       <div className="flex-1 overflow-auto p-4">

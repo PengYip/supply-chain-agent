@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { documents, extractions, bindings } from './schema.js';
 import type { DbContext } from './client.js';
 import type { BlockModel, DocType, SourceSpan } from '../types.js';
@@ -16,6 +16,14 @@ import {
   searchChunksPg,
   getChunkMetaByRowidsPg,
 } from './postgres-repositories.js';
+
+// Phase 2 business-data isolation: a normalized userId is '' / undefined when the
+// caller is unscoped (legacy path, most tests). When a non-empty userId IS in
+// scope, repository fns filter every read by it so one tenant cannot see
+// another's documents / extractions / bindings / chunks. Writes stamp the row.
+export function effectiveUserId(userId?: string): string {
+  return userId && userId.length > 0 ? userId : '';
+}
 
 export interface ExtractionInput {
   documentId: string;
@@ -53,26 +61,29 @@ const rid = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toSt
 // delegates to the pg impl in postgres-repositories.ts. Callers `await` once;
 // no per-call-site branching.
 
-export async function saveDocument(ctx: DbContext, model: BlockModel): Promise<string> {
-  if (ctx.backend === 'postgres') return saveDocumentPg(ctx, model);
+export async function saveDocument(ctx: DbContext, model: BlockModel, userId?: string): Promise<string> {
+  if (ctx.backend === 'postgres') return saveDocumentPg(ctx, model, userId);
   ctx.db.insert(documents).values({
     id: model.docId,
     docType: model.docType,
     modality: model.modality,
     sourceUri: model.sourceUri,
     blockModel: JSON.stringify(model),
+    userId: effectiveUserId(userId),
   }).run();
   return model.docId;
 }
 
-export async function loadDocument(ctx: DbContext, docId: string): Promise<BlockModel | null> {
-  if (ctx.backend === 'postgres') return loadDocumentPg(ctx, docId);
-  const row = ctx.db.select().from(documents).where(eq(documents.id, docId)).all()[0];
+export async function loadDocument(ctx: DbContext, docId: string, userId?: string): Promise<BlockModel | null> {
+  if (ctx.backend === 'postgres') return loadDocumentPg(ctx, docId, userId);
+  const uid = effectiveUserId(userId);
+  const filter = uid ? and(eq(documents.id, docId), eq(documents.userId, uid)) : eq(documents.id, docId);
+  const row = ctx.db.select().from(documents).where(filter).all()[0];
   return row ? (JSON.parse(row.blockModel) as BlockModel) : null;
 }
 
-export async function saveExtraction(ctx: DbContext, input: ExtractionInput): Promise<string> {
-  if (ctx.backend === 'postgres') return saveExtractionPg(ctx, input);
+export async function saveExtraction(ctx: DbContext, input: ExtractionInput, userId?: string): Promise<string> {
+  if (ctx.backend === 'postgres') return saveExtractionPg(ctx, input, userId);
   const id = rid('EX');
   ctx.db.insert(extractions).values({
     id,
@@ -82,12 +93,13 @@ export async function saveExtraction(ctx: DbContext, input: ExtractionInput): Pr
     fieldMeta: JSON.stringify(input.fieldMeta),
     overallConfidence: input.overallConfidence,
     needsReview: input.needsReview,
+    userId: effectiveUserId(userId),
   }).run();
   return id;
 }
 
-export async function saveBinding(ctx: DbContext, input: BindingInput): Promise<string> {
-  if (ctx.backend === 'postgres') return saveBindingPg(ctx, input);
+export async function saveBinding(ctx: DbContext, input: BindingInput, userId?: string): Promise<string> {
+  if (ctx.backend === 'postgres') return saveBindingPg(ctx, input, userId);
   const id = rid('BD');
   ctx.db.insert(bindings).values({
     id,
@@ -97,6 +109,7 @@ export async function saveBinding(ctx: DbContext, input: BindingInput): Promise<
     sourceRefs: JSON.stringify(input.sourceRefs),
     confidence: input.confidence,
     createdBy: input.createdBy,
+    userId: effectiveUserId(userId),
   }).run();
   return id;
 }
@@ -196,14 +209,21 @@ export async function searchChunks(
   ctx: DbContext,
   query: string,
   limit: number,
+  userId?: string,
 ): Promise<ChunkMatch[]> {
-  if (ctx.backend === 'postgres') return searchChunksPg(ctx, query, limit);
+  if (ctx.backend === 'postgres') return searchChunksPg(ctx, query, limit, userId);
   const ftsQuery = sanitizeFtsQuery(query);
   if (!ftsQuery) return [];
   const safeLimit = limit > 0 ? Math.floor(limit) : 5;
+  const uid = effectiveUserId(userId);
   // Column-scoped MATCH (f.chunk_text) + alias JOIN: a bare `doc_chunk_fts MATCH`
   // collides with the external content table name in the same FROM. snippet() and
   // bm25() read content via content_rowid -> doc_chunk.id.
+  //
+  // Phase 2: when userId is in scope, JOIN to documents and filter on user_id so
+  // recall only returns the caller's chunks. When uid is '' (legacy/tests), the
+  // extra JOIN+WHERE is skipped so behavior is byte-identical to the pre-isolation
+  // path (no perf hit, no rows hidden from unscoped callers).
   const stmt = ctx.sqlite.prepare(
     `SELECT
        dc.id           AS chunkRowId,
@@ -213,12 +233,15 @@ export async function searchChunks(
        bm25(doc_chunk_fts) AS bm25Score
      FROM doc_chunk AS dc
      JOIN doc_chunk_fts AS f ON f.rowid = dc.id
+     ${uid ? 'JOIN documents AS d ON d.id = dc.document_id' : ''}
      WHERE f.chunk_text MATCH ?
+     ${uid ? 'AND d.user_id = ?' : ''}
      ORDER BY bm25Score
      LIMIT ?`,
   );
+  const params: Array<string | number> = uid ? [ftsQuery, uid, safeLimit] : [ftsQuery, safeLimit];
   try {
-    const rows = stmt.all(ftsQuery, safeLimit) as Array<{
+    const rows = stmt.all(...params) as Array<{
       chunkRowId: number | bigint;
       documentId: string;
       chunkIndex: number | null;
@@ -253,18 +276,26 @@ export interface ChunkMeta {
 export async function getChunkMetaByRowids(
   ctx: DbContext,
   rowids: number[],
+  userId?: string,
 ): Promise<Map<number, ChunkMeta>> {
-  if (ctx.backend === 'postgres') return getChunkMetaByRowidsPg(ctx, rowids);
+  if (ctx.backend === 'postgres') return getChunkMetaByRowidsPg(ctx, rowids, userId);
   const out = new Map<number, ChunkMeta>();
   if (rowids.length === 0) return out;
+  const uid = effectiveUserId(userId);
   const placeholders = rowids.map(() => '?').join(',');
-  const rows = ctx.sqlite
-    .prepare(
-      `SELECT id, document_id, chunk_index, chunk_text
+  // Phase 2: when userId is in scope, JOIN documents and filter on user_id so a
+  // caller cannot pull chunk text for a document they do not own. Unscoped path
+  // (uid === '') keeps the pre-isolation query shape.
+  const sql = uid
+    ? `SELECT dc.id, dc.document_id, dc.chunk_index, dc.chunk_text
+       FROM doc_chunk AS dc
+       JOIN documents AS d ON d.id = dc.document_id
+       WHERE dc.id IN (${placeholders}) AND d.user_id = ?`
+    : `SELECT id, document_id, chunk_index, chunk_text
        FROM doc_chunk
-       WHERE id IN (${placeholders})`,
-    )
-    .all(...rowids) as Array<{
+       WHERE id IN (${placeholders})`;
+  const params: Array<string | number> = uid ? [...rowids, uid] : rowids;
+  const rows = ctx.sqlite.prepare(sql).all(...params) as Array<{
     id: number | bigint;
     document_id: string;
     chunk_index: number | null;

@@ -6,9 +6,11 @@ import {
   buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool,
 } from '../pipeline/tools/documentEntry.js';
 import { buildRecallDocumentsTool } from '../pipeline/tools/recall.js';
+import { buildExecuteCodeTool } from '../pipeline/tools/executeCode.js';
 import type { DbContext } from '../pipeline/db/client.js';
 import type { ExtractionDeps } from '../pipeline/extraction.js';
 import type { Embedder } from '../pipeline/embedder.js';
+import { env } from '../env.js';
 
 // MVP roles. Later phases add risk / finance / management with their own toolsets.
 export type Role = 'trader';
@@ -22,6 +24,9 @@ export interface HarnessDeps {
   ctx: DbContext;
   extraction?: ExtractionDeps;
   embedder?: Embedder;
+  /** Phase 2 business-data isolation: stamp + filter doc/extraction/binding/chunk
+   *  rows by this user. Empty/undefined = unscoped (legacy/tests; no filtering). */
+  userId?: string;
 }
 
 // A registry entry: the AI SDK 6 Tool plus the name it is addressed by at
@@ -60,19 +65,28 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
 
 // Doc-entry + recall tool names are part of the trader's capability set even
 // though constructing their instances requires a DbContext (see getToolsForRole).
-const TRADER_CTX_TOOL_NAMES = ['ingest_document', 'extract_fields', 'bind_document', 'recall_documents'] as const;
+const TRADER_CTX_TOOL_NAMES = ['ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code'] as const;
 
 export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
   const base: GatedTool[] = (BASE_TOOLS_FOR_ROLE[role] ?? []).map((t) => ({ ...t }));
   if (role === 'trader' && deps?.ctx) {
-    const { ctx, extraction, embedder } = deps;
+    const { ctx, extraction, embedder, userId } = deps;
     base.push(
-      { ...buildIngestDocumentTool({ ctx, embedder }), name: 'ingest_document' },
-      { ...buildExtractFieldsTool({ ctx, extraction }), name: 'extract_fields' },
+      { ...buildIngestDocumentTool({ ctx, embedder, userId }), name: 'ingest_document' },
+      { ...buildExtractFieldsTool({ ctx, extraction, userId }), name: 'extract_fields' },
       // bind_document is L2: caller must attach human approval (needsApproval).
-      { ...buildBindDocumentTool({ ctx }), name: 'bind_document', needsApproval: true },
+      { ...buildBindDocumentTool({ ctx, userId }), name: 'bind_document', needsApproval: true },
       // recall_documents is L1: FTS5/vector/hybrid recall over ingested chunks.
-      { ...buildRecallDocumentsTool({ ctx, embedder }), name: 'recall_documents' },
+      { ...buildRecallDocumentsTool({ ctx, embedder, userId }), name: 'recall_documents' },
+      // execute_code is L1: run Python in an isolated CubeSandbox microVM.
+      {
+        ...buildExecuteCodeTool({
+          cubeApiUrl: env.CUBE_API_URL,
+          sandboxDomain: env.CUBE_SANDBOX_DOMAIN,
+          templateAlias: env.CUBE_TEMPLATE_ALIAS,
+        }),
+        name: 'execute_code',
+      },
     );
   }
   return base;

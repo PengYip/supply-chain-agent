@@ -126,6 +126,12 @@ export interface RunStreamOpts {
    * behavior is unchanged. When `model` is injected, no provider client is built.
    */
   deps?: HarnessDeps;
+  /**
+   * Phase 2 business-data isolation: owning user for documents / extractions /
+   * bindings / chunks touched by the doc-entry tools this turn. Empty/undefined
+   * = unscoped (legacy/tests; no filtering).
+   */
+  userId?: string;
 }
 
 // Scan a turn's response messages for v6 tool-approval-request parts (emitted
@@ -188,7 +194,7 @@ export function recordL2PendingFromResponse(
 // to pre-H1 behavior. When supplied (tests), no provider client is constructed and
 // no network/env is required, so the agent loop can be exercised offline against
 // a canned fake model + in-memory DbContext.
-export function runStream({ messages, role, auditTraceId, model, deps }: RunStreamOpts) {
+export function runStream({ messages, role, auditTraceId, model, deps, userId }: RunStreamOpts) {
   // Production default: real DeepSeek model. If a model was injected, skip
   // building the provider client so tests need no API key / network.
   //
@@ -213,7 +219,7 @@ export function runStream({ messages, role, auditTraceId, model, deps }: RunStre
   // there is a single DeepSeek client per turn.
   const tools = buildGatedTools(
     role,
-    deps ?? { ctx: getHarnessDbContext(), extraction: { model: resolvedModel }, embedder: defaultEmbedder() },
+    deps ?? { ctx: getHarnessDbContext(), extraction: { model: resolvedModel }, embedder: defaultEmbedder(), userId },
   );
   // Context compression + circuit breaker (AUTO-LOOP variant). prepareStep runs
   // compressByBudget one step LATE (the just-produced result is already
