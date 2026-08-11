@@ -17,6 +17,7 @@ export const RealChatView: React.FC<{ onSignOut?: () => void; sessionId?: string
   const [uploadState, setUploadState] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle')
   const [uploadMsg, setUploadMsg] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const sendMessageRef = useRef<((msg: { text: string }) => void) | null>(null)
 
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -40,6 +41,9 @@ export const RealChatView: React.FC<{ onSignOut?: () => void; sessionId?: string
       setUploadMsg(
         `已上传: ${data.filename ?? file.name}${data.docId ? ` (docId ${data.docId})` : ''}`,
       )
+      if (data.docId && sendMessageRef.current) {
+        sendMessageRef.current({ text: `[系统提示] 已上传文件 "${data.filename ?? file.name}"（docId: ${data.docId}），文件已解析并索引。请使用 recall 工具搜索文档内容，或使用 documentEntry 工具录入单据信息。` })
+      }
     } catch (err) {
       setUploadState('error')
       setUploadMsg(err instanceof Error ? err.message : String(err))
@@ -77,6 +81,7 @@ export const RealChatView: React.FC<{ onSignOut?: () => void; sessionId?: string
       lastAssistantMessageIsCompleteWithApprovalResponses({ messages }) ||
       lastAssistantMessageIsCompleteWithToolCalls({ messages }),
   })
+  sendMessageRef.current = sendMessage
 
   // Load session history when the externally-provided sessionId changes.
   // Also seed sessionIdRef so the very first outbound chat request carries the

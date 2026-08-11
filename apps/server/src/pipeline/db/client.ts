@@ -112,3 +112,41 @@ export function migrate(sqlite: Database.Database): void {
     }
   }
 }
+
+/**
+ * Phase 2 startup migration for Postgres: add `user_id` columns + indexes to the
+ * documents/extractions/bindings tables when they were created by an older schema
+ * (drizzle-kit created them WITHOUT user_id before Phase 2). Idempotent via
+ * ADD COLUMN IF NOT EXISTS / CREATE INDEX IF NOT EXISTS -- safe to run on every
+ * startup.
+ *
+ * Best-effort: wraps everything in try/catch and logs a warning on failure rather
+ * than throwing, so the server still boots (a subsequent query needing user_id
+ * then surfaces a clear column-missing error at runtime instead of crashing
+ * startup). Statements run individually (not one multi-statement query) so this
+ * is robust behind pgBouncer transaction mode and reports per-statement errors.
+ *
+ * Mirror of the SQLite ALTER loop in migrate(); the IF NOT EXISTS guard makes the
+ * per-DBMS duplication unnecessary on the Postgres side.
+ */
+export async function migratePostgres(pool: Pool): Promise<void> {
+  const statements = [
+    `ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE extractions ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE bindings ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''`,
+    `CREATE INDEX IF NOT EXISTS documents_user_id_idx ON documents(user_id)`,
+    `CREATE INDEX IF NOT EXISTS extractions_user_id_idx ON extractions(user_id)`,
+    `CREATE INDEX IF NOT EXISTS bindings_user_id_idx ON bindings(user_id)`,
+  ];
+  try {
+    for (const sql of statements) {
+      await pool.query(sql);
+    }
+  } catch (e) {
+    console.warn(
+      '[migratePostgres] user_id column/index migration failed (continuing; ' +
+        'tables may pre-date Phase 2 or Postgres is unreachable):',
+      e instanceof Error ? e.message : e,
+    );
+  }
+}

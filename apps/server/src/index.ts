@@ -14,6 +14,7 @@ import { statusRoute } from './routes/status.js';
 import { sessionsRoute } from './routes/sessions.js';
 import { filesRoute } from './routes/files.js';
 import { ensureBucket } from './lib/minio.js';
+import { migrateOnStartup } from './pipeline/db/dbBackend.js';
 import { listToolNames, type Role } from './harness/roleToolRegistry.js';
 import { auth } from './lib/auth.js';
 import {
@@ -90,10 +91,16 @@ app.use('*', serveStatic({ root: webDist }));
 
 const port = env.PORT;
 
-// Phase 3: ensure the MinIO bucket exists before serving. Best-effort -- if
-// MinIO is unreachable, uploads 5xx but auth/chat/recall still work.
-void ensureBucket();
-
-serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`Server running on http://localhost:${info.port}`);
-});
+// Boot sequence: run DB startup migrations BEFORE accepting traffic, then start
+// the HTTP server. migrateOnStartup is a no-op on SQLite (its migration runs
+// synchronously inside getDbContext); on Postgres it adds the Phase 2 user_id
+// columns + indexes (idempotent). It never throws -- failures log a warning and
+// the server still boots (the failing query would then surface a clear error at
+// runtime rather than crashing startup). ensureBucket stays best-effort.
+(async () => {
+  await migrateOnStartup();
+  void ensureBucket();
+  serve({ fetch: app.fetch, port }, (info) => {
+    console.log(`Server running on http://localhost:${info.port}`);
+  });
+})();
