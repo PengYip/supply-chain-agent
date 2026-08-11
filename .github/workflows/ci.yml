@@ -50,7 +50,8 @@ jobs:
             git clone git@github.com:PengYip/supply-chain-agent.git "$DEPLOY_DIR"
           fi
           cd "$DEPLOY_DIR"
-          git pull origin main
+          git fetch origin
+          git reset --hard origin/main
           npm install
           npm run build
           pm2 reload sca-server || pm2 start ecosystem.config.cjs
