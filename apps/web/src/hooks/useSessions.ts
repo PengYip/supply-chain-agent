@@ -15,7 +15,10 @@ export function useSessions() {
   const refresh = useCallback(async () => {
     try {
       const res = await fetch('/api/sessions');
-      if (res.ok) setSessions(await res.json());
+      if (res.ok) {
+        const data = await res.json();
+        setSessions(Array.isArray(data) ? data : (data.sessions ?? []));
+      }
     } catch { /* ignore */ }
     setLoading(false);
   }, []);
