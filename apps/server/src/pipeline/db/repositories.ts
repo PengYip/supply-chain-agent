@@ -372,10 +372,16 @@ export async function findDocIdsByMinioKeys(
     minio_key: string;
   }>;
   for (const r of rows1) out.set(r.minio_key, r.id);
-  // Phase 2: source_uri LIKE fallback for unresolved keys (legacy rows).
+  // Phase 2: source_uri LIKE fallback for unresolved keys (legacy rows, or rows
+  // whose minio_key was never stamped because the file was moved between folders).
+  // Match by the unique <uuid>-<filename> tail (the last path segment) instead of
+  // the full flattened key, so the lookup survives folder moves -- the full flat
+  // key changes when a file is moved, but the last segment is invariant and UUIDs
+  // are unique per upload.
   const missing = minioKeys.filter((k) => !out.has(k));
   for (const key of missing) {
-    const flat = `%${key.replace(/\//g, '_')}`;
+    const lastSeg = key.split('/').pop() ?? key;
+    const flat = `%${lastSeg}`;
     const sql2 = uid
       ? 'SELECT id FROM documents WHERE source_uri LIKE ? AND (user_id = ? OR user_id IS NULL) LIMIT 1'
       : 'SELECT id FROM documents WHERE source_uri LIKE ? LIMIT 1';

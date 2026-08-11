@@ -386,10 +386,13 @@ export async function findDocIdsByMinioKeysPg(
   for (const r of res.rows) {
     out.set(r.minio_key, r.id);
   }
-  // Phase 2: source_uri LIKE fallback for unresolved keys.
+  // Phase 2: source_uri LIKE fallback for unresolved keys. Match by the unique
+  // <uuid>-<filename> tail (last path segment) so the lookup survives folder
+  // moves -- the full flat key changes on move, but the last segment is invariant.
   const missing = minioKeys.filter((k) => !out.has(k));
   for (const key of missing) {
-    const flat = `%${key.replace(/\//g, '_')}`;
+    const lastSeg = key.split('/').pop() ?? key;
+    const flat = `%${lastSeg}`;
     const r = uid
       ? await ctx.pool.query(
           'SELECT id FROM documents WHERE source_uri LIKE $1 AND (user_id = $2 OR user_id IS NULL) LIMIT 1',
