@@ -392,7 +392,7 @@ export async function findDocIdsByMinioKeysPg(
     const flat = `%${key.replace(/\//g, '_')}`;
     const r = uid
       ? await ctx.pool.query(
-          'SELECT id FROM documents WHERE source_uri LIKE $1 AND user_id = $2 LIMIT 1',
+          'SELECT id FROM documents WHERE source_uri LIKE $1 AND (user_id = $2 OR user_id IS NULL) LIMIT 1',
           [flat, uid],
         )
       : await ctx.pool.query(

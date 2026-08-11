@@ -45,9 +45,10 @@ function FileRow(props: {
   depth: number
   downloadFile: (key: string) => void
   onAddToConversation: (file: FileEntry) => void
+  onMove: (file: FileEntry) => void
   added: boolean
 }) {
-  const { file, depth, downloadFile, onAddToConversation, added } = props
+  const { file, depth, downloadFile, onAddToConversation, onMove, added } = props
   return (
     <div
       style={{
@@ -75,6 +76,12 @@ function FileRow(props: {
             添加到对话
           </span>
         )}
+        <span
+          onClick={() => onMove(file)}
+          style={{ fontSize: 12, color: '#2563eb', cursor: 'pointer' }}
+        >
+          移动
+        </span>
       </div>
     </div>
   )
@@ -90,6 +97,7 @@ interface TreeFolderProps {
   downloadFile: (key: string) => void
   removeFolder: (path: string) => void
   onAddToConversation: (file: FileEntry) => void
+  onMove: (file: FileEntry) => void
   contextFileKeys: Set<string>
 }
 
@@ -104,6 +112,7 @@ function TreeFolder(props: TreeFolderProps) {
     downloadFile,
     removeFolder,
     onAddToConversation,
+    onMove,
     contextFileKeys,
   } = props
   const isOpen = expanded.has(fullPath)
@@ -153,6 +162,7 @@ function TreeFolder(props: TreeFolderProps) {
               depth={depth + 1}
               downloadFile={downloadFile}
               onAddToConversation={onAddToConversation}
+              onMove={onMove}
               added={contextFileKeys.has(f.key)}
             />
           ))}
@@ -168,6 +178,7 @@ function TreeFolder(props: TreeFolderProps) {
               downloadFile={downloadFile}
               removeFolder={removeFolder}
               onAddToConversation={onAddToConversation}
+              onMove={onMove}
               contextFileKeys={contextFileKeys}
             />
           ))}
@@ -179,7 +190,7 @@ function TreeFolder(props: TreeFolderProps) {
 
 export function FilePanel(props: FilePanelProps) {
   const { visible, onClose, onAddToConversation, contextFileKeys } = props
-  const { files, folders, loading, downloadFile, createFolder, removeFolder } = useFiles()
+  const { files, folders, loading, downloadFile, moveFile, createFolder, removeFolder } = useFiles()
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
 
   const tree = useMemo(() => buildTree(files, folders), [files, folders])
@@ -196,6 +207,14 @@ export function FilePanel(props: FilePanelProps) {
   const handleNewFolder = () => {
     const name = window.prompt('请输入文件夹名称')
     if (name && name.trim()) createFolder(name.trim())
+  }
+
+  const handleMove = (file: FileEntry) => {
+    const folderNames = folders.map((f) => f.path).join('、')
+    const hint = folderNames ? `可用文件夹: ${folderNames}` : '（暂无文件夹）'
+    const cur = file.directory === '/' ? '' : file.directory.replace(/^\//, '')
+    const input = window.prompt(`移动到哪个文件夹？\n${hint}\n（留空移到根目录）`, cur)
+    if (input !== null) moveFile(file.key, input.trim())
   }
 
   const hasContent = files.length > 0 || folders.length > 0
@@ -271,6 +290,7 @@ export function FilePanel(props: FilePanelProps) {
                 depth={0}
                 downloadFile={downloadFile}
                 onAddToConversation={onAddToConversation}
+                onMove={handleMove}
                 added={contextFileKeys.has(f.key)}
               />
             ))}
@@ -286,6 +306,7 @@ export function FilePanel(props: FilePanelProps) {
                 downloadFile={downloadFile}
                 removeFolder={removeFolder}
                 onAddToConversation={onAddToConversation}
+                onMove={handleMove}
                 contextFileKeys={contextFileKeys}
               />
             ))}

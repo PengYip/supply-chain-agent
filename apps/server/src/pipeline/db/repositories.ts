@@ -377,7 +377,7 @@ export async function findDocIdsByMinioKeys(
   for (const key of missing) {
     const flat = `%${key.replace(/\//g, '_')}`;
     const sql2 = uid
-      ? 'SELECT id FROM documents WHERE source_uri LIKE ? AND user_id = ? LIMIT 1'
+      ? 'SELECT id FROM documents WHERE source_uri LIKE ? AND (user_id = ? OR user_id IS NULL) LIMIT 1'
       : 'SELECT id FROM documents WHERE source_uri LIKE ? LIMIT 1';
     const params2: string[] = uid ? [flat, uid] : [flat];
     const row = ctx.sqlite.prepare(sql2).get(...params2) as { id: string } | undefined;
