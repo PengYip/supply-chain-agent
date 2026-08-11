@@ -27,11 +27,23 @@ const DEFAULT_ROLE: Role = 'trader';
 // AuthEnv gives the auth middlewares a typed `user` slot on the context.
 const app = new Hono<AuthEnv>();
 
-// Allow the Vite dev server (http://localhost:5173) to call the API directly.
+// CORS: allow the Vite dev server, the production origin (BETTER_AUTH_URL),
+// and any extra trusted origins (TRUSTED_ORIGINS env). In production the
+// frontend is same-origin so the browser does not enforce CORS, but we still
+// echo the header so credential-bearing requests are not blocked by a
+// restrictive preflight.
+const corsAllowedOrigins = new Set(
+  [
+    'http://localhost:5173',
+    env.BETTER_AUTH_URL,
+    ...(env.TRUSTED_ORIGINS?.split(',').map((s) => s.trim()).filter(Boolean) ?? []),
+  ].filter(Boolean) as string[],
+);
+
 app.use(
   '/api/*',
   cors({
-    origin: 'http://localhost:5173',
+    origin: (origin) => (origin && corsAllowedOrigins.has(origin) ? origin : null),
     allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type'],
     // Cookies must be sent cross-origin in dev (Vite :5173 -> API :3001).
