@@ -48,6 +48,9 @@ const EnvSchema = z.object({
   CUBE_API_URL: z.string().url().default('http://172.18.10.150:3040'),
   CUBE_SANDBOX_DOMAIN: z.string().default('cube.app'),
   CUBE_TEMPLATE_ALIAS: z.string().default('sca-code'),
+  // Comma-separated list of additional trusted origins for Better Auth.
+  // Needed when the app is accessed from a different host/IP than BETTER_AUTH_URL.
+  TRUSTED_ORIGINS: z.string().optional(),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

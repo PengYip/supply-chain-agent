@@ -11,6 +11,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onAuthed }) => {
   const [mode, setMode] = useState<Mode>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -18,6 +19,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onAuthed }) => {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    if (mode === 'signup' && password !== confirmPassword) {
+      setError('两次输入的密码不一致');
+      return;
+    }
     setLoading(true);
     try {
       if (mode === 'signup') {
@@ -82,6 +87,17 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onAuthed }) => {
           onChange={(e) => setPassword(e.target.value)}
           className="w-full px-3 py-2 rounded-lg border border-borderGray text-sm focus:outline-none"
         />
+
+        {mode === 'signup' && (
+          <input
+            type="password"
+            required
+            placeholder="确认密码"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg border border-borderGray text-sm focus:outline-none"
+          />
+        )}
 
         {error && (
           <div className="text-xs text-danger bg-danger/10 rounded-lg px-3 py-2">

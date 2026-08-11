@@ -24,10 +24,19 @@ const databaseUrl =
 const pool = new Pool({ connectionString: databaseUrl, max: 10 });
 const db = drizzle(pool, { schema: authSchema });
 
+// Additional origins Better Auth should trust (comma-separated in env). The
+// baseURL is always trusted; TRUSTED_ORIGINS lets users access the app from
+// other IPs (e.g. http://10.10.0.2:3001) without "Invalid origin" errors.
+const extraTrustedOrigins = (process.env.TRUSTED_ORIGINS ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 export const auth = betterAuth({
   database: drizzleAdapter(db, { provider: 'pg' }),
   secret: env.BETTER_AUTH_SECRET,
   baseURL: env.BETTER_AUTH_URL,
+  trustedOrigins: [env.BETTER_AUTH_URL, ...extraTrustedOrigins],
   emailAndPassword: { enabled: true },
   plugins: [
     admin({
