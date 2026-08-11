@@ -62,9 +62,12 @@ export async function loadDocumentPg(
   userId?: string,
 ): Promise<BlockModel | null> {
   const uid = effectiveUserId(userId);
+  // Legacy rows (pre-Phase 2) have user_id = '' (or NULL) and must stay
+  // accessible to any authenticated caller -- a strict `user_id = $uid` filter
+  // would hide them. Same convention as findDocIdsByMinioKeysPg.
   const res = uid
     ? await ctx.pool.query(
-        'SELECT block_model FROM documents WHERE id = $1 AND user_id = $2',
+        "SELECT block_model FROM documents WHERE id = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)",
         [docId, uid],
       )
     : await ctx.pool.query(
@@ -199,7 +202,11 @@ export async function searchChunksPg(
   // recall only returns the caller's chunks. Unscoped path (uid === '') keeps
   // the pre-isolation query shape.
   const join = uid ? 'JOIN documents AS d ON d.id = c.document_id' : '';
-  const userFilter = uid ? 'AND d.user_id = $3' : '';
+  // Legacy rows (user_id = '' / NULL) are accessible to any caller. Matching
+  // the findDocIdsByMinioKeysPg convention so recall never hides pre-isolation docs.
+  const userFilter = uid
+    ? "AND (d.user_id = $3 OR d.user_id = '' OR d.user_id IS NULL)"
+    : '';
   const params = uid ? [trimmed, safeLimit, uid] : [trimmed, safeLimit];
   let res;
   try {
@@ -249,7 +256,7 @@ export async function getChunkMetaByRowidsPg(
         `SELECT c.id, c.document_id, c.chunk_index, c.chunk_text
          FROM doc_chunk AS c
          JOIN documents AS d ON d.id = c.document_id
-         WHERE c.id = ANY($1) AND d.user_id = $2`,
+         WHERE c.id = ANY($1) AND (d.user_id = $2 OR d.user_id = '' OR d.user_id IS NULL)`,
         [rowids, uid],
       )
     : await ctx.pool.query(
@@ -373,10 +380,11 @@ export async function findDocIdsByMinioKeysPg(
   const out = new Map<string, string>();
   if (minioKeys.length === 0) return out;
   const uid = effectiveUserId(userId);
-  // Phase 1: exact minio_key match.
+  // Phase 1: exact minio_key match. Legacy rows (user_id = '' / NULL) stay
+  // accessible to any caller (same convention as the source_uri fallback below).
   const res = uid
     ? await ctx.pool.query(
-        'SELECT id, minio_key FROM documents WHERE minio_key = ANY($1) AND user_id = $2',
+        "SELECT id, minio_key FROM documents WHERE minio_key = ANY($1) AND (user_id = $2 OR user_id = '' OR user_id IS NULL)",
         [minioKeys, uid],
       )
     : await ctx.pool.query(

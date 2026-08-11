@@ -71,6 +71,13 @@ export async function ingestFile(opts: IngestOptions): Promise<{
     modality === 'scanned'
       ? await ingestWithMinerU(safePath, docType, docId)
       : await ingestWithDigital(safePath, docType, docId);
+  if (blockModel.blocks.length === 0) {
+    throw new Error(
+      modality === 'scanned'
+        ? 'MinerU 解析返回 0 个内容块。请检查 .mineru.json 文件是否正确生成。'
+        : '文件解析得到 0 个内容块。该文件可能是扫描件（无文字层）。请使用扫描件模式上传（modality=scanned）并配套 .mineru.json 文件，或先用 OCR 工具提取文字。',
+    );
+  }
   await saveDocument(ctx, blockModel, userId);
   const chunks = chunkBlockModel(blockModel);
   const chunkRowIds = await saveChunks(ctx, docId, chunks);

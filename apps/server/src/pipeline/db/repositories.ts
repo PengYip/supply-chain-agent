@@ -1,4 +1,4 @@
-import { eq, and } from 'drizzle-orm';
+import { eq, and, or, isNull } from 'drizzle-orm';
 import { documents, extractions, bindings } from './schema.js';
 import type { DbContext } from './client.js';
 import type { BlockModel, DocType, SourceSpan } from '../types.js';
@@ -82,7 +82,15 @@ export async function saveDocument(ctx: DbContext, model: BlockModel, userId?: s
 export async function loadDocument(ctx: DbContext, docId: string, userId?: string): Promise<BlockModel | null> {
   if (ctx.backend === 'postgres') return loadDocumentPg(ctx, docId, userId);
   const uid = effectiveUserId(userId);
-  const filter = uid ? and(eq(documents.id, docId), eq(documents.userId, uid)) : eq(documents.id, docId);
+  // Legacy rows (pre-Phase 2) have user_id = '' (or NULL) and must stay
+  // accessible to any authenticated caller -- a strict `user_id = uid` filter
+  // would hide them. Same convention as findDocIdsByMinioKeys.
+  const filter = uid
+    ? and(
+        eq(documents.id, docId),
+        or(eq(documents.userId, uid), eq(documents.userId, ''), isNull(documents.userId)),
+      )
+    : eq(documents.id, docId);
   const row = ctx.db.select().from(documents).where(filter).all()[0];
   return row ? (JSON.parse(row.blockModel) as BlockModel) : null;
 }
@@ -238,11 +246,11 @@ export async function searchChunks(
        bm25(doc_chunk_fts) AS bm25Score
      FROM doc_chunk AS dc
      JOIN doc_chunk_fts AS f ON f.rowid = dc.id
-     ${uid ? 'JOIN documents AS d ON d.id = dc.document_id' : ''}
-     WHERE f.chunk_text MATCH ?
-     ${uid ? 'AND d.user_id = ?' : ''}
-     ORDER BY bm25Score
-     LIMIT ?`,
+      ${uid ? 'JOIN documents AS d ON d.id = dc.document_id' : ''}
+      WHERE f.chunk_text MATCH ?
+      ${uid ? "AND (d.user_id = ? OR d.user_id = '' OR d.user_id IS NULL)" : ''}
+      ORDER BY bm25Score
+      LIMIT ?`,
   );
   const params: Array<string | number> = uid ? [ftsQuery, uid, safeLimit] : [ftsQuery, safeLimit];
   try {
@@ -295,7 +303,7 @@ export async function getChunkMetaByRowids(
     ? `SELECT dc.id, dc.document_id, dc.chunk_index, dc.chunk_text
        FROM doc_chunk AS dc
        JOIN documents AS d ON d.id = dc.document_id
-       WHERE dc.id IN (${placeholders}) AND d.user_id = ?`
+       WHERE dc.id IN (${placeholders}) AND (d.user_id = ? OR d.user_id = '' OR d.user_id IS NULL)`
     : `SELECT id, document_id, chunk_index, chunk_text
        FROM doc_chunk
        WHERE id IN (${placeholders})`;
@@ -361,10 +369,12 @@ export async function findDocIdsByMinioKeys(
   if (minioKeys.length === 0) return out;
   if (ctx.backend === 'postgres') return findDocIdsByMinioKeysPg(ctx, minioKeys, userId);
   const uid = effectiveUserId(userId);
-  // Phase 1: exact minio_key match (batch via IN).
+  // Phase 1: exact minio_key match (batch via IN). Legacy rows (user_id = '' /
+  // NULL) stay accessible to any caller (same convention as the source_uri
+  // fallback below).
   const placeholders = minioKeys.map(() => '?').join(',');
   const sql1 = uid
-    ? `SELECT id, minio_key FROM documents WHERE minio_key IN (${placeholders}) AND user_id = ?`
+    ? `SELECT id, minio_key FROM documents WHERE minio_key IN (${placeholders}) AND (user_id = ? OR user_id = '' OR user_id IS NULL)`
     : `SELECT id, minio_key FROM documents WHERE minio_key IN (${placeholders})`;
   const params1: string[] = uid ? [...minioKeys, uid] : minioKeys;
   const rows1 = ctx.sqlite.prepare(sql1).all(...params1) as Array<{
