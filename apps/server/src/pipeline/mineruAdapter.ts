@@ -1,4 +1,12 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
+import * as path from 'node:path';
+import { tmpdir } from 'node:os';
 import type { Block, BlockModel, BBox, DocType } from './types.js';
+
+const execFileAsync = promisify(execFile);
 
 // MinerU real output shape (validated against MinerU 3.4.4 pipeline-backend
 // `<doc>_middle.json`, captured 2026-08-07 via `uvx --from 'mineru[pipeline]' --with six
@@ -122,17 +130,50 @@ export function normalizeMinerUOutput(input: NormalizeInput): BlockModel {
 
 /**
  * Full ingest entry: shells out to MinerU (via the mineru-pdf skill CLI) to
- * produce JSON, then normalizes. The CLI invocation is environment-specific;
- * for MVP it reads pre-generated JSON at `<sourceUri>.mineru.json` to keep
- * tests hermetic. Production wires the real MinerU subprocess here.
+ * produce JSON, then normalizes.
+ *
+ * Two paths:
+ *  1. Hermetic test path (FIRST): if `<sourceUri>.mineru.json` exists, read it
+ *     and normalize. No subprocess. Used by unit tests so they don't depend on
+ *     the MinerU binary.
+ *  2. Production path: shell out to the MinerU CLI (env-configurable via
+ *     MINERU_BIN, default `mineru`) and read the produced `_middle.json`.
  */
 export async function ingestWithMinerU(
   sourceUri: string,
   docType: DocType,
   docId: string,
 ): Promise<BlockModel> {
-  const { readFileSync } = await import('node:fs');
   const jsonPath = `${sourceUri}.mineru.json`;
-  const minerUOutput = JSON.parse(readFileSync(jsonPath, 'utf-8'));
-  return normalizeMinerUOutput({ docId, docType, sourceUri, minerUOutput });
+  // Hermetic test path: pre-generated JSON wins, no subprocess.
+  if (existsSync(jsonPath)) {
+    const raw = JSON.parse(readFileSync(jsonPath, 'utf-8'));
+    return normalizeMinerUOutput({ docId, docType, sourceUri, minerUOutput: raw });
+  }
+  // Production path: shell out to MinerU CLI.
+  const outDir = await mkdtemp(path.join(tmpdir(), 'mineru-'));
+  const mineruBin = process.env.MINERU_BIN || 'mineru';
+  try {
+    const { stdout, stderr } = await execFileAsync(mineruBin, [
+      '-p', sourceUri,
+      '-o', outDir,
+      '-b', 'pipeline',
+      '-l', 'ch',       // Chinese language
+      '-d', 'cpu',      // no GPU on server
+      '-m', 'auto',     // auto-download models on first run
+    ], { timeout: 600_000 });  // 10 min timeout per PDF
+    // MinerU outputs to <outDir>/<basename>/<basename>_middle.json
+    const baseName = path.basename(sourceUri, path.extname(sourceUri));
+    const middleJsonPath = path.join(outDir, baseName, `${baseName}_middle.json`);
+    if (!existsSync(middleJsonPath)) {
+      // MinerU sometimes names the output dir differently; we do not scan
+      // subdirectories here -- surface the failure with the expected path so
+      // operators can investigate. stdout/stderr are included for diagnosis.
+      throw new Error(`MinerU output not found at ${middleJsonPath}. stdout: ${stdout}. stderr: ${stderr}`);
+    }
+    const raw = JSON.parse(readFileSync(middleJsonPath, 'utf-8'));
+    return normalizeMinerUOutput({ docId, docType, sourceUri, minerUOutput: raw });
+  } catch (e) {
+    throw new Error(`MinerU CLI failed: ${(e as Error).message}. Ensure MINERU_BIN points to the mineru executable.`);
+  }
 }

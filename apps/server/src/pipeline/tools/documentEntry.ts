@@ -67,15 +67,30 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   // Path allowlist (injection defense): reject anything outside INGEST_ROOT.
   const safePath = assertWithinRoot(sourcePath);
   const docId = newDocId();
-  const blockModel =
+  let blockModel =
     modality === 'scanned'
       ? await ingestWithMinerU(safePath, docType, docId)
       : await ingestWithDigital(safePath, docType, docId);
+
+  // Auto-fallback: digital PDF yielded 0 blocks -> likely scanned -> retry via MinerU OCR.
+  if (blockModel.blocks.length === 0 && modality !== 'scanned' && /\.pdf$/i.test(safePath)) {
+    console.warn('[ingest] digital ingest yielded 0 blocks for PDF; retrying as scanned via MinerU OCR');
+    try {
+      const mineruModel = await ingestWithMinerU(safePath, docType, docId);
+      if (mineruModel.blocks.length > 0) {
+        blockModel = mineruModel;
+      }
+    } catch (e) {
+      console.warn('[ingest] MinerU OCR fallback failed:', (e as Error).message);
+    }
+  }
+
+  // Final check: still 0 blocks after fallback -> throw.
   if (blockModel.blocks.length === 0) {
     throw new Error(
       modality === 'scanned'
-        ? 'MinerU 解析返回 0 个内容块。请检查 .mineru.json 文件是否正确生成。'
-        : '文件解析得到 0 个内容块。该文件可能是扫描件（无文字层）。请使用扫描件模式上传（modality=scanned）并配套 .mineru.json 文件，或先用 OCR 工具提取文字。',
+        ? '文件解析得到 0 个内容块。MinerU OCR 可能失败，请检查 .mineru.json 或 MinerU 服务配置。'
+        : '文件解析得到 0 个内容块。该文件可能是扫描件(无文字层)，MinerU OCR 也未能提取内容。',
     );
   }
   await saveDocument(ctx, blockModel, userId);
