@@ -74,6 +74,8 @@ export const documents = pgTable(
     sourceUri: text('source_uri').notNull(),
     // SQLite stores this as TEXT(JSON); Postgres uses JSONB for structured query.
     blockModel: jsonb('block_model').notNull(),
+    /** MinIO object key for uploads (null for tool-ingested / legacy docs). */
+    minioKey: text('minio_key'),
     // Phase 2 business-data isolation: owning user ('' = legacy / unscoped).
     userId: text('user_id').notNull().default(''),
     createdAt: nowTs(),
@@ -228,5 +230,26 @@ export const documentRelation = pgTable(
     ),
     sourceIdx: index('idx_document_relation_source').on(t.sourceDoc),
     targetIdx: index('idx_document_relation_target').on(t.targetDoc),
+  }),
+);
+
+// ---- File manager (Phase 3+) ------------------------------------------------
+//
+// Virtual folders owned per-user. Mirrors the SQLite file_folders table. Files
+// themselves live in MinIO (keyed users/<userId>/...); this table only records
+// the user's folder entries so the file manager can render an empty folder even
+// before any file is moved into it.
+
+/** file_folders: virtual folder tree for the file manager. Mirrors SQLite file_folders. */
+export const fileFolders = pgTable(
+  'file_folders',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id').notNull(),
+    path: text('path').notNull(),
+    createdAt: nowTs(),
+  },
+  (t) => ({
+    userIdx: index('idx_file_folders_user').on(t.userId),
   }),
 );

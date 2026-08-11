@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { documents, extractions, bindings } from './schema.js';
+import { documents, extractions, bindings, fileFolders } from './schema.js';
 // Type-only import: erased at emit, so SQLite-only hosts do not need pg installed
 // to RUN; only the Postgres path (postgres-client.ts) does a real `import { Pool }`.
 import type { Pool } from 'pg';
@@ -31,7 +31,7 @@ export type DbContext = SqliteDbContext | PostgresDbContext;
 export function createDb(path = ':memory:'): SqliteDbContext {
   const sqlite = new Database(path);
   sqlite.pragma('journal_mode = WAL');
-  const db = drizzle(sqlite, { schema: { documents, extractions, bindings } });
+  const db = drizzle(sqlite, { schema: { documents, extractions, bindings, fileFolders } });
   return { backend: 'sqlite', db, sqlite };
 }
 
@@ -44,6 +44,7 @@ export function migrate(sqlite: Database.Database): void {
       modality TEXT NOT NULL,
       source_uri TEXT NOT NULL,
       block_model TEXT NOT NULL,
+      minio_key TEXT,
       user_id TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -74,6 +75,16 @@ export function migrate(sqlite: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
     CREATE INDEX IF NOT EXISTS idx_extractions_user ON extractions(user_id);
     CREATE INDEX IF NOT EXISTS idx_bindings_user ON bindings(user_id);
+
+    -- File manager (Phase 3+): virtual folders owned per-user. Files themselves
+    -- live in MinIO; this table only records folder entries.
+    CREATE TABLE IF NOT EXISTS file_folders (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      path TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_file_folders_user ON file_folders(user_id);
 
     -- L4 document recall index (Task 6 v1, SQLite/FTS5 path). Keyword BM25 recall
     -- over chunked document text. Postgres+pgvector and sqlite-vec/semantic paths
@@ -111,6 +122,19 @@ export function migrate(sqlite: Database.Database): void {
       }
     }
   }
+
+  // Phase 3+: link documents back to their MinIO object key (uploads). Same
+  // idempotent ALTER pattern as the user_id block above for pre-existing DBs.
+  {
+    const cols = sqlite.prepare('PRAGMA table_info(documents)').all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'minio_key')) {
+      try {
+        sqlite.exec('ALTER TABLE documents ADD COLUMN minio_key TEXT');
+      } catch {
+        // Column may have been added concurrently; safe to ignore.
+      }
+    }
+  }
 }
 
 /**
@@ -137,6 +161,16 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     `CREATE INDEX IF NOT EXISTS documents_user_id_idx ON documents(user_id)`,
     `CREATE INDEX IF NOT EXISTS extractions_user_id_idx ON extractions(user_id)`,
     `CREATE INDEX IF NOT EXISTS bindings_user_id_idx ON bindings(user_id)`,
+    // Phase 3+: link documents back to their MinIO object key + the file manager
+    // virtual-folder table. Idempotent like the user_id statements above.
+    `ALTER TABLE documents ADD COLUMN IF NOT EXISTS minio_key TEXT`,
+    `CREATE TABLE IF NOT EXISTS file_folders (
+       id TEXT PRIMARY KEY,
+       user_id TEXT NOT NULL,
+       path TEXT NOT NULL,
+       created_at timestamptz NOT NULL DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_file_folders_user ON file_folders(user_id)`,
   ];
   try {
     for (const sql of statements) {
@@ -144,8 +178,8 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     }
   } catch (e) {
     console.warn(
-      '[migratePostgres] user_id column/index migration failed (continuing; ' +
-        'tables may pre-date Phase 2 or Postgres is unreachable):',
+      '[migratePostgres] schema migration failed (continuing; ' +
+        'tables may pre-date these features or Postgres is unreachable):',
       e instanceof Error ? e.message : e,
     );
   }

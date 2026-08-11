@@ -15,6 +15,11 @@ import {
   saveChunksPg,
   searchChunksPg,
   getChunkMetaByRowidsPg,
+  setDocumentMinioKeyPg,
+  findDocIdsByMinioKeysPg,
+  listFileFoldersPg,
+  createFileFolderPg,
+  deleteFileFolderPg,
 } from './postgres-repositories.js';
 
 // Phase 2 business-data isolation: a normalized userId is '' / undefined when the
@@ -309,4 +314,113 @@ export async function getChunkMetaByRowids(
     });
   }
   return out;
+}
+
+// ---- File manager: document minio_key link-back + virtual folders ----------
+//
+// These back the /api/files endpoints: uploads stamp minio_key onto the document
+// row so the file list can attach a docId to each MinIO object; the list does a
+// batch lookup (with a source_uri LIKE fallback for legacy rows); folders are a
+// per-user virtual tree (file_folders table). All dispatched by backend like the
+// core repo fns above. userId IS required on the folder fns (folders are always
+// per-user); minio_key lookups filter by userId when in scope (defense in depth
+// on top of the MinIO key-prefix scoping the route already does).
+
+export interface FileFolderRow {
+  id: string;
+  path: string;
+}
+
+const folderRid = () =>
+  `FL-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
+/** Set the MinIO object key on a document row (post-ingest link-back). */
+export async function setDocumentMinioKey(
+  ctx: DbContext,
+  docId: string,
+  minioKey: string,
+): Promise<void> {
+  if (ctx.backend === 'postgres') return setDocumentMinioKeyPg(ctx, docId, minioKey);
+  ctx.sqlite
+    .prepare('UPDATE documents SET minio_key = ? WHERE id = ?')
+    .run(minioKey, docId);
+}
+
+/**
+ * Batch-lookup document ids by MinIO object key. Phase 1 is an exact match on
+ * documents.minio_key; phase 2 falls back to a source_uri LIKE match for keys
+ * not resolved (legacy rows without minio_key -- source_uri ends with the slash-
+ * flattened key). Returns a Map<minioKey, docId>. Empty in / out for convenience.
+ */
+export async function findDocIdsByMinioKeys(
+  ctx: DbContext,
+  minioKeys: string[],
+  userId?: string,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (minioKeys.length === 0) return out;
+  if (ctx.backend === 'postgres') return findDocIdsByMinioKeysPg(ctx, minioKeys, userId);
+  const uid = effectiveUserId(userId);
+  // Phase 1: exact minio_key match (batch via IN).
+  const placeholders = minioKeys.map(() => '?').join(',');
+  const sql1 = uid
+    ? `SELECT id, minio_key FROM documents WHERE minio_key IN (${placeholders}) AND user_id = ?`
+    : `SELECT id, minio_key FROM documents WHERE minio_key IN (${placeholders})`;
+  const params1: string[] = uid ? [...minioKeys, uid] : minioKeys;
+  const rows1 = ctx.sqlite.prepare(sql1).all(...params1) as Array<{
+    id: string;
+    minio_key: string;
+  }>;
+  for (const r of rows1) out.set(r.minio_key, r.id);
+  // Phase 2: source_uri LIKE fallback for unresolved keys (legacy rows).
+  const missing = minioKeys.filter((k) => !out.has(k));
+  for (const key of missing) {
+    const flat = `%${key.replace(/\//g, '_')}`;
+    const sql2 = uid
+      ? 'SELECT id FROM documents WHERE source_uri LIKE ? AND user_id = ? LIMIT 1'
+      : 'SELECT id FROM documents WHERE source_uri LIKE ? LIMIT 1';
+    const params2: string[] = uid ? [flat, uid] : [flat];
+    const row = ctx.sqlite.prepare(sql2).get(...params2) as { id: string } | undefined;
+    if (row) out.set(key, row.id);
+  }
+  return out;
+}
+
+/** List the user's virtual folders (path ascending). */
+export async function listFileFolders(
+  ctx: DbContext,
+  userId: string,
+): Promise<FileFolderRow[]> {
+  if (ctx.backend === 'postgres') return listFileFoldersPg(ctx, userId);
+  const rows = ctx.sqlite
+    .prepare('SELECT id, path FROM file_folders WHERE user_id = ? ORDER BY path ASC')
+    .all(userId) as Array<{ id: string; path: string }>;
+  return rows.map((r) => ({ id: r.id, path: r.path }));
+}
+
+/** Insert a virtual folder row. Returns the generated id. */
+export async function createFileFolder(
+  ctx: DbContext,
+  userId: string,
+  folderPath: string,
+): Promise<string> {
+  const id = folderRid();
+  if (ctx.backend === 'postgres') return createFileFolderPg(ctx, userId, folderPath, id);
+  ctx.sqlite
+    .prepare('INSERT INTO file_folders (id, user_id, path) VALUES (?, ?, ?)')
+    .run(id, userId, folderPath);
+  return id;
+}
+
+/** Delete a virtual folder row. Returns true iff a row was removed. */
+export async function deleteFileFolder(
+  ctx: DbContext,
+  userId: string,
+  folderPath: string,
+): Promise<boolean> {
+  if (ctx.backend === 'postgres') return deleteFileFolderPg(ctx, userId, folderPath);
+  const info = ctx.sqlite
+    .prepare('DELETE FROM file_folders WHERE user_id = ? AND path = ?')
+    .run(userId, folderPath);
+  return info.changes > 0;
 }

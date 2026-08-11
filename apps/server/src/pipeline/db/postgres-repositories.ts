@@ -340,3 +340,105 @@ export async function vectorKnnPg(
     distance: Number(r.distance),
   }));
 }
+
+// ---- File manager: document minio_key link-back + virtual folders ----------
+//
+// Mirror of the SQLite helpers in repositories.ts. Raw parameterized SQL over
+// the Pool. minio_key is nullable; lookups fall back to a source_uri LIKE match
+// for rows written before the column existed (legacy uploads).
+
+/** Set the MinIO object key on a document row (post-ingest link-back). */
+export async function setDocumentMinioKeyPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  minioKey: string,
+): Promise<void> {
+  await ctx.pool.query(
+    'UPDATE documents SET minio_key = $1 WHERE id = $2',
+    [minioKey, docId],
+  );
+}
+
+/**
+ * Batch-lookup document ids by MinIO object key. Phase 1 is an exact match on
+ * documents.minio_key; phase 2 falls back to a source_uri LIKE match for keys
+ * not resolved (legacy rows without minio_key -- source_uri ends with the slash-
+ * flattened key). Returns a Map<minioKey, docId>.
+ */
+export async function findDocIdsByMinioKeysPg(
+  ctx: PostgresDbContext,
+  minioKeys: string[],
+  userId?: string,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (minioKeys.length === 0) return out;
+  const uid = effectiveUserId(userId);
+  // Phase 1: exact minio_key match.
+  const res = uid
+    ? await ctx.pool.query(
+        'SELECT id, minio_key FROM documents WHERE minio_key = ANY($1) AND user_id = $2',
+        [minioKeys, uid],
+      )
+    : await ctx.pool.query(
+        'SELECT id, minio_key FROM documents WHERE minio_key = ANY($1)',
+        [minioKeys],
+      );
+  for (const r of res.rows) {
+    out.set(r.minio_key, r.id);
+  }
+  // Phase 2: source_uri LIKE fallback for unresolved keys.
+  const missing = minioKeys.filter((k) => !out.has(k));
+  for (const key of missing) {
+    const flat = `%${key.replace(/\//g, '_')}`;
+    const r = uid
+      ? await ctx.pool.query(
+          'SELECT id FROM documents WHERE source_uri LIKE $1 AND user_id = $2 LIMIT 1',
+          [flat, uid],
+        )
+      : await ctx.pool.query(
+          'SELECT id FROM documents WHERE source_uri LIKE $1 LIMIT 1',
+          [flat],
+        );
+    if (r.rows[0]) out.set(key, r.rows[0].id);
+  }
+  return out;
+}
+
+/** List the user's virtual folders (path ascending). */
+export async function listFileFoldersPg(
+  ctx: PostgresDbContext,
+  userId: string,
+): Promise<Array<{ id: string; path: string }>> {
+  const res = await ctx.pool.query(
+    'SELECT id, path FROM file_folders WHERE user_id = $1 ORDER BY path ASC',
+    [userId],
+  );
+  return res.rows.map((r) => ({ id: r.id, path: r.path }));
+}
+
+/** Insert a virtual folder row. Returns the generated id. */
+export async function createFileFolderPg(
+  ctx: PostgresDbContext,
+  userId: string,
+  folderPath: string,
+  id: string,
+): Promise<string> {
+  await ctx.pool.query(
+    'INSERT INTO file_folders (id, user_id, path) VALUES ($1, $2, $3)',
+    [id, userId, folderPath],
+  );
+  return id;
+}
+
+/** Delete a virtual folder row. Returns true iff a row was removed. */
+export async function deleteFileFolderPg(
+  ctx: PostgresDbContext,
+  userId: string,
+  folderPath: string,
+): Promise<boolean> {
+  const res = await ctx.pool.query(
+    'DELETE FROM file_folders WHERE user_id = $1 AND path = $2',
+    [userId, folderPath],
+  );
+  return (res.rowCount ?? 0) > 0;
+}

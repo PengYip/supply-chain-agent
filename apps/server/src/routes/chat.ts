@@ -18,9 +18,18 @@ export const chatRoute = new Hono<AuthEnv>();
 // AI SDK 6 `useChat` posts UIMessages in the `parts` format
 // ({ id, role, parts: [...] }), NOT the legacy { role, content: string }.
 // Be permissive here and let `convertToModelMessages` do the real validation.
+//
+// contextFiles (Phase 3+): the client may attach the files the user "@-mentioned"
+// in this turn so the agent has their docIds up front. We surface them as a
+// leading system message that tells the model to use recall_documents to read
+// the actual content (the message carries metadata only, never file bytes).
 const BodySchema = z.object({
   messages: z.array(z.any()).min(1),
   role: z.enum(['trader']).default('trader'),
+  contextFiles: z
+    .array(z.object({ docId: z.string(), filename: z.string() }))
+    .optional()
+    .default([]),
 });
 
 function isModelNotFound(message: string): boolean {
@@ -45,7 +54,7 @@ chatRoute.post('/chat', async (c) => {
     );
   }
 
-  const { messages, role } = parsed.data;
+  const { messages, role, contextFiles } = parsed.data;
 
   // Session: reuse x-session-id if it exists AND belongs to the authenticated
   // user (Phase 2 data isolation), else create a new one owned by the user.
@@ -85,9 +94,29 @@ chatRoute.post('/chat', async (c) => {
   }
   appendMessages(sessionId, newModelMessages);
 
+  // When the user @-references files this turn, surface them as a leading system
+  // message so the agent has the docIds/filenames up front. The model is told to
+  // use recall_documents to read the actual content (we never inline file bytes
+  // into the prompt -- the recall tool is the grounded read path).
+  let streamMessages: ModelMessage[];
+  if (contextFiles.length > 0) {
+    const fileList = contextFiles
+      .map((f, i) => `${i + 1}. ${f.filename} (docId: ${f.docId})`)
+      .join('\n');
+    const contextMsg: ModelMessage = {
+      role: 'system',
+      content:
+        '用户在本次对话中引用了以下文件。请使用 recall 工具搜索文档内容来回答关于这些文件的问题：\n' +
+        fileList,
+    };
+    streamMessages = [contextMsg, ...priorMessages, ...newModelMessages];
+  } else {
+    streamMessages = [...priorMessages, ...newModelMessages];
+  }
+
   try {
     const result = runStream({
-      messages: [...priorMessages, ...newModelMessages],
+      messages: streamMessages,
       role: agentRole,
       auditTraceId,
       userId: userId ?? undefined,

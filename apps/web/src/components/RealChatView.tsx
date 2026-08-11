@@ -6,11 +6,17 @@ import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, LogOut, Paperclip } 
 import { RealMessageItem, ErrorMessage } from './RealMessageItem'
 import { AgentStatusBar } from './AgentStatusBar'
 import { useAgentStatus } from '../hooks/useAgentStatus'
+import { type ContextFile } from '../hooks/useFiles'
 import { buildRenderItems } from '../utils/realChatUtils'
 import { authClient } from '../lib/auth'
 import clsx from 'clsx'
 
-export const RealChatView: React.FC<{ onSignOut?: () => void; sessionId?: string | null }> = ({ onSignOut, sessionId }) => {
+export const RealChatView: React.FC<{
+  onSignOut?: () => void;
+  sessionId?: string | null;
+  contextFiles: ContextFile[];
+  setContextFiles: React.Dispatch<React.SetStateAction<ContextFile[]>>;
+}> = ({ onSignOut, sessionId, contextFiles, setContextFiles }) => {
   const [input, setInput] = useState('')
 
   // Phase 3: file upload state. Uploads POST to /api/files (MinIO + ingest bridge).
@@ -59,6 +65,12 @@ export const RealChatView: React.FC<{ onSignOut?: () => void; sessionId?: string
   const sessionIdRef = useRef<string | null>(null)
   const [liveSessionId, setLiveSessionId] = useState<string | null>(null)
 
+  // Mirror the latest contextFiles into a ref so the transport's `body` callback
+  // (created once via useMemo) always reads the current value without recreating
+  // the transport (which would reset chat state).
+  const contextFilesRef = useRef(contextFiles)
+  useEffect(() => { contextFilesRef.current = contextFiles }, [contextFiles])
+
   const fetchWrapper = useCallback<typeof fetch>(async (input, init) => {
     const res = await fetch(input, init)
     const sid = res.headers.get('x-session-id')
@@ -72,7 +84,10 @@ export const RealChatView: React.FC<{ onSignOut?: () => void; sessionId?: string
   const transport = useMemo(() => new DefaultChatTransport({
     api: '/api/chat',
     headers: () => (sessionIdRef.current ? { 'x-session-id': sessionIdRef.current } : {}) as Record<string, string>,
-    body: { role: 'trader' },
+    body: () => ({
+      role: 'trader',
+      contextFiles: contextFilesRef.current.map((f) => ({ docId: f.docId, filename: f.filename })),
+    }),
     fetch: fetchWrapper,
   }), [fetchWrapper])
   const { messages, sendMessage, status, error, addToolApprovalResponse, setMessages } = useChat<UIMessage>({
@@ -230,6 +245,10 @@ export const RealChatView: React.FC<{ onSignOut?: () => void; sessionId?: string
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [renderItems, status])
 
+  const removeFromConversation = useCallback((key: string) => {
+    setContextFiles((prev) => prev.filter((f) => f.key !== key))
+  }, [setContextFiles])
+
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     const text = input.trim()
@@ -378,6 +397,16 @@ export const RealChatView: React.FC<{ onSignOut?: () => void; sessionId?: string
             <div className="mb-3 rounded-lg border border-success/20 bg-success/5 px-3 py-2 text-xs text-success flex items-center gap-1.5">
               <ShieldCheck className="w-3.5 h-3.5" />
               审批已通过，新消息已追加到对话
+            </div>
+          )}
+          {contextFiles.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '4px 8px', borderBottom: '1px solid #eee', marginBottom: 8 }}>
+              {contextFiles.map((f) => (
+                <span key={f.key} style={{ background: '#e3f2fd', border: '1px solid #90caf9', borderRadius: 3, padding: '2px 6px', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  {f.filename}
+                  <span onClick={() => removeFromConversation(f.key)} style={{ cursor: 'pointer', color: '#666' }}>x</span>
+                </span>
+              ))}
             </div>
           )}
           <form onSubmit={onSubmit} className="flex items-end gap-2">
