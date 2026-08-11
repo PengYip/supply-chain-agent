@@ -47,6 +47,9 @@ apps/server/ingest-root/
 # Subagent-Driven Development scratch (progress ledger etc.)
 .superpowers/
 
+# TypeScript incremental build cache (tsc -b artifact)
+*.tsbuildinfo
+
 # H2 real-sample MinerU spike: real contract PDFs + raw MinerU output contain
 # real customer data -- never commit. Only redacted/synthetic shape fixtures
 # are committed (under apps/server/test/pipeline/fixtures/).
