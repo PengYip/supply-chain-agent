@@ -18,7 +18,7 @@ export const user = pgTable('user', {
     .default(false),
   image: text('image'),
   // admin plugin:
-  role: text('role').notNull().default('viewer'),
+  role: text('role').notNull().default('trader'),
   banned: boolean('banned').notNull().default(false),
   banReason: text('ban_reason'),
   banExpires: timestamp('ban_expires', { withTimezone: true }),
