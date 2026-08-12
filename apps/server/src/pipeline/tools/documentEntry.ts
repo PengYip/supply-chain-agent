@@ -5,8 +5,7 @@ import type { DbContext } from '../db/client.js';
 import {
   saveDocument, loadDocument, saveExtraction, saveBinding, saveChunks,
 } from '../db/repositories.js';
-import { ingestWithDigital } from '../digitalAdapter.js';
-import { ingestWithMinerU } from '../mineruAdapter.js';
+import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
 import { chunkBlockModel } from '../chunking.js';
 import { linkDocumentToContract } from '../../data/seed.js';
@@ -67,32 +66,9 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   // Path allowlist (injection defense): reject anything outside INGEST_ROOT.
   const safePath = assertWithinRoot(sourcePath);
   const docId = newDocId();
-  let blockModel =
-    modality === 'scanned'
-      ? await ingestWithMinerU(safePath, docType, docId)
-      : await ingestWithDigital(safePath, docType, docId);
+  // Parse (pure, no DB) — extracted into parseDocument primitive.
+  const blockModel = await parseDocument({ sourcePath: safePath, docType, docId, modality });
 
-  // Auto-fallback: digital PDF yielded 0 blocks -> likely scanned -> retry via MinerU OCR.
-  if (blockModel.blocks.length === 0 && modality !== 'scanned' && /\.pdf$/i.test(safePath)) {
-    console.warn('[ingest] digital ingest yielded 0 blocks for PDF; retrying as scanned via MinerU OCR');
-    try {
-      const mineruModel = await ingestWithMinerU(safePath, docType, docId);
-      if (mineruModel.blocks.length > 0) {
-        blockModel = mineruModel;
-      }
-    } catch (e) {
-      console.warn('[ingest] MinerU OCR fallback failed:', (e as Error).message);
-    }
-  }
-
-  // Final check: still 0 blocks after fallback -> throw.
-  if (blockModel.blocks.length === 0) {
-    throw new Error(
-      modality === 'scanned'
-        ? '文件解析得到 0 个内容块。MinerU OCR 可能失败，请检查 .mineru.json 或 MinerU 服务配置。'
-        : '文件解析得到 0 个内容块。该文件可能是扫描件(无文字层)，MinerU OCR 也未能提取内容。',
-    );
-  }
   await saveDocument(ctx, blockModel, userId);
   const chunks = chunkBlockModel(blockModel);
   const chunkRowIds = await saveChunks(ctx, docId, chunks);
