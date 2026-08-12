@@ -87,8 +87,17 @@ export function withToolTimeout(
         resolve({ status: 'error', reason: 'tool_timeout', toolName, timeoutMs });
       }, timeoutMs);
     });
+    const execPromise = execute(input, options);
+    // Mark any late rejection handled: if the timeout wins the race, the
+    // abandoned execPromise is still pending; a late DB/network rejection would
+    // otherwise surface as an unhandled rejection under
+    // --unhandled-rejections=throw and crash the PM2 process. The no-op catch
+    // does NOT affect race behavior (fast-resolve: no-op; fast-reject before
+    // timeout: throw still propagates via the race; timeout + late-reject:
+    // swallowed here).
+    execPromise.catch(() => {});
     try {
-      const result = await Promise.race([execute(input, options), timeout]);
+      const result = await Promise.race([execPromise, timeout]);
       return result;
     } finally {
       if (timer) clearTimeout(timer);

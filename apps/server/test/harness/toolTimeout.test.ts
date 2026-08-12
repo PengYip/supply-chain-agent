@@ -32,4 +32,14 @@ describe('withToolTimeout (per-tool timeout wrapper)', () => {
     const out = await wrapped({} as any, {} as any);
     expect(out).toEqual({ ok: true, value: 42 });
   });
+
+  it('propagates a thrown error and clears the timer', async () => {
+    const throwing = tool({
+      description: 'throwing test tool',
+      inputSchema: z.object({}),
+      execute: async () => { throw new Error('boom'); },
+    });
+    const wrapped = withToolTimeout(throwing.execute!, 1000);
+    await expect(wrapped({} as any, {} as any)).rejects.toThrow('boom');
+  });
 });
