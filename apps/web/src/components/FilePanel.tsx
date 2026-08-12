@@ -260,22 +260,22 @@ function FileRow(props: {
         style={{
           marginLeft: 8,
           flex: 1,
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
           overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
+          overflowWrap: 'anywhere',
         }}
       >
         {file.name}
       </span>
-      <span style={{ fontSize: 11, color: '#9ca3af', marginRight: 8, whiteSpace: 'nowrap' }}>{formatSize(file.size)}</span>
+      <span style={{ fontSize: 11, color: '#9ca3af', marginRight: 8, whiteSpace: 'nowrap', display: hover ? 'inline' : 'none' }}>{formatSize(file.size)}</span>
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          display: 'flex',
+          display: hover || moving || deletingFilePath === file.key ? 'flex' : 'none',
           alignItems: 'center',
           gap: 6,
-          opacity: hover || moving ? 1 : 0,
-          transition: 'opacity 120ms ease',
           whiteSpace: 'nowrap',
         }}
       >
@@ -423,9 +423,11 @@ function TreeFolder(props: TreeFolderProps) {
             marginLeft: 8,
             flex: 1,
             fontWeight: 600,
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
             overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
+            overflowWrap: 'anywhere',
           }}
         >
           {name}
@@ -453,8 +455,7 @@ function TreeFolder(props: TreeFolderProps) {
               fontSize: 11,
               color: '#dc2626',
               cursor: 'pointer',
-              opacity: hover ? 1 : 0,
-              transition: 'opacity 120ms ease',
+              display: hover ? 'inline-block' : 'none',
               padding: '2px 4px',
               borderRadius: 3,
             }}
