@@ -66,6 +66,36 @@ function withAudit(name: string, execute: Tool['execute']): Tool['execute'] {
   };
 }
 
+/**
+ * Per-tool timeout wrapper (book Ch5:314). Wraps an execute in a Promise.race
+ * against a timeout. On timeout returns a STRUCTURED result — NOT a throw — so
+ * the model sees the timeout as a tool result it can adapt to next turn (change
+ * args, switch tool, give up) instead of a silent kill. The wrapper is INNERMOST
+ * (composed inside withAudit in buildGatedTools) so withAudit records the
+ * structured timeout like any other result. toolName is attached for context.
+ */
+export function withToolTimeout(
+  execute: Tool['execute'],
+  timeoutMs: number,
+  toolName?: string,
+): Tool['execute'] {
+  if (!execute) return execute;
+  return async (input: any, options: any) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(() => {
+        resolve({ status: 'error', reason: 'tool_timeout', toolName, timeoutMs });
+      }, timeoutMs);
+    });
+    try {
+      const result = await Promise.race([execute(input, options), timeout]);
+      return result;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+}
+
 export function buildGatedTools(role: Role, deps?: HarnessDeps): Record<string, Tool> {
   const list = getToolsForRole(role, deps);
   // Contract guard: no tool may go live for the model without a declared
@@ -75,7 +105,7 @@ export function buildGatedTools(role: Role, deps?: HarnessDeps): Record<string, 
   const gated: Record<string, Tool> = {};
   for (const t of list) {
     const name = t.name;
-    const audited: Tool = { ...t, execute: withAudit(name, t.execute) };
+    const audited: Tool = { ...t, execute: withAudit(name, withToolTimeout(t.execute, env.TOOL_TIMEOUT_MS, name)) };
     // L2 via the permission gate (source of truth) OR a literal boolean
     // needsApproval stamped at registration (e.g. bind_document). `=== true`
     // avoids matching Tool's needsApproval-function form.

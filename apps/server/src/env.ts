@@ -46,6 +46,11 @@ const EnvSchema = z.object({
    *  default (only OPENAI_API_KEY is required). Enforced in the /api/files
    *  upload route BEFORE buffering the body (413). */
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
+  /** Per-tool execute timeout in ms (book Ch5:314 fault recovery). Default 120s.
+   *  Applied in buildGatedTools via withToolTimeout — a tool that exceeds it
+   *  returns a STRUCTURED {status:'error', reason:'tool_timeout'} result (not a
+   *  throw) so the model can adapt next turn. CI-safe permissive default. */
+  TOOL_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
   // Neo4j graph store (Phase 4 §7). The ONLY graph store — dev/CI/prod all
   // connect to the ubuntu-server Neo4j over the network. PASSWORD defaults to
   // '' so env.ts zod-parses cleanly in CI (which only injects OPENAI_API_KEY)
