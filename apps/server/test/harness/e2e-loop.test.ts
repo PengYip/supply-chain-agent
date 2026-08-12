@@ -24,6 +24,8 @@ import { env } from '../../src/env.js';
 interface FakeModelOptions {
   toolCall: { id: string; toolName: string; input: unknown };
   onTools?: (names: string[]) => void;
+  /** Receives the converted `prompt` AI SDK 6 hands to doStream (call 1). */
+  onPrompt?: (prompt: unknown) => void;
 }
 
 // Minimal fake LanguageModelV2. doStream drives the multi-step loop:
@@ -46,10 +48,11 @@ function createFakeModel(opts: FakeModelOptions) {
         warnings: [] as unknown[],
       };
     },
-    async doStream(options: { tools?: Array<{ name?: string }> }) {
+    async doStream(options: { tools?: Array<{ name?: string }>; prompt?: unknown }) {
       calls++;
-      if (calls === 1 && options.tools) {
-        opts.onTools?.(options.tools.map((t) => t.name ?? ''));
+      if (calls === 1) {
+        if (options.tools) opts.onTools?.(options.tools.map((t) => t.name ?? ''));
+        opts.onPrompt?.(options.prompt);
       }
       const stream = new ReadableStream<unknown>({
         start(controller) {
@@ -82,9 +85,11 @@ describe('agent e2e loop (stub model)', () => {
     writeFileSync(f, '合同号: HT-2024-001\n金额: 2860000', 'utf-8');
 
     let capturedNames: string[] = [];
+    let capturedPrompt: unknown;
     const fake = createFakeModel({
       toolCall: { id: 'call_1', toolName: 'ingest_document', input: { sourceUri: f, docType: '合同', modality: 'digital' } },
       onTools: (names) => { capturedNames = names; },
+      onPrompt: (p) => { capturedPrompt = p; },
     });
 
     const messages: ModelMessage[] = [{ role: 'user', content: '请录入这份合同' }];
@@ -92,6 +97,7 @@ describe('agent e2e loop (stub model)', () => {
       messages,
       role: 'trader',
       auditTraceId: 'e2e-trace',
+      sessionId: 'e2e-session',
       model: fake as any,
       deps: { ctx, extraction: { model: fake as any } },
     });
@@ -127,5 +133,18 @@ describe('agent e2e loop (stub model)', () => {
     expect(out?.blockCount).toBe(2);
     expect(out?.modality).toBe('digital');
     expect(out?.docId).toMatch(/^DOC-/);
+
+    // (e) runStream injects the model-facing <agent_status> user message at the
+    // trajectory tail when sessionId is set. AI SDK 6 v2 hands the converted
+    // messages to the model as options.prompt; the injected status message is
+    // the last element. Asserting user role + both delimiters proves the
+    // `messages: messagesForModel` wiring -- would fail if reverted to `messages,`.
+    const prompt = (capturedPrompt ?? []) as Array<{ role?: string; content?: unknown }>;
+    expect(prompt.length).toBeGreaterThan(0);
+    const last = prompt[prompt.length - 1];
+    expect(last.role).toBe('user');
+    const lastJson = JSON.stringify(last);
+    expect(lastJson).toContain('<agent_status>');
+    expect(lastJson).toContain('</agent_status>');
   });
 });

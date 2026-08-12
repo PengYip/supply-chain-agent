@@ -26,11 +26,14 @@ export type HumanAgentStatusState =
 const POLL_INTERVAL_MS = 5000
 
 /**
- * Polls the agent-status endpoint for a given chat session while the session
- * is active. Polling only runs when `sessionId` is non-null (i.e. the real-mode
- * chat has established a session) AND `active` is true (a turn is in flight),
- * and cleans up its interval + in-flight request on unmount, when the session
- * id changes, or when the turn goes inactive.
+ * Polls the agent-status endpoint for a given chat session while a turn is
+ * active. "Stop polling when no active turn" (§9.3) means stop NETWORK
+ * requests — NOT clear the display. So:
+ *   - no session (`sessionId` null) → idle, nothing rendered;
+ *   - session exists but turn ended (`active` false) → keep the last-fetched
+ *     data rendered, do NOT fetch or re-arm the interval (the previous effect's
+ *     cleanup already tore down its interval/abort);
+ *   - session + active turn → poll every POLL_INTERVAL_MS.
  *
  * 404 (no recorded activity yet) and network errors are treated as `idle`
  * rather than crashing the UI — the strip just shows the empty state.
@@ -42,8 +45,14 @@ export function useHumanAgentStatus(
   const [state, setState] = useState<HumanAgentStatusState>({ status: 'idle' })
 
   useEffect(() => {
-    if (!sessionId || !active) {
+    if (!sessionId) {
       setState({ status: 'idle' })
+      return
+    }
+    if (!active) {
+      // Session exists but the turn ended: keep the last-known data on screen,
+      // just don't poll. Returning undefined here means no cleanup is needed
+      // (the prior active run's cleanup already cleared its interval/abort).
       return
     }
 
