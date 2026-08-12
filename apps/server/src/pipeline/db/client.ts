@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { documents, extractions, bindings, fileFolders } from './schema.js';
+import { documents, extractions, bindings, fileFolders, classifications } from './schema.js';
 // Type-only import: erased at emit, so SQLite-only hosts do not need pg installed
 // to RUN; only the Postgres path (postgres-client.ts) does a real `import { Pool }`.
 import type { Pool } from 'pg';
@@ -31,7 +31,7 @@ export type DbContext = SqliteDbContext | PostgresDbContext;
 export function createDb(path = ':memory:'): SqliteDbContext {
   const sqlite = new Database(path);
   sqlite.pragma('journal_mode = WAL');
-  const db = drizzle(sqlite, { schema: { documents, extractions, bindings, fileFolders } });
+  const db = drizzle(sqlite, { schema: { documents, extractions, bindings, fileFolders, classifications } });
   return { backend: 'sqlite', db, sqlite };
 }
 
@@ -75,6 +75,19 @@ export function migrate(sqlite: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
     CREATE INDEX IF NOT EXISTS idx_extractions_user ON extractions(user_id);
     CREATE INDEX IF NOT EXISTS idx_bindings_user ON bindings(user_id);
+
+    CREATE TABLE IF NOT EXISTS classifications (
+      id TEXT PRIMARY KEY,
+      document_id TEXT NOT NULL REFERENCES documents(id),
+      doc_type TEXT NOT NULL,
+      confidence REAL NOT NULL,
+      source TEXT NOT NULL,
+      hint TEXT,
+      user_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_classifications_doc ON classifications(document_id);
+    CREATE INDEX IF NOT EXISTS idx_classifications_user ON classifications(user_id);
 
     -- File manager (Phase 3+): virtual folders owned per-user. Files themselves
     -- live in MinIO; this table only records folder entries.

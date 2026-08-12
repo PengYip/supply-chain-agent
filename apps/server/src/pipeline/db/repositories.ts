@@ -1,5 +1,5 @@
 import { eq, and, or, isNull } from 'drizzle-orm';
-import { documents, extractions, bindings } from './schema.js';
+import { documents, extractions, bindings, classifications } from './schema.js';
 import type { DbContext } from './client.js';
 import type { BlockModel, DocType, SourceSpan } from '../types.js';
 import type { SpanMatchStrength } from '../spanValidator.js';
@@ -136,6 +136,83 @@ export async function loadExtraction(
     fieldMeta: JSON.parse(row.fieldMeta as string),
     overallConfidence: row.overallConfidence,
     needsReview: !!row.needsReview,
+  };
+}
+
+export interface ClassificationInput {
+  documentId: string;
+  docType: DocType;
+  confidence: number;
+  source: 'classified' | 'hint' | 'fallback';
+  hint?: DocType;
+}
+
+export interface ClassificationRow {
+  id: string;
+  documentId: string;
+  docType: DocType;
+  confidence: number;
+  source: string;
+  hint: DocType | null;
+}
+
+/** Persist one classification result for a document (one row per ingest). */
+export async function saveClassification(
+  ctx: DbContext,
+  input: ClassificationInput,
+  userId?: string,
+): Promise<string> {
+  if (ctx.backend === 'postgres') {
+    throw new Error('saveClassification: postgres backend not yet implemented');
+  }
+  const id = rid('CL');
+  ctx.db.insert(classifications).values({
+    id,
+    documentId: input.documentId,
+    docType: input.docType,
+    confidence: input.confidence,
+    source: input.source,
+    hint: input.hint ?? null,
+    userId: effectiveUserId(userId),
+  }).run();
+  return id;
+}
+
+/**
+ * Load the classification row for a document (most recent if multiple). Same
+ * userId-legacy filter as loadExtraction (rows with user_id = '' / NULL stay
+ * readable by any caller). Postgres path stubbed -- Phase 2 is SQLite-only.
+ */
+export async function loadClassification(
+  ctx: DbContext,
+  documentId: string,
+  userId?: string,
+): Promise<ClassificationRow | null> {
+  if (ctx.backend === 'postgres') {
+    throw new Error('loadClassification: postgres backend not yet implemented');
+  }
+  const uid = effectiveUserId(userId);
+  const filter = uid
+    ? and(
+        eq(classifications.documentId, documentId),
+        or(eq(classifications.userId, uid), eq(classifications.userId, ''), isNull(classifications.userId)),
+      )
+    : eq(classifications.documentId, documentId);
+  const row = ctx.db
+    .select()
+    .from(classifications)
+    .where(filter)
+    .orderBy(classifications.createdAt)
+    .all()
+    .pop();
+  if (!row) return null;
+  return {
+    id: row.id,
+    documentId: row.documentId,
+    docType: row.docType as DocType,
+    confidence: row.confidence,
+    source: row.source,
+    hint: (row.hint as DocType | null) ?? null,
   };
 }
 

@@ -201,4 +201,74 @@ describe('document-entry tools', () => {
     expect(out.reason).toBe('field_not_found');
     expect(out.availableFields).toEqual(['a']);
   });
+
+  // Stub model whose doGenerate returns classifier-schema JSON (docType + confidence).
+  const stubClassifierModel = {
+    specificationVersion: 'v2' as const,
+    provider: 'fake',
+    modelId: 'fake-model',
+    supportedUrls: {} as Record<string, RegExp[]>,
+    async doGenerate() {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify({ docType: '合同', confidence: 0.88 }),
+          },
+        ],
+        finishReason: 'stop' as const,
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        warnings: [] as unknown[],
+      };
+    },
+    async doStream() {
+      throw new Error('doStream not used by classify');
+    },
+  } as any;
+
+  it('ingest_document classifies docType and overrides the hint, persisting the result', async () => {
+    const f = join(dir, 'contract.txt');
+    writeFileSync(f, '合同号：HT-2024-001\n买方：示例公司\n卖方：另一方公司\n', 'utf-8');
+    // Pass an intentionally-wrong hint ('其他'); the classifier should override to '合同'.
+    const ingest = buildIngestDocumentTool({
+      ctx,
+      classifier: { model: stubClassifierModel } as any,
+    });
+    const res: any = await ingest.execute(
+      { sourceUri: f, docType: '其他', modality: 'digital' },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+    expect(res.docId).toBeDefined();
+    expect(res.classifiedDocType).toBe('合同');
+    expect(res.classificationConfidence).toBeCloseTo(0.88, 5);
+    expect(res.classificationSource).toBe('classified');
+
+    // The classified docType is what the documents row stores.
+    const { loadDocument, loadClassification } = await import(
+      '../../../src/pipeline/db/repositories.js'
+    );
+    const model = await loadDocument(ctx, res.docId);
+    expect(model?.docType).toBe('合同');
+    const cls = await loadClassification(ctx, res.docId);
+    expect(cls?.docType).toBe('合同');
+    expect(cls?.confidence).toBeCloseTo(0.88, 5);
+    expect(cls?.source).toBe('classified');
+    expect(cls?.hint).toBe('其他');
+  });
+
+  it('ingest_document degrades to the hint docType when no classifier is wired', async () => {
+    const f = join(dir, 'bill.txt');
+    writeFileSync(f, '提单号：BL-9\n', 'utf-8');
+    const ingest = buildIngestDocumentTool({ ctx }); // no classifier
+    const res: any = await ingest.execute(
+      // docType omitted -> hint defaults to '其他'
+      { sourceUri: f, modality: 'digital' },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+    expect(res.classifiedDocType).toBe('其他');
+    expect(res.classificationSource).toBe('hint');
+    // Per shipped classifier.ts: hint/degrade confidence is 0 (LOW) so a bare
+    // hint is never treated as an authoritative classification.
+    expect(res.classificationConfidence).toBe(0);
+  });
 });

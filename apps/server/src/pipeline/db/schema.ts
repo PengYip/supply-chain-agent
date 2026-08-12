@@ -60,6 +60,27 @@ export const bindings = sqliteTable(
   (t) => ({ userIdx: index('idx_bindings_user').on(t.userId) }),
 );
 
+/**
+ * Phase 2 classification: one row per document ingest. The classified docType is
+ * ALSO written to documents.doc_type (so loadDocument reflects it); this row
+ * carries the confidence + source + the caller's hint for audit. source:
+ * 'classified' = LLM decided; 'hint' = no model; 'fallback' = LLM errored.
+ */
+export const classifications = sqliteTable(
+  'classifications',
+  {
+    id: text('id').primaryKey(),
+    documentId: text('document_id').notNull().references(() => documents.id),
+    docType: text('doc_type').notNull(),
+    confidence: real('confidence').notNull(),
+    source: text('source').notNull(),
+    hint: text('hint'),
+    userId: text('user_id').notNull().default(''),
+    createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  },
+  (t) => ({ docIdx: index('idx_classifications_doc').on(t.documentId) }),
+);
+
 /** Virtual folders for the file manager (Phase 3+). One row per (user, path). */
 export const fileFolders = sqliteTable(
   'file_folders',

@@ -4,9 +4,11 @@ import { randomUUID } from 'node:crypto';
 import type { DbContext } from '../db/client.js';
 import {
   saveDocument, loadDocument, saveExtraction, loadExtraction, saveBinding, saveChunks,
+  saveClassification,
 } from '../db/repositories.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
+import { classifyDocument, classifyDocumentWithoutModel, type ClassifierDeps } from '../classifier.js';
 import { chunkBlockModel } from '../chunking.js';
 import { linkDocumentToContract } from '../../data/seed.js';
 import { tagExternal, assertWithinRoot } from '../../harness/injectionDefense.js';
@@ -18,6 +20,9 @@ import { validateSpan, type SpanMatchStrength } from '../spanValidator.js';
 export interface ToolDeps {
   ctx: DbContext;
   extraction?: ExtractionDeps; // inject for extract_fields; defaults to real model
+  /** Phase 2 routing-classify stage. When unset, ingest degrades to the
+   *  caller-supplied docType hint (source 'hint', confidence 0). */
+  classifier?: ClassifierDeps;
   /** Embedder for the L4 vector recall index (Task 6 v2). When unset OR when
    *  sqlite-vec is unavailable on the connection, ingest skips vector population
    *  and only the FTS5 keyword index (Task 6 v1) is populated. */
@@ -49,8 +54,11 @@ function ensureFk(ctx: DbContext): void {
 export interface IngestOptions {
   ctx: DbContext;
   sourcePath: string;
-  docType: DocType;
+  /** Caller hint. Classification determines the effective docType when a
+   *  classifier is wired; otherwise this hint is used directly. Defaults to '其他'. */
+  docType?: DocType;
   modality: Modality;
+  classifier?: ClassifierDeps;
   embedder?: Embedder;
   /** Phase 2: owning user for the new document + its chunks. */
   userId?: string;
@@ -60,16 +68,33 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   docId: string;
   blockCount: number;
   modality: string;
+  classifiedDocType: DocType;
+  classificationConfidence: number;
+  classificationSource: 'classified' | 'hint' | 'fallback';
 }> {
-  const { ctx, sourcePath, docType, modality, embedder, userId } = opts;
+  const { ctx, sourcePath, docType, modality, embedder, classifier, userId } = opts;
   ensureFk(ctx);
   // Path allowlist (injection defense): reject anything outside INGEST_ROOT.
   const safePath = assertWithinRoot(sourcePath);
   const docId = newDocId();
-  // Parse (pure, no DB) — extracted into parseDocument primitive.
-  const blockModel = await parseDocument({ sourcePath: safePath, docType, docId, modality });
+  // Parse (pure, no DB) — extracted into parseDocument primitive (Phase 1).
+  const blockModel = await parseDocument({ sourcePath: safePath, docType: docType ?? '其他', docId, modality });
+
+  // Classify (Phase 2 routing-classify): parsed blocks -> effective docType.
+  // Degrades to the hint when no classifier is wired (tests / dev offline).
+  const cls = classifier
+    ? await classifyDocument(classifier, { blocks: blockModel.blocks, hint: docType })
+    : classifyDocumentWithoutModel({ blocks: blockModel.blocks, hint: docType });
+  // The classified docType is the source of truth from here on (design §6:
+  // routing-classify picks the docType used downstream).
+  blockModel.docType = cls.docType;
 
   await saveDocument(ctx, blockModel, userId);
+  await saveClassification(
+    ctx,
+    { documentId: docId, docType: cls.docType, confidence: cls.confidence, source: cls.source, hint: docType },
+    userId,
+  );
   const chunks = chunkBlockModel(blockModel);
   const chunkRowIds = await saveChunks(ctx, docId, chunks);
   if (embedder && (await isVecReady(ctx))) {
@@ -86,24 +111,35 @@ export async function ingestFile(opts: IngestOptions): Promise<{
       );
     }
   }
-  return { docId, blockCount: blockModel.blocks.length, modality: blockModel.modality };
+  return {
+    docId,
+    blockCount: blockModel.blocks.length,
+    modality: blockModel.modality,
+    classifiedDocType: cls.docType,
+    classificationConfidence: cls.confidence,
+    classificationSource: cls.source,
+  };
 }
 
 export function buildIngestDocumentTool(deps: ToolDeps) {
   return tool({
     description:
-      '录入一份原始单据(合同/发票/提单/装箱单)。解析文件为结构化 BlockModel 并持久化, 返回 docId 与解析信息。不抽取业务字段(用 extract_fields)。',
+      '录入一份原始单据(合同/发票/提单/装箱单)。解析文件为结构化 BlockModel 并持久化, ' +
+      '内置分类器自动判定单据类型(docType 为可选提示, 分类器会确认或纠正)并打自动标签, ' +
+      '返回 docId、分类结果(classifiedDocType / confidence / source)与标签。不抽取业务字段(用 extract_fields)。',
     inputSchema: z.object({
       sourceUri: z.string().min(1).describe('本地文件路径 (PDF/TXT/DOCX); scanned 还需配套 <sourceUri>.mineru.json'),
-      docType: z.enum(['合同', '发票', '提单', '装箱单', '其他']),
+      docType: z.enum(['合同', '发票', '提单', '装箱单', '其他']).optional()
+        .describe('可选的单据类型提示; 分类器会确认或纠正。省略时由分类器决定'),
       modality: z.enum(['digital', 'scanned']),
     }),
     execute: async ({ sourceUri, docType, modality }) => {
       return ingestFile({
         ctx: deps.ctx,
         sourcePath: sourceUri,
-        docType: docType as DocType,
+        docType: docType as DocType | undefined,
         modality: modality as Modality,
+        classifier: deps.classifier,
         embedder: deps.embedder,
         userId: deps.userId,
       });
