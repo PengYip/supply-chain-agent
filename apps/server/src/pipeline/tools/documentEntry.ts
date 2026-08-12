@@ -116,8 +116,16 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   // Auto-tag (Phase 2): derive a small deterministic tag set from the effective
   // docType + content (design §8: auto-tags are an ingest byproduct, persisted
   // and included in the return summary). Explicit tags come from tag_document.
-  const tags = deriveAutoTags({ docType: blockModel.docType, blocks: blockModel.blocks });
-  await saveDocumentTags(ctx, docId, tags, 'auto', userId);
+  // Fault-tolerant like the vector block above: by design a byproduct, so a
+  // persistence failure (UNIQUE regression, disk full, locked DB) degrades to
+  // an empty tag set instead of killing the already-committed primary result.
+  let tags: string[] = [];
+  try {
+    tags = deriveAutoTags({ docType: blockModel.docType, blocks: blockModel.blocks });
+    await saveDocumentTags(ctx, docId, tags, 'auto', userId);
+  } catch (e) {
+    console.warn('[ingest] auto-tag persistence skipped:', (e as Error).message);
+  }
 
   return {
     docId,
@@ -295,7 +303,7 @@ export function buildTagDocumentTool(deps: ToolDeps) {
     description:
       '为已录入的单据打显式标签(用户/代理人工标注)。可在录入后任意时刻调用。' +
       '与 ingest 时自动生成的标签(来源 auto)不同, 这些标签来源为 explicit。' +
-      '图关系(买方/卖方/引用)不在此工具, 用 link_entities。' +
+      '图关系(买方/卖方/引用)暂不支持, 将在后续工具中提供。' +
       '使用场景: 用户说"给这份合同打上 重要 / 客户A 标签"时。',
     inputSchema: z.object({
       docId: z.string().min(1).describe('目标单据 docId (来自 ingest_document 返回)'),

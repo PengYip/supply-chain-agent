@@ -294,6 +294,33 @@ describe('document-entry tools', () => {
     expect(autoTags).toContain('信用证');
   });
 
+  it('ingest_document survives an auto-tag persistence failure (degrades gracefully)', async () => {
+    // Fault injection: drop the document_tags table so saveDocumentTags throws
+    // "no such table" mid-ingest. Auto-tags are a byproduct (design §8); a
+    // persistence failure must NOT kill the already-committed primary result
+    // (saveDocument/saveClassification/saveChunks have all run). Mirrors the
+    // vector-embedding block's fault-tolerant try/catch pattern.
+    ctx.sqlite.exec('DROP TABLE document_tags');
+    const f = join(dir, 'lc.txt');
+    writeFileSync(f, '合同号: HT-2024-001\n本合同采用信用证 CIF\n', 'utf-8');
+    const ingest = buildIngestDocumentTool({ ctx });
+    const res: any = await ingest.execute(
+      { sourceUri: f, docType: '合同', modality: 'digital' },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+    // Primary result committed despite the tag-stage throw.
+    expect(res.docId).toBeDefined();
+    expect(res.classifiedDocType).toBe('合同');
+    expect(res.blockCount).toBeGreaterThan(0);
+    // Return shape unchanged: tags is still an array (deriveAutoTags ran
+    // before the persist threw).
+    expect(Array.isArray(res.tags)).toBe(true);
+    // The document row itself persisted.
+    const { loadDocument } = await import('../../../src/pipeline/db/repositories.js');
+    const model = await loadDocument(ctx, res.docId);
+    expect(model?.docType).toBe('合同');
+  });
+
   it('tag_document (L2) adds explicit tags to an existing document', async () => {
     const f = join(dir, 'c.txt');
     writeFileSync(f, '合同号: HT-2024-001\n', 'utf-8');
