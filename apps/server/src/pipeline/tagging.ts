@@ -25,10 +25,16 @@ const MAX_AUTO_TAGS = 8;
 
 export function deriveAutoTags(input: { docType: DocType; blocks: Block[] }): string[] {
   const text = input.blocks.map((b) => b.text).join('\n');
+  // Case-insensitive match: OCR on bilingual trade docs routinely produces
+  // ALL-CAPS Latin forms (KG, TON, INVOICE, PACKING LIST, CONTRACT, INSPECTION,
+  // BILL OF LADING). Normalize both sides to lowercase so those still match.
+  // This only ADDS recall; exact-case matches are unchanged. The PUSHED tag is
+  // the canonical-cased entry from the table, never the lowercased input.
+  const lc = text.toLowerCase();
   const tags: string[] = [input.docType];
   for (const { tag, keywords } of AUTO_TAG_KEYWORDS) {
     if (tags.length >= MAX_AUTO_TAGS) break;
-    if (keywords.some((k) => text.includes(k))) {
+    if (keywords.some((k) => lc.includes(k.toLowerCase()))) {
       if (!tags.includes(tag)) tags.push(tag);
     }
   }

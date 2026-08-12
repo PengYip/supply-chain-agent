@@ -32,14 +32,37 @@ describe('deriveAutoTags', () => {
   });
 
   it('caps the tag list at 8 entries', () => {
-    // Craft content that hits many keyword rules at once.
+    // Craft content that hits many keyword rules at once. Assert the EXACT
+    // first-8 array so the test proves BOTH the cap AND that iteration reached
+    // the boundary tag (合同) -- a broken matcher returning ['其他'] would fail.
     const text = '信用证 CIF FOB 提单 装箱单 发票 合同 港口 重量 检验';
     const tags = deriveAutoTags({ docType: '其他' as DocType, blocks: blk(text) });
-    expect(tags.length).toBeLessThanOrEqual(8);
+    expect(tags).toEqual(['其他', '信用证', 'CIF', 'FOB', '提单', '装箱单', '发票', '合同']);
   });
 
   it('returns at least the docType for empty content', () => {
     const tags = deriveAutoTags({ docType: '提单' as DocType, blocks: blk('') });
+    expect(tags).toEqual(['提单']);
+  });
+
+  it('joins block texts with a newline so tags match across blocks', () => {
+    // Proves the \n-join of block texts is what is matched (CIF lives in the
+    // 2nd block), and that the docType echo dedupes against a keyword hit in
+    // the 1st block (only one '合同' in the output).
+    const tags = deriveAutoTags({
+      docType: '合同' as DocType,
+      blocks: [
+        { id: '1', type: 'text', text: '本合同', page: 1, bbox: null, ocrConfidence: 1 },
+        { id: '2', type: 'text', text: '采用 CIF 术语', page: 1, bbox: null, ocrConfidence: 1 },
+      ],
+    });
+    expect(tags).toContain('合同');
+    expect(tags).toContain('CIF');
+    expect(tags.filter((t) => t === '合同').length).toBe(1);
+  });
+
+  it('returns only the docType when blocks is empty', () => {
+    const tags = deriveAutoTags({ docType: '提单' as DocType, blocks: [] });
     expect(tags).toEqual(['提单']);
   });
 });
