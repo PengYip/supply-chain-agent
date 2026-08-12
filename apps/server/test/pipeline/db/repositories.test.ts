@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createDb, migrate } from '../../../src/pipeline/db/client.js';
+import { createDb, migrate, type DbContext } from '../../../src/pipeline/db/client.js';
 import {
   saveDocument, loadDocument, saveExtraction, saveBinding, listBindingsForContract,
-  saveDocumentTags, listDocumentTags,
+  saveDocumentTags, listDocumentTags, countDocuments, countExtractionsNeedingReview,
 } from '../../../src/pipeline/db/repositories.js';
 import type { BlockModel } from '../../../src/pipeline/types.js';
 
@@ -71,5 +71,46 @@ describe('repositories', () => {
     // Pin the exact survivor set (order-independent content check).
     expect(rowsAfter.map((r) => r.tag).sort()).toEqual(['信用证', '合同']);
     expect(rowsAfter.every((r) => r.source === 'auto')).toBe(true);
+  });
+});
+
+describe('countDocuments / countExtractionsNeedingReview', () => {
+  let ctx: DbContext;
+  beforeEach(() => {
+    ctx = createDb(':memory:');
+    migrate(ctx.sqlite);
+    ctx.sqlite
+      .prepare(
+        "INSERT INTO documents (id, doc_type, modality, source_uri, block_model, user_id, created_at) VALUES ('d1','合同','digital','s','{}','alice',datetime('now'))",
+      )
+      .run();
+    ctx.sqlite
+      .prepare(
+        "INSERT INTO documents (id, doc_type, modality, source_uri, block_model, user_id, created_at) VALUES ('d2','发票','digital','s','{}','',datetime('now'))",
+      )
+      .run();
+    ctx.sqlite
+      .prepare(
+        "INSERT INTO extractions (id, document_id, doc_type, fields, field_meta, overall_confidence, needs_review, user_id, created_at) VALUES ('e1','d1','合同','[]','{}',0.8,1,'alice',datetime('now'))",
+      )
+      .run();
+    ctx.sqlite
+      .prepare(
+        "INSERT INTO extractions (id, document_id, doc_type, fields, field_meta, overall_confidence, needs_review, user_id, created_at) VALUES ('e2','d2','发票','[]','{}',0.9,0,'',datetime('now'))",
+      )
+      .run();
+  });
+
+  it('counts documents scoped by userId plus legacy rows', () => {
+    expect(countDocuments(ctx, 'alice')).toBe(2); // d1 (alice) + d2 (legacy '')
+  });
+
+  it('counts extractions needing review scoped by userId plus legacy rows', () => {
+    expect(countExtractionsNeedingReview(ctx, 'alice')).toBe(1); // only e1 (needs_review=1)
+  });
+
+  it('with no userId counts only legacy rows', () => {
+    expect(countDocuments(ctx)).toBe(1); // only d2 (user_id='')
+    expect(countExtractionsNeedingReview(ctx)).toBe(0); // e2 legacy but needs_review=0
   });
 });

@@ -30,6 +30,41 @@ export function effectiveUserId(userId?: string): string {
   return userId && userId.length > 0 ? userId : '';
 }
 
+/**
+ * Count document rows visible to the caller (caller's own rows + legacy
+ * user_id='' / NULL rows). SQLite-only this phase; postgres stubbed.
+ */
+export function countDocuments(ctx: DbContext, userId?: string): number {
+  if (ctx.backend === 'postgres') {
+    throw new Error('countDocuments: postgres backend not yet implemented');
+  }
+  const uid = effectiveUserId(userId);
+  const row = ctx.sqlite
+    .prepare(
+      "SELECT COUNT(*) AS n FROM documents WHERE user_id = ? OR user_id = '' OR user_id IS NULL",
+    )
+    .get(uid) as { n: number } | undefined;
+  return row?.n ?? 0;
+}
+
+/**
+ * Count extraction rows flagged needs_review visible to the caller. needs_review
+ * is stored INTEGER 0/1 (drizzle boolean mode); SQL filters on needs_review = 1.
+ * SQLite-only this phase; postgres stubbed.
+ */
+export function countExtractionsNeedingReview(ctx: DbContext, userId?: string): number {
+  if (ctx.backend === 'postgres') {
+    throw new Error('countExtractionsNeedingReview: postgres backend not yet implemented');
+  }
+  const uid = effectiveUserId(userId);
+  const row = ctx.sqlite
+    .prepare(
+      "SELECT COUNT(*) AS n FROM extractions WHERE needs_review = 1 AND (user_id = ? OR user_id = '' OR user_id IS NULL)",
+    )
+    .get(uid) as { n: number } | undefined;
+  return row?.n ?? 0;
+}
+
 export interface ExtractionInput {
   documentId: string;
   docType: DocType;
