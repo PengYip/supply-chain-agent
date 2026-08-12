@@ -33,14 +33,22 @@ function getTitleModel(): LanguageModel {
   return titleModel;
 }
 
-/** Defensively extract text from a ModelMessage's content (string or parts[]). */
-function extractMessageText(msg: ModelMessage | undefined): string {
-  if (!msg) return '';
-  const content = msg.content as unknown;
+/**
+ * Defensively extract text from a message, handling BOTH shapes:
+ *   - ModelMessage: `.content` is a string or an array of `{type:'text', text}` parts.
+ *   - UIMessage (AI SDK 6 parts format): `.parts` is an array of `{type:'text', text}`.
+ * Without the `.parts` fallback, firstUserText/firstReplyText come back empty and
+ * the title falls back to '新会话' every time. `any` is intentional — the two
+ * message shapes don't share a TS structural field for text content.
+ */
+function extractMessageText(msg: any): string {
+  const content = msg?.content;
   if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((p) => ((p as { type?: string })?.type === 'text' ? String((p as { text?: unknown }).text ?? '') : ''))
+  const parts = Array.isArray(content) ? content : msg?.parts;
+  if (Array.isArray(parts)) {
+    return parts
+      .filter((p: any) => p?.type === 'text')
+      .map((p: any) => String(p?.text ?? ''))
       .join('');
   }
   return '';
@@ -100,9 +108,13 @@ chatRoute.post('/chat', async (c) => {
   const headerId = c.req.header('x-session-id');
   const candidate = headerId && userId ? (sessionBelongsTo(headerId, userId) ? loadSession(headerId) : null) : null;
   const loaded = headerId && !userId ? loadSession(headerId) : candidate;
-  const isFirstTurn = loaded == null;
   const sessionId = loaded?.id ?? createSession(role as Role, userId).id;
   const priorMessages = loaded?.messages ?? [];
+  // First turn = no prior messages. Detecting via `loaded == null` misses the
+  // primary user flow: the sidebar pre-creates an empty session (新建会话), the
+  // first message carries that x-session-id, loadSession returns the empty
+  // session (loaded != null) but with zero messages — title-gen must still fire.
+  const isFirstTurn = priorMessages.length === 0;
   setSessionContext(sessionId);
 
   const auditTraceId = randomUUID();
