@@ -5,6 +5,7 @@ import { RealChatView } from './components/RealChatView';
 import { SessionSidebar } from './components/SessionSidebar';
 import { FilePanel } from './components/FilePanel';
 import { type FileEntry, type ContextFile } from './hooks/useFiles';
+import { useSessions } from './hooks/useSessions';
 
 function App() {
   const [session, setSession] = useState<unknown>(null);
@@ -12,6 +13,9 @@ function App() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [filePanelVisible, setFilePanelVisible] = useState(false);
   const [contextFiles, setContextFiles] = useState<ContextFile[]>([]);
+  // Phase 5: sessions live at App so the sidebar (data) and RealChatView
+  // (refresh trigger) can share one useSessions instance.
+  const { sessions, loading: sessionsLoading, refresh: refreshSessions, createSession, deleteSession } = useSessions();
 
   const refetchSession = useCallback(async () => {
     const { data } = await authClient.getSession();
@@ -52,13 +56,21 @@ function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
-      <SessionSidebar activeSessionId={activeSessionId} onSelect={setActiveSessionId} />
+      <SessionSidebar
+        activeSessionId={activeSessionId}
+        onSelect={setActiveSessionId}
+        sessions={sessions}
+        loading={sessionsLoading}
+        createSession={createSession}
+        deleteSession={deleteSession}
+      />
       <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
         <RealChatView
           sessionId={activeSessionId}
           onSignOut={refetchSession}
           contextFiles={contextFiles}
           setContextFiles={setContextFiles}
+          onSessionChanged={() => { void refreshSessions(); }}
         />
         <button
           type="button"

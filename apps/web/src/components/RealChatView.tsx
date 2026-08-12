@@ -16,7 +16,10 @@ export const RealChatView: React.FC<{
   sessionId?: string | null;
   contextFiles: ContextFile[];
   setContextFiles: React.Dispatch<React.SetStateAction<ContextFile[]>>;
-}> = ({ onSignOut, sessionId, contextFiles, setContextFiles }) => {
+  /** Phase 5: called when a chat turn finishes so the sidebar can refresh
+   *  (a newly-generated session title appears). */
+  onSessionChanged?: () => void;
+}> = ({ onSignOut, sessionId, contextFiles, setContextFiles, onSessionChanged }) => {
   const [input, setInput] = useState('')
 
   // Phase 3: file upload state. Uploads POST to /api/files (MinIO + ingest bridge).
@@ -130,6 +133,19 @@ export const RealChatView: React.FC<{
       cancelled = true
     }
   }, [sessionId, setMessages])
+
+  // Phase 5: refresh the sidebar when a chat turn finishes (status transitions
+  // to 'ready') so a newly-generated session title appears. Uses a ref so it
+  // only fires on the transition, not on mount (status is already 'ready').
+  const prevStatusRef = useRef(status)
+  const onSessionChangedRef = useRef(onSessionChanged)
+  onSessionChangedRef.current = onSessionChanged
+  useEffect(() => {
+    if (prevStatusRef.current !== 'ready' && status === 'ready') {
+      onSessionChangedRef.current?.()
+    }
+    prevStatusRef.current = status
+  }, [status])
 
   const handleApprove = (id: string) =>
     addToolApprovalResponse({ id, approved: true, reason: '用户确认执行' })
