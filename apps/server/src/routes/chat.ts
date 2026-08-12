@@ -119,6 +119,7 @@ chatRoute.post('/chat', async (c) => {
       messages: streamMessages,
       role: agentRole,
       auditTraceId,
+      sessionId,
       userId: userId ?? undefined,
     });
 

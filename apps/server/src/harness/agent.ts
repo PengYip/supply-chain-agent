@@ -3,14 +3,17 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import { env } from '../env.js';
 import { getToolsForRole, type Role, type HarnessDeps } from './roleToolRegistry.js';
 import { getPermission } from './permissionGate.js';
-import { recordPendingApproval } from './sessionStore.js';
-import { auditRecorder } from './auditRecorder.js';
+import { recordPendingApproval, countPendingApprovals } from './sessionStore.js';
+import { auditRecorder, type ToolCallRecord } from './auditRecorder.js';
 import { assertAllToolsContracted } from './contextContract.js';
 import {
   compressByBudget,
   createFailureTracker,
   makeCircuitBreaker,
 } from './compression.js';
+import { appendStatusMessage, type AgentStatusSnapshot } from './agentStatus.js';
+import { getToolCallCounts } from './statusAggregator.js';
+import { countDocuments, countExtractionsNeedingReview } from '../pipeline/db/repositories.js';
 import { DeterministicEmbedder, OllamaEmbedder, type Embedder } from '../pipeline/embedder.js';
 import { type DbContext } from '../pipeline/db/client.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
@@ -132,6 +135,13 @@ export interface RunStreamOpts {
    * = unscoped (legacy/tests; no filtering).
    */
   userId?: string;
+  /**
+   * Phase 3 status bar: when set, a model-facing <agent_status> user-role
+   * message is appended at the trajectory tail for this turn (never persisted;
+   * only the real conversation is, via appendMessages). Unset = no status
+   * injection (tests that don't need it).
+   */
+  sessionId?: string;
 }
 
 // Scan a turn's response messages for v6 tool-approval-request parts (emitted
@@ -186,6 +196,37 @@ export function recordL2PendingFromResponse(
   }
 }
 
+export interface BuildAgentStatusSnapshotOpts {
+  sessionId: string;
+  userId?: string;
+  ctx: DbContext;
+  recorder?: { records: ToolCallRecord[] };
+}
+
+/**
+ * Assemble the model-facing status snapshot (design §9.2) from existing harness
+ * sources: per-tool counts (auditRecorder), pending approvals (sessionStore),
+ * and DB progress counts (repositories). Sync because better-sqlite3 is sync.
+ * `recorder` defaults to the process-wide singleton; tests pass a local one for
+ * deterministic isolation.
+ */
+export function buildAgentStatusSnapshot({
+  sessionId,
+  userId,
+  ctx,
+  recorder = auditRecorder,
+}: BuildAgentStatusSnapshotOpts): AgentStatusSnapshot {
+  const toolCounts = getToolCallCounts(sessionId, recorder);
+  const totalCalls = toolCounts.reduce((sum, t) => sum + t.count, 0);
+  return {
+    toolCounts,
+    totalCalls,
+    pendingApprovals: countPendingApprovals(sessionId),
+    docsIngested: countDocuments(ctx, userId),
+    extractionsPendingReview: countExtractionsNeedingReview(ctx, userId),
+  };
+}
+
 // Create the streamText result for one agent turn. Caller is responsible for
 // session persistence and for returning result.toUIMessageStreamResponse().
 //
@@ -194,7 +235,7 @@ export function recordL2PendingFromResponse(
 // to pre-H1 behavior. When supplied (tests), no provider client is constructed and
 // no network/env is required, so the agent loop can be exercised offline against
 // a canned fake model + in-memory DbContext.
-export function runStream({ messages, role, auditTraceId, model, deps, userId }: RunStreamOpts) {
+export function runStream({ messages, role, auditTraceId, model, deps, userId, sessionId }: RunStreamOpts) {
   // Production default: real DeepSeek model. If a model was injected, skip
   // building the provider client so tests need no API key / network.
   //
@@ -217,22 +258,34 @@ export function runStream({ messages, role, auditTraceId, model, deps, userId }:
     }).chat(env.OPENAI_MODEL);
   // Reuse the same model handle for both the agent loop and extract_fields so
   // there is a single DeepSeek client per turn.
-  const tools = buildGatedTools(
-    role,
-    deps ?? { ctx: getHarnessDbContext(), extraction: { model: resolvedModel }, classifier: { model: resolvedModel }, embedder: defaultEmbedder(), userId },
-  );
+  const harnessDeps = deps ?? {
+    ctx: getHarnessDbContext(),
+    extraction: { model: resolvedModel },
+    classifier: { model: resolvedModel },
+    embedder: defaultEmbedder(),
+    userId,
+  };
+  const ctx = harnessDeps.ctx;
+  const tools = buildGatedTools(role, harnessDeps);
   // Context compression + circuit breaker (AUTO-LOOP variant). prepareStep runs
   // compressByBudget one step LATE (the just-produced result is already
   // committed), which is acceptable for the short stepCountIs(5) internal tool.
   // withAudit already archived the FULL result to auditRecorder before the next
   // prepareStep runs, so audit/status see uncompressed data -- no re-archive.
   const failures = createFailureTracker(3);
+  // Phase 3 status bar: append a per-turn model-facing <agent_status> snapshot
+  // at the trajectory tail. The snapshot is built from existing harness state
+  // (audit recorder + sessionStore + DB counts). The appended message is NEVER
+  // persisted (only appendMessages() is, which stores the real conversation),
+  // so the status message is replaced fresh on every turn.
+  const snapshot = sessionId ? buildAgentStatusSnapshot({ sessionId, userId, ctx }) : null;
+  const messagesForModel = appendStatusMessage(messages, snapshot);
   return streamText({
     // Chat Completions API (.chat) -- DeepSeek's Responses-API compatibility
     // corrupts tool-call id correlation.
     model: resolvedModel,
     system: SYSTEM_PROMPT,
-    messages,
+    messages: messagesForModel,
     tools,
     // L5 circuit breaker: stop after 3 consecutive tool failures (infra errors,
     // not business ok:false -- those return success:true with the payload).
