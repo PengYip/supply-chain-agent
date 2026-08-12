@@ -271,4 +271,25 @@ describe('document-entry tools', () => {
     // hint is never treated as an authoritative classification.
     expect(res.classificationConfidence).toBe(0);
   });
+
+  it('ingest_document persists + returns auto-derived tags', async () => {
+    const f = join(dir, 'contract-lc.txt');
+    writeFileSync(f, '合同号：HT-2024-001\n本合同采用信用证（L/C）结算，条款 CIF\n', 'utf-8');
+    const ingest = buildIngestDocumentTool({ ctx }); // no classifier -> docType hint '其他'
+    // Supply docType hint '合同' so auto-tag seeds with '合同' even without a classifier.
+    const res: any = await ingest.execute(
+      { sourceUri: f, docType: '合同', modality: 'digital' },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+    expect(Array.isArray(res.tags)).toBe(true);
+    expect(res.tags.length).toBeGreaterThan(0);
+    expect(res.tags).toContain('合同');
+    expect(res.tags).toContain('信用证');
+
+    const { listDocumentTags } = await import('../../../src/pipeline/db/repositories.js');
+    const rows = await listDocumentTags(ctx, res.docId);
+    const autoTags = rows.filter((r) => r.source === 'auto').map((r) => r.tag);
+    expect(autoTags).toContain('合同');
+    expect(autoTags).toContain('信用证');
+  });
 });

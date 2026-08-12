@@ -81,6 +81,27 @@ export const classifications = sqliteTable(
   (t) => ({ docIdx: index('idx_classifications_doc').on(t.documentId) }),
 );
 
+/**
+ * Phase 2 tags. Two sources (design §8): 'auto' = derived inside ingest_document
+ * (byproduct); 'explicit' = added via the tag_document L2 tool by user/agent.
+ * Graph edges are NOT tags (they live in the graph layer, Step 4).
+ */
+export const documentTags = sqliteTable(
+  'document_tags',
+  {
+    id: text('id').primaryKey(),
+    documentId: text('document_id').notNull().references(() => documents.id),
+    tag: text('tag').notNull(),
+    source: text('source').notNull(), // 'auto' | 'explicit'
+    userId: text('user_id').notNull().default(''),
+    createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  },
+  (t) => ({
+    docIdx: index('idx_document_tags_doc').on(t.documentId),
+    userIdx: index('idx_document_tags_user').on(t.userId),
+  }),
+);
+
 /** Virtual folders for the file manager (Phase 3+). One row per (user, path). */
 export const fileFolders = sqliteTable(
   'file_folders',

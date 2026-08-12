@@ -216,6 +216,78 @@ export async function loadClassification(
   };
 }
 
+export type DocumentTagSource = 'auto' | 'explicit';
+
+export interface DocumentTagRow {
+  tag: string;
+  source: DocumentTagSource;
+}
+
+/**
+ * Persist tag rows for a document with the given source. Idempotent per
+ * (document, tag, source, user): a UNIQUE collision is skipped so re-ingesting
+ * or re-calling tag_document with the same tag does not duplicate rows.
+ */
+export async function saveDocumentTags(
+  ctx: DbContext,
+  documentId: string,
+  tags: string[],
+  source: DocumentTagSource,
+  userId?: string,
+): Promise<void> {
+  if (ctx.backend === 'postgres') {
+    throw new Error('saveDocumentTags: postgres backend not yet implemented');
+  }
+  const uid = effectiveUserId(userId);
+  // De-dup against existing rows with the same (document, tag, source, user).
+  const existing = ctx.sqlite
+    .prepare(
+      `SELECT tag FROM document_tags
+       WHERE document_id = ? AND source = ? AND (user_id = ? OR user_id = '')`,
+    )
+    .all(documentId, source, uid) as Array<{ tag: string }>;
+  const have = new Set(existing.map((r) => r.tag));
+  const tx = ctx.sqlite.transaction((rows: string[]) => {
+    for (const tag of rows) {
+      if (have.has(tag)) continue;
+      const id = rid('TG');
+      ctx.sqlite
+        .prepare(
+          `INSERT INTO document_tags (id, document_id, tag, source, user_id) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(id, documentId, tag, source, uid);
+    }
+  });
+  tx(tags);
+}
+
+/**
+ * List all tags for a document (both sources), tag ascending. Same userId-legacy
+ * filter as loadExtraction. Postgres path stubbed -- Phase 2 is SQLite-only.
+ */
+export async function listDocumentTags(
+  ctx: DbContext,
+  documentId: string,
+  userId?: string,
+): Promise<DocumentTagRow[]> {
+  if (ctx.backend === 'postgres') {
+    throw new Error('listDocumentTags: postgres backend not yet implemented');
+  }
+  const uid = effectiveUserId(userId);
+  const rows = uid
+    ? ctx.sqlite
+        .prepare(
+          `SELECT tag, source FROM document_tags
+           WHERE document_id = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)
+           ORDER BY tag ASC`,
+        )
+        .all(documentId, uid) as Array<{ tag: string; source: string }>
+    : ctx.sqlite
+        .prepare(`SELECT tag, source FROM document_tags WHERE document_id = ? ORDER BY tag ASC`)
+        .all(documentId) as Array<{ tag: string; source: string }>;
+  return rows.map((r) => ({ tag: r.tag, source: r.source as DocumentTagSource }));
+}
+
 export async function saveExtraction(ctx: DbContext, input: ExtractionInput, userId?: string): Promise<string> {
   if (ctx.backend === 'postgres') return saveExtractionPg(ctx, input, userId);
   const id = rid('EX');

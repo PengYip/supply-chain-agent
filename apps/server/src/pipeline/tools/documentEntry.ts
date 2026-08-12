@@ -4,11 +4,12 @@ import { randomUUID } from 'node:crypto';
 import type { DbContext } from '../db/client.js';
 import {
   saveDocument, loadDocument, saveExtraction, loadExtraction, saveBinding, saveChunks,
-  saveClassification,
+  saveClassification, saveDocumentTags,
 } from '../db/repositories.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
 import { classifyDocument, classifyDocumentWithoutModel, type ClassifierDeps } from '../classifier.js';
+import { deriveAutoTags } from '../tagging.js';
 import { chunkBlockModel } from '../chunking.js';
 import { linkDocumentToContract } from '../../data/seed.js';
 import { tagExternal, assertWithinRoot } from '../../harness/injectionDefense.js';
@@ -71,6 +72,7 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   classifiedDocType: DocType;
   classificationConfidence: number;
   classificationSource: 'classified' | 'hint' | 'fallback';
+  tags: string[];
 }> {
   const { ctx, sourcePath, docType, modality, embedder, classifier, userId } = opts;
   ensureFk(ctx);
@@ -111,6 +113,12 @@ export async function ingestFile(opts: IngestOptions): Promise<{
       );
     }
   }
+  // Auto-tag (Phase 2): derive a small deterministic tag set from the effective
+  // docType + content (design §8: auto-tags are an ingest byproduct, persisted
+  // and included in the return summary). Explicit tags come from tag_document.
+  const tags = deriveAutoTags({ docType: blockModel.docType, blocks: blockModel.blocks });
+  await saveDocumentTags(ctx, docId, tags, 'auto', userId);
+
   return {
     docId,
     blockCount: blockModel.blocks.length,
@@ -118,6 +126,7 @@ export async function ingestFile(opts: IngestOptions): Promise<{
     classifiedDocType: cls.docType,
     classificationConfidence: cls.confidence,
     classificationSource: cls.source,
+    tags,
   };
 }
 
