@@ -134,12 +134,8 @@ export function buildExtractFieldsTool(deps: ToolDeps) {
       }
       ensureFk(deps.ctx);
       // Zero-hallucination directives:
-      //  - empty LLM output (no fields) is surfaced as needsReview + reason, never a silent empty success;
-      //  - "neither bucket" (confidence in [0.7,0.9): not needsReview, not autoAccepted) is listed in pendingManual.
+      //  - empty LLM output (no fields) is surfaced as needsReview + reason, never a silent empty success.
       const needsReview = result.needsReview || result.fields.length === 0;
-      const pendingManual = result.fields
-        .filter((f) => !f.needsReview && !f.autoAccepted)
-        .map((f) => f.name);
       const extractionId = await saveExtraction(
         deps.ctx,
         {
@@ -152,25 +148,25 @@ export function buildExtractFieldsTool(deps: ToolDeps) {
         },
         deps.userId,
       );
-      // Injection defense (output:tagged): the field VALUES and citedText are
-      // strings read straight from an untrusted document -- an attacker could
-      // embed prompt-injection text in them. Wrap every external-derived STRING
-      // leaf in <external_content> so the model treats them as DATA. The object
-      // STRUCTURE is unchanged; numbers, names, spans, and confidence are not
-      // document text and are left alone. The DB persists the raw (unwrapped)
-      // values above; only the context-bound return is wrapped.
-      const taggedFields = result.fields.map((f) => ({
-        ...f,
+      // Bounded summary for the model trajectory. Full evidence (citedText,
+      // sourceSpans) stays persisted via saveExtraction and is retrievable on
+      // demand via inspect_extraction(extractionId, fieldName). The field VALUE
+      // is the only document-derived string leaf exposed here, so wrap it in
+      // <external_content> (injection defense: output-tagged).
+      const summaryFields = result.fields.map((f) => ({
+        name: f.name,
         value: typeof f.value === 'string' ? tagExternal(f.value) : f.value,
-        citedText: f.citedText ? tagExternal(f.citedText) : f.citedText,
+        confidence: f.confidence,
+        needsReview: f.needsReview,
+        autoAccepted: f.autoAccepted,
       }));
+
       return {
         extractionId,
-        fields: taggedFields,
+        fields: summaryFields,
         overallConfidence: result.overallConfidence,
         needsReview,
         missingRequired: result.missingRequired,
-        pendingManual,
         reason: result.fields.length === 0 ? 'no_fields_extracted' : undefined,
       };
     },
