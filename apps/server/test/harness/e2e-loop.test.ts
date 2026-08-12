@@ -111,8 +111,8 @@ describe('agent e2e loop (stub model)', () => {
     expect(threw).toBe(false);
 
     // (a) the live streamText call received the full trader toolset (base 7 +
-    // 3 doc-entry + recall_documents + execute_code + inspect_extraction = 13).
-    expect(capturedNames).toHaveLength(13);
+    // 3 doc-entry + recall_documents + execute_code + inspect_extraction + tag_document = 14).
+    expect(capturedNames).toHaveLength(14);
     for (const n of ['ingest_document', 'extract_fields', 'bind_document', 'query_contract', 'create_payment', 'recall_documents']) {
       expect(capturedNames).toContain(n);
     }

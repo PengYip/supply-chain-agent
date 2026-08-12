@@ -113,6 +113,14 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
   },
+  tag_document: {
+    // Explicit user/agent labels -> trusted agent input (like bind_document's
+    // contractNo), so output 'raw' / injection 'safe'. Tags are short strings ->
+    // budget 'full'. Mutates persistent doc state -> signal 'env', persist
+    // 'business'. L2 write (soft gate).
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'business', risk: { level: 'L2', injection: 'safe' },
+  },
   recall_documents: {
     // Returns BM25 snippets of ingested document text -> external content, so
     // output is 'tagged' (injectionDefense wraps each snippet, like extract_fields).

@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { DbContext } from '../db/client.js';
 import {
   saveDocument, loadDocument, saveExtraction, loadExtraction, saveBinding, saveChunks,
-  saveClassification, saveDocumentTags,
+  saveClassification, saveDocumentTags, listDocumentTags,
 } from '../db/repositories.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
@@ -277,6 +277,49 @@ export function buildInspectExtractionTool(deps: ToolDeps) {
         sourceSpans: field.sourceSpans,
         confidence: meta?.confidence ?? 0,
         strength,
+      };
+    },
+  });
+}
+
+/**
+ * tag_document — L2 explicit-tagging tool.
+ * Adds user/agent-supplied labels to an EXISTING document, any time post-ingest.
+ * Distinct from auto-tags (an ingest byproduct, source 'auto') and from graph
+ * edges (link_entities, Step 4). Idempotent per (doc, tag, source='explicit'):
+ * re-adding the same tag is a no-op. needsApproval (L2) because it mutates
+ * business state (the agent must have user consent to label a document).
+ */
+export function buildTagDocumentTool(deps: ToolDeps) {
+  return tool({
+    description:
+      '为已录入的单据打显式标签(用户/代理人工标注)。可在录入后任意时刻调用。' +
+      '与 ingest 时自动生成的标签(来源 auto)不同, 这些标签来源为 explicit。' +
+      '图关系(买方/卖方/引用)不在此工具, 用 link_entities。' +
+      '使用场景: 用户说"给这份合同打上 重要 / 客户A 标签"时。',
+    inputSchema: z.object({
+      docId: z.string().min(1).describe('目标单据 docId (来自 ingest_document 返回)'),
+      tags: z.array(z.string().min(1)).min(1).describe('要添加的标签数组, 至少一个'),
+    }),
+    execute: async ({ docId, tags }) => {
+      const blockModel = await loadDocument(deps.ctx, docId, deps.userId);
+      if (!blockModel) return { status: 'error' as const, reason: 'document_not_found' as const };
+      if (tags.length === 0) return { status: 'error' as const, reason: 'no_tags_provided' as const };
+
+      ensureFk(deps.ctx);
+      // Compute addedTags by diffing against existing explicit tags for this doc.
+      const before = await listDocumentTags(deps.ctx, docId, deps.userId);
+      const hadExplicit = new Set(
+        before.filter((r) => r.source === 'explicit').map((r) => r.tag),
+      );
+      const addedTags = tags.filter((t) => !hadExplicit.has(t));
+      await saveDocumentTags(deps.ctx, docId, tags, 'explicit', deps.userId);
+      const after = await listDocumentTags(deps.ctx, docId, deps.userId);
+      return {
+        status: 'ok' as const,
+        docId,
+        addedTags,
+        totalTags: after.length,
       };
     },
   });

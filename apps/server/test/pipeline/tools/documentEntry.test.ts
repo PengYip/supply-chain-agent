@@ -5,6 +5,7 @@ import { createDb, migrate } from '../../../src/pipeline/db/client.js';
 import { env } from '../../../src/env.js';
 import {
   buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool, buildInspectExtractionTool,
+  buildTagDocumentTool,
 } from '../../../src/pipeline/tools/documentEntry.js';
 
 let ctx: ReturnType<typeof createDb>;
@@ -291,5 +292,79 @@ describe('document-entry tools', () => {
     const autoTags = rows.filter((r) => r.source === 'auto').map((r) => r.tag);
     expect(autoTags).toContain('合同');
     expect(autoTags).toContain('信用证');
+  });
+
+  it('tag_document (L2) adds explicit tags to an existing document', async () => {
+    const f = join(dir, 'c.txt');
+    writeFileSync(f, '合同号: HT-2024-001\n', 'utf-8');
+    const ingest = buildIngestDocumentTool({ ctx });
+    const ing: any = await ingest.execute(
+      { sourceUri: f, docType: '合同', modality: 'digital' },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+
+    const tag = buildTagDocumentTool({ ctx });
+    const out: any = await tag.execute(
+      { docId: ing.docId, tags: ['重要', '客户A'] },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+    expect(out.status).toBe('ok');
+    expect(out.docId).toBe(ing.docId);
+    expect(out.addedTags.sort()).toEqual(['客户A', '重要']);
+
+    const { listDocumentTags } = await import('../../../src/pipeline/db/repositories.js');
+    const rows = await listDocumentTags(ctx, ing.docId);
+    const explicit = rows.filter((r) => r.source === 'explicit').map((r) => r.tag).sort();
+    expect(explicit).toEqual(['客户A', '重要']);
+    // totalTags counts every tag row (auto + explicit).
+    expect(out.totalTags).toBe(rows.length);
+  });
+
+  it('tag_document errors on unknown docId', async () => {
+    const tag = buildTagDocumentTool({ ctx });
+    const out: any = await tag.execute(
+      { docId: 'DOC-does-not-exist', tags: ['x'] },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+    expect(out.status).toBe('error');
+    expect(out.reason).toBe('document_not_found');
+  });
+
+  it('tag_document is idempotent on repeated identical tags', async () => {
+    const f = join(dir, 'c2.txt');
+    writeFileSync(f, '发票号 INV-1\n', 'utf-8');
+    const ingest = buildIngestDocumentTool({ ctx });
+    const ing: any = await ingest.execute(
+      { sourceUri: f, docType: '发票', modality: 'digital' },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+    const tag = buildTagDocumentTool({ ctx });
+    await tag.execute(
+      { docId: ing.docId, tags: ['重点'] },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+    const out: any = await tag.execute(
+      { docId: ing.docId, tags: ['重点'] },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+    // Second call adds nothing new.
+    expect(out.addedTags).toEqual([]);
+  });
+
+  it('tag_document rejects an empty tag list with a clear reason', async () => {
+    const f = join(dir, 'c3.txt');
+    writeFileSync(f, 'x\n', 'utf-8');
+    const ingest = buildIngestDocumentTool({ ctx });
+    const ing: any = await ingest.execute(
+      { sourceUri: f, docType: '其他', modality: 'digital' },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+    const tag = buildTagDocumentTool({ ctx });
+    const out: any = await tag.execute(
+      { docId: ing.docId, tags: [] },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+    expect(out.status).toBe('error');
+    expect(out.reason).toBe('no_tags_provided');
   });
 });

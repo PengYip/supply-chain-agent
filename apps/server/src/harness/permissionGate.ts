@@ -60,6 +60,7 @@ registerPermission('execute_code', 'L1'); // CubeSandbox: isolated Python execut
 registerPermission('link_document', 'L2');
 registerPermission('advance_contract_stage', 'L2');
 registerPermission('bind_document', 'L2'); // T9: bind document to contract
+registerPermission('tag_document', 'L2'); // Phase 2: explicit document labeling
 // L3 external approval
 registerPermission('create_payment', 'L3');
 registerPermission('refund_payment', 'L3');

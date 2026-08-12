@@ -4,11 +4,13 @@ import { linkDocument, createPayment } from '../tools/writes.js';
 import { escalateToHuman, verifyDocumentFields } from '../tools/hitl.js';
 import {
   buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool, buildInspectExtractionTool,
+  buildTagDocumentTool,
 } from '../pipeline/tools/documentEntry.js';
 import { buildRecallDocumentsTool } from '../pipeline/tools/recall.js';
 import { buildExecuteCodeTool } from '../pipeline/tools/executeCode.js';
 import type { DbContext } from '../pipeline/db/client.js';
 import type { ExtractionDeps } from '../pipeline/extraction.js';
+import type { ClassifierDeps } from '../pipeline/classifier.js';
 import type { Embedder } from '../pipeline/embedder.js';
 import { env } from '../env.js';
 
@@ -23,6 +25,8 @@ export type Role = 'trader';
 export interface HarnessDeps {
   ctx: DbContext;
   extraction?: ExtractionDeps;
+  /** Phase 2 routing-classify stage. Unset -> ingest degrades to the hint docType. */
+  classifier?: ClassifierDeps;
   embedder?: Embedder;
   /** Phase 2 business-data isolation: stamp + filter doc/extraction/binding/chunk
    *  rows by this user. Empty/undefined = unscoped (legacy/tests; no filtering). */
@@ -65,20 +69,23 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
 
 // Doc-entry + recall tool names are part of the trader's capability set even
 // though constructing their instances requires a DbContext (see getToolsForRole).
-const TRADER_CTX_TOOL_NAMES = ['ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction'] as const;
+const TRADER_CTX_TOOL_NAMES = ['ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document'] as const;
 
 export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
   const base: GatedTool[] = (BASE_TOOLS_FOR_ROLE[role] ?? []).map((t) => ({ ...t }));
   if (role === 'trader' && deps?.ctx) {
-    const { ctx, extraction, embedder, userId } = deps;
+    const { ctx, extraction, embedder, classifier, userId } = deps;
     base.push(
-      { ...buildIngestDocumentTool({ ctx, embedder, userId }), name: 'ingest_document' },
+      { ...buildIngestDocumentTool({ ctx, embedder, classifier, userId }), name: 'ingest_document' },
       { ...buildExtractFieldsTool({ ctx, extraction, userId }), name: 'extract_fields' },
       // bind_document is L2: caller must attach human approval (needsApproval).
       { ...buildBindDocumentTool({ ctx, userId }), name: 'bind_document', needsApproval: true },
       // inspect_extraction is L1: on-demand evidence drill-down for a single
       // already-extracted field (citedText recomputed from persisted spans).
       { ...buildInspectExtractionTool({ ctx, userId }), name: 'inspect_extraction' },
+      // tag_document is L2: explicit user/agent labels, post-ingest, any time.
+      // needsApproval = soft gate (v6): the agent must have user consent to label.
+      { ...buildTagDocumentTool({ ctx, userId }), name: 'tag_document', needsApproval: true },
       // recall_documents is L1: FTS5/vector/hybrid recall over ingested chunks.
       { ...buildRecallDocumentsTool({ ctx, embedder, userId }), name: 'recall_documents' },
       // execute_code is L1: run Python in an isolated CubeSandbox microVM.

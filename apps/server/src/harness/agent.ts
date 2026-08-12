@@ -219,7 +219,7 @@ export function runStream({ messages, role, auditTraceId, model, deps, userId }:
   // there is a single DeepSeek client per turn.
   const tools = buildGatedTools(
     role,
-    deps ?? { ctx: getHarnessDbContext(), extraction: { model: resolvedModel }, embedder: defaultEmbedder(), userId },
+    deps ?? { ctx: getHarnessDbContext(), extraction: { model: resolvedModel }, classifier: { model: resolvedModel }, embedder: defaultEmbedder(), userId },
   );
   // Context compression + circuit breaker (AUTO-LOOP variant). prepareStep runs
   // compressByBudget one step LATE (the just-produced result is already
