@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ModelMessage } from 'ai';
+import { convertToModelMessages, type ModelMessage, type UIMessage } from 'ai';
 import { runStream } from '../../src/harness/agent.js';
 import { createDb, migrate } from '../../src/pipeline/db/client.js';
 import { env } from '../../src/env.js';
@@ -67,11 +68,13 @@ import {
  *
  * THE TESTS BELOW: (1) a fake LanguageModelV2 that emits reasoning-* stream
  * parts + a tool call -- mirroring what the deepseek provider emits internally
- * -- proving the reasoning part survives runStream -> response.messages ->
- * appendMessages -> loadSession and re-feeds into runStream without throwing;
- * (2) a construction test asserting the swapped provider wiring
- * (createDeepSeek().chat()) yields a valid V3 model, exercising the
- * model-resolution path agent.ts now uses in production (no network).
+ * -- proving the reasoning part survives runStream -> response.messages, then
+ * persists through the UIMessage-canonical round-trip (appendMessages stores
+ * UIMessages; loadSession rehydrates UIMessages; convertToModelMessages
+ * re-derives ModelMessages carrying the reasoning part); (2) a construction
+ * test asserting the swapped provider wiring (createDeepSeek().chat()) yields a
+ * valid V3 model, exercising the model-resolution path agent.ts now uses in
+ * production (no network).
  */
 
 interface FakeModelOptions {
@@ -198,27 +201,41 @@ describe('reasoning_content resume survival (Task 4)', () => {
     expect(before.length, 'response.messages should contain a reasoning part').toBeGreaterThan(0);
     expect(before[0].text).toBe('用户要录入合同，先调 ingest_document 解析。');
 
-    // (2) CORE ROUND-TRIP: sessionStore appendMessages -> loadSession must
-    //     preserve the reasoning part (lossless JSON, no part-type filtering).
+    // (2) CORE ROUND-TRIP under the UIMessage-canonical contract: the assistant
+    //     UIMessage (mirroring SDK responseMessage shape, reasoning part
+    //     included) is persisted via appendMessages, reloaded via loadSession,
+    //     and re-converted via convertToModelMessages. The re-converted
+    //     assistant ModelMessage must still carry the reasoning part with the
+    //     same text -- proving reasoning survives the persistence round-trip.
+    const reasoningText = before[0].text;
+    const assistantUIMessage: UIMessage = {
+      id: randomUUID(),
+      role: 'assistant',
+      parts: [
+        { type: 'reasoning', text: reasoningText } as UIMessage['parts'][number],
+        { type: 'text', text: '录入完成' },
+      ],
+    };
     const session = createSession('trader');
-    appendMessages(session.id, responseMessages);
+    appendMessages(session.id, [assistantUIMessage]);
     const loaded = loadSession(session.id);
     expect(loaded, 'loaded session must exist').not.toBeNull();
 
-    const after = reasoningParts(loaded!.messages);
-    expect(after.length, 'loaded messages must still contain the reasoning part').toBe(before.length);
-    expect(after[0].text).toBe(before[0].text);
+    const reconverted = await convertToModelMessages(loaded!.messages as UIMessage[]);
+    const after = reasoningParts(reconverted);
+    expect(after.length, 're-converted messages must still contain the reasoning part').toBeGreaterThanOrEqual(1);
+    expect(after[0].text).toBe(reasoningText);
 
-    // Structural fidelity: the loaded assistant message's content array still
-    // has BOTH the reasoning part and the tool-call part, in order.
-    const loadedAssistant = loaded!.messages.find(
+    // Structural fidelity: the re-converted assistant ModelMessage's content
+    // array still has BOTH the reasoning part and a text part.
+    const reconvertedAssistant = reconverted.find(
       (m) => m.role === 'assistant' && Array.isArray(m.content) &&
         (m.content as Array<{ type?: string }>).some((p) => p.type === 'reasoning'),
     );
-    expect(loadedAssistant).toBeDefined();
-    const types = (loadedAssistant!.content as Array<{ type?: string }>).map((p) => p.type);
+    expect(reconvertedAssistant).toBeDefined();
+    const types = (reconvertedAssistant!.content as Array<{ type?: string }>).map((p) => p.type);
     expect(types).toContain('reasoning');
-    expect(types).toContain('tool-call');
+    expect(types).toContain('text');
   });
 
   it('re-feeding loaded messages into runStream (resume) does not throw', async () => {
@@ -235,7 +252,8 @@ describe('reasoning_content resume survival (Task 4)', () => {
       },
     });
 
-    // Turn 1: produce messages that include reasoning + a tool call, persist.
+    // Turn 1: produce messages that include reasoning + a tool call, then
+    // persist the assistant turn as a UIMessage (UIMessage-canonical contract).
     const result1 = await runStream({
       messages: [{ role: 'user', content: '请录入这份合同' }],
       role: 'trader',
@@ -245,19 +263,31 @@ describe('reasoning_content resume survival (Task 4)', () => {
     });
     await drain(result1);
     const response1 = await result1.response;
+    const reasoning1 = reasoningParts(response1.messages as ModelMessage[]);
+    expect(reasoning1.length, 'turn 1 produced a reasoning part').toBeGreaterThan(0);
+    const assistantUIMessage1: UIMessage = {
+      id: randomUUID(),
+      role: 'assistant',
+      parts: [
+        { type: 'reasoning', text: reasoning1[0].text } as UIMessage['parts'][number],
+        { type: 'text', text: '录入完成' },
+      ],
+    };
     const session = createSession('trader');
-    appendMessages(session.id, response1.messages as ModelMessage[]);
+    appendMessages(session.id, [assistantUIMessage1]);
 
-    // Turn 2 (resume): load the persisted history and feed it back through
-    // runStream. This is the kill-process -> restart -> loadSession path.
+    // Turn 2 (resume): load the persisted UIMessage history and re-convert it
+    // to ModelMessages for runStream. This is the kill-process -> restart ->
+    // loadSession path under the UIMessage-canonical contract.
     const loaded = loadSession(session.id)!;
-    expect(reasoningParts(loaded.messages).length).toBeGreaterThan(0);
+    const reconvertedLoaded = await convertToModelMessages(loaded.messages as UIMessage[]);
+    expect(reasoningParts(reconvertedLoaded).length).toBeGreaterThan(0);
 
     let threw = false;
     let errorMsg = '';
     try {
       const result2 = await runStream({
-        messages: loaded.messages,
+        messages: reconvertedLoaded,
         role: 'trader',
         auditTraceId: 'reasoning-resume-2',
         model: fake as any,

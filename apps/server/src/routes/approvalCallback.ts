@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { randomUUID } from 'node:crypto';
-import type { ModelMessage } from 'ai';
+import { convertToModelMessages, type ModelMessage, type UIMessage } from 'ai';
 import { z } from 'zod';
 import { runStream, recordL2PendingFromResponse } from '../harness/agent.js';
 import {
@@ -35,13 +35,20 @@ function isModelNotFound(message: string): boolean {
 }
 
 // Resume a session: re-run the agent over the full persisted history (including
-// the message the caller just appended) and return the stream. Persists the
-// assistant response and records any new L2 pending approvals when done.
-async function resumeSession(sessionId: string): Promise<Response> {
+// any message the caller just appended) and return the stream. Persists the
+// assistant UIMessage via toUIMessageStreamResponse onFinish and records any new
+// L2 pending approvals when done. `extraModelMessages` carries transient
+// ModelMessages (e.g. the L2 tool-approval-response, role:'tool') that have no
+// UIMessage form and must NOT be persisted.
+async function resumeSession(sessionId: string, extraModelMessages: ModelMessage[] = []): Promise<Response> {
   setSessionContext(sessionId);
   const session = loadSession(sessionId);
   const role: Role = (session?.role ?? 'trader') as Role;
-  const messages = session?.messages ?? [];
+  const uiMessages = (session?.messages ?? []) as UIMessage[];
+  const baseModelMessages = uiMessages.length > 0
+    ? (await convertToModelMessages(uiMessages))
+    : ([] as ModelMessage[]);
+  const messages: ModelMessage[] = [...baseModelMessages, ...extraModelMessages];
   const auditTraceId = randomUUID();
   console.log(
     JSON.stringify({
@@ -58,15 +65,16 @@ async function resumeSession(sessionId: string): Promise<Response> {
   // path are unscoped. (The authenticated user.id IS available in the route
   // handler; threading it for scoped resume-path counts is a future improvement.)
   const result = await runStream({ messages, role, auditTraceId, sessionId });
+  // After the stream completes, record any L2 soft-gate approvals requested
+  // this turn. The assistant UIMessage is persisted via onFinish below.
   // `result.response` is a PromiseLike (no .catch), so use the 2-arg .then.
   result.response.then(
     (r) => {
       try {
-        appendMessages(sessionId, r.messages);
         recordL2PendingFromResponse(sessionId, r.messages);
       } catch (err) {
         console.error(
-          '[approval] persist failed:',
+          '[approval] L2 record failed:',
           err instanceof Error ? err.message : err,
         );
       }
@@ -75,6 +83,18 @@ async function resumeSession(sessionId: string): Promise<Response> {
   );
 
   const resp = result.toUIMessageStreamResponse({
+    originalMessages: uiMessages,
+    generateMessageId: randomUUID,
+    onFinish: ({ responseMessage }) => {
+      try {
+        appendMessages(sessionId, [responseMessage]);
+      } catch (err) {
+        console.error(
+          '[approval] persist failed:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    },
     onError: (error: unknown) => {
       const msg = error instanceof Error ? error.message : String(error);
       console.error('[approval] streamText error:', msg);
@@ -156,7 +176,7 @@ approvalCallback.post('/approval/callback', async (c) => {
         `请立即调用 create_payment 并传入 authorizedTicketId=${ticketId} 续跑付款以真正执行。`;
     }
     appendMessages(pending.session_id, [
-      { role: 'user', content: instruction } as ModelMessage,
+      { id: randomUUID(), role: 'user', parts: [{ type: 'text', text: instruction }] } as UIMessage,
     ]);
     console.log(
       JSON.stringify({
@@ -185,7 +205,9 @@ approvalCallback.post('/approval/callback', async (c) => {
   // v6 resume message: a tool message whose content carries a
   // tool-approval-response part matching the prior tool-approval-request's
   // approvalId. The TS ToolContent union only models tool-result parts, so the
-  // approval-response part is cast through unknown.
+  // approval-response part is cast through unknown. role:'tool' has NO valid
+  // UIMessage form, so this message is TRANSIENT -- never persisted, only passed
+  // into resumeSession as a one-shot ModelMessage for this resume turn.
   const toolCallId = pending.tool_call_id ?? id;
   const resumeMessage = {
     role: 'tool',
@@ -199,7 +221,6 @@ approvalCallback.post('/approval/callback', async (c) => {
       },
     ],
   } as unknown as ModelMessage;
-  appendMessages(pending.session_id, [resumeMessage]);
   console.log(
     JSON.stringify({
       event: 'approval_l2_resolved',
@@ -207,5 +228,5 @@ approvalCallback.post('/approval/callback', async (c) => {
       sessionId: pending.session_id,
     }),
   );
-  return await resumeSession(pending.session_id);
+  return await resumeSession(pending.session_id, [resumeMessage]);
 });

@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { randomUUID } from 'node:crypto';
-import { convertToModelMessages, type ModelMessage, type LanguageModel } from 'ai';
+import { convertToModelMessages, type ModelMessage, type UIMessage, type LanguageModel } from 'ai';
 import { z } from 'zod';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { runStream, recordL2PendingFromResponse } from '../harness/agent.js';
@@ -128,7 +128,9 @@ chatRoute.post('/chat', async (c) => {
     }),
   );
 
-  // Convert incoming UIMessages -> model messages and persist the user input.
+  // Convert incoming UIMessages -> model messages for streamText input. The raw
+  // client UIMessages are persisted as the canonical form (NOT the converted
+  // ModelMessages); the assistant UIMessage is persisted via onFinish below.
   let newModelMessages: ModelMessage[];
   try {
     newModelMessages = (await convertToModelMessages(messages)) as ModelMessage[];
@@ -136,7 +138,11 @@ chatRoute.post('/chat', async (c) => {
     const msg = err instanceof Error ? err.message : String(err);
     return c.json({ error: 'Failed to convert messages', detail: msg }, 400);
   }
-  appendMessages(sessionId, newModelMessages);
+  appendMessages(sessionId, messages as UIMessage[]);
+  // Convert prior persisted UIMessages -> ModelMessages for streamText input.
+  const priorModelMessages = priorMessages.length > 0
+    ? (await convertToModelMessages(priorMessages as UIMessage[]))
+    : ([] as ModelMessage[]);
 
   // When the user @-references files this turn, surface them as a leading system
   // message so the agent has the docIds/filenames up front. The model is told to
@@ -153,9 +159,9 @@ chatRoute.post('/chat', async (c) => {
         '用户在本次对话中引用了以下文件。请使用 recall 工具搜索文档内容来回答关于这些文件的问题：\n' +
         fileList,
     };
-    streamMessages = [contextMsg, ...priorMessages, ...newModelMessages];
+    streamMessages = [contextMsg, ...priorModelMessages, ...newModelMessages];
   } else {
-    streamMessages = [...priorMessages, ...newModelMessages];
+    streamMessages = [...priorModelMessages, ...newModelMessages];
   }
 
   try {
@@ -167,16 +173,16 @@ chatRoute.post('/chat', async (c) => {
       userId: userId ?? undefined,
     });
 
-    // After the stream completes, persist the assistant response messages and
-    // record any L2 soft-gate approvals that were requested this turn.
+    // After the stream completes, record any L2 soft-gate approvals requested
+    // this turn. The assistant UIMessage itself is persisted via
+    // toUIMessageStreamResponse onFinish (the clean server-side source).
     // `result.response` is a PromiseLike (no .catch), so use the 2-arg .then.
     result.response.then(
       async (r) => {
         try {
-          appendMessages(sessionId, r.messages);
           recordL2PendingFromResponse(sessionId, r.messages);
         } catch (err) {
-          console.error('[chat] persist failed:', err instanceof Error ? err.message : err);
+          console.error('[chat] L2 record failed:', err instanceof Error ? err.message : err);
         }
         // Phase 5: fire-and-forget title generation on the first exchange.
         // void + .catch so title-gen NEVER breaks a chat turn.
@@ -200,6 +206,15 @@ chatRoute.post('/chat', async (c) => {
     );
 
     const streamResp = result.toUIMessageStreamResponse({
+      originalMessages: messages as UIMessage[],
+      generateMessageId: randomUUID,
+      onFinish: ({ responseMessage }) => {
+        try {
+          appendMessages(sessionId, [responseMessage]);
+        } catch (err) {
+          console.error('[chat] persist failed:', err instanceof Error ? err.message : err);
+        }
+      },
       onError: (error: unknown) => {
         const msg = error instanceof Error ? error.message : String(error);
         console.error('[chat] streamText error:', msg);

@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import Database from 'better-sqlite3';
-import type { ModelMessage } from 'ai';
+import type { UIMessage } from 'ai';
 
 import type { Role } from './roleToolRegistry.js';
 
@@ -79,7 +79,7 @@ export interface SessionInfo {
 export interface LoadedSession {
   id: string;
   role: Role;
-  messages: ModelMessage[];
+  messages: UIMessage[];
   /** Auto-generated session title (Phase 5); stored in metadata_json. */
   title?: string;
 }
@@ -184,6 +184,31 @@ function parseTitle(metadataJson: string | null | undefined): string | undefined
 }
 
 /**
+ * Normalize a parsed message row to UIMessage. Legacy rows were stored as
+ * ModelMessage ({role, content}) without .parts; wrap them so reload never
+ * crashes convertToModelMessages. Roles outside the UIMessage union (e.g.
+ * 'tool' from old server-synthesized resume rows) coerce to a valid role.
+ */
+function normalizeToUIMessage(raw: unknown): UIMessage {
+  const m = raw as { parts?: unknown; role?: unknown; content?: unknown };
+  if (Array.isArray(m.parts)) return m as UIMessage;
+  const roleRaw = (m.role ?? 'user') as string;
+  const role: UIMessage['role'] =
+    roleRaw === 'assistant' ? 'assistant' : roleRaw === 'system' ? 'system' : 'user';
+  const c = m.content;
+  const text =
+    typeof c === 'string'
+      ? c
+      : Array.isArray(c)
+        ? (c as Array<{ type?: string; text?: string }>)
+            .filter((p) => p?.type === 'text')
+            .map((p) => String(p.text ?? ''))
+            .join('')
+        : '';
+  return { id: randomUUID(), role, parts: [{ type: 'text', text }] } as UIMessage;
+}
+
+/**
  * Set the session's auto-generated title. Stored inside the existing
  * metadata_json blob (no schema migration): merges `{...meta, title}` so other
  * metadata keys are preserved. No-op if the session does not exist.
@@ -233,7 +258,7 @@ export function loadSession(id: string): LoadedSession | null {
   const row = stmtGetSession.get(id) as SessionRow | undefined;
   if (!row) return null;
   const rows = stmtListMessages.all(id) as MessageRow[];
-  const messages = rows.map((r) => JSON.parse(r.model_message_json) as ModelMessage);
+  const messages = rows.map((r) => normalizeToUIMessage(JSON.parse(r.model_message_json)));
   return { id: row.id, role: row.role, messages, title: parseTitle(row.metadata_json) };
 }
 
@@ -256,12 +281,12 @@ export function deleteSession(id: string): boolean {
   return true;
 }
 
-export function appendMessages(sessionId: string, msgs: ModelMessage[]): void {
+export function appendMessages(sessionId: string, msgs: UIMessage[]): void {
   if (msgs.length === 0) return;
   const maxRow = stmtMaxSeq.get(sessionId) as { max_seq: number } | undefined;
   const startSeq = (maxRow?.max_seq ?? -1) + 1;
   const now = new Date().toISOString();
-  const tx = db.transaction((items: ModelMessage[]) => {
+  const tx = db.transaction((items: UIMessage[]) => {
     items.forEach((msg, i) => {
       stmtInsertMessage.run(
         sessionId,
