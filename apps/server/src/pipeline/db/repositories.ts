@@ -555,6 +555,65 @@ export async function getChunkMetaByRowids(
   return out;
 }
 
+/**
+ * Hard-delete a document and EVERY dependent row across the storage stack.
+ * SQLite FKs are OFF by default, so children MUST be deleted before the parent
+ * (order is load-bearing). FTS5 external-content table doc_chunk_fts has no
+ * triggers and sqlite-vec doc_chunk_vec must be deleted by id -- both explicit.
+ * doc_chunk_vec is optional (only exists when sqlite-vec loads); its delete is
+ * guarded on table existence so the cascade works on DBs without the extension.
+ * Returns { deleted: true } if the documents row existed (and was removed),
+ * { deleted: false } if not found / not visible to this user.
+ * Postgres backend: throw (not yet implemented) -- mirror sibling pg-throws.
+ *
+ * Security: chunkIds are integers read from our own DB (not user input), so
+ * interpolating them into `IN (...)` is safe. docId/uid stay parameterized.
+ */
+export function deleteDocument(ctx: DbContext, docId: string, userId?: string): { deleted: boolean } {
+  if (ctx.backend === 'postgres') {
+    throw new Error('deleteDocument: postgres backend not yet implemented');
+  }
+  const uid = effectiveUserId(userId);
+  const sqlite = ctx.sqlite;
+  // Verify ownership/visibility first (3-way OR legacy filter, same as loadDocument).
+  const owned = sqlite
+    .prepare("SELECT 1 FROM documents WHERE id = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL) LIMIT 1")
+    .get(docId, uid);
+  if (!owned) return { deleted: false };
+
+  const chunkIds = sqlite
+    .prepare('SELECT id FROM doc_chunk WHERE document_id = ?')
+    .all(docId) as { id: number }[];
+
+  // doc_chunk_vec is optional (only present when sqlite-vec loads); check before
+  // deleting so the cascade works on DBs where the vec extension is absent.
+  const hasVecTable = !!sqlite
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='doc_chunk_vec'")
+    .get();
+
+  const tx = sqlite.transaction(() => {
+    // 1-2. FTS + vec by chunk id (chunkIds are our own integers — safe to interpolate).
+    if (chunkIds.length) {
+      const idList = chunkIds.map((c) => c.id).join(',');
+      sqlite.exec(`DELETE FROM doc_chunk_fts WHERE rowid IN (${idList})`);
+      if (hasVecTable) {
+        sqlite.exec(`DELETE FROM doc_chunk_vec WHERE id IN (${idList})`);
+      }
+    }
+    // 3. chunks.
+    sqlite.prepare('DELETE FROM doc_chunk WHERE document_id = ?').run(docId);
+    // 4-7. stage tables.
+    sqlite.prepare('DELETE FROM extractions WHERE document_id = ?').run(docId);
+    sqlite.prepare('DELETE FROM classifications WHERE document_id = ?').run(docId);
+    sqlite.prepare('DELETE FROM bindings WHERE document_id = ?').run(docId);
+    sqlite.prepare('DELETE FROM document_tags WHERE document_id = ?').run(docId);
+    // 8. parent last (after all referencers gone).
+    sqlite.prepare('DELETE FROM documents WHERE id = ?').run(docId);
+  });
+  tx();
+  return { deleted: true };
+}
+
 // ---- File manager: document minio_key link-back + virtual folders ----------
 //
 // These back the /api/files endpoints: uploads stamp minio_key onto the document

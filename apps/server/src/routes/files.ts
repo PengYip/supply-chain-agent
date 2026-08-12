@@ -34,6 +34,7 @@ import {
   listFileFolders,
   createFileFolder,
   deleteFileFolder,
+  deleteDocument,
 } from '../pipeline/db/repositories.js';
 import type { DocType, Modality } from '../pipeline/types.js';
 import { DeterministicEmbedder, OllamaEmbedder, type Embedder } from '../pipeline/embedder.js';
@@ -307,6 +308,39 @@ filesRoute.delete('/rmdir', requireRole('admin', 'trader'), async (c) => {
 
   await deleteFileFolder(ctx(), user.id, folderPath);
   return c.json({ ok: true });
+});
+
+/** Delete a file: cascade-delete the DB document row + all dependents (chunks,
+ *  fts, vec, extractions, classifications, bindings, document_tags) AND remove
+ *  the MinIO object. Human-UI only (no agent tool). Ownership: the MinIO key
+ *  must live under this user's prefix (mirror /move + /presign). The :key param
+ *  carries the URL-encoded MinIO object key (slashes encoded so it is a single
+ *  path segment). */
+filesRoute.delete('/:key', requireRole('admin', 'trader'), async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const key = decodeURIComponent(c.req.param('key'));
+
+  // Ownership guard: key must be under this user's prefix.
+  if (!key.startsWith(`users/${user.id}/`)) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+
+  // Resolve docId from the MinIO key (reuse the /move helper — it also handles
+  // the source_uri LIKE fallback for legacy rows without a minio_key stamp).
+  const docIdMap = await findDocIdsByMinioKeys(ctx(), [key], user.id);
+  const docId = docIdMap.get(key);
+  if (docId) {
+    deleteDocument(ctx(), docId, user.id);
+  }
+  // Always attempt the MinIO object removal (orphan cleanup even if no doc row).
+  try {
+    await minioClient.removeObject(MINIO_BUCKET, key);
+  } catch (e) {
+    // Log but don't 500 — the DB rows were already deleted (or never existed).
+    console.warn('[files] minio removeObject failed for', key, (e as Error).message);
+  }
+  return c.json({ ok: true, key, docId: docId ?? null });
 });
 
 /** Presign a download URL for one of the current user's files. Key comes via

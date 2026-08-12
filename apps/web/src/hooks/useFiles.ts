@@ -128,5 +128,14 @@ export function useFiles() {
     await refresh();
   }, [refresh]);
 
-  return { files, folders, loading, refresh, downloadFile, moveFile, createFolder, removeFolder };
+  const deleteFile = useCallback(async (key: string) => {
+    const res = await fetch(`/api/files/${encodeURIComponent(key)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error('delete failed');
+    await refresh();
+  }, [refresh]);
+
+  return { files, folders, loading, refresh, downloadFile, moveFile, createFolder, removeFolder, deleteFile };
 }
