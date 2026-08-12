@@ -29,6 +29,23 @@ import { tagExternal } from '../../harness/injectionDefense.js';
 // tagExternal() because user code can print arbitrary content (including
 // prompt-injection text) to stdout. The output contract is 'tagged'.
 
+// Output bounding: cap aggregated stdout/stderr and per-result text so a
+// runaway script cannot bloat the model trajectory. Truncation is ALWAYS
+// signalled with an explicit marker (never silent).
+export const MAX_OUTPUT_CHARS = 8000;
+export const MAX_RESULT_CHARS = 4000;
+export const MAX_RESULTS = 20;
+
+/**
+ * Cap a string to `cap` chars and append an explicit truncation marker so the
+ * model can see that output was dropped (never silently truncate). Strings at
+ * or below the cap pass through unchanged.
+ */
+export function truncateWithMarker(s: string, cap: number = MAX_OUTPUT_CHARS): string {
+  if (s.length <= cap) return s;
+  return s.slice(0, cap) + `\n[truncated: ${s.length} chars total, showing first ${cap}]`;
+}
+
 export interface ExecuteCodeDeps {
   /** CubeAPI REST endpoint, e.g. http://172.18.10.150:3040 */
   cubeApiUrl: string;
@@ -183,16 +200,21 @@ export function buildExecuteCodeTool(deps: ExecuteCodeDeps) {
         const raw = await executeInSandbox(sandbox.sandboxID, deps.sandboxDomain, code);
         const messages = parseNDJSON(raw);
 
-        // 3. Aggregate results
-        const stdout = messages
-          .filter((m) => m.type === 'stdout')
-          .map((m) => m.text ?? '')
-          .join('');
-        const stderr = messages
-          .filter((m) => m.type === 'stderr')
-          .map((m) => m.text ?? '')
-          .join('');
-        const results = messages.filter((m) => m.type === 'result');
+        // 3. Aggregate results (bounded: stdout/stderr capped at MAX_OUTPUT_CHARS,
+        //    results array sliced to MAX_RESULTS with each text capped at
+        //    MAX_RESULT_CHARS; all still tagExternal-wrapped for injection defense).
+        const stdout = truncateWithMarker(
+          messages.filter((m) => m.type === 'stdout').map((m) => m.text ?? '').join(''),
+        );
+        const stderr = truncateWithMarker(
+          messages.filter((m) => m.type === 'stderr').map((m) => m.text ?? '').join(''),
+        );
+        const allResults = messages.filter((m) => m.type === 'result');
+        const results = allResults.slice(0, MAX_RESULTS).map((m) => ({
+          text: tagExternal(truncateWithMarker(m.text ?? '', MAX_RESULT_CHARS)),
+          is_main_result: m.is_main_result ?? false,
+        }));
+        const resultsDropped = allResults.length - results.length;
         const errors = messages.filter((m) => m.type === 'error');
         const execCount = messages.find((m) => m.type === 'number_of_executions');
 
@@ -202,17 +224,15 @@ export function buildExecuteCodeTool(deps: ExecuteCodeDeps) {
         return {
           status: hasError ? ('error' as const) : ('success' as const),
           executionCount: execCount?.execution_count ?? 1,
-          stdout: stdout ? tagExternal(stdout) : '',
-          stderr: stderr ? tagExternal(stderr) : '',
-          results: results.map((r) => ({
-            text: tagExternal(r.text ?? ''),
-            is_main_result: r.is_main_result ?? false,
-          })),
+          stdout: tagExternal(stdout),
+          stderr: tagExternal(stderr),
+          results,
+          resultsDropped: resultsDropped > 0 ? resultsDropped : undefined,
           error: hasError
             ? {
                 name: errors[0]?.name ?? 'UnknownError',
-                value: tagExternal(errors[0]?.value ?? ''),
-                traceback: (errors[0]?.traceback ?? []).map(tagExternal),
+                value: tagExternal(truncateWithMarker(errors[0]?.value ?? '')),
+                traceback: (errors[0]?.traceback ?? []).map((t) => tagExternal(truncateWithMarker(t))),
               }
             : null,
         };
@@ -224,6 +244,7 @@ export function buildExecuteCodeTool(deps: ExecuteCodeDeps) {
           stdout: '',
           stderr: '',
           results: [],
+          resultsDropped: undefined,
           error: {
             name: 'SandboxError',
             value: tagExternal(msg),

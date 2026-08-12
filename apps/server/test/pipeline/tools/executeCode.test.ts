@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import https from 'node:https';
-import { buildExecuteCodeTool } from '../../../src/pipeline/tools/executeCode.js';
+import { buildExecuteCodeTool, truncateWithMarker, MAX_OUTPUT_CHARS } from '../../../src/pipeline/tools/executeCode.js';
 
 // The execute_code tool uses two HTTP transports:
 //   - globalThis.fetch  for cube-api REST (create/kill sandbox)
@@ -238,5 +238,48 @@ describe('execute_code tool', () => {
     expect(res.stderr).toBe('');
     expect(res.results).toEqual([]);
     expect(res.error).toBeNull();
+  });
+});
+
+describe('execute_code output bounding', () => {
+  it('leaves short strings unchanged', () => {
+    expect(truncateWithMarker('hello')).toBe('hello');
+  });
+
+  it('truncates long strings with an explicit marker', () => {
+    const big = 'x'.repeat(MAX_OUTPUT_CHARS * 3);
+    const out = truncateWithMarker(big);
+    expect(out.length).toBeLessThan(big.length);
+    expect(out).toContain('[truncated:');
+    expect(out.startsWith('x')).toBe(true);
+  });
+
+  it('does not truncate at exactly the cap', () => {
+    const exact = 'y'.repeat(MAX_OUTPUT_CHARS);
+    expect(truncateWithMarker(exact)).toBe(exact);
+  });
+
+  it('bounds huge stdout with a truncation marker (integration)', async () => {
+    // Feed an NDJSON stdout message larger than MAX_OUTPUT_CHARS so the
+    // aggregation path caps it. The bounding must NOT strip the tagExternal
+    // wrap (injection defense preserved post-truncation).
+    const huge = 'x'.repeat(MAX_OUTPUT_CHARS * 3);
+    const ndjson = [
+      JSON.stringify({ type: 'number_of_executions', execution_count: 1 }),
+      JSON.stringify({ type: 'stdout', text: huge }),
+      JSON.stringify({ type: 'end_of_execution' }),
+    ].join('\n');
+    setupHttpsMock(ndjson);
+
+    const tool = makeTool();
+    const res = await tool.execute({ code: "print('x' * 24000)" }, execContext);
+
+    expect(res.status).toBe('success');
+    // Bounded: well under the original size.
+    expect(res.stdout.length).toBeLessThan(huge.length);
+    // Truncation marker present (inside the external_content wrap).
+    expect(res.stdout).toContain('[truncated:');
+    // Still wrapped (injection defense preserved post-truncation).
+    expect(res.stdout).toContain('<external_content');
   });
 });
