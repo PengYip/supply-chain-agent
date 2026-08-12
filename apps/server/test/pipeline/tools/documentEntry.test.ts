@@ -144,7 +144,11 @@ describe('document-entry tools', () => {
     const extractionId = await saveExtraction(ctx, {
       documentId: ing.docId,
       docType: '发票',
-      fields: { 发票号: { value: 'INV-001', sourceSpans: [] } },
+      // Real span pointing into b0 ("发票号：INV-001"): prefix 发票号： is 4 chars
+      // (full-width colon), then INV-001 occupies positions 4..11. Must resolve
+      // to a non-null citedText via validateSpan so the recompute loop + the
+      // break-on-first-valid-span branch both get exercised.
+      fields: { 发票号: { value: 'INV-001', sourceSpans: [{ blockId: 'b0', start: 4, end: 11 }] } },
       fieldMeta: { 发票号: { strength: 'exact', confidence: 0.95 } },
       overallConfidence: 0.95,
       needsReview: false,
@@ -164,6 +168,10 @@ describe('document-entry tools', () => {
     expect(String(out.value)).toContain('external_content');
     expect(out.confidence).toBe(0.95);
     expect(Array.isArray(out.sourceSpans)).toBe(true);
+    // citedText is recomputed from the seeded span via validateSpan (the tool's
+    // headline DRY behavior), then wrapped via tagExternal like value.
+    expect(String(out.citedText)).toContain('INV-001');
+    expect(String(out.citedText)).toContain('external_content');
   });
 
   it('inspect_extraction errors on unknown field and lists available fields', async () => {
