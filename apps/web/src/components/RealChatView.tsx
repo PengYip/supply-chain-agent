@@ -4,8 +4,8 @@ import { DefaultChatTransport, generateId, lastAssistantMessageIsCompleteWithApp
 import type { UIMessage, UIMessageChunk } from 'ai'
 import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, LogOut, Paperclip } from 'lucide-react'
 import { RealMessageItem, ErrorMessage } from './RealMessageItem'
-import { AgentStatusBar } from './AgentStatusBar'
-import { useAgentStatus } from '../hooks/useAgentStatus'
+import { HumanAgentStatusBar } from './HumanAgentStatusBar'
+import { useHumanAgentStatus } from '../hooks/useHumanAgentStatus'
 import { type ContextFile } from '../hooks/useFiles'
 import { buildRenderItems } from '../utils/realChatUtils'
 import { authClient } from '../lib/auth'
@@ -16,7 +16,10 @@ export const RealChatView: React.FC<{
   sessionId?: string | null;
   contextFiles: ContextFile[];
   setContextFiles: React.Dispatch<React.SetStateAction<ContextFile[]>>;
-}> = ({ onSignOut, sessionId, contextFiles, setContextFiles }) => {
+  /** Phase 5: called when a chat turn finishes so the sidebar can refresh
+   *  (a newly-generated session title appears). */
+  onSessionChanged?: () => void;
+}> = ({ onSignOut, sessionId, contextFiles, setContextFiles, onSessionChanged }) => {
   const [input, setInput] = useState('')
 
   // Phase 3: file upload state. Uploads POST to /api/files (MinIO + ingest bridge).
@@ -28,6 +31,16 @@ export const RealChatView: React.FC<{
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    // Client guard: reject oversized uploads before POSTing. Keep in sync with
+    // the server default (env.MAX_UPLOAD_BYTES); the server re-checks and
+    // returns 413, so this is a latency/UX guard, not the enforcement edge.
+    const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setUploadState('error')
+      setUploadMsg(`文件过大（${(file.size / 1024 / 1024).toFixed(1)} MiB），上限为 25 MiB`)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      return
+    }
     setUploadState('uploading')
     setUploadMsg(null)
     try {
@@ -59,7 +72,7 @@ export const RealChatView: React.FC<{
   }, [])
   // sessionIdRef is read synchronously by the transport headers callback
   // (must be a ref, not state). We mirror it into `sessionId` state purely so
-  // AgentStatusBar / useAgentStatus can react to it once the chat response
+  // HumanAgentStatusBar / useHumanAgentStatus can react to it once the chat response
   // returns the id in the `x-session-id` header. The server reuses this id
   // for every request on this session, so the polled status path matches.
   const sessionIdRef = useRef<string | null>(null)
@@ -120,6 +133,19 @@ export const RealChatView: React.FC<{
       cancelled = true
     }
   }, [sessionId, setMessages])
+
+  // Phase 5: refresh the sidebar when a chat turn finishes (status transitions
+  // to 'ready') so a newly-generated session title appears. Uses a ref so it
+  // only fires on the transition, not on mount (status is already 'ready').
+  const prevStatusRef = useRef(status)
+  const onSessionChangedRef = useRef(onSessionChanged)
+  onSessionChangedRef.current = onSessionChanged
+  useEffect(() => {
+    if (prevStatusRef.current !== 'ready' && status === 'ready') {
+      onSessionChangedRef.current?.()
+    }
+    prevStatusRef.current = status
+  }, [status])
 
   const handleApprove = (id: string) =>
     addToolApprovalResponse({ id, approved: true, reason: '用户确认执行' })
@@ -239,7 +265,7 @@ export const RealChatView: React.FC<{
   const bottomRef = useRef<HTMLDivElement>(null)
 
   // Poll agent status only while a real session exists (real mode only).
-  const agentStatus = useAgentStatus(liveSessionId)
+  const agentStatus = useHumanAgentStatus(liveSessionId, isStreaming)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -301,7 +327,7 @@ export const RealChatView: React.FC<{
       </div>
 
       {/* Agent status strip (real mode only) */}
-      <AgentStatusBar sessionId={liveSessionId} status={agentStatus} />
+      <HumanAgentStatusBar sessionId={liveSessionId} status={agentStatus} />
 
       {/* Messages */}
       <div className="flex-1 overflow-auto p-4">

@@ -1,5 +1,5 @@
 import { eq, and, or, isNull } from 'drizzle-orm';
-import { documents, extractions, bindings } from './schema.js';
+import { documents, extractions, bindings, classifications } from './schema.js';
 import type { DbContext } from './client.js';
 import type { BlockModel, DocType, SourceSpan } from '../types.js';
 import type { SpanMatchStrength } from '../spanValidator.js';
@@ -28,6 +28,41 @@ import {
 // another's documents / extractions / bindings / chunks. Writes stamp the row.
 export function effectiveUserId(userId?: string): string {
   return userId && userId.length > 0 ? userId : '';
+}
+
+/**
+ * Count document rows visible to the caller (caller's own rows + legacy
+ * user_id='' / NULL rows). SQLite-only this phase; postgres stubbed.
+ */
+export function countDocuments(ctx: DbContext, userId?: string): number {
+  if (ctx.backend === 'postgres') {
+    throw new Error('countDocuments: postgres backend not yet implemented');
+  }
+  const uid = effectiveUserId(userId);
+  const row = ctx.sqlite
+    .prepare(
+      "SELECT COUNT(*) AS n FROM documents WHERE user_id = ? OR user_id = '' OR user_id IS NULL",
+    )
+    .get(uid) as { n: number } | undefined;
+  return row?.n ?? 0;
+}
+
+/**
+ * Count extraction rows flagged needs_review visible to the caller. needs_review
+ * is stored INTEGER 0/1 (drizzle boolean mode); SQL filters on needs_review = 1.
+ * SQLite-only this phase; postgres stubbed.
+ */
+export function countExtractionsNeedingReview(ctx: DbContext, userId?: string): number {
+  if (ctx.backend === 'postgres') {
+    throw new Error('countExtractionsNeedingReview: postgres backend not yet implemented');
+  }
+  const uid = effectiveUserId(userId);
+  const row = ctx.sqlite
+    .prepare(
+      "SELECT COUNT(*) AS n FROM extractions WHERE needs_review = 1 AND (user_id = ? OR user_id = '' OR user_id IS NULL)",
+    )
+    .get(uid) as { n: number } | undefined;
+  return row?.n ?? 0;
 }
 
 export interface ExtractionInput {
@@ -93,6 +128,202 @@ export async function loadDocument(ctx: DbContext, docId: string, userId?: strin
     : eq(documents.id, docId);
   const row = ctx.db.select().from(documents).where(filter).all()[0];
   return row ? (JSON.parse(row.blockModel) as BlockModel) : null;
+}
+
+export interface ExtractionRow {
+  id: string;
+  documentId: string;
+  docType: DocType;
+  fields: Record<string, { value: string | number; sourceSpans: SourceSpan[] }>;
+  fieldMeta: Record<string, { strength: SpanMatchStrength; confidence: number }>;
+  overallConfidence: number;
+  needsReview: boolean;
+}
+
+/**
+ * Load a single extraction row by id. Used by the inspect_extraction L1 tool
+ * for on-demand field-evidence drill-down. Same userId-legacy filter as
+ * loadDocument (rows with user_id = '' / NULL stay readable by any caller).
+ * Postgres path is stubbed -- Phase 1 is SQLite-only; the pg twin lands later.
+ */
+export async function loadExtraction(
+  ctx: DbContext,
+  extractionId: string,
+  userId?: string,
+): Promise<ExtractionRow | null> {
+  if (ctx.backend === 'postgres') {
+    throw new Error('loadExtraction: postgres backend not yet implemented');
+  }
+  const uid = effectiveUserId(userId);
+  const filter = uid
+    ? and(
+        eq(extractions.id, extractionId),
+        or(eq(extractions.userId, uid), eq(extractions.userId, ''), isNull(extractions.userId)),
+      )
+    : eq(extractions.id, extractionId);
+  const row = ctx.db.select().from(extractions).where(filter).all()[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    documentId: row.documentId,
+    docType: row.docType as DocType,
+    fields: JSON.parse(row.fields as string),
+    fieldMeta: JSON.parse(row.fieldMeta as string),
+    overallConfidence: row.overallConfidence,
+    needsReview: !!row.needsReview,
+  };
+}
+
+export interface ClassificationInput {
+  documentId: string;
+  docType: DocType;
+  confidence: number;
+  source: 'classified' | 'hint' | 'fallback';
+  hint?: DocType;
+}
+
+export interface ClassificationRow {
+  id: string;
+  documentId: string;
+  docType: DocType;
+  confidence: number;
+  source: string;
+  hint: DocType | null;
+}
+
+/** Persist one classification result for a document (one row per ingest). */
+export async function saveClassification(
+  ctx: DbContext,
+  input: ClassificationInput,
+  userId?: string,
+): Promise<string> {
+  if (ctx.backend === 'postgres') {
+    throw new Error('saveClassification: postgres backend not yet implemented');
+  }
+  const id = rid('CL');
+  ctx.db.insert(classifications).values({
+    id,
+    documentId: input.documentId,
+    docType: input.docType,
+    confidence: input.confidence,
+    source: input.source,
+    hint: input.hint ?? null,
+    userId: effectiveUserId(userId),
+  }).run();
+  return id;
+}
+
+/**
+ * Load the classification row for a document (most recent if multiple). Same
+ * userId-legacy filter as loadExtraction (rows with user_id = '' / NULL stay
+ * readable by any caller). Postgres path stubbed -- Phase 2 is SQLite-only.
+ */
+export async function loadClassification(
+  ctx: DbContext,
+  documentId: string,
+  userId?: string,
+): Promise<ClassificationRow | null> {
+  if (ctx.backend === 'postgres') {
+    throw new Error('loadClassification: postgres backend not yet implemented');
+  }
+  const uid = effectiveUserId(userId);
+  const filter = uid
+    ? and(
+        eq(classifications.documentId, documentId),
+        or(eq(classifications.userId, uid), eq(classifications.userId, ''), isNull(classifications.userId)),
+      )
+    : eq(classifications.documentId, documentId);
+  const row = ctx.db
+    .select()
+    .from(classifications)
+    .where(filter)
+    .orderBy(classifications.createdAt)
+    .all()
+    .pop();
+  if (!row) return null;
+  return {
+    id: row.id,
+    documentId: row.documentId,
+    docType: row.docType as DocType,
+    confidence: row.confidence,
+    source: row.source,
+    hint: (row.hint as DocType | null) ?? null,
+  };
+}
+
+export type DocumentTagSource = 'auto' | 'explicit';
+
+export interface DocumentTagRow {
+  tag: string;
+  source: DocumentTagSource;
+}
+
+/**
+ * Persist tag rows for a document with the given source. Idempotent per
+ * (document, tag, source, user): a UNIQUE collision is skipped so re-ingesting
+ * or re-calling tag_document with the same tag does not duplicate rows.
+ */
+export async function saveDocumentTags(
+  ctx: DbContext,
+  documentId: string,
+  tags: string[],
+  source: DocumentTagSource,
+  userId?: string,
+): Promise<void> {
+  if (ctx.backend === 'postgres') {
+    throw new Error('saveDocumentTags: postgres backend not yet implemented');
+  }
+  const uid = effectiveUserId(userId);
+  // De-dup against existing rows with the same (document, tag, source, user).
+  // 3-way OR matches listDocumentTags/loadExtraction/loadClassification (no
+  // behavioral impact today since the column is NOT NULL DEFAULT '', but
+  // consistent with siblings).
+  const existing = ctx.sqlite
+    .prepare(
+      `SELECT tag FROM document_tags
+       WHERE document_id = ? AND source = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)`,
+    )
+    .all(documentId, source, uid) as Array<{ tag: string }>;
+  const have = new Set(existing.map((r) => r.tag));
+  const tx = ctx.sqlite.transaction((rows: string[]) => {
+    for (const tag of rows) {
+      if (have.has(tag)) continue;
+      const id = rid('TG');
+      ctx.sqlite
+        .prepare(
+          `INSERT INTO document_tags (id, document_id, tag, source, user_id) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(id, documentId, tag, source, uid);
+    }
+  });
+  tx(tags);
+}
+
+/**
+ * List all tags for a document (both sources), tag ascending. Same userId-legacy
+ * filter as loadExtraction. Postgres path stubbed -- Phase 2 is SQLite-only.
+ */
+export async function listDocumentTags(
+  ctx: DbContext,
+  documentId: string,
+  userId?: string,
+): Promise<DocumentTagRow[]> {
+  if (ctx.backend === 'postgres') {
+    throw new Error('listDocumentTags: postgres backend not yet implemented');
+  }
+  const uid = effectiveUserId(userId);
+  const rows = uid
+    ? ctx.sqlite
+        .prepare(
+          `SELECT tag, source FROM document_tags
+           WHERE document_id = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)
+           ORDER BY tag ASC`,
+        )
+        .all(documentId, uid) as Array<{ tag: string; source: string }>
+    : ctx.sqlite
+        .prepare(`SELECT tag, source FROM document_tags WHERE document_id = ? ORDER BY tag ASC`)
+        .all(documentId) as Array<{ tag: string; source: string }>;
+  return rows.map((r) => ({ tag: r.tag, source: r.source as DocumentTagSource }));
 }
 
 export async function saveExtraction(ctx: DbContext, input: ExtractionInput, userId?: string): Promise<string> {
@@ -322,6 +553,65 @@ export async function getChunkMetaByRowids(
     });
   }
   return out;
+}
+
+/**
+ * Hard-delete a document and EVERY dependent row across the storage stack.
+ * SQLite FKs are OFF by default, so children MUST be deleted before the parent
+ * (order is load-bearing). FTS5 external-content table doc_chunk_fts has no
+ * triggers and sqlite-vec doc_chunk_vec must be deleted by id -- both explicit.
+ * doc_chunk_vec is optional (only exists when sqlite-vec loads); its delete is
+ * guarded on table existence so the cascade works on DBs without the extension.
+ * Returns { deleted: true } if the documents row existed (and was removed),
+ * { deleted: false } if not found / not visible to this user.
+ * Postgres backend: throw (not yet implemented) -- mirror sibling pg-throws.
+ *
+ * Security: chunkIds are integers read from our own DB (not user input), so
+ * interpolating them into `IN (...)` is safe. docId/uid stay parameterized.
+ */
+export function deleteDocument(ctx: DbContext, docId: string, userId?: string): { deleted: boolean } {
+  if (ctx.backend === 'postgres') {
+    throw new Error('deleteDocument: postgres backend not yet implemented');
+  }
+  const uid = effectiveUserId(userId);
+  const sqlite = ctx.sqlite;
+  // Verify ownership/visibility first (3-way OR legacy filter, same as loadDocument).
+  const owned = sqlite
+    .prepare("SELECT 1 FROM documents WHERE id = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL) LIMIT 1")
+    .get(docId, uid);
+  if (!owned) return { deleted: false };
+
+  const chunkIds = sqlite
+    .prepare('SELECT id FROM doc_chunk WHERE document_id = ?')
+    .all(docId) as { id: number }[];
+
+  // doc_chunk_vec is optional (only present when sqlite-vec loads); check before
+  // deleting so the cascade works on DBs where the vec extension is absent.
+  const hasVecTable = !!sqlite
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='doc_chunk_vec'")
+    .get();
+
+  const tx = sqlite.transaction(() => {
+    // 1-2. FTS + vec by chunk id (chunkIds are our own integers — safe to interpolate).
+    if (chunkIds.length) {
+      const idList = chunkIds.map((c) => c.id).join(',');
+      sqlite.exec(`DELETE FROM doc_chunk_fts WHERE rowid IN (${idList})`);
+      if (hasVecTable) {
+        sqlite.exec(`DELETE FROM doc_chunk_vec WHERE id IN (${idList})`);
+      }
+    }
+    // 3. chunks.
+    sqlite.prepare('DELETE FROM doc_chunk WHERE document_id = ?').run(docId);
+    // 4-7. stage tables.
+    sqlite.prepare('DELETE FROM extractions WHERE document_id = ?').run(docId);
+    sqlite.prepare('DELETE FROM classifications WHERE document_id = ?').run(docId);
+    sqlite.prepare('DELETE FROM bindings WHERE document_id = ?').run(docId);
+    sqlite.prepare('DELETE FROM document_tags WHERE document_id = ?').run(docId);
+    // 8. parent last (after all referencers gone).
+    sqlite.prepare('DELETE FROM documents WHERE id = ?').run(docId);
+  });
+  tx();
+  return { deleted: true };
 }
 
 // ---- File manager: document minio_key link-back + virtual folders ----------

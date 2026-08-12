@@ -59,7 +59,7 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
   // Isolation: wipe pipeline tables between tests (dev container only).
   beforeEach(async () => {
     await ctx.pool.query(
-      'TRUNCATE doc_chunk, extractions, bindings, document_relation, doc_contract, documents RESTART IDENTITY CASCADE',
+      'TRUNCATE doc_chunk, extractions, bindings, documents RESTART IDENTITY CASCADE',
     );
   });
 

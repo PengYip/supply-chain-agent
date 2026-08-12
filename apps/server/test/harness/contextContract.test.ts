@@ -17,7 +17,6 @@ const EXPECTED_TOOLS = [
   'query_contract',
   'query_orders',
   'cross_check',
-  'link_document',
   'create_payment',
   'escalate_to_human',
   'verify_document_fields',
@@ -26,6 +25,11 @@ const EXPECTED_TOOLS = [
   'bind_document',
   'recall_documents',
   'execute_code',
+  'inspect_extraction',
+  'tag_document',
+  'create_entity',
+  'link_entities',
+  'graph_query',
 ] as const;
 
 describe('tool-context contract registry', () => {
@@ -44,6 +48,13 @@ describe('tool-context contract registry', () => {
     expect(Object.keys(TOOL_CONTEXT_CONTRACTS).sort()).toEqual(
       [...EXPECTED_TOOLS].sort(),
     );
+  });
+
+  it('link_document is no longer a registered trader tool (retired in Phase 4)', () => {
+    // The volatile in-memory link_document tool was retired in favor of the
+    // Neo4j graph tools (create_entity/link_entities/graph_query). It must not
+    // reappear in the live trader toolset.
+    expect(listToolNames('trader')).not.toContain('link_document');
   });
 
   it('getContract returns the registered contract', () => {
@@ -78,7 +89,7 @@ describe('contract injection-exposure mapping (integration point 1)', () => {
     // ingested doc text -> all must be wrapped in <external_content>. execute_code
     // runs user-supplied Python whose stdout can carry injection payloads too.
     expect(getTaggedOutputTools().sort()).toEqual(
-      ['execute_code', 'extract_fields', 'recall_documents', 'verify_document_fields'].sort(),
+      ['execute_code', 'extract_fields', 'inspect_extraction', 'recall_documents', 'verify_document_fields'].sort(),
     );
   });
 
@@ -88,7 +99,7 @@ describe('contract injection-exposure mapping (integration point 1)', () => {
     // AND return external content. recall_documents reads back that doc text.
     // execute_code runs untrusted user code (injection external).
     expect(getExternalHandlingTools().sort()).toEqual(
-      ['execute_code', 'extract_fields', 'ingest_document', 'recall_documents', 'verify_document_fields'].sort(),
+      ['execute_code', 'extract_fields', 'ingest_document', 'inspect_extraction', 'recall_documents', 'verify_document_fields'].sort(),
     );
   });
 

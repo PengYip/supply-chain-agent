@@ -3,22 +3,27 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import type { DbContext } from '../db/client.js';
 import {
-  saveDocument, loadDocument, saveExtraction, saveBinding, saveChunks,
+  saveDocument, loadDocument, saveExtraction, loadExtraction, saveBinding, saveChunks,
+  saveClassification, saveDocumentTags, listDocumentTags,
 } from '../db/repositories.js';
-import { ingestWithDigital } from '../digitalAdapter.js';
-import { ingestWithMinerU } from '../mineruAdapter.js';
+import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
+import { classifyDocument, classifyDocumentWithoutModel, type ClassifierDeps } from '../classifier.js';
+import { deriveAutoTags } from '../tagging.js';
 import { chunkBlockModel } from '../chunking.js';
 import { linkDocumentToContract } from '../../data/seed.js';
 import { tagExternal, assertWithinRoot } from '../../harness/injectionDefense.js';
 import type { Embedder } from '../embedder.js';
 import { isVecReady, saveChunkVectors } from '../db/vecStore.js';
 import type { DocType, Modality, SourceSpan } from '../types.js';
-import type { SpanMatchStrength } from '../spanValidator.js';
+import { validateSpan, type SpanMatchStrength } from '../spanValidator.js';
 
 export interface ToolDeps {
   ctx: DbContext;
   extraction?: ExtractionDeps; // inject for extract_fields; defaults to real model
+  /** Phase 2 routing-classify stage. When unset, ingest degrades to the
+   *  caller-supplied docType hint (source 'hint', confidence 0). */
+  classifier?: ClassifierDeps;
   /** Embedder for the L4 vector recall index (Task 6 v2). When unset OR when
    *  sqlite-vec is unavailable on the connection, ingest skips vector population
    *  and only the FTS5 keyword index (Task 6 v1) is populated. */
@@ -50,8 +55,11 @@ function ensureFk(ctx: DbContext): void {
 export interface IngestOptions {
   ctx: DbContext;
   sourcePath: string;
-  docType: DocType;
+  /** Caller hint. Classification determines the effective docType when a
+   *  classifier is wired; otherwise this hint is used directly. Defaults to '其他'. */
+  docType?: DocType;
   modality: Modality;
+  classifier?: ClassifierDeps;
   embedder?: Embedder;
   /** Phase 2: owning user for the new document + its chunks. */
   userId?: string;
@@ -61,39 +69,34 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   docId: string;
   blockCount: number;
   modality: string;
+  classifiedDocType: DocType;
+  classificationConfidence: number;
+  classificationSource: 'classified' | 'hint' | 'fallback';
+  tags: string[];
 }> {
-  const { ctx, sourcePath, docType, modality, embedder, userId } = opts;
+  const { ctx, sourcePath, docType, modality, embedder, classifier, userId } = opts;
   ensureFk(ctx);
   // Path allowlist (injection defense): reject anything outside INGEST_ROOT.
   const safePath = assertWithinRoot(sourcePath);
   const docId = newDocId();
-  let blockModel =
-    modality === 'scanned'
-      ? await ingestWithMinerU(safePath, docType, docId)
-      : await ingestWithDigital(safePath, docType, docId);
+  // Parse (pure, no DB) — extracted into parseDocument primitive (Phase 1).
+  const blockModel = await parseDocument({ sourcePath: safePath, docType: docType ?? '其他', docId, modality });
 
-  // Auto-fallback: digital PDF yielded 0 blocks -> likely scanned -> retry via MinerU OCR.
-  if (blockModel.blocks.length === 0 && modality !== 'scanned' && /\.pdf$/i.test(safePath)) {
-    console.warn('[ingest] digital ingest yielded 0 blocks for PDF; retrying as scanned via MinerU OCR');
-    try {
-      const mineruModel = await ingestWithMinerU(safePath, docType, docId);
-      if (mineruModel.blocks.length > 0) {
-        blockModel = mineruModel;
-      }
-    } catch (e) {
-      console.warn('[ingest] MinerU OCR fallback failed:', (e as Error).message);
-    }
-  }
+  // Classify (Phase 2 routing-classify): parsed blocks -> effective docType.
+  // Degrades to the hint when no classifier is wired (tests / dev offline).
+  const cls = classifier
+    ? await classifyDocument(classifier, { blocks: blockModel.blocks, hint: docType })
+    : classifyDocumentWithoutModel({ blocks: blockModel.blocks, hint: docType });
+  // The classified docType is the source of truth from here on (design §6:
+  // routing-classify picks the docType used downstream).
+  blockModel.docType = cls.docType;
 
-  // Final check: still 0 blocks after fallback -> throw.
-  if (blockModel.blocks.length === 0) {
-    throw new Error(
-      modality === 'scanned'
-        ? '文件解析得到 0 个内容块。MinerU OCR 可能失败，请检查 .mineru.json 或 MinerU 服务配置。'
-        : '文件解析得到 0 个内容块。该文件可能是扫描件(无文字层)，MinerU OCR 也未能提取内容。',
-    );
-  }
   await saveDocument(ctx, blockModel, userId);
+  await saveClassification(
+    ctx,
+    { documentId: docId, docType: cls.docType, confidence: cls.confidence, source: cls.source, hint: docType },
+    userId,
+  );
   const chunks = chunkBlockModel(blockModel);
   const chunkRowIds = await saveChunks(ctx, docId, chunks);
   if (embedder && (await isVecReady(ctx))) {
@@ -110,24 +113,50 @@ export async function ingestFile(opts: IngestOptions): Promise<{
       );
     }
   }
-  return { docId, blockCount: blockModel.blocks.length, modality: blockModel.modality };
+  // Auto-tag (Phase 2): derive a small deterministic tag set from the effective
+  // docType + content (design §8: auto-tags are an ingest byproduct, persisted
+  // and included in the return summary). Explicit tags come from tag_document.
+  // Fault-tolerant like the vector block above: by design a byproduct, so a
+  // persistence failure (UNIQUE regression, disk full, locked DB) degrades to
+  // an empty tag set instead of killing the already-committed primary result.
+  let tags: string[] = [];
+  try {
+    tags = deriveAutoTags({ docType: blockModel.docType, blocks: blockModel.blocks });
+    await saveDocumentTags(ctx, docId, tags, 'auto', userId);
+  } catch (e) {
+    console.warn('[ingest] auto-tag persistence skipped:', (e as Error).message);
+  }
+
+  return {
+    docId,
+    blockCount: blockModel.blocks.length,
+    modality: blockModel.modality,
+    classifiedDocType: cls.docType,
+    classificationConfidence: cls.confidence,
+    classificationSource: cls.source,
+    tags,
+  };
 }
 
 export function buildIngestDocumentTool(deps: ToolDeps) {
   return tool({
     description:
-      '录入一份原始单据(合同/发票/提单/装箱单)。解析文件为结构化 BlockModel 并持久化, 返回 docId 与解析信息。不抽取业务字段(用 extract_fields)。',
+      '录入一份原始单据(合同/发票/提单/装箱单)。解析文件为结构化 BlockModel 并持久化, ' +
+      '内置分类器自动判定单据类型(docType 为可选提示, 分类器会确认或纠正)并打自动标签, ' +
+      '返回 docId、分类结果(classifiedDocType / confidence / source)与标签。不抽取业务字段(用 extract_fields)。',
     inputSchema: z.object({
       sourceUri: z.string().min(1).describe('本地文件路径 (PDF/TXT/DOCX); scanned 还需配套 <sourceUri>.mineru.json'),
-      docType: z.enum(['合同', '发票', '提单', '装箱单', '其他']),
+      docType: z.enum(['合同', '发票', '提单', '装箱单', '其他']).optional()
+        .describe('可选的单据类型提示; 分类器会确认或纠正。省略时由分类器决定'),
       modality: z.enum(['digital', 'scanned']),
     }),
     execute: async ({ sourceUri, docType, modality }) => {
       return ingestFile({
         ctx: deps.ctx,
         sourcePath: sourceUri,
-        docType: docType as DocType,
+        docType: docType as DocType | undefined,
         modality: modality as Modality,
+        classifier: deps.classifier,
         embedder: deps.embedder,
         userId: deps.userId,
       });
@@ -158,12 +187,8 @@ export function buildExtractFieldsTool(deps: ToolDeps) {
       }
       ensureFk(deps.ctx);
       // Zero-hallucination directives:
-      //  - empty LLM output (no fields) is surfaced as needsReview + reason, never a silent empty success;
-      //  - "neither bucket" (confidence in [0.7,0.9): not needsReview, not autoAccepted) is listed in pendingManual.
+      //  - empty LLM output (no fields) is surfaced as needsReview + reason, never a silent empty success.
       const needsReview = result.needsReview || result.fields.length === 0;
-      const pendingManual = result.fields
-        .filter((f) => !f.needsReview && !f.autoAccepted)
-        .map((f) => f.name);
       const extractionId = await saveExtraction(
         deps.ctx,
         {
@@ -176,26 +201,133 @@ export function buildExtractFieldsTool(deps: ToolDeps) {
         },
         deps.userId,
       );
-      // Injection defense (output:tagged): the field VALUES and citedText are
-      // strings read straight from an untrusted document -- an attacker could
-      // embed prompt-injection text in them. Wrap every external-derived STRING
-      // leaf in <external_content> so the model treats them as DATA. The object
-      // STRUCTURE is unchanged; numbers, names, spans, and confidence are not
-      // document text and are left alone. The DB persists the raw (unwrapped)
-      // values above; only the context-bound return is wrapped.
-      const taggedFields = result.fields.map((f) => ({
-        ...f,
+      // Bounded summary for the model trajectory. Full evidence (citedText,
+      // sourceSpans) stays persisted via saveExtraction and is retrievable on
+      // demand via inspect_extraction(extractionId, fieldName). The field VALUE
+      // is the only document-derived string leaf exposed here, so wrap it in
+      // <external_content> (injection defense: output-tagged).
+      const summaryFields = result.fields.map((f) => ({
+        name: f.name,
         value: typeof f.value === 'string' ? tagExternal(f.value) : f.value,
-        citedText: f.citedText ? tagExternal(f.citedText) : f.citedText,
+        confidence: f.confidence,
+        needsReview: f.needsReview,
+        autoAccepted: f.autoAccepted,
       }));
+
       return {
         extractionId,
-        fields: taggedFields,
+        fields: summaryFields,
         overallConfidence: result.overallConfidence,
         needsReview,
         missingRequired: result.missingRequired,
-        pendingManual,
         reason: result.fields.length === 0 ? 'no_fields_extracted' : undefined,
+      };
+    },
+  });
+}
+
+/**
+ * inspect_extraction — L1 perception tool.
+ * On-demand evidence drill-down for a SINGLE already-extracted field.
+ * Scope boundary: only fields that extract_fields already produced (given by
+ * extractionId). NOT a general text-retrieval tool (use recall_documents for
+ * arbitrary text). citedText is recomputed from persisted sourceSpans + the
+ * loaded BlockModel via validateSpan, so the span validator stays the single
+ * source of truth (citedText is never stored separately).
+ */
+export function buildInspectExtractionTool(deps: ToolDeps) {
+  return tool({
+    description:
+      '查看某个已抽取字段的证据（原文片段 citedText 与 sourceSpans）。' +
+      '仅限 extract_fields 已经抽取出的字段（用其返回的 extractionId）。' +
+      '不要用它做任意文本检索（那应该用 recall_documents）。' +
+      '使用场景：用户想看某字段值在原文哪里、或对抽取结果存疑需要取证时。',
+    inputSchema: z.object({
+      extractionId: z.string().min(1).describe('extract_fields 返回的 extractionId'),
+      fieldName: z.string().min(1).describe('要查看证据的字段名，取自 extract_fields 返回 fields[].name'),
+    }),
+    execute: async ({ extractionId, fieldName }) => {
+      const row = await loadExtraction(deps.ctx, extractionId, deps.userId);
+      if (!row) return { status: 'error' as const, reason: 'extraction_not_found' as const };
+
+      const field = row.fields[fieldName];
+      if (!field) {
+        return {
+          status: 'error' as const,
+          reason: 'field_not_found' as const,
+          availableFields: Object.keys(row.fields),
+        };
+      }
+
+      const blockModel = await loadDocument(deps.ctx, row.documentId, deps.userId);
+      if (!blockModel) return { status: 'error' as const, reason: 'document_not_found' as const };
+
+      // Recompute citedText from persisted spans + BlockModel (DRY): the span
+      // validator stays the single source of truth. citedText is never stored.
+      const meta = row.fieldMeta[fieldName];
+      let citedText: string | null = null;
+      let strength: SpanMatchStrength = meta?.strength ?? 'none';
+      for (const span of field.sourceSpans) {
+        const v = validateSpan(String(field.value), span, blockModel.blocks);
+        if (v.citedText) {
+          citedText = v.citedText;
+          strength = v.strength;
+          break;
+        }
+      }
+
+      return {
+        status: 'ok' as const,
+        extractionId,
+        fieldName,
+        value: typeof field.value === 'string' ? tagExternal(field.value) : field.value,
+        citedText: citedText ? tagExternal(citedText) : null,
+        sourceSpans: field.sourceSpans,
+        confidence: meta?.confidence ?? 0,
+        strength,
+      };
+    },
+  });
+}
+
+/**
+ * tag_document — L2 explicit-tagging tool.
+ * Adds user/agent-supplied labels to an EXISTING document, any time post-ingest.
+ * Distinct from auto-tags (an ingest byproduct, source 'auto') and from graph
+ * edges (link_entities, Step 4). Idempotent per (doc, tag, source='explicit'):
+ * re-adding the same tag is a no-op. needsApproval (L2) because it mutates
+ * business state (the agent must have user consent to label a document).
+ */
+export function buildTagDocumentTool(deps: ToolDeps) {
+  return tool({
+    description:
+      '为已录入的单据打显式标签(用户/代理人工标注)。可在录入后任意时刻调用。' +
+      '与 ingest 时自动生成的标签(来源 auto)不同, 这些标签来源为 explicit。' +
+      '图关系(买方/卖方/引用)暂不支持, 将在后续工具中提供。' +
+      '使用场景: 用户说"给这份合同打上 重要 / 客户A 标签"时。',
+    inputSchema: z.object({
+      docId: z.string().min(1).describe('目标单据 docId (来自 ingest_document 返回)'),
+      tags: z.array(z.string().min(1)).min(1).describe('要添加的标签数组, 至少一个'),
+    }),
+    execute: async ({ docId, tags }) => {
+      const blockModel = await loadDocument(deps.ctx, docId, deps.userId);
+      if (!blockModel) return { status: 'error' as const, reason: 'document_not_found' as const };
+      if (tags.length === 0) return { status: 'error' as const, reason: 'no_tags_provided' as const };
+
+      ensureFk(deps.ctx);
+      // Compute addedTags by diffing against existing explicit tags for this doc.
+      const before = await listDocumentTags(deps.ctx, docId, deps.userId);
+      const hadExplicit = new Set(
+        before.filter((r) => r.source === 'explicit').map((r) => r.tag),
+      );
+      const addedTags = tags.filter((t) => !hadExplicit.has(t));
+      await saveDocumentTags(deps.ctx, docId, tags, 'explicit', deps.userId);
+      const after = await listDocumentTags(deps.ctx, docId, deps.userId);
+      return {
+        status: 'ok' as const,
+        docId,
+        addedTags,
+        totalTags: after.length,
       };
     },
   });

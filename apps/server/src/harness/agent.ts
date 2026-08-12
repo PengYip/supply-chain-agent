@@ -3,14 +3,19 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import { env } from '../env.js';
 import { getToolsForRole, type Role, type HarnessDeps } from './roleToolRegistry.js';
 import { getPermission } from './permissionGate.js';
-import { recordPendingApproval } from './sessionStore.js';
-import { auditRecorder } from './auditRecorder.js';
+import { recordPendingApproval, countPendingApprovals } from './sessionStore.js';
+import { auditRecorder, type ToolCallRecord } from './auditRecorder.js';
+import { classifyToolError } from './errorClassification.js';
 import { assertAllToolsContracted } from './contextContract.js';
 import {
   compressByBudget,
   createFailureTracker,
   makeCircuitBreaker,
+  type FailureTracker,
 } from './compression.js';
+import { appendStatusMessage, type AgentStatusSnapshot } from './agentStatus.js';
+import { getToolCallCounts } from './statusAggregator.js';
+import { countDocuments, countExtractionsNeedingReview } from '../pipeline/db/repositories.js';
 import { DeterministicEmbedder, OllamaEmbedder, type Embedder } from '../pipeline/embedder.js';
 import { type DbContext } from '../pipeline/db/client.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
@@ -53,17 +58,77 @@ export const SYSTEM_PROMPT = [
 // errors (it records on success right before returning, matching the prior
 // per-tool semantics; on throw the error propagates and no record is emitted,
 // exactly as before).
-function withAudit(name: string, execute: Tool['execute']): Tool['execute'] {
+export function withAudit(name: string, execute: Tool['execute'], failures?: FailureTracker): Tool['execute'] {
   if (!execute) return execute;
   return async (input: any, options: any) => {
     const start = Date.now();
-    const result = await execute(input, options);
-    auditRecorder.recordToolCall({ toolName: name, args: input, result, durationMs: Date.now() - start });
+    let result: any;
+    try {
+      result = await execute(input, options);
+    } catch (err) {
+      // Book Ch5:196 + Ch5:184: surface the error as a structured tool RESULT
+      // (not an SDK tool-error part) so the model sees a uniform shape incl.
+      // whether retrying is worthwhile. This makes withAudit NEVER throw.
+      const classified = classifyToolError(err);
+      result = { status: 'error', reason: 'tool_error', toolName: name, ...classified };
+    }
+    const durationMs = Date.now() - start;
+    auditRecorder.recordToolCall({ toolName: name, args: input, result, durationMs });
+    // Record the REAL success/fail signal directly (certain knowledge from the
+    // try/catch + result shape). After T3, withAudit never throws, so the SDK's
+    // experimental_onToolCallFinish would see every call as success=true;
+    // recording here keeps the consecutive-failure circuit breaker alive. A
+    // result with status==='error' (thrown+caught OR T1 structured timeout)
+    // counts as a failure.
+    const isError = result?.status === 'error';
+    failures?.recordToolFinish(!isError);
+    // Phase 6 T2 (book Ch5:186): fingerprint for repeat-call loop detection.
+    // Unconditional (incl. caught throws) — the model DID call the tool.
+    failures?.recordToolCall(name, input);
     return result;
   };
 }
 
-export function buildGatedTools(role: Role, deps?: HarnessDeps): Record<string, Tool> {
+/**
+ * Per-tool timeout wrapper (book Ch5:314). Wraps an execute in a Promise.race
+ * against a timeout. On timeout returns a STRUCTURED result — NOT a throw — so
+ * the model sees the timeout as a tool result it can adapt to next turn (change
+ * args, switch tool, give up) instead of a silent kill. The wrapper is INNERMOST
+ * (composed inside withAudit in buildGatedTools) so withAudit records the
+ * structured timeout like any other result. toolName is attached for context.
+ */
+export function withToolTimeout(
+  execute: Tool['execute'],
+  timeoutMs: number,
+  toolName?: string,
+): Tool['execute'] {
+  if (!execute) return execute;
+  return async (input: any, options: any) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(() => {
+        resolve({ status: 'error', reason: 'tool_timeout', toolName, timeoutMs });
+      }, timeoutMs);
+    });
+    const execPromise = execute(input, options);
+    // Mark any late rejection handled: if the timeout wins the race, the
+    // abandoned execPromise is still pending; a late DB/network rejection would
+    // otherwise surface as an unhandled rejection under
+    // --unhandled-rejections=throw and crash the PM2 process. The no-op catch
+    // does NOT affect race behavior (fast-resolve: no-op; fast-reject before
+    // timeout: throw still propagates via the race; timeout + late-reject:
+    // swallowed here).
+    execPromise.catch(() => {});
+    try {
+      const result = await Promise.race([execPromise, timeout]);
+      return result;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+}
+
+export function buildGatedTools(role: Role, deps?: HarnessDeps, failures?: FailureTracker): Record<string, Tool> {
   const list = getToolsForRole(role, deps);
   // Contract guard: no tool may go live for the model without a declared
   // tool-context contract. Fail fast (first turn) if a new tool is added to
@@ -72,7 +137,7 @@ export function buildGatedTools(role: Role, deps?: HarnessDeps): Record<string, 
   const gated: Record<string, Tool> = {};
   for (const t of list) {
     const name = t.name;
-    const audited: Tool = { ...t, execute: withAudit(name, t.execute) };
+    const audited: Tool = { ...t, execute: withAudit(name, withToolTimeout(t.execute, env.TOOL_TIMEOUT_MS, name), failures) };
     // L2 via the permission gate (source of truth) OR a literal boolean
     // needsApproval stamped at registration (e.g. bind_document). `=== true`
     // avoids matching Tool's needsApproval-function form.
@@ -132,6 +197,13 @@ export interface RunStreamOpts {
    * = unscoped (legacy/tests; no filtering).
    */
   userId?: string;
+  /**
+   * Phase 3 status bar: when set, a model-facing <agent_status> user-role
+   * message is appended at the trajectory tail for this turn (never persisted;
+   * only the real conversation is, via appendMessages). Unset = no status
+   * injection (tests that don't need it).
+   */
+  sessionId?: string;
 }
 
 // Scan a turn's response messages for v6 tool-approval-request parts (emitted
@@ -186,6 +258,37 @@ export function recordL2PendingFromResponse(
   }
 }
 
+export interface BuildAgentStatusSnapshotOpts {
+  sessionId: string;
+  userId?: string;
+  ctx: DbContext;
+  recorder?: { records: ToolCallRecord[] };
+}
+
+/**
+ * Assemble the model-facing status snapshot (design §9.2) from existing harness
+ * sources: per-tool counts (auditRecorder), pending approvals (sessionStore),
+ * and DB progress counts (repositories). Sync because better-sqlite3 is sync.
+ * `recorder` defaults to the process-wide singleton; tests pass a local one for
+ * deterministic isolation.
+ */
+export function buildAgentStatusSnapshot({
+  sessionId,
+  userId,
+  ctx,
+  recorder = auditRecorder,
+}: BuildAgentStatusSnapshotOpts): AgentStatusSnapshot {
+  const toolCounts = getToolCallCounts(sessionId, recorder);
+  const totalCalls = toolCounts.reduce((sum, t) => sum + t.count, 0);
+  return {
+    toolCounts,
+    totalCalls,
+    pendingApprovals: countPendingApprovals(sessionId),
+    docsIngested: countDocuments(ctx, userId),
+    extractionsPendingReview: countExtractionsNeedingReview(ctx, userId),
+  };
+}
+
 // Create the streamText result for one agent turn. Caller is responsible for
 // session persistence and for returning result.toUIMessageStreamResponse().
 //
@@ -194,7 +297,7 @@ export function recordL2PendingFromResponse(
 // to pre-H1 behavior. When supplied (tests), no provider client is constructed and
 // no network/env is required, so the agent loop can be exercised offline against
 // a canned fake model + in-memory DbContext.
-export function runStream({ messages, role, auditTraceId, model, deps, userId }: RunStreamOpts) {
+export function runStream({ messages, role, auditTraceId, model, deps, userId, sessionId }: RunStreamOpts) {
   // Production default: real DeepSeek model. If a model was injected, skip
   // building the provider client so tests need no API key / network.
   //
@@ -217,29 +320,43 @@ export function runStream({ messages, role, auditTraceId, model, deps, userId }:
     }).chat(env.OPENAI_MODEL);
   // Reuse the same model handle for both the agent loop and extract_fields so
   // there is a single DeepSeek client per turn.
-  const tools = buildGatedTools(
-    role,
-    deps ?? { ctx: getHarnessDbContext(), extraction: { model: resolvedModel }, embedder: defaultEmbedder(), userId },
-  );
+  const harnessDeps = deps ?? {
+    ctx: getHarnessDbContext(),
+    extraction: { model: resolvedModel },
+    classifier: { model: resolvedModel },
+    embedder: defaultEmbedder(),
+    userId,
+  };
+  const ctx = harnessDeps.ctx;
   // Context compression + circuit breaker (AUTO-LOOP variant). prepareStep runs
   // compressByBudget one step LATE (the just-produced result is already
   // committed), which is acceptable for the short stepCountIs(5) internal tool.
   // withAudit already archived the FULL result to auditRecorder before the next
   // prepareStep runs, so audit/status see uncompressed data -- no re-archive.
+  // Created BEFORE buildGatedTools so withAudit can record repeat-call
+  // fingerprints into it (Phase 6 T2, book Ch5:186).
   const failures = createFailureTracker(3);
+  const tools = buildGatedTools(role, harnessDeps, failures);
+  // Phase 3 status bar: append a per-turn model-facing <agent_status> snapshot
+  // at the trajectory tail. The snapshot is built from existing harness state
+  // (audit recorder + sessionStore + DB counts). The appended message is NEVER
+  // persisted (only appendMessages() is, which stores the real conversation),
+  // so the status message is replaced fresh on every turn.
+  const snapshot = sessionId ? buildAgentStatusSnapshot({ sessionId, userId, ctx }) : null;
+  const messagesForModel = appendStatusMessage(messages, snapshot);
   return streamText({
     // Chat Completions API (.chat) -- DeepSeek's Responses-API compatibility
     // corrupts tool-call id correlation.
     model: resolvedModel,
     system: SYSTEM_PROMPT,
-    messages,
+    messages: messagesForModel,
     tools,
     // L5 circuit breaker: stop after 3 consecutive tool failures (infra errors,
     // not business ok:false -- those return success:true with the payload).
     // Kept alongside the step cap so the loop still terminates on runaway tool
     // errors. Failure count is updated by experimental_onToolCallFinish (and on
     // a prepareStep compression throw) via the shared `failures` tracker.
-    stopWhen: [stepCountIs(5), makeCircuitBreaker(() => failures.shouldStop)],
+    stopWhen: [stepCountIs(5), makeCircuitBreaker(() => failures.shouldStop || failures.isLooping)],
     // AI SDK 6 option name is `experimental_telemetry` (v7 renames to `telemetry`).
     // In tests no OTel exporter is registered (instrumentation.ts is not loaded),
     // so these spans are no-op and emit no network traffic.
@@ -264,11 +381,12 @@ export function runStream({ messages, role, auditTraceId, model, deps, userId }:
         return {};
       }
     },
-    // L5 failure signal: success resets the streak, failure increments it.
-    // finishReason stays 'tool-calls' even on a tool error in v6, so this is the
-    // authoritative failure signal.
-    experimental_onToolCallFinish: ({ success }) => {
-      failures.recordToolFinish(success);
-    },
+    // Phase 6 T3: experimental_onToolCallFinish was REMOVED. After T3,
+    // withAudit catches all throws and records the success/fail signal directly
+    // into `failures` (certain knowledge from its try/catch + result shape). The
+    // SDK's `success` param would always be true now (withAudit never throws),
+    // so the callback was dead for the circuit-breaker purpose. The `failures`
+    // tracker is still updated by withAudit (tool success/fail + fingerprint)
+    // and prepareStep (compression failure) — both certain signals.
   });
 }

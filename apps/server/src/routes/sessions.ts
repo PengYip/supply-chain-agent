@@ -32,7 +32,7 @@ sessionsRoute.get('/', requireRole('admin', 'trader', 'viewer'), (c) => {
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const rows = listSessionsForUser(user.id);
   return c.json({
-    sessions: rows.map((r) => ({ id: r.id, role: r.role, createdAt: r.createdAt })),
+    sessions: rows.map((r) => ({ id: r.id, role: r.role, createdAt: r.createdAt, title: r.title })),
   });
 });
 
@@ -67,7 +67,7 @@ sessionsRoute.get('/:id', (c) => {
   }
   const loaded = loadSession(id);
   if (!loaded) return c.json({ error: 'not found' }, 404);
-  return c.json({ id: loaded.id, role: loaded.role, messages: loaded.messages });
+  return c.json({ id: loaded.id, role: loaded.role, messages: loaded.messages, title: loaded.title });
 });
 
 // Delete a session -- only if the authenticated user owns it. Also cascades to

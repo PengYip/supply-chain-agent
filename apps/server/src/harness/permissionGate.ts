@@ -53,12 +53,16 @@ registerPermission('verify_document_fields', 'L1'); // T4: document OCR check
 // T9: document-entry pipeline tools
 registerPermission('ingest_document', 'L1'); // T9: parse + persist BlockModel
 registerPermission('extract_fields', 'L1'); // T9: grounded field extraction
+registerPermission('inspect_extraction', 'L1'); // on-demand field-evidence drill-down
 registerPermission('recall_documents', 'L1'); // T6: FTS5 keyword recall over chunks
 registerPermission('execute_code', 'L1'); // CubeSandbox: isolated Python execution
 // L2 write confirm
-registerPermission('link_document', 'L2');
 registerPermission('advance_contract_stage', 'L2');
 registerPermission('bind_document', 'L2'); // T9: bind document to contract
+registerPermission('tag_document', 'L2'); // Phase 2: explicit document labeling
+registerPermission('create_entity', 'L2'); // Phase 4 §7: graph entity create
+registerPermission('link_entities', 'L2'); // Phase 4 §7: graph edge create
+registerPermission('graph_query', 'L2'); // Phase 4 §7: graph traversal (L2: soft gate)
 // L3 external approval
 registerPermission('create_payment', 'L3');
 registerPermission('refund_payment', 'L3');

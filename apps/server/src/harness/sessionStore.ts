@@ -72,12 +72,16 @@ CREATE TABLE IF NOT EXISTS authorized_tickets (
 export interface SessionInfo {
   id: string;
   role: Role;
+  /** Auto-generated session title (Phase 5); stored in metadata_json. */
+  title?: string;
 }
 
 export interface LoadedSession {
   id: string;
   role: Role;
   messages: ModelMessage[];
+  /** Auto-generated session title (Phase 5); stored in metadata_json. */
+  title?: string;
 }
 
 export type ApprovalLevel = 'L2' | 'L3';
@@ -117,10 +121,13 @@ const stmtInsertSession = db.prepare(
 );
 const stmtGetSession = db.prepare('SELECT * FROM sessions WHERE id = ?');
 const stmtListSessionsForUser = db.prepare(
-  'SELECT id, role, created_at FROM sessions WHERE user_id = ? ORDER BY created_at DESC',
+  'SELECT id, role, created_at, metadata_json FROM sessions WHERE user_id = ? ORDER BY created_at DESC',
 );
 const stmtTouchSession = db.prepare(
   'UPDATE sessions SET updated_at = ? WHERE id = ?',
+);
+const stmtUpdateMetadata = db.prepare(
+  'UPDATE sessions SET metadata_json = ?, updated_at = ? WHERE id = ?',
 );
 const stmtMaxSeq = db.prepare(
   'SELECT COALESCE(MAX(seq), -1) AS max_seq FROM session_messages WHERE session_id = ?',
@@ -165,16 +172,51 @@ export function createSession(role: Role, userId?: string | null): SessionInfo {
   return { id, role };
 }
 
+/** Parse the title out of a session's metadata_json blob (defensive). */
+function parseTitle(metadataJson: string | null | undefined): string | undefined {
+  if (!metadataJson) return undefined;
+  try {
+    const meta = JSON.parse(metadataJson) as { title?: unknown };
+    return typeof meta.title === 'string' ? meta.title : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Set the session's auto-generated title. Stored inside the existing
+ * metadata_json blob (no schema migration): merges `{...meta, title}` so other
+ * metadata keys are preserved. No-op if the session does not exist.
+ */
+export function setSessionTitle(sessionId: string, title: string): void {
+  const row = stmtGetSession.get(sessionId) as SessionRow | undefined;
+  if (!row) return;
+  let meta: Record<string, unknown> = {};
+  try {
+    meta = row.metadata_json ? (JSON.parse(row.metadata_json) as Record<string, unknown>) : {};
+  } catch {
+    meta = {};
+  }
+  meta.title = title;
+  stmtUpdateMetadata.run(JSON.stringify(meta), new Date().toISOString(), sessionId);
+}
+
 /** List chat sessions owned by a user (Phase 2 data isolation). */
 export function listSessionsForUser(
   userId: string,
-): Array<{ id: string; role: Role; createdAt: string }> {
+): Array<{ id: string; role: Role; createdAt: string; title?: string }> {
   const rows = stmtListSessionsForUser.all(userId) as Array<{
     id: string;
     role: Role;
     created_at: string;
+    metadata_json: string | null;
   }>;
-  return rows.map((r) => ({ id: r.id, role: r.role, createdAt: r.created_at }));
+  return rows.map((r) => ({
+    id: r.id,
+    role: r.role,
+    createdAt: r.created_at,
+    title: parseTitle(r.metadata_json),
+  }));
 }
 
 /**
@@ -192,7 +234,7 @@ export function loadSession(id: string): LoadedSession | null {
   if (!row) return null;
   const rows = stmtListMessages.all(id) as MessageRow[];
   const messages = rows.map((r) => JSON.parse(r.model_message_json) as ModelMessage);
-  return { id: row.id, role: row.role, messages };
+  return { id: row.id, role: row.role, messages, title: parseTitle(row.metadata_json) };
 }
 
 /**

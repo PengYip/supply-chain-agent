@@ -1,9 +1,13 @@
 import React from 'react'
-import { useSessions, type Session } from '../hooks/useSessions'
+import { type Session } from '../hooks/useSessions'
 
 interface SessionSidebarProps {
   activeSessionId: string | null
   onSelect: (id: string) => void
+  sessions: Session[]
+  loading: boolean
+  createSession: (role?: string) => Promise<Session | null>
+  deleteSession: (id: string) => Promise<void>
 }
 
 function relativeTime(iso: string): string {
@@ -19,9 +23,7 @@ function relativeTime(iso: string): string {
   return `${Math.floor(diff / day)}天前`
 }
 
-export function SessionSidebar(props: SessionSidebarProps) {
-  const { activeSessionId, onSelect } = props
-  const { sessions, loading, createSession, deleteSession } = useSessions()
+export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, createSession, deleteSession }: SessionSidebarProps) {
 
   const handleNew = async () => {
     const s: Session | null = await createSession('trader')
@@ -106,7 +108,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
                   >
                     删除
                   </span>
-                  <div style={{ fontSize: 14 }}>角色：{s.role}</div>
+                  <div style={{ fontSize: 14 }}>{s.title ?? `角色：${s.role}`}</div>
                   <div style={{ fontSize: 12, color: '#888' }}>
                     {relativeTime(s.updatedAt || s.createdAt)}
                   </div>

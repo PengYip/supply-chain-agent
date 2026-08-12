@@ -34,6 +34,7 @@ import {
   listFileFolders,
   createFileFolder,
   deleteFileFolder,
+  deleteDocument,
 } from '../pipeline/db/repositories.js';
 import type { DocType, Modality } from '../pipeline/types.js';
 import { DeterministicEmbedder, OllamaEmbedder, type Embedder } from '../pipeline/embedder.js';
@@ -94,6 +95,12 @@ function parseFileKey(key: string, userId: string): { name: string; directory: s
   return { name, directory };
 }
 
+/** Pure predicate so the upload-size guard is unit-testable without allocating
+ * a huge buffer. Returns true iff `size` strictly exceeds `limit`. */
+export function exceedsUploadLimit(size: number, limit: number): boolean {
+  return size > limit;
+}
+
 /** Upload a file -> MinIO -> INGEST_ROOT -> ingest pipeline. */
 // Phase 4 RBAC: only admin/trader may upload files (viewer cannot).
 filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
@@ -110,6 +117,15 @@ filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
   const file = body['file'];
   if (!(file instanceof File)) {
     return c.json({ error: 'no file provided (field "file")' }, 400);
+  }
+
+  // Reject oversized uploads BEFORE buffering the body (avoid allocating a
+  // huge ArrayBuffer for a request we will refuse anyway).
+  if (exceedsUploadLimit(file.size, env.MAX_UPLOAD_BYTES)) {
+    return c.json(
+      { error: 'file too large', limit: env.MAX_UPLOAD_BYTES, size: file.size },
+      413,
+    );
   }
 
   const docTypeStr = strField(body['docType'], '其他');
@@ -292,6 +308,39 @@ filesRoute.delete('/rmdir', requireRole('admin', 'trader'), async (c) => {
 
   await deleteFileFolder(ctx(), user.id, folderPath);
   return c.json({ ok: true });
+});
+
+/** Delete a file: cascade-delete the DB document row + all dependents (chunks,
+ *  fts, vec, extractions, classifications, bindings, document_tags) AND remove
+ *  the MinIO object. Human-UI only (no agent tool). Ownership: the MinIO key
+ *  must live under this user's prefix (mirror /move + /presign). The :key param
+ *  carries the URL-encoded MinIO object key (slashes encoded so it is a single
+ *  path segment). */
+filesRoute.delete('/:key', requireRole('admin', 'trader'), async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const key = decodeURIComponent(c.req.param('key'));
+
+  // Ownership guard: key must be under this user's prefix.
+  if (!key.startsWith(`users/${user.id}/`)) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+
+  // Resolve docId from the MinIO key (reuse the /move helper — it also handles
+  // the source_uri LIKE fallback for legacy rows without a minio_key stamp).
+  const docIdMap = await findDocIdsByMinioKeys(ctx(), [key], user.id);
+  const docId = docIdMap.get(key);
+  if (docId) {
+    deleteDocument(ctx(), docId, user.id);
+  }
+  // Always attempt the MinIO object removal (orphan cleanup even if no doc row).
+  try {
+    await minioClient.removeObject(MINIO_BUCKET, key);
+  } catch (e) {
+    // Log but don't 500 — the DB rows were already deleted (or never existed).
+    console.warn('[files] minio removeObject failed for', key, (e as Error).message);
+  }
+  return c.json({ ok: true, key, docId: docId ?? null });
 });
 
 /** Presign a download URL for one of the current user's files. Key comes via

@@ -76,10 +76,6 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'counter',
     persist: 'business', risk: { level: 'L1', injection: 'safe' },
   },
-  link_document: {
-    output: 'raw', budget: 'full', signal: 'env',
-    persist: 'business', risk: { level: 'L2', injection: 'safe' },
-  },
   create_payment: {
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L3', injection: 'safe' },
@@ -100,9 +96,43 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'tagged', budget: 'summary', signal: 'todo',
     persist: 'business', risk: { level: 'L1', injection: 'external' },
   },
+  inspect_extraction: {
+    // On-demand drill-down for ONE already-extracted field. Returns the field
+    // value + recomputed citedText (both document-derived strings) wrapped via
+    // tagExternal -> output 'tagged' / injection 'external'. Bounded to a single
+    // field -> budget 'summary'. Read-only lookup -> risk L1. Backed by the
+    // persisted extraction row (business data) -> persist 'business'.
+    output: 'tagged', budget: 'summary', signal: 'counter',
+    persist: 'business', risk: { level: 'L1', injection: 'external' },
+  },
   bind_document: {
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
+  },
+  tag_document: {
+    // Explicit user/agent labels -> trusted agent input (like bind_document's
+    // contractNo), so output 'raw' / injection 'safe'. Tags are short strings ->
+    // budget 'full'. Mutates persistent doc state -> signal 'env', persist
+    // 'business'. L2 write (soft gate).
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'business', risk: { level: 'L2', injection: 'safe' },
+  },
+  // Graph layer (§7): create/link/query entities in Neo4j. Agent-supplied open
+  // kind/name/props are trusted input (no document-derived text returned), so
+  // output 'raw' / injection 'safe'. Returns short handles/summaries -> budget
+  // 'full'. Mutates/persists to the graph store -> signal 'env', persist 'graph'
+  // (the new recall target). All L2 soft-gate writes.
+  create_entity: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'graph', risk: { level: 'L2', injection: 'safe' },
+  },
+  link_entities: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'graph', risk: { level: 'L2', injection: 'safe' },
+  },
+  graph_query: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'graph', risk: { level: 'L2', injection: 'safe' },
   },
   recall_documents: {
     // Returns BM25 snippets of ingested document text -> external content, so

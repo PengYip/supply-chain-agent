@@ -1,16 +1,16 @@
 import React from 'react'
 import { Activity, Clock, ShieldAlert } from 'lucide-react'
 import clsx from 'clsx'
-import type { AgentStatusState } from '../hooks/useAgentStatus'
+import type { HumanAgentStatusState } from '../hooks/useHumanAgentStatus'
 
-interface AgentStatusBarProps {
+interface HumanAgentStatusBarProps {
   sessionId: string | null
-  status: AgentStatusState
+  status: HumanAgentStatusState
 }
 
 /**
  * Compact functional data strip shown only in real mode (mounted inside
- * RealChatView). Polls the agent-status endpoint via `useAgentStatus` and
+ * RealChatView). Polls the agent-status endpoint via `useHumanAgentStatus` and
  * surfaces: total tool calls, bySignal breakdown, last tool + when, and
  * pending approvals (highlighted when > 0 as the human-in-the-loop signal).
  *
@@ -40,7 +40,7 @@ function formatRelative(iso: string | null, now: number = Date.now()): string {
   return `${day} 天前`
 }
 
-export const AgentStatusBar: React.FC<AgentStatusBarProps> = ({ sessionId, status }) => {
+export const HumanAgentStatusBar: React.FC<HumanAgentStatusBarProps> = ({ sessionId, status }) => {
   const data = status.status === 'ok' ? status.data : null
   const pending = data?.pendingApprovals ?? 0
   const hasActivity = !!data && data.totalCalls > 0
@@ -132,4 +132,4 @@ const Metric: React.FC<MetricProps> = ({ label, value }) => (
   </span>
 )
 
-export default AgentStatusBar
+export default HumanAgentStatusBar

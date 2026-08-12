@@ -6,6 +6,8 @@ export interface Session {
   userId: string;
   createdAt: string;
   updatedAt: string;
+  /** Auto-generated session title (Phase 5); undefined until the first exchange completes. */
+  title?: string;
 }
 
 export function useSessions() {

@@ -42,6 +42,23 @@ const EnvSchema = z.object({
   MINIO_ACCESS_KEY: z.string().default('minio'),
   MINIO_SECRET_KEY: z.string().default('miniosecret'),
   MINIO_BUCKET: z.string().default('sca-files'),
+  /** Per-upload size ceiling in bytes. Default 25 MiB. CI-safe permissive
+   *  default (only OPENAI_API_KEY is required). Enforced in the /api/files
+   *  upload route BEFORE buffering the body (413). */
+  MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
+  /** Per-tool execute timeout in ms (book Ch5:314 fault recovery). Default 120s.
+   *  Applied in buildGatedTools via withToolTimeout — a tool that exceeds it
+   *  returns a STRUCTURED {status:'error', reason:'tool_timeout'} result (not a
+   *  throw) so the model can adapt next turn. CI-safe permissive default. */
+  TOOL_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
+  // Neo4j graph store (Phase 4 §7). The ONLY graph store — dev/CI/prod all
+  // connect to the ubuntu-server Neo4j over the network. PASSWORD defaults to
+  // '' so env.ts zod-parses cleanly in CI (which only injects OPENAI_API_KEY)
+  // and unit tests that import env.ts; getDriver() fail-fast-throws at runtime
+  // if PASSWORD is empty. Live-graph tests gate on describe.skipIf(!NEO4J_PASSWORD).
+  NEO4J_URL: z.string().default('bolt://localhost:7687'),
+  NEO4J_USER: z.string().default('neo4j'),
+  NEO4J_PASSWORD: z.string().default(''),
   // CubeSandbox code execution (execute_code tool). Points at a deployed
   // CubeSandbox instance whose cube-api speaks the E2B-compatible REST protocol.
   // Defaults target the dev cluster on ubuntu-server; override via .env for prod.

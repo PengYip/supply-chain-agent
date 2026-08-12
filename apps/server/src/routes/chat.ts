@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import { randomUUID } from 'node:crypto';
-import { convertToModelMessages, type ModelMessage } from 'ai';
+import { convertToModelMessages, type ModelMessage, type LanguageModel } from 'ai';
 import { z } from 'zod';
+import { createDeepSeek } from '@ai-sdk/deepseek';
 import { runStream, recordL2PendingFromResponse } from '../harness/agent.js';
 import type { Role } from '../harness/roleToolRegistry.js';
 import {
@@ -9,11 +10,49 @@ import {
   loadSession,
   appendMessages,
   sessionBelongsTo,
+  setSessionTitle,
 } from '../harness/sessionStore.js';
 import { setSessionContext } from '../harness/sessionContext.js';
+import { generateSessionTitle } from '../harness/titleGen.js';
+import { env } from '../env.js';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 
 export const chatRoute = new Hono<AuthEnv>();
+
+// Phase 5: title-generation model handle. Lazy singleton reusing the SAME
+// factory as agent.ts (createDeepSeek(...).chat(env.OPENAI_MODEL)). Only used on
+// the first turn of a session (one-shot title), so construction amortizes.
+let titleModel: LanguageModel | null = null;
+function getTitleModel(): LanguageModel {
+  if (!titleModel) {
+    titleModel = createDeepSeek({
+      baseURL: env.OPENAI_BASE_URL,
+      apiKey: env.OPENAI_API_KEY,
+    }).chat(env.OPENAI_MODEL);
+  }
+  return titleModel;
+}
+
+/**
+ * Defensively extract text from a message, handling BOTH shapes:
+ *   - ModelMessage: `.content` is a string or an array of `{type:'text', text}` parts.
+ *   - UIMessage (AI SDK 6 parts format): `.parts` is an array of `{type:'text', text}`.
+ * Without the `.parts` fallback, firstUserText/firstReplyText come back empty and
+ * the title falls back to '新会话' every time. `any` is intentional — the two
+ * message shapes don't share a TS structural field for text content.
+ */
+function extractMessageText(msg: any): string {
+  const content = msg?.content;
+  if (typeof content === 'string') return content;
+  const parts = Array.isArray(content) ? content : msg?.parts;
+  if (Array.isArray(parts)) {
+    return parts
+      .filter((p: any) => p?.type === 'text')
+      .map((p: any) => String(p?.text ?? ''))
+      .join('');
+  }
+  return '';
+}
 
 // AI SDK 6 `useChat` posts UIMessages in the `parts` format
 // ({ id, role, parts: [...] }), NOT the legacy { role, content: string }.
@@ -71,6 +110,11 @@ chatRoute.post('/chat', async (c) => {
   const loaded = headerId && !userId ? loadSession(headerId) : candidate;
   const sessionId = loaded?.id ?? createSession(role as Role, userId).id;
   const priorMessages = loaded?.messages ?? [];
+  // First turn = no prior messages. Detecting via `loaded == null` misses the
+  // primary user flow: the sidebar pre-creates an empty session (新建会话), the
+  // first message carries that x-session-id, loadSession returns the empty
+  // session (loaded != null) but with zero messages — title-gen must still fire.
+  const isFirstTurn = priorMessages.length === 0;
   setSessionContext(sessionId);
 
   const auditTraceId = randomUUID();
@@ -119,6 +163,7 @@ chatRoute.post('/chat', async (c) => {
       messages: streamMessages,
       role: agentRole,
       auditTraceId,
+      sessionId,
       userId: userId ?? undefined,
     });
 
@@ -126,12 +171,27 @@ chatRoute.post('/chat', async (c) => {
     // record any L2 soft-gate approvals that were requested this turn.
     // `result.response` is a PromiseLike (no .catch), so use the 2-arg .then.
     result.response.then(
-      (r) => {
+      async (r) => {
         try {
           appendMessages(sessionId, r.messages);
           recordL2PendingFromResponse(sessionId, r.messages);
         } catch (err) {
           console.error('[chat] persist failed:', err instanceof Error ? err.message : err);
+        }
+        // Phase 5: fire-and-forget title generation on the first exchange.
+        // void + .catch so title-gen NEVER breaks a chat turn.
+        if (isFirstTurn) {
+          const firstUserText = extractMessageText(
+            newModelMessages.find((m) => m.role === 'user'),
+          );
+          const firstReplyText = extractMessageText(
+            r.messages.find((m) => m.role === 'assistant'),
+          );
+          void generateSessionTitle(getTitleModel(), firstUserText, firstReplyText)
+            .then((title) => setSessionTitle(sessionId, title))
+            .catch(() => {
+              /* title-gen is best-effort; never surface to the user */
+            });
         }
       },
       () => {

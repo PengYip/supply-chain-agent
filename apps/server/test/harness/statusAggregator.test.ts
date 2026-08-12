@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createAuditRecorder } from '../../src/harness/auditRecorder.js';
-import { getSessionStatus } from '../../src/harness/statusAggregator.js';
+import { createAuditRecorder, type ToolCallRecord } from '../../src/harness/auditRecorder.js';
+import { getSessionStatus, getToolCallCounts } from '../../src/harness/statusAggregator.js';
 import {
   setSessionContext,
 } from '../../src/harness/sessionContext.js';
@@ -136,5 +136,31 @@ describe('status route GET /sessions/:id/status', () => {
     expect(body['lastToolName']).toBeNull();
     expect(body['lastToolAt']).toBeNull();
     expect(body['pendingApprovals']).toBe(0);
+  });
+});
+
+const rec: ToolCallRecord[] = [
+  { toolName: 'ingest_document', args: {}, result: {}, durationMs: 10, timestamp: '2026-08-12T00:00:00Z', sessionId: 's1' },
+  { toolName: 'extract_fields', args: {}, result: {}, durationMs: 5, timestamp: '2026-08-12T00:00:01Z', sessionId: 's1' },
+  { toolName: 'ingest_document', args: {}, result: {}, durationMs: 8, timestamp: '2026-08-12T00:00:02Z', sessionId: 's1' },
+  { toolName: 'recall_documents', args: {}, result: {}, durationMs: 3, timestamp: '2026-08-12T00:00:03Z', sessionId: 's2' },
+];
+
+describe('getToolCallCounts', () => {
+  it('groups tool calls by toolName in first-seen order, scoped by session', () => {
+    expect(getToolCallCounts('s1', { records: rec })).toEqual([
+      { tool: 'ingest_document', count: 2 },
+      { tool: 'extract_fields', count: 1 },
+    ]);
+  });
+
+  it('ignores records from other sessions', () => {
+    expect(getToolCallCounts('s2', { records: rec })).toEqual([
+      { tool: 'recall_documents', count: 1 },
+    ]);
+  });
+
+  it('returns an empty array for an unknown session', () => {
+    expect(getToolCallCounts('unknown', { records: rec })).toEqual([]);
   });
 });

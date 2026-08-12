@@ -211,6 +211,9 @@ function FileRow(props: {
   onMove: (key: string, directory: string) => void
   onCancelMove: () => void
   added: boolean
+  onDelete: (key: string) => void
+  deletingFilePath: string | null
+  setDeletingFilePath: (key: string | null) => void
 }) {
   const {
     file,
@@ -225,6 +228,9 @@ function FileRow(props: {
     onMove,
     onCancelMove,
     added,
+    onDelete,
+    deletingFilePath,
+    setDeletingFilePath,
   } = props
   const [hover, setHover] = useState(false)
 
@@ -301,6 +307,32 @@ function FileRow(props: {
         >
           移动
         </span>
+        {deletingFilePath === file.key ? (
+          <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+            <span style={{ color: '#6b7280' }}>删除文件？</span>
+            <span
+              onClick={() => { onDelete(file.key); setDeletingFilePath(null) }}
+              style={{ color: '#dc2626', cursor: 'pointer', fontWeight: 500 }}
+            >
+              确定
+            </span>
+            <span
+              onClick={() => setDeletingFilePath(null)}
+              style={{ color: '#6b7280', cursor: 'pointer' }}
+            >
+              取消
+            </span>
+          </div>
+        ) : (
+          <span
+            onClick={(e) => { e.stopPropagation(); setDeletingFilePath(file.key) }}
+            style={{ fontSize: 11, color: '#dc2626', cursor: 'pointer', padding: '2px 4px', borderRadius: 3 }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = '#fef2f2' }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = '' }}
+          >
+            删除
+          </span>
+        )}
       </div>
       {moving && (
         <MoveDropdown file={file} folders={folders} onMove={onMove} onClose={onCancelMove} />
@@ -327,6 +359,9 @@ interface TreeFolderProps {
   contextFileKeys: Set<string>
   deletingFolderPath: string | null
   setDeletingFolderPath: (path: string | null) => void
+  onDelete: (key: string) => void
+  deletingFilePath: string | null
+  setDeletingFilePath: (key: string | null) => void
 }
 
 function TreeFolder(props: TreeFolderProps) {
@@ -348,6 +383,9 @@ function TreeFolder(props: TreeFolderProps) {
     contextFileKeys,
     deletingFolderPath,
     setDeletingFolderPath,
+    onDelete,
+    deletingFilePath,
+    setDeletingFilePath,
   } = props
   const isOpen = expanded.has(fullPath)
   const [hover, setHover] = useState(false)
@@ -453,6 +491,9 @@ function TreeFolder(props: TreeFolderProps) {
               onMove={onMove}
               onCancelMove={onCancelMove}
               added={contextFileKeys.has(f.key)}
+              onDelete={onDelete}
+              deletingFilePath={deletingFilePath}
+              setDeletingFilePath={setDeletingFilePath}
             />
           ))}
           {Object.entries(node.subdirs).map(([subname, subnode]) => (
@@ -475,6 +516,9 @@ function TreeFolder(props: TreeFolderProps) {
               contextFileKeys={contextFileKeys}
               deletingFolderPath={deletingFolderPath}
               setDeletingFolderPath={setDeletingFolderPath}
+              onDelete={onDelete}
+              deletingFilePath={deletingFilePath}
+              setDeletingFilePath={setDeletingFilePath}
             />
           ))}
         </div>
@@ -485,13 +529,14 @@ function TreeFolder(props: TreeFolderProps) {
 
 export function FilePanel(props: FilePanelProps) {
   const { visible, onClose, onAddToConversation, contextFileKeys } = props
-  const { files, folders, loading, downloadFile, moveFile, createFolder, removeFolder } = useFiles()
+  const { files, folders, loading, downloadFile, moveFile, createFolder, removeFolder, deleteFile } = useFiles()
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [movingFileKey, setMovingFileKey] = useState<string | null>(null)
   const [creatingFolder, setCreatingFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
   const [deletingFolderPath, setDeletingFolderPath] = useState<string | null>(null)
+  const [deletingFilePath, setDeletingFilePath] = useState<string | null>(null)
 
   const tree = useMemo(() => buildTree(files, folders), [files, folders])
 
@@ -499,6 +544,7 @@ export function FilePanel(props: FilePanelProps) {
     if (!visible) {
       setMovingFileKey(null)
       setDeletingFolderPath(null)
+      setDeletingFilePath(null)
       setCreatingFolder(false)
       setSelectedKey(null)
     }
@@ -698,6 +744,9 @@ export function FilePanel(props: FilePanelProps) {
                 onMove={handleMove}
                 onCancelMove={() => setMovingFileKey(null)}
                 added={contextFileKeys.has(f.key)}
+                onDelete={deleteFile}
+                deletingFilePath={deletingFilePath}
+                setDeletingFilePath={setDeletingFilePath}
               />
             ))}
             {Object.entries(tree.subdirs).map(([subname, subnode]) => (
@@ -720,6 +769,9 @@ export function FilePanel(props: FilePanelProps) {
                 contextFileKeys={contextFileKeys}
                 deletingFolderPath={deletingFolderPath}
                 setDeletingFolderPath={setDeletingFolderPath}
+                onDelete={deleteFile}
+                deletingFilePath={deletingFilePath}
+                setDeletingFilePath={setDeletingFilePath}
               />
             ))}
           </>

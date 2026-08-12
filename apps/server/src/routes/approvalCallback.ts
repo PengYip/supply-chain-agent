@@ -53,7 +53,11 @@ function resumeSession(sessionId: string): Response {
     }),
   );
 
-  const result = runStream({ messages, role, auditTraceId });
+  // userId is not threaded here: LoadedSession ({id, role, messages}) does not
+  // expose the session owner, so the Phase 3 status-bar counts on the resume
+  // path are unscoped. (The authenticated user.id IS available in the route
+  // handler; threading it for scoped resume-path counts is a future improvement.)
+  const result = runStream({ messages, role, auditTraceId, sessionId });
   // `result.response` is a PromiseLike (no .catch), so use the 2-arg .then.
   result.response.then(
     (r) => {

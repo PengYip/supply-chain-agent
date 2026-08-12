@@ -11,6 +11,7 @@
 import { getContract } from './contextContract.js';
 import { auditRecorder, type ToolCallRecord } from './auditRecorder.js';
 import { countPendingApprovals } from './sessionStore.js';
+import type { ToolCallCount } from './agentStatus.js';
 
 export interface AgentStatus {
   sessionId: string;
@@ -65,4 +66,26 @@ export function getSessionStatus(
     lastToolAt: last ? last.timestamp : null,
     pendingApprovals: countPendingApprovals(sessionId),
   };
+}
+
+/**
+ * Model-facing per-tool call counts for a session (design §9.2). Distinct from
+ * `getSessionStatus`'s bySignal tally: this returns one entry per distinct
+ * tool, in first-seen order, so formatAgentStatusBody can render the tool-by-
+ * tool breakdown without duplicate lines. `recorder` defaults to the
+ * process-wide singleton auditRecorder; tests pass a local recorder for
+ * deterministic isolation.
+ */
+export function getToolCallCounts(
+  sessionId: string,
+  recorder: { records: ToolCallRecord[] } = auditRecorder,
+): ToolCallCount[] {
+  const order: string[] = [];
+  const counts = new Map<string, number>();
+  for (const r of recorder.records) {
+    if (r.sessionId !== sessionId) continue;
+    if (!counts.has(r.toolName)) order.push(r.toolName);
+    counts.set(r.toolName, (counts.get(r.toolName) ?? 0) + 1);
+  }
+  return order.map((tool) => ({ tool, count: counts.get(tool) as number }));
 }

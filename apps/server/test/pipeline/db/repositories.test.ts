@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createDb, migrate } from '../../../src/pipeline/db/client.js';
+import { createDb, migrate, type DbContext } from '../../../src/pipeline/db/client.js';
 import {
   saveDocument, loadDocument, saveExtraction, saveBinding, listBindingsForContract,
+  saveDocumentTags, listDocumentTags, countDocuments, countExtractionsNeedingReview,
+  deleteDocument,
 } from '../../../src/pipeline/db/repositories.js';
 import type { BlockModel } from '../../../src/pipeline/types.js';
 
@@ -44,5 +46,165 @@ describe('repositories', () => {
     const list = await listBindingsForContract(ctx, 'HT-2024-001');
     expect(list).toHaveLength(1);
     expect(list[0].documentId).toBe('DOC-1');
+  });
+
+  it('saveDocumentTags is idempotent per (document, tag, source, user)', async () => {
+    // Seed a real document row so the document_tags FK is satisfied.
+    await saveDocument(ctx, mkModel('DOC-TAG-1'));
+    const userId = 'user-1';
+    const tags = ['合同', '信用证'];
+
+    // First write: seeds both rows.
+    await saveDocumentTags(ctx, 'DOC-TAG-1', tags, 'auto', userId);
+    const rowsBefore = await listDocumentTags(ctx, 'DOC-TAG-1', userId);
+    expect(rowsBefore).toHaveLength(2);
+
+    // Second write with the SAME (document, tag, source, user): MUST not grow.
+    // This is the load-bearing invariant -- fails if anyone removes the dedup
+    // guard (and the UNIQUE index backstop turns a regression into a loud
+    // constraint error instead of silent duplicate rows).
+    await saveDocumentTags(ctx, 'DOC-TAG-1', tags, 'auto', userId);
+    const rowsAfter = await listDocumentTags(ctx, 'DOC-TAG-1', userId);
+
+    // No-growth + order stability (both queries use the same ORDER BY tag ASC).
+    expect(rowsAfter).toEqual(rowsBefore);
+    expect(rowsAfter).toHaveLength(2);
+    // Pin the exact survivor set (order-independent content check).
+    expect(rowsAfter.map((r) => r.tag).sort()).toEqual(['信用证', '合同']);
+    expect(rowsAfter.every((r) => r.source === 'auto')).toBe(true);
+  });
+});
+
+describe('countDocuments / countExtractionsNeedingReview', () => {
+  let ctx: DbContext;
+  beforeEach(() => {
+    ctx = createDb(':memory:');
+    migrate(ctx.sqlite);
+    ctx.sqlite
+      .prepare(
+        "INSERT INTO documents (id, doc_type, modality, source_uri, block_model, user_id, created_at) VALUES ('d1','合同','digital','s','{}','alice',datetime('now'))",
+      )
+      .run();
+    ctx.sqlite
+      .prepare(
+        "INSERT INTO documents (id, doc_type, modality, source_uri, block_model, user_id, created_at) VALUES ('d2','发票','digital','s','{}','',datetime('now'))",
+      )
+      .run();
+    ctx.sqlite
+      .prepare(
+        "INSERT INTO extractions (id, document_id, doc_type, fields, field_meta, overall_confidence, needs_review, user_id, created_at) VALUES ('e1','d1','合同','[]','{}',0.8,1,'alice',datetime('now'))",
+      )
+      .run();
+    ctx.sqlite
+      .prepare(
+        "INSERT INTO extractions (id, document_id, doc_type, fields, field_meta, overall_confidence, needs_review, user_id, created_at) VALUES ('e2','d2','发票','[]','{}',0.9,0,'',datetime('now'))",
+      )
+      .run();
+  });
+
+  it('counts documents scoped by userId plus legacy rows', () => {
+    expect(countDocuments(ctx, 'alice')).toBe(2); // d1 (alice) + d2 (legacy '')
+  });
+
+  it('counts extractions needing review scoped by userId plus legacy rows', () => {
+    expect(countExtractionsNeedingReview(ctx, 'alice')).toBe(1); // only e1 (needs_review=1)
+  });
+
+  it('with no userId counts only legacy rows', () => {
+    expect(countDocuments(ctx)).toBe(1); // only d2 (user_id='')
+    expect(countExtractionsNeedingReview(ctx)).toBe(0); // e2 legacy but needs_review=0
+  });
+});
+
+describe('deleteDocument (cascade)', () => {
+  let ctx: DbContext;
+  const userId = 'alice';
+  beforeEach(() => {
+    ctx = createDb(':memory:');
+    migrate(ctx.sqlite);
+    // Seed a full doc stack under alice (D1) + a second doc (D2) for isolation.
+    ctx.sqlite
+      .prepare(
+        "INSERT INTO documents (id, doc_type, modality, source_uri, block_model, user_id, created_at) VALUES ('D1','合同','digital','s','{}','alice',datetime('now'))",
+      )
+      .run();
+    ctx.sqlite
+      .prepare(
+        "INSERT INTO documents (id, doc_type, modality, source_uri, block_model, user_id, created_at) VALUES ('D2','发票','digital','s','{}','alice',datetime('now'))",
+      )
+      .run();
+    // 2 chunks with explicit ids (so the fts rowid assertion is deterministic).
+    ctx.sqlite
+      .prepare(
+        "INSERT INTO doc_chunk (id, document_id, chunk_text, chunk_index, created_at) VALUES (1, 'D1', 'chunk1', 0, datetime('now'))",
+      )
+      .run();
+    ctx.sqlite
+      .prepare(
+        "INSERT INTO doc_chunk (id, document_id, chunk_text, chunk_index, created_at) VALUES (2, 'D1', 'chunk2', 1, datetime('now'))",
+      )
+      .run();
+    // doc_chunk_fts external-content index entries (rowid = doc_chunk.id).
+    ctx.sqlite
+      .prepare('INSERT INTO doc_chunk_fts (rowid, chunk_text) VALUES (1, \'chunk1\')')
+      .run();
+    ctx.sqlite
+      .prepare('INSERT INTO doc_chunk_fts (rowid, chunk_text) VALUES (2, \'chunk2\')')
+      .run();
+    // Stage tables (Phase 2).
+    ctx.sqlite
+      .prepare(
+        "INSERT INTO extractions (id, document_id, doc_type, fields, field_meta, overall_confidence, needs_review, user_id, created_at) VALUES ('E1','D1','合同','[]','{}',0.9,0,'alice',datetime('now'))",
+      )
+      .run();
+    ctx.sqlite
+      .prepare(
+        "INSERT INTO classifications (id, document_id, doc_type, confidence, source, hint, user_id, created_at) VALUES ('CL1','D1','合同',0.9,'classified',NULL,'alice',datetime('now'))",
+      )
+      .run();
+    ctx.sqlite
+      .prepare(
+        "INSERT INTO bindings (id, document_id, contract_no, relation, source_refs, confidence, created_by, user_id, created_at) VALUES ('BD1','D1','HT','primary','[]',0.9,'agent','alice',datetime('now'))",
+      )
+      .run();
+    ctx.sqlite
+      .prepare(
+        "INSERT INTO document_tags (id, document_id, tag, source, user_id, created_at) VALUES ('TG1','D1','重要','explicit','alice',datetime('now'))",
+      )
+      .run();
+  });
+
+  it('removes the documents row and all dependents (chunks/fts/extractions/classifications/bindings/document_tags)', async () => {
+    expect(await loadDocument(ctx, 'D1', userId)).toBeTruthy();
+    const res = deleteDocument(ctx, 'D1', userId);
+    expect(res.deleted).toBe(true);
+
+    // documents row gone.
+    expect(await loadDocument(ctx, 'D1', userId)).toBeNull();
+    // dependents gone (raw check by document_id).
+    const chk = (table: string) =>
+      ctx.sqlite.prepare(`SELECT 1 FROM ${table} WHERE document_id = ?`).get('D1');
+    expect(chk('doc_chunk')).toBeUndefined();
+    expect(chk('extractions')).toBeUndefined();
+    expect(chk('classifications')).toBeUndefined();
+    expect(chk('bindings')).toBeUndefined();
+    expect(chk('document_tags')).toBeUndefined();
+    // fts index entries (by chunk rowid) gone.
+    expect(
+      ctx.sqlite.prepare('SELECT 1 FROM doc_chunk_fts WHERE rowid IN (1,2) LIMIT 1').get(),
+    ).toBeUndefined();
+    // (doc_chunk_vec is optional — only exists when sqlite-vec loads; the repo
+    // fn guards its delete on table existence, so it is not seeded/asserted here.)
+  });
+
+  it('deleteDocument on a missing docId returns { deleted: false } and is a no-op', async () => {
+    expect(deleteDocument(ctx, 'nope', userId).deleted).toBe(false);
+    expect(await loadDocument(ctx, 'D1', userId)).toBeTruthy(); // untouched
+  });
+
+  it('deleteDocument respects userId isolation (other user cannot delete)', async () => {
+    expect(deleteDocument(ctx, 'D1', 'bob').deleted).toBe(false);
+    expect(await loadDocument(ctx, 'D1', userId)).toBeTruthy(); // still present
+    expect(await loadDocument(ctx, 'D2', userId)).toBeTruthy(); // untouched
   });
 });

@@ -18,6 +18,29 @@ import {
 import { type RenderItem, type ToolCallStep } from '../utils/realChatUtils'
 import clsx from 'clsx'
 
+/** Write message text to the clipboard. Primary path is navigator.clipboard
+ *  (secure context); the execCommand fallback is defensive for non-secure
+ *  contexts (dev on :5173 is a localhost secure context, so the fallback is
+ *  rarely hit). Returns void; callers manage UI confirmation state. */
+async function copyMessageText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    try {
+      document.execCommand('copy')
+    } catch {
+      /* ignore — clipboard unavailable */
+    }
+    document.body.removeChild(ta)
+  }
+}
+
 const formatArgs = (args: unknown): string => {
   try {
     if (!args || typeof args !== 'object') return ''
@@ -254,6 +277,13 @@ export const RealMessageItem: React.FC<{
   onDeny?: (id: string) => void | PromiseLike<void>
 }> = ({ item, isStreaming, onApprove, onDeny }) => {
   const isUser = item.role === 'user'
+  // Copy-to-clipboard: aggregate the message's text segments into one string
+  // and track which message id is in its 1.5s "已复制" confirmation window.
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+  const fullText = item.segments
+    .filter((s): s is { kind: 'text'; text: string } => s.kind === 'text')
+    .map((s) => s.text)
+    .join('\n\n')
   // 找最后一个文本段的位置：流式光标只挂在末尾文本段上（避免中间文本段也出光标）
   let lastTextSegmentIdx = -1
   for (let i = item.segments.length - 1; i >= 0; i--) {
@@ -275,7 +305,7 @@ export const RealMessageItem: React.FC<{
       </div>
       <div
         className={clsx(
-          'max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm',
+          'group max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm',
           isUser ? 'bg-steelBlue text-white rounded-tr-sm' : 'bg-white border border-borderGray text-textDark rounded-tl-sm'
         )}
       >
@@ -326,6 +356,33 @@ export const RealMessageItem: React.FC<{
             )
           })}
         </div>
+        {/* Copy-to-clipboard affordance (assistant messages with text only).
+            Hover-revealed via the `group` on the bubble; force-visible for the
+            1.5s confirmation window after a click. */}
+        {!isUser && fullText && (
+          <div className="flex justify-end mt-1.5 -mb-1">
+            <button
+              type="button"
+              onClick={async () => {
+                await copyMessageText(fullText)
+                setCopiedId(item.id)
+                setTimeout(
+                  () => setCopiedId((cur) => (cur === item.id ? null : cur)),
+                  1500,
+                )
+              }}
+              title="复制"
+              className={clsx(
+                'transition text-[11px] text-textGray hover:text-textDark',
+                copiedId === item.id
+                  ? 'opacity-100'
+                  : 'opacity-0 group-hover:opacity-100',
+              )}
+            >
+              {copiedId === item.id ? '已复制' : '复制'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

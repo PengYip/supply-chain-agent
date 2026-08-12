@@ -310,28 +310,69 @@ function defaultLookup(toolName: string): ContractBudget | undefined {
 // ---- circuit breaker (L5) ---------------------------------------------------
 
 /**
+ * Deterministic JSON stringification (sorted object keys) so two structurally
+ * identical args produce the same fingerprint regardless of key insertion order.
+ * Throw-safe on circular input (falls back to String(value)).
+ */
+export function stableStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value, (_k, v) =>
+      v && typeof v === 'object' && !Array.isArray(v)
+        ? Object.keys(v).sort().reduce((acc: Record<string, unknown>, k) => {
+            acc[k] = (v as Record<string, unknown>)[k];
+            return acc;
+          }, {})
+        : v,
+    );
+  } catch {
+    return String(value);
+  }
+}
+
+/**
  * Stateful consecutive-failure tracker. recordToolFinish(true) resets the
  * streak; recordToolFinish(false) increments it. `shouldStop` flips true once
  * the streak reaches `threshold` (default 3). Exposed for unit testing and so
  * runStream's onToolCallFinish / stopWhen share one source of truth.
+ *
+ * Phase 6 T2 (book Ch5:186): also tracks repeat-call fingerprints via
+ * recordToolCall(toolName, args). `isLooping` flips true when any single
+ * (toolName, args) fingerprint accumulates >= threshold records — a no-progress
+ * loop signal. The map is cumulative within a turn (the tracker is fresh per
+ * runStream call, max 5 steps, so 3 identical calls in one turn IS a loop).
  */
 export interface FailureTracker {
   recordToolFinish(success: boolean): void;
+  /** Record a tool call for repeat-call fingerprint loop detection (book Ch5:186). */
+  recordToolCall(toolName: string, args: unknown): void;
   readonly consecutiveFailures: number;
   readonly shouldStop: boolean;
+  /** True when any single (toolName,args) fingerprint has been recorded >= threshold times. */
+  readonly isLooping: boolean;
 }
 
 export function createFailureTracker(threshold = 3): FailureTracker {
   let consecutiveFailures = 0;
+  const fpCounts = new Map<string, number>();
+  let looping = false;
   return {
     recordToolFinish(success: boolean): void {
       consecutiveFailures = success ? 0 : consecutiveFailures + 1;
+    },
+    recordToolCall(toolName: string, args: unknown): void {
+      const fp = `${toolName}::${stableStringify(args)}`;
+      const next = (fpCounts.get(fp) ?? 0) + 1;
+      fpCounts.set(fp, next);
+      if (next >= threshold) looping = true;
     },
     get consecutiveFailures(): number {
       return consecutiveFailures;
     },
     get shouldStop(): boolean {
       return consecutiveFailures >= threshold;
+    },
+    get isLooping(): boolean {
+      return looping;
     },
   };
 }
