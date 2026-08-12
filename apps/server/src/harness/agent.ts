@@ -5,6 +5,7 @@ import { getToolsForRole, type Role, type HarnessDeps } from './roleToolRegistry
 import { getPermission } from './permissionGate.js';
 import { recordPendingApproval, countPendingApprovals } from './sessionStore.js';
 import { auditRecorder, type ToolCallRecord } from './auditRecorder.js';
+import { classifyToolError } from './errorClassification.js';
 import { assertAllToolsContracted } from './contextContract.js';
 import {
   compressByBudget,
@@ -57,17 +58,32 @@ export const SYSTEM_PROMPT = [
 // errors (it records on success right before returning, matching the prior
 // per-tool semantics; on throw the error propagates and no record is emitted,
 // exactly as before).
-function withAudit(name: string, execute: Tool['execute'], failures?: FailureTracker): Tool['execute'] {
+export function withAudit(name: string, execute: Tool['execute'], failures?: FailureTracker): Tool['execute'] {
   if (!execute) return execute;
   return async (input: any, options: any) => {
     const start = Date.now();
-    const result = await execute(input, options);
-    auditRecorder.recordToolCall({ toolName: name, args: input, result, durationMs: Date.now() - start });
-    // Phase 6 T2 (book Ch5:186): record the (toolName, args) fingerprint for
-    // repeat-call loop detection. Recorded AFTER a successful execute so only
-    // completed calls (incl. structured timeout results) are fingerprinted;
-    // throwing calls are caught by the failure-tracker's consecutive-failures
-    // signal instead.
+    let result: any;
+    try {
+      result = await execute(input, options);
+    } catch (err) {
+      // Book Ch5:196 + Ch5:184: surface the error as a structured tool RESULT
+      // (not an SDK tool-error part) so the model sees a uniform shape incl.
+      // whether retrying is worthwhile. This makes withAudit NEVER throw.
+      const classified = classifyToolError(err);
+      result = { status: 'error', reason: 'tool_error', toolName: name, ...classified };
+    }
+    const durationMs = Date.now() - start;
+    auditRecorder.recordToolCall({ toolName: name, args: input, result, durationMs });
+    // Record the REAL success/fail signal directly (certain knowledge from the
+    // try/catch + result shape). After T3, withAudit never throws, so the SDK's
+    // experimental_onToolCallFinish would see every call as success=true;
+    // recording here keeps the consecutive-failure circuit breaker alive. A
+    // result with status==='error' (thrown+caught OR T1 structured timeout)
+    // counts as a failure.
+    const isError = result?.status === 'error';
+    failures?.recordToolFinish(!isError);
+    // Phase 6 T2 (book Ch5:186): fingerprint for repeat-call loop detection.
+    // Unconditional (incl. caught throws) — the model DID call the tool.
     failures?.recordToolCall(name, input);
     return result;
   };
@@ -365,11 +381,12 @@ export function runStream({ messages, role, auditTraceId, model, deps, userId, s
         return {};
       }
     },
-    // L5 failure signal: success resets the streak, failure increments it.
-    // finishReason stays 'tool-calls' even on a tool error in v6, so this is the
-    // authoritative failure signal.
-    experimental_onToolCallFinish: ({ success }) => {
-      failures.recordToolFinish(success);
-    },
+    // Phase 6 T3: experimental_onToolCallFinish was REMOVED. After T3,
+    // withAudit catches all throws and records the success/fail signal directly
+    // into `failures` (certain knowledge from its try/catch + result shape). The
+    // SDK's `success` param would always be true now (withAudit never throws),
+    // so the callback was dead for the circuit-breaker purpose. The `failures`
+    // tracker is still updated by withAudit (tool success/fail + fingerprint)
+    // and prepareStep (compression failure) — both certain signals.
   });
 }
