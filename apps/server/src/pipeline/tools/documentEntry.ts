@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import type { DbContext } from '../db/client.js';
 import {
-  saveDocument, loadDocument, saveExtraction, saveBinding, saveChunks,
+  saveDocument, loadDocument, saveExtraction, loadExtraction, saveBinding, saveChunks,
 } from '../db/repositories.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
@@ -13,7 +13,7 @@ import { tagExternal, assertWithinRoot } from '../../harness/injectionDefense.js
 import type { Embedder } from '../embedder.js';
 import { isVecReady, saveChunkVectors } from '../db/vecStore.js';
 import type { DocType, Modality, SourceSpan } from '../types.js';
-import type { SpanMatchStrength } from '../spanValidator.js';
+import { validateSpan, type SpanMatchStrength } from '../spanValidator.js';
 
 export interface ToolDeps {
   ctx: DbContext;
@@ -168,6 +168,70 @@ export function buildExtractFieldsTool(deps: ToolDeps) {
         needsReview,
         missingRequired: result.missingRequired,
         reason: result.fields.length === 0 ? 'no_fields_extracted' : undefined,
+      };
+    },
+  });
+}
+
+/**
+ * inspect_extraction — L1 perception tool.
+ * On-demand evidence drill-down for a SINGLE already-extracted field.
+ * Scope boundary: only fields that extract_fields already produced (given by
+ * extractionId). NOT a general text-retrieval tool (use recall_documents for
+ * arbitrary text). citedText is recomputed from persisted sourceSpans + the
+ * loaded BlockModel via validateSpan, so the span validator stays the single
+ * source of truth (citedText is never stored separately).
+ */
+export function buildInspectExtractionTool(deps: ToolDeps) {
+  return tool({
+    description:
+      '查看某个已抽取字段的证据（原文片段 citedText 与 sourceSpans）。' +
+      '仅限 extract_fields 已经抽取出的字段（用其返回的 extractionId）。' +
+      '不要用它做任意文本检索（那应该用 recall_documents）。' +
+      '使用场景：用户想看某字段值在原文哪里、或对抽取结果存疑需要取证时。',
+    inputSchema: z.object({
+      extractionId: z.string().min(1).describe('extract_fields 返回的 extractionId'),
+      fieldName: z.string().min(1).describe('要查看证据的字段名，取自 extract_fields 返回 fields[].name'),
+    }),
+    execute: async ({ extractionId, fieldName }) => {
+      const row = await loadExtraction(deps.ctx, extractionId, deps.userId);
+      if (!row) return { status: 'error' as const, reason: 'extraction_not_found' as const };
+
+      const field = row.fields[fieldName];
+      if (!field) {
+        return {
+          status: 'error' as const,
+          reason: 'field_not_found' as const,
+          availableFields: Object.keys(row.fields),
+        };
+      }
+
+      const blockModel = await loadDocument(deps.ctx, row.documentId, deps.userId);
+      if (!blockModel) return { status: 'error' as const, reason: 'document_not_found' as const };
+
+      // Recompute citedText from persisted spans + BlockModel (DRY): the span
+      // validator stays the single source of truth. citedText is never stored.
+      const meta = row.fieldMeta[fieldName];
+      let citedText: string | null = null;
+      let strength: SpanMatchStrength = meta?.strength ?? 'none';
+      for (const span of field.sourceSpans) {
+        const v = validateSpan(String(field.value), span, blockModel.blocks);
+        if (v.citedText) {
+          citedText = v.citedText;
+          strength = v.strength;
+          break;
+        }
+      }
+
+      return {
+        status: 'ok' as const,
+        extractionId,
+        fieldName,
+        value: typeof field.value === 'string' ? tagExternal(field.value) : field.value,
+        citedText: citedText ? tagExternal(citedText) : null,
+        sourceSpans: field.sourceSpans,
+        confidence: meta?.confidence ?? 0,
+        strength,
       };
     },
   });

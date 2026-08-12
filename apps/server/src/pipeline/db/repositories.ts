@@ -95,6 +95,50 @@ export async function loadDocument(ctx: DbContext, docId: string, userId?: strin
   return row ? (JSON.parse(row.blockModel) as BlockModel) : null;
 }
 
+export interface ExtractionRow {
+  id: string;
+  documentId: string;
+  docType: DocType;
+  fields: Record<string, { value: string | number; sourceSpans: SourceSpan[] }>;
+  fieldMeta: Record<string, { strength: SpanMatchStrength; confidence: number }>;
+  overallConfidence: number;
+  needsReview: boolean;
+}
+
+/**
+ * Load a single extraction row by id. Used by the inspect_extraction L1 tool
+ * for on-demand field-evidence drill-down. Same userId-legacy filter as
+ * loadDocument (rows with user_id = '' / NULL stay readable by any caller).
+ * Postgres path is stubbed -- Phase 1 is SQLite-only; the pg twin lands later.
+ */
+export async function loadExtraction(
+  ctx: DbContext,
+  extractionId: string,
+  userId?: string,
+): Promise<ExtractionRow | null> {
+  if (ctx.backend === 'postgres') {
+    throw new Error('loadExtraction: postgres backend not yet implemented');
+  }
+  const uid = effectiveUserId(userId);
+  const filter = uid
+    ? and(
+        eq(extractions.id, extractionId),
+        or(eq(extractions.userId, uid), eq(extractions.userId, ''), isNull(extractions.userId)),
+      )
+    : eq(extractions.id, extractionId);
+  const row = ctx.db.select().from(extractions).where(filter).all()[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    documentId: row.documentId,
+    docType: row.docType as DocType,
+    fields: JSON.parse(row.fields as string),
+    fieldMeta: JSON.parse(row.fieldMeta as string),
+    overallConfidence: row.overallConfidence,
+    needsReview: !!row.needsReview,
+  };
+}
+
 export async function saveExtraction(ctx: DbContext, input: ExtractionInput, userId?: string): Promise<string> {
   if (ctx.backend === 'postgres') return saveExtractionPg(ctx, input, userId);
   const id = rid('EX');

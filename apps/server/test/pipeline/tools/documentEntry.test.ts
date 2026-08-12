@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { createDb, migrate } from '../../../src/pipeline/db/client.js';
 import { env } from '../../../src/env.js';
 import {
-  buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool,
+  buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool, buildInspectExtractionTool,
 } from '../../../src/pipeline/tools/documentEntry.js';
 
 let ctx: ReturnType<typeof createDb>;
@@ -128,5 +128,69 @@ describe('document-entry tools', () => {
     }
     expect(out).toHaveProperty('overallConfidence');
     expect(out).toHaveProperty('missingRequired');
+  });
+
+  it('inspect_extraction returns persisted-field evidence on demand', async () => {
+    // Seed an extraction row directly so the test does not depend on the LLM.
+    const { saveExtraction } = await import('../../../src/pipeline/db/repositories.js');
+    const f = join(dir, 'inv.txt');
+    writeFileSync(f, '发票号：INV-001\n金额：10000\n', 'utf-8');
+    const ingest = buildIngestDocumentTool({ ctx });
+    const ing: any = await ingest.execute(
+      { sourceUri: f, docType: '发票', modality: 'digital' },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+
+    const extractionId = await saveExtraction(ctx, {
+      documentId: ing.docId,
+      docType: '发票',
+      fields: { 发票号: { value: 'INV-001', sourceSpans: [] } },
+      fieldMeta: { 发票号: { strength: 'exact', confidence: 0.95 } },
+      overallConfidence: 0.95,
+      needsReview: false,
+    });
+
+    const inspect = buildInspectExtractionTool({ ctx });
+    const out: any = await inspect.execute(
+      { extractionId, fieldName: '发票号' },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+
+    expect(out.status).toBe('ok');
+    expect(out.fieldName).toBe('发票号');
+    // value is wrapped via tagExternal (output contract is 'tagged'); the raw
+    // value must come through AND be sentinel-wrapped (injection defense).
+    expect(String(out.value)).toContain('INV-001');
+    expect(String(out.value)).toContain('external_content');
+    expect(out.confidence).toBe(0.95);
+    expect(Array.isArray(out.sourceSpans)).toBe(true);
+  });
+
+  it('inspect_extraction errors on unknown field and lists available fields', async () => {
+    const { saveExtraction } = await import('../../../src/pipeline/db/repositories.js');
+    const f = join(dir, 'c.txt');
+    writeFileSync(f, 'x\n', 'utf-8');
+    const ingest = buildIngestDocumentTool({ ctx });
+    const ing: any = await ingest.execute(
+      { sourceUri: f, docType: '其他', modality: 'digital' },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+    const extractionId = await saveExtraction(ctx, {
+      documentId: ing.docId,
+      docType: '其他',
+      fields: { a: { value: '1', sourceSpans: [] } },
+      fieldMeta: { a: { strength: 'none', confidence: 0.1 } },
+      overallConfidence: 0.1,
+      needsReview: true,
+    });
+
+    const inspect = buildInspectExtractionTool({ ctx });
+    const out: any = await inspect.execute(
+      { extractionId, fieldName: 'nope' },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+    expect(out.status).toBe('error');
+    expect(out.reason).toBe('field_not_found');
+    expect(out.availableFields).toEqual(['a']);
   });
 });

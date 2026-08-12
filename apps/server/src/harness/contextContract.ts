@@ -100,6 +100,15 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'tagged', budget: 'summary', signal: 'todo',
     persist: 'business', risk: { level: 'L1', injection: 'external' },
   },
+  inspect_extraction: {
+    // On-demand drill-down for ONE already-extracted field. Returns the field
+    // value + recomputed citedText (both document-derived strings) wrapped via
+    // tagExternal -> output 'tagged' / injection 'external'. Bounded to a single
+    // field -> budget 'summary'. Read-only lookup -> risk L1. Backed by the
+    // persisted extraction row (business data) -> persist 'business'.
+    output: 'tagged', budget: 'summary', signal: 'counter',
+    persist: 'business', risk: { level: 'L1', injection: 'external' },
+  },
   bind_document: {
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
