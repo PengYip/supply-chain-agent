@@ -10,6 +10,7 @@ import {
   compressByBudget,
   createFailureTracker,
   makeCircuitBreaker,
+  type FailureTracker,
 } from './compression.js';
 import { appendStatusMessage, type AgentStatusSnapshot } from './agentStatus.js';
 import { getToolCallCounts } from './statusAggregator.js';
@@ -56,12 +57,18 @@ export const SYSTEM_PROMPT = [
 // errors (it records on success right before returning, matching the prior
 // per-tool semantics; on throw the error propagates and no record is emitted,
 // exactly as before).
-function withAudit(name: string, execute: Tool['execute']): Tool['execute'] {
+function withAudit(name: string, execute: Tool['execute'], failures?: FailureTracker): Tool['execute'] {
   if (!execute) return execute;
   return async (input: any, options: any) => {
     const start = Date.now();
     const result = await execute(input, options);
     auditRecorder.recordToolCall({ toolName: name, args: input, result, durationMs: Date.now() - start });
+    // Phase 6 T2 (book Ch5:186): record the (toolName, args) fingerprint for
+    // repeat-call loop detection. Recorded AFTER a successful execute so only
+    // completed calls (incl. structured timeout results) are fingerprinted;
+    // throwing calls are caught by the failure-tracker's consecutive-failures
+    // signal instead.
+    failures?.recordToolCall(name, input);
     return result;
   };
 }
@@ -105,7 +112,7 @@ export function withToolTimeout(
   };
 }
 
-export function buildGatedTools(role: Role, deps?: HarnessDeps): Record<string, Tool> {
+export function buildGatedTools(role: Role, deps?: HarnessDeps, failures?: FailureTracker): Record<string, Tool> {
   const list = getToolsForRole(role, deps);
   // Contract guard: no tool may go live for the model without a declared
   // tool-context contract. Fail fast (first turn) if a new tool is added to
@@ -114,7 +121,7 @@ export function buildGatedTools(role: Role, deps?: HarnessDeps): Record<string, 
   const gated: Record<string, Tool> = {};
   for (const t of list) {
     const name = t.name;
-    const audited: Tool = { ...t, execute: withAudit(name, withToolTimeout(t.execute, env.TOOL_TIMEOUT_MS, name)) };
+    const audited: Tool = { ...t, execute: withAudit(name, withToolTimeout(t.execute, env.TOOL_TIMEOUT_MS, name), failures) };
     // L2 via the permission gate (source of truth) OR a literal boolean
     // needsApproval stamped at registration (e.g. bind_document). `=== true`
     // avoids matching Tool's needsApproval-function form.
@@ -305,13 +312,15 @@ export function runStream({ messages, role, auditTraceId, model, deps, userId, s
     userId,
   };
   const ctx = harnessDeps.ctx;
-  const tools = buildGatedTools(role, harnessDeps);
   // Context compression + circuit breaker (AUTO-LOOP variant). prepareStep runs
   // compressByBudget one step LATE (the just-produced result is already
   // committed), which is acceptable for the short stepCountIs(5) internal tool.
   // withAudit already archived the FULL result to auditRecorder before the next
   // prepareStep runs, so audit/status see uncompressed data -- no re-archive.
+  // Created BEFORE buildGatedTools so withAudit can record repeat-call
+  // fingerprints into it (Phase 6 T2, book Ch5:186).
   const failures = createFailureTracker(3);
+  const tools = buildGatedTools(role, harnessDeps, failures);
   // Phase 3 status bar: append a per-turn model-facing <agent_status> snapshot
   // at the trajectory tail. The snapshot is built from existing harness state
   // (audit recorder + sessionStore + DB counts). The appended message is NEVER
@@ -331,7 +340,7 @@ export function runStream({ messages, role, auditTraceId, model, deps, userId, s
     // Kept alongside the step cap so the loop still terminates on runaway tool
     // errors. Failure count is updated by experimental_onToolCallFinish (and on
     // a prepareStep compression throw) via the shared `failures` tracker.
-    stopWhen: [stepCountIs(5), makeCircuitBreaker(() => failures.shouldStop)],
+    stopWhen: [stepCountIs(5), makeCircuitBreaker(() => failures.shouldStop || failures.isLooping)],
     // AI SDK 6 option name is `experimental_telemetry` (v7 renames to `telemetry`).
     // In tests no OTel exporter is registered (instrumentation.ts is not loaded),
     // so these spans are no-op and emit no network traffic.
