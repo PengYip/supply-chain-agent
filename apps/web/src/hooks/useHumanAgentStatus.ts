@@ -18,27 +18,31 @@ export interface AgentStatus {
  * Discriminated union so the UI can render idle / data / error states
  * without crashing on 404 (no activity yet) or transient fetch failures.
  */
-export type AgentStatusState =
+export type HumanAgentStatusState =
   | { status: 'idle' }
   | { status: 'ok'; data: AgentStatus }
   | { status: 'error' }
 
-const POLL_INTERVAL_MS = 3000
+const POLL_INTERVAL_MS = 5000
 
 /**
  * Polls the agent-status endpoint for a given chat session while the session
  * is active. Polling only runs when `sessionId` is non-null (i.e. the real-mode
- * chat has established a session) and cleans up its interval + in-flight
- * request on unmount or when the session id changes.
+ * chat has established a session) AND `active` is true (a turn is in flight),
+ * and cleans up its interval + in-flight request on unmount, when the session
+ * id changes, or when the turn goes inactive.
  *
  * 404 (no recorded activity yet) and network errors are treated as `idle`
  * rather than crashing the UI — the strip just shows the empty state.
  */
-export function useAgentStatus(sessionId: string | null): AgentStatusState {
-  const [state, setState] = useState<AgentStatusState>({ status: 'idle' })
+export function useHumanAgentStatus(
+  sessionId: string | null,
+  active = true,
+): HumanAgentStatusState {
+  const [state, setState] = useState<HumanAgentStatusState>({ status: 'idle' })
 
   useEffect(() => {
-    if (!sessionId) {
+    if (!sessionId || !active) {
       setState({ status: 'idle' })
       return
     }
@@ -79,9 +83,9 @@ export function useAgentStatus(sessionId: string | null): AgentStatusState {
       controller.abort()
       window.clearInterval(intervalId)
     }
-  }, [sessionId])
+  }, [sessionId, active])
 
   return state
 }
 
-export default useAgentStatus
+export default useHumanAgentStatus
