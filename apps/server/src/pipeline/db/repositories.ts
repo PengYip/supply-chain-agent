@@ -240,10 +240,13 @@ export async function saveDocumentTags(
   }
   const uid = effectiveUserId(userId);
   // De-dup against existing rows with the same (document, tag, source, user).
+  // 3-way OR matches listDocumentTags/loadExtraction/loadClassification (no
+  // behavioral impact today since the column is NOT NULL DEFAULT '', but
+  // consistent with siblings).
   const existing = ctx.sqlite
     .prepare(
       `SELECT tag FROM document_tags
-       WHERE document_id = ? AND source = ? AND (user_id = ? OR user_id = '')`,
+       WHERE document_id = ? AND source = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)`,
     )
     .all(documentId, source, uid) as Array<{ tag: string }>;
   const have = new Set(existing.map((r) => r.tag));

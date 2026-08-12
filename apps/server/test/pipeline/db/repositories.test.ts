@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { createDb, migrate } from '../../../src/pipeline/db/client.js';
 import {
   saveDocument, loadDocument, saveExtraction, saveBinding, listBindingsForContract,
+  saveDocumentTags, listDocumentTags,
 } from '../../../src/pipeline/db/repositories.js';
 import type { BlockModel } from '../../../src/pipeline/types.js';
 
@@ -44,5 +45,31 @@ describe('repositories', () => {
     const list = await listBindingsForContract(ctx, 'HT-2024-001');
     expect(list).toHaveLength(1);
     expect(list[0].documentId).toBe('DOC-1');
+  });
+
+  it('saveDocumentTags is idempotent per (document, tag, source, user)', async () => {
+    // Seed a real document row so the document_tags FK is satisfied.
+    await saveDocument(ctx, mkModel('DOC-TAG-1'));
+    const userId = 'user-1';
+    const tags = ['合同', '信用证'];
+
+    // First write: seeds both rows.
+    await saveDocumentTags(ctx, 'DOC-TAG-1', tags, 'auto', userId);
+    const rowsBefore = await listDocumentTags(ctx, 'DOC-TAG-1', userId);
+    expect(rowsBefore).toHaveLength(2);
+
+    // Second write with the SAME (document, tag, source, user): MUST not grow.
+    // This is the load-bearing invariant -- fails if anyone removes the dedup
+    // guard (and the UNIQUE index backstop turns a regression into a loud
+    // constraint error instead of silent duplicate rows).
+    await saveDocumentTags(ctx, 'DOC-TAG-1', tags, 'auto', userId);
+    const rowsAfter = await listDocumentTags(ctx, 'DOC-TAG-1', userId);
+
+    // No-growth + order stability (both queries use the same ORDER BY tag ASC).
+    expect(rowsAfter).toEqual(rowsBefore);
+    expect(rowsAfter).toHaveLength(2);
+    // Pin the exact survivor set (order-independent content check).
+    expect(rowsAfter.map((r) => r.tag).sort()).toEqual(['信用证', '合同']);
+    expect(rowsAfter.every((r) => r.source === 'auto')).toBe(true);
   });
 });

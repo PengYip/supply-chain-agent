@@ -99,6 +99,12 @@ export function migrate(sqlite: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_document_tags_doc ON document_tags(document_id);
     CREATE INDEX IF NOT EXISTS idx_document_tags_user ON document_tags(user_id);
+    -- Structural idempotency backstop for saveDocumentTags. The app-layer
+    -- pre-read + dedup is the primary guard in serial operation, so this index
+    -- does not fire normally; it converts any future app-bug (or race) into a
+    -- UNIQUE constraint violation instead of silent duplicate rows. Safe to add
+    -- now because the table is brand-new (no existing rows to dedup).
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_document_tags_unique ON document_tags(document_id, tag, source, user_id);
 
     -- File manager (Phase 3+): virtual folders owned per-user. Files themselves
     -- live in MinIO; this table only records folder entries.
