@@ -28,6 +28,9 @@ const EXPECTED_TOOLS = [
   'execute_code',
   'inspect_extraction',
   'tag_document',
+  'create_entity',
+  'link_entities',
+  'graph_query',
 ] as const;
 
 describe('tool-context contract registry', () => {

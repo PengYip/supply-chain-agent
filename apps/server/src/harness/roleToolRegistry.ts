@@ -8,6 +8,7 @@ import {
 } from '../pipeline/tools/documentEntry.js';
 import { buildRecallDocumentsTool } from '../pipeline/tools/recall.js';
 import { buildExecuteCodeTool } from '../pipeline/tools/executeCode.js';
+import { buildCreateEntityTool, buildLinkEntitiesTool, buildGraphQueryTool } from '../graph/tools.js';
 import type { DbContext } from '../pipeline/db/client.js';
 import type { ExtractionDeps } from '../pipeline/extraction.js';
 import type { ClassifierDeps } from '../pipeline/classifier.js';
@@ -69,7 +70,7 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
 
 // Doc-entry + recall tool names are part of the trader's capability set even
 // though constructing their instances requires a DbContext (see getToolsForRole).
-const TRADER_CTX_TOOL_NAMES = ['ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document'] as const;
+const TRADER_CTX_TOOL_NAMES = ['ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query'] as const;
 
 export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
   const base: GatedTool[] = (BASE_TOOLS_FOR_ROLE[role] ?? []).map((t) => ({ ...t }));
@@ -86,6 +87,11 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
       // tag_document is L2: explicit user/agent labels, post-ingest, any time.
       // needsApproval = soft gate (v6): the agent must have user consent to label.
       { ...buildTagDocumentTool({ ctx, userId }), name: 'tag_document', needsApproval: true },
+      // Graph layer (§7): create/link/query entities in Neo4j. All L2 (mutate
+      // graph state / soft gate). Builders take no deps (use getDriver() directly).
+      { ...buildCreateEntityTool(), name: 'create_entity', needsApproval: true },
+      { ...buildLinkEntitiesTool(), name: 'link_entities', needsApproval: true },
+      { ...buildGraphQueryTool(), name: 'graph_query', needsApproval: true },
       // recall_documents is L1: FTS5/vector/hybrid recall over ingested chunks.
       { ...buildRecallDocumentsTool({ ctx, embedder, userId }), name: 'recall_documents' },
       // execute_code is L1: run Python in an isolated CubeSandbox microVM.

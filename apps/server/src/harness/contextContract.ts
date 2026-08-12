@@ -121,6 +121,23 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
   },
+  // Graph layer (§7): create/link/query entities in Neo4j. Agent-supplied open
+  // kind/name/props are trusted input (no document-derived text returned), so
+  // output 'raw' / injection 'safe'. Returns short handles/summaries -> budget
+  // 'full'. Mutates/persists to the graph store -> signal 'env', persist 'graph'
+  // (the new recall target). All L2 soft-gate writes.
+  create_entity: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'graph', risk: { level: 'L2', injection: 'safe' },
+  },
+  link_entities: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'graph', risk: { level: 'L2', injection: 'safe' },
+  },
+  graph_query: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'graph', risk: { level: 'L2', injection: 'safe' },
+  },
   recall_documents: {
     // Returns BM25 snippets of ingested document text -> external content, so
     // output is 'tagged' (injectionDefense wraps each snippet, like extract_fields).
