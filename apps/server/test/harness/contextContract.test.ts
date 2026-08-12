@@ -17,7 +17,6 @@ const EXPECTED_TOOLS = [
   'query_contract',
   'query_orders',
   'cross_check',
-  'link_document',
   'create_payment',
   'escalate_to_human',
   'verify_document_fields',
@@ -49,6 +48,13 @@ describe('tool-context contract registry', () => {
     expect(Object.keys(TOOL_CONTEXT_CONTRACTS).sort()).toEqual(
       [...EXPECTED_TOOLS].sort(),
     );
+  });
+
+  it('link_document is no longer a registered trader tool (retired in Phase 4)', () => {
+    // The volatile in-memory link_document tool was retired in favor of the
+    // Neo4j graph tools (create_entity/link_entities/graph_query). It must not
+    // reappear in the live trader toolset.
+    expect(listToolNames('trader')).not.toContain('link_document');
   });
 
   it('getContract returns the registered contract', () => {

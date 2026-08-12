@@ -76,10 +76,6 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'counter',
     persist: 'business', risk: { level: 'L1', injection: 'safe' },
   },
-  link_document: {
-    output: 'raw', budget: 'full', signal: 'env',
-    persist: 'business', risk: { level: 'L2', injection: 'safe' },
-  },
   create_payment: {
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L3', injection: 'safe' },

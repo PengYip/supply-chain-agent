@@ -1,6 +1,6 @@
 import type { Tool } from 'ai';
 import { queryContract, queryOrders, crossCheck } from '../tools/queries.js';
-import { linkDocument, createPayment } from '../tools/writes.js';
+import { createPayment } from '../tools/writes.js';
 import { escalateToHuman, verifyDocumentFields } from '../tools/hitl.js';
 import {
   buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool, buildInspectExtractionTool,
@@ -61,7 +61,6 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
     { ...queryContract, name: 'query_contract' },
     { ...queryOrders, name: 'query_orders' },
     { ...crossCheck, name: 'cross_check' },
-    { ...linkDocument, name: 'link_document' },
     { ...createPayment, name: 'create_payment' },
     { ...escalateToHuman, name: 'escalate_to_human' },
     { ...verifyDocumentFields, name: 'verify_document_fields' },

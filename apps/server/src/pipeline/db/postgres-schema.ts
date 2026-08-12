@@ -7,8 +7,10 @@
 // The first four tables (documents / extractions / bindings / doc_chunk) MIRROR
 // the SQLite schema in db/schema.ts + the raw DDL in db/client.ts, column-for-
 // column. doc_chunk here additionally carries the §7 vector + FTS columns. The
-// doc_contract + document_relation tables implement the §7 design DDL (数字零幻觉
-// source traceability + inter-document relations) that has no SQLite equivalent.
+// §7 inter-document relation / contract-ledger tables (document_relation /
+// doc_contract) that previously lived here were REMOVED in Phase 4 — they were
+// dead code (no repo fn wrote them) and are superseded by the Neo4j graph
+// layer (graph/repo.ts + graph/tools.ts).
 //
 // DEPENDENCY NOTE: drizzle-orm/pg-core ships with drizzle-orm (no new install).
 // The pgvector `vector` type is declared via a customType below instead of
@@ -28,11 +30,8 @@ import {
   jsonb,
   serial,
   index,
-  uniqueIndex,
-  check,
   customType,
 } from 'drizzle-orm/pg-core';
-import { sql } from 'drizzle-orm';
 
 // ---- pgvector + tsvector column types (no new deps) ------------------------
 
@@ -162,74 +161,6 @@ export const docChunk = pgTable(
   },
   (t) => ({
     docIdx: index('idx_doc_chunk_doc').on(t.documentId),
-  }),
-);
-
-// ---- §7 design tables: contract ledger + inter-document relations ----------
-
-/**
- * doc_contract: the trusted contract ledger. The 数字零幻觉 (zero-hallucination)
- * source triple (source_file / source_page / voucher_no) traces every monetary
- * figure back to a verifiable source location, and file_hash enables idempotent
- * re-ingest dedup (same file -> same hash -> skip or upsert, never duplicate).
- */
-export const docContract = pgTable(
-  'doc_contract',
-  {
-    contractNo: text('contract_no').primaryKey(),
-    amount: numeric('amount', { precision: 18, scale: 2 }),
-    currency: text('currency').default('CNY'),
-    signDate: timestamp('sign_date', { withTimezone: true }),
-    // 数字零幻觉 source traceability triple:
-    sourceFile: text('source_file'),
-    sourcePage: integer('source_page'),
-    voucherNo: text('voucher_no'),
-    // Idempotent dedup: hash of the source bytes (re-ingest detection).
-    fileHash: text('file_hash'),
-    createdAt: nowTs(),
-  },
-  (t) => ({
-    fileHashUnique: uniqueIndex('idx_doc_contract_file_hash').on(t.fileHash),
-  }),
-);
-
-/** Allowed inter-document relation types (CHECK-validated enum). */
-export const DOCUMENT_RELATION_TYPES = [
-  '补充协议',
-  '验收单',
-  '付款单',
-  '发票',
-  '关联交易',
-] as const;
-export type DocumentRelationType = (typeof DOCUMENT_RELATION_TYPES)[number];
-
-/**
- * document_relation: typed edges between documents (e.g. an invoice supplemental
- * to a contract). relation_type is CHECK-constrained to the §7 enum; source_clause
- * + confidence preserve the grounding provenance of the link itself.
- */
-export const documentRelation = pgTable(
-  'document_relation',
-  {
-    id: serial('id').primaryKey(),
-    sourceDoc: text('source_doc')
-      .notNull()
-      .references(() => documents.id),
-    targetDoc: text('target_doc')
-      .notNull()
-      .references(() => documents.id),
-    relationType: text('relation_type').notNull(),
-    sourceClause: text('source_clause'),
-    confidence: numeric('confidence', { precision: 5, scale: 4 }),
-    createdAt: nowTs(),
-  },
-  (t) => ({
-    relationTypeCheck: check(
-      'document_relation_type_check',
-      sql`${t.relationType} IN ('补充协议', '验收单', '付款单', '发票', '关联交易')`,
-    ),
-    sourceIdx: index('idx_document_relation_source').on(t.sourceDoc),
-    targetIdx: index('idx_document_relation_target').on(t.targetDoc),
   }),
 );
 

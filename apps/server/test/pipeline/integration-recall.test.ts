@@ -272,9 +272,10 @@ describe('integration: document-entry -> hybrid recall chain', () => {
       embedder,
     });
     const names = tools.map((t) => t.name);
-    // The 7 base + 3 doc-entry + recall_documents + execute_code + inspect_extraction + tag_document
-    // + create_entity + link_entities + graph_query = 17 live trader tools.
-    expect(names).toHaveLength(17);
+    // base 6 (link_document retired in Phase 4) + 3 doc-entry + recall_documents
+    // + execute_code + inspect_extraction + tag_document + create_entity +
+    // link_entities + graph_query = 16 live trader tools.
+    expect(names).toHaveLength(16);
     expect(names).toContain('recall_documents');
     expect(names).toContain('ingest_document');
     expect(names).toContain('extract_fields');

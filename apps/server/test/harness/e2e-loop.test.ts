@@ -116,10 +116,11 @@ describe('agent e2e loop (stub model)', () => {
     // (d) stream + telemetry path completes without throwing.
     expect(threw).toBe(false);
 
-    // (a) the live streamText call received the full trader toolset (base 7 +
-    // 3 doc-entry + recall_documents + execute_code + inspect_extraction + tag_document
-    // + create_entity + link_entities + graph_query = 17).
-    expect(capturedNames).toHaveLength(17);
+    // (a) the live streamText call received the full trader toolset. base 6
+    // (link_document retired in Phase 4) + 3 doc-entry + recall_documents +
+    // execute_code + inspect_extraction + tag_document + create_entity +
+    // link_entities + graph_query = 16.
+    expect(capturedNames).toHaveLength(16);
     for (const n of ['ingest_document', 'extract_fields', 'bind_document', 'query_contract', 'create_payment', 'recall_documents']) {
       expect(capturedNames).toContain(n);
     }

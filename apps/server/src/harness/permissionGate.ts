@@ -57,7 +57,6 @@ registerPermission('inspect_extraction', 'L1'); // on-demand field-evidence dril
 registerPermission('recall_documents', 'L1'); // T6: FTS5 keyword recall over chunks
 registerPermission('execute_code', 'L1'); // CubeSandbox: isolated Python execution
 // L2 write confirm
-registerPermission('link_document', 'L2');
 registerPermission('advance_contract_stage', 'L2');
 registerPermission('bind_document', 'L2'); // T9: bind document to contract
 registerPermission('tag_document', 'L2'); // Phase 2: explicit document labeling

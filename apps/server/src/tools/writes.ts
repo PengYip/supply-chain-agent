@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
-import { linkDocumentToContract, recordPayment } from '../data/seed.js';
+import { recordPayment } from '../data/seed.js';
 import {
   recordPendingApproval,
   isAuthorized,
@@ -14,34 +14,11 @@ import { getSessionContext } from '../harness/sessionContext.js';
 //
 // H4: per-tool audit recording was removed -- every tool call is now wrapped
 // centrally by `withAudit` in src/harness/agent.ts (buildGatedTools).
-
-// ---- link_document (L2: write, needs user confirmation) ---------------------
-
-const linkDocumentSchema = z.object({
-  contractNo: z.string().describe('目标合同号，如 HT-2024-001'),
-  documentId: z
-    .string()
-    .describe('要挂接的单据号，如提单号 BL-2024-0920-002'),
-});
-
-export const linkDocument = tool({
-  description:
-    '把单据（提单/发票等）挂接到指定合同。属于写操作，需用户确认后才会真正执行。',
-  inputSchema: linkDocumentSchema,
-  execute: async ({ contractNo, documentId }) => {
-    const res = linkDocumentToContract(contractNo, documentId);
-    const result = res.ok
-      ? {
-          ok: true as const,
-          contractNo: res.contractNo,
-          documentId,
-          changeId: res.changeId,
-          linkedAt: res.linkedAt,
-        }
-      : { ok: false as const, reason: res.reason };
-    return result;
-  },
-});
+//
+// Phase 4: the link_document tool was RETIRED in favor of the Neo4j graph tools
+// (create_entity / link_entities / graph_query). The underlying
+// linkDocumentToContract helper remains in data/seed.ts (used by bind_document,
+// which dual-writes to it); only the tool wrapper + its registrations are gone.
 
 // ---- create_payment (L3: money / irreversible, external approval) -----------
 //
