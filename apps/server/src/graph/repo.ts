@@ -4,9 +4,10 @@ import { getDriver } from './neo4j.js';
 /**
  * Relation graph layer (design §7). Neo4j-primary, open schema: node label and
  * relationship type are open strings (validated identifiers); props are JSON.
- * Dynamic labels/types use the injection-safe $($kind) form (Neo4j >= 5.26);
- * assertToken + interpolation is the <5.26 fallback and is always used for
- * constraint DDL (which cannot use $($kind)).
+ * Dynamic labels/types use the injection-safe $($kind) parameter form, which
+ * REQUIRES Neo4j >= 5.26. No runtime fallback is wired; the deployment target
+ * (ubuntu-server container neo4j-db) is verified 5.26.10. assertToken is used
+ * ONLY for the constraint DDL, which cannot use $($kind).
  */
 
 export type EntityKind = string;
