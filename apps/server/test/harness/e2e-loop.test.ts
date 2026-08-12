@@ -93,7 +93,7 @@ describe('agent e2e loop (stub model)', () => {
     });
 
     const messages: ModelMessage[] = [{ role: 'user', content: '请录入这份合同' }];
-    const result = runStream({
+    const result = await runStream({
       messages,
       role: 'trader',
       auditTraceId: 'e2e-trace',

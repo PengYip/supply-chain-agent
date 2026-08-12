@@ -20,20 +20,20 @@ describe('buildAgentStatusSnapshot', () => {
       .run();
   });
 
-  it('aggregates per-tool counts, pending approvals, and DB progress counts', () => {
+  it('aggregates per-tool counts, pending approvals, and DB progress counts', async () => {
     const records: ToolCallRecord[] = [
       { toolName: 'ingest_document', args: {}, result: {}, durationMs: 1, timestamp: 't', sessionId: 's1' },
       { toolName: 'ingest_document', args: {}, result: {}, durationMs: 1, timestamp: 't', sessionId: 's1' },
     ];
-    const snap = buildAgentStatusSnapshot({ sessionId: 's1', userId: 'alice', ctx, recorder: { records } });
+    const snap = await buildAgentStatusSnapshot({ sessionId: 's1', userId: 'alice', ctx, recorder: { records } });
     expect(snap.toolCounts).toEqual([{ tool: 'ingest_document', count: 2 }]);
     expect(snap.totalCalls).toBe(2);
     expect(snap.docsIngested).toBe(1);
     expect(snap.extractionsPendingReview).toBe(1);
   });
 
-  it('reports zero pending approvals for an unknown session', () => {
-    const snap = buildAgentStatusSnapshot({
+  it('reports zero pending approvals for an unknown session', async () => {
+    const snap = await buildAgentStatusSnapshot({
       sessionId: 'never-existed',
       userId: 'alice',
       ctx,

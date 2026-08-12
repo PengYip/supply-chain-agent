@@ -137,7 +137,7 @@ function createReasoningFakeModel(opts: FakeModelOptions) {
   };
 }
 
-function drain(result: ReturnType<typeof runStream>): Promise<void> {
+function drain(result: Awaited<ReturnType<typeof runStream>>): Promise<void> {
   return new Promise((resolve, reject) => {
     void (async () => {
       try {
@@ -179,7 +179,7 @@ describe('reasoning_content resume survival (Task 4)', () => {
     });
 
     const messages: ModelMessage[] = [{ role: 'user', content: '请录入这份合同' }];
-    const result = runStream({
+    const result = await runStream({
       messages,
       role: 'trader',
       auditTraceId: 'reasoning-trace',
@@ -236,7 +236,7 @@ describe('reasoning_content resume survival (Task 4)', () => {
     });
 
     // Turn 1: produce messages that include reasoning + a tool call, persist.
-    const result1 = runStream({
+    const result1 = await runStream({
       messages: [{ role: 'user', content: '请录入这份合同' }],
       role: 'trader',
       auditTraceId: 'reasoning-resume-1',
@@ -256,7 +256,7 @@ describe('reasoning_content resume survival (Task 4)', () => {
     let threw = false;
     let errorMsg = '';
     try {
-      const result2 = runStream({
+      const result2 = await runStream({
         messages: loaded.messages,
         role: 'trader',
         auditTraceId: 'reasoning-resume-2',

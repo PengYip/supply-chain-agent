@@ -102,17 +102,17 @@ describe('countDocuments / countExtractionsNeedingReview', () => {
       .run();
   });
 
-  it('counts documents scoped by userId plus legacy rows', () => {
-    expect(countDocuments(ctx, 'alice')).toBe(2); // d1 (alice) + d2 (legacy '')
+  it('counts documents scoped by userId plus legacy rows', async () => {
+    expect(await countDocuments(ctx, 'alice')).toBe(2); // d1 (alice) + d2 (legacy '')
   });
 
-  it('counts extractions needing review scoped by userId plus legacy rows', () => {
-    expect(countExtractionsNeedingReview(ctx, 'alice')).toBe(1); // only e1 (needs_review=1)
+  it('counts extractions needing review scoped by userId plus legacy rows', async () => {
+    expect(await countExtractionsNeedingReview(ctx, 'alice')).toBe(1); // only e1 (needs_review=1)
   });
 
-  it('with no userId counts only legacy rows', () => {
-    expect(countDocuments(ctx)).toBe(1); // only d2 (user_id='')
-    expect(countExtractionsNeedingReview(ctx)).toBe(0); // e2 legacy but needs_review=0
+  it('with no userId counts only legacy rows', async () => {
+    expect(await countDocuments(ctx)).toBe(1); // only d2 (user_id='')
+    expect(await countExtractionsNeedingReview(ctx)).toBe(0); // e2 legacy but needs_review=0
   });
 });
 
@@ -176,7 +176,7 @@ describe('deleteDocument (cascade)', () => {
 
   it('removes the documents row and all dependents (chunks/fts/extractions/classifications/bindings/document_tags)', async () => {
     expect(await loadDocument(ctx, 'D1', userId)).toBeTruthy();
-    const res = deleteDocument(ctx, 'D1', userId);
+    const res = await deleteDocument(ctx, 'D1', userId);
     expect(res.deleted).toBe(true);
 
     // documents row gone.
@@ -198,12 +198,12 @@ describe('deleteDocument (cascade)', () => {
   });
 
   it('deleteDocument on a missing docId returns { deleted: false } and is a no-op', async () => {
-    expect(deleteDocument(ctx, 'nope', userId).deleted).toBe(false);
+    expect((await deleteDocument(ctx, 'nope', userId)).deleted).toBe(false);
     expect(await loadDocument(ctx, 'D1', userId)).toBeTruthy(); // untouched
   });
 
   it('deleteDocument respects userId isolation (other user cannot delete)', async () => {
-    expect(deleteDocument(ctx, 'D1', 'bob').deleted).toBe(false);
+    expect((await deleteDocument(ctx, 'D1', 'bob')).deleted).toBe(false);
     expect(await loadDocument(ctx, 'D1', userId)).toBeTruthy(); // still present
     expect(await loadDocument(ctx, 'D2', userId)).toBeTruthy(); // untouched
   });

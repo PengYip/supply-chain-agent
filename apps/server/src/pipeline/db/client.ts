@@ -201,6 +201,33 @@ export async function migratePostgres(pool: Pool): Promise<void> {
        created_at timestamptz NOT NULL DEFAULT NOW()
      )`,
     `CREATE INDEX IF NOT EXISTS idx_file_folders_user ON file_folders(user_id)`,
+    // classifications: mirror of the SQLite table in migrate(). numeric(5,4) for
+    // confidence matches extractions.overall_confidence pg convention.
+    `CREATE TABLE IF NOT EXISTS classifications (
+       id TEXT PRIMARY KEY,
+       document_id TEXT NOT NULL REFERENCES documents(id),
+       doc_type TEXT NOT NULL,
+       confidence numeric(5,4) NOT NULL,
+       source TEXT NOT NULL,
+       hint TEXT,
+       user_id TEXT NOT NULL DEFAULT '',
+       created_at timestamptz NOT NULL DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_classifications_doc ON classifications(document_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_classifications_user ON classifications(user_id)`,
+    // document_tags: mirror of the SQLite table in migrate().
+    `CREATE TABLE IF NOT EXISTS document_tags (
+       id TEXT PRIMARY KEY,
+       document_id TEXT NOT NULL REFERENCES documents(id),
+       tag TEXT NOT NULL,
+       source TEXT NOT NULL,
+       user_id TEXT NOT NULL DEFAULT '',
+       created_at timestamptz NOT NULL DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_document_tags_doc ON document_tags(document_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_document_tags_user ON document_tags(user_id)`,
+    // Structural idempotency backstop for saveDocumentTags (see SQLite DDL comment).
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_document_tags_unique ON document_tags(document_id, tag, source, user_id)`,
   ];
   try {
     for (const sql of statements) {

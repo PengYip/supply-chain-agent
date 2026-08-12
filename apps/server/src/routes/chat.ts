@@ -159,7 +159,7 @@ chatRoute.post('/chat', async (c) => {
   }
 
   try {
-    const result = runStream({
+    const result = await runStream({
       messages: streamMessages,
       role: agentRole,
       auditTraceId,

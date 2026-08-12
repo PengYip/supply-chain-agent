@@ -20,6 +20,15 @@ import {
   listFileFoldersPg,
   createFileFolderPg,
   deleteFileFolderPg,
+  // pg parity for the previously-stubbed fns.
+  countDocumentsPg,
+  countExtractionsNeedingReviewPg,
+  loadExtractionPg,
+  saveClassificationPg,
+  loadClassificationPg,
+  saveDocumentTagsPg,
+  listDocumentTagsPg,
+  deleteDocumentPg,
 } from './postgres-repositories.js';
 
 // Phase 2 business-data isolation: a normalized userId is '' / undefined when the
@@ -32,12 +41,10 @@ export function effectiveUserId(userId?: string): string {
 
 /**
  * Count document rows visible to the caller (caller's own rows + legacy
- * user_id='' / NULL rows). SQLite-only this phase; postgres stubbed.
+ * user_id='' / NULL rows).
  */
-export function countDocuments(ctx: DbContext, userId?: string): number {
-  if (ctx.backend === 'postgres') {
-    throw new Error('countDocuments: postgres backend not yet implemented');
-  }
+export async function countDocuments(ctx: DbContext, userId?: string): Promise<number> {
+  if (ctx.backend === 'postgres') return countDocumentsPg(ctx, userId);
   const uid = effectiveUserId(userId);
   const row = ctx.sqlite
     .prepare(
@@ -49,13 +56,10 @@ export function countDocuments(ctx: DbContext, userId?: string): number {
 
 /**
  * Count extraction rows flagged needs_review visible to the caller. needs_review
- * is stored INTEGER 0/1 (drizzle boolean mode); SQL filters on needs_review = 1.
- * SQLite-only this phase; postgres stubbed.
+ * is stored INTEGER 0/1 on SQLite (drizzle boolean mode); on pg it is boolean.
  */
-export function countExtractionsNeedingReview(ctx: DbContext, userId?: string): number {
-  if (ctx.backend === 'postgres') {
-    throw new Error('countExtractionsNeedingReview: postgres backend not yet implemented');
-  }
+export async function countExtractionsNeedingReview(ctx: DbContext, userId?: string): Promise<number> {
+  if (ctx.backend === 'postgres') return countExtractionsNeedingReviewPg(ctx, userId);
   const uid = effectiveUserId(userId);
   const row = ctx.sqlite
     .prepare(
@@ -144,16 +148,13 @@ export interface ExtractionRow {
  * Load a single extraction row by id. Used by the inspect_extraction L1 tool
  * for on-demand field-evidence drill-down. Same userId-legacy filter as
  * loadDocument (rows with user_id = '' / NULL stay readable by any caller).
- * Postgres path is stubbed -- Phase 1 is SQLite-only; the pg twin lands later.
  */
 export async function loadExtraction(
   ctx: DbContext,
   extractionId: string,
   userId?: string,
 ): Promise<ExtractionRow | null> {
-  if (ctx.backend === 'postgres') {
-    throw new Error('loadExtraction: postgres backend not yet implemented');
-  }
+  if (ctx.backend === 'postgres') return loadExtractionPg(ctx, extractionId, userId);
   const uid = effectiveUserId(userId);
   const filter = uid
     ? and(
@@ -197,9 +198,7 @@ export async function saveClassification(
   input: ClassificationInput,
   userId?: string,
 ): Promise<string> {
-  if (ctx.backend === 'postgres') {
-    throw new Error('saveClassification: postgres backend not yet implemented');
-  }
+  if (ctx.backend === 'postgres') return saveClassificationPg(ctx, input, userId);
   const id = rid('CL');
   ctx.db.insert(classifications).values({
     id,
@@ -216,16 +215,14 @@ export async function saveClassification(
 /**
  * Load the classification row for a document (most recent if multiple). Same
  * userId-legacy filter as loadExtraction (rows with user_id = '' / NULL stay
- * readable by any caller). Postgres path stubbed -- Phase 2 is SQLite-only.
+ * readable by any caller).
  */
 export async function loadClassification(
   ctx: DbContext,
   documentId: string,
   userId?: string,
 ): Promise<ClassificationRow | null> {
-  if (ctx.backend === 'postgres') {
-    throw new Error('loadClassification: postgres backend not yet implemented');
-  }
+  if (ctx.backend === 'postgres') return loadClassificationPg(ctx, documentId, userId);
   const uid = effectiveUserId(userId);
   const filter = uid
     ? and(
@@ -270,9 +267,7 @@ export async function saveDocumentTags(
   source: DocumentTagSource,
   userId?: string,
 ): Promise<void> {
-  if (ctx.backend === 'postgres') {
-    throw new Error('saveDocumentTags: postgres backend not yet implemented');
-  }
+  if (ctx.backend === 'postgres') return saveDocumentTagsPg(ctx, documentId, tags, source, userId);
   const uid = effectiveUserId(userId);
   // De-dup against existing rows with the same (document, tag, source, user).
   // 3-way OR matches listDocumentTags/loadExtraction/loadClassification (no
@@ -301,16 +296,14 @@ export async function saveDocumentTags(
 
 /**
  * List all tags for a document (both sources), tag ascending. Same userId-legacy
- * filter as loadExtraction. Postgres path stubbed -- Phase 2 is SQLite-only.
+ * filter as loadExtraction.
  */
 export async function listDocumentTags(
   ctx: DbContext,
   documentId: string,
   userId?: string,
 ): Promise<DocumentTagRow[]> {
-  if (ctx.backend === 'postgres') {
-    throw new Error('listDocumentTags: postgres backend not yet implemented');
-  }
+  if (ctx.backend === 'postgres') return listDocumentTagsPg(ctx, documentId, userId);
   const uid = effectiveUserId(userId);
   const rows = uid
     ? ctx.sqlite
@@ -564,15 +557,12 @@ export async function getChunkMetaByRowids(
  * guarded on table existence so the cascade works on DBs without the extension.
  * Returns { deleted: true } if the documents row existed (and was removed),
  * { deleted: false } if not found / not visible to this user.
- * Postgres backend: throw (not yet implemented) -- mirror sibling pg-throws.
  *
  * Security: chunkIds are integers read from our own DB (not user input), so
  * interpolating them into `IN (...)` is safe. docId/uid stay parameterized.
  */
-export function deleteDocument(ctx: DbContext, docId: string, userId?: string): { deleted: boolean } {
-  if (ctx.backend === 'postgres') {
-    throw new Error('deleteDocument: postgres backend not yet implemented');
-  }
+export async function deleteDocument(ctx: DbContext, docId: string, userId?: string): Promise<{ deleted: boolean }> {
+  if (ctx.backend === 'postgres') return deleteDocumentPg(ctx, docId, userId);
   const uid = effectiveUserId(userId);
   const sqlite = ctx.sqlite;
   // Verify ownership/visibility first (3-way OR legacy filter, same as loadDocument).

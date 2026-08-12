@@ -67,7 +67,7 @@ async function drainToolCall(toolName: string, input: unknown) {
   migrate(ctx.sqlite);
   const fake = createFakeModel({ toolCall: { id: 'c1', toolName, input } });
   const messages: ModelMessage[] = [{ role: 'user', content: 'go' }];
-  const result = runStream({
+  const result = await runStream({
     messages,
     role: 'trader',
     auditTraceId: 'h4',

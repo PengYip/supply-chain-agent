@@ -268,24 +268,25 @@ export interface BuildAgentStatusSnapshotOpts {
 /**
  * Assemble the model-facing status snapshot (design §9.2) from existing harness
  * sources: per-tool counts (auditRecorder), pending approvals (sessionStore),
- * and DB progress counts (repositories). Sync because better-sqlite3 is sync.
+ * and DB progress counts (repositories). Async because the pg count fns are
+ * async (better-sqlite3 is sync, but both branches share the async signature).
  * `recorder` defaults to the process-wide singleton; tests pass a local one for
  * deterministic isolation.
  */
-export function buildAgentStatusSnapshot({
+export async function buildAgentStatusSnapshot({
   sessionId,
   userId,
   ctx,
   recorder = auditRecorder,
-}: BuildAgentStatusSnapshotOpts): AgentStatusSnapshot {
+}: BuildAgentStatusSnapshotOpts): Promise<AgentStatusSnapshot> {
   const toolCounts = getToolCallCounts(sessionId, recorder);
   const totalCalls = toolCounts.reduce((sum, t) => sum + t.count, 0);
   return {
     toolCounts,
     totalCalls,
     pendingApprovals: countPendingApprovals(sessionId),
-    docsIngested: countDocuments(ctx, userId),
-    extractionsPendingReview: countExtractionsNeedingReview(ctx, userId),
+    docsIngested: await countDocuments(ctx, userId),
+    extractionsPendingReview: await countExtractionsNeedingReview(ctx, userId),
   };
 }
 
@@ -297,7 +298,7 @@ export function buildAgentStatusSnapshot({
 // to pre-H1 behavior. When supplied (tests), no provider client is constructed and
 // no network/env is required, so the agent loop can be exercised offline against
 // a canned fake model + in-memory DbContext.
-export function runStream({ messages, role, auditTraceId, model, deps, userId, sessionId }: RunStreamOpts) {
+export async function runStream({ messages, role, auditTraceId, model, deps, userId, sessionId }: RunStreamOpts) {
   // Production default: real DeepSeek model. If a model was injected, skip
   // building the provider client so tests need no API key / network.
   //
@@ -342,7 +343,7 @@ export function runStream({ messages, role, auditTraceId, model, deps, userId, s
   // (audit recorder + sessionStore + DB counts). The appended message is NEVER
   // persisted (only appendMessages() is, which stores the real conversation),
   // so the status message is replaced fresh on every turn.
-  const snapshot = sessionId ? buildAgentStatusSnapshot({ sessionId, userId, ctx }) : null;
+  const snapshot = sessionId ? await buildAgentStatusSnapshot({ sessionId, userId, ctx }) : null;
   const messagesForModel = appendStatusMessage(messages, snapshot);
   return streamText({
     // Chat Completions API (.chat) -- DeepSeek's Responses-API compatibility

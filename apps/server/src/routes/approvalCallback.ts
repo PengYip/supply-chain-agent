@@ -37,7 +37,7 @@ function isModelNotFound(message: string): boolean {
 // Resume a session: re-run the agent over the full persisted history (including
 // the message the caller just appended) and return the stream. Persists the
 // assistant response and records any new L2 pending approvals when done.
-function resumeSession(sessionId: string): Response {
+async function resumeSession(sessionId: string): Promise<Response> {
   setSessionContext(sessionId);
   const session = loadSession(sessionId);
   const role: Role = (session?.role ?? 'trader') as Role;
@@ -57,7 +57,7 @@ function resumeSession(sessionId: string): Response {
   // expose the session owner, so the Phase 3 status-bar counts on the resume
   // path are unscoped. (The authenticated user.id IS available in the route
   // handler; threading it for scoped resume-path counts is a future improvement.)
-  const result = runStream({ messages, role, auditTraceId, sessionId });
+  const result = await runStream({ messages, role, auditTraceId, sessionId });
   // `result.response` is a PromiseLike (no .catch), so use the 2-arg .then.
   result.response.then(
     (r) => {
@@ -165,7 +165,7 @@ approvalCallback.post('/approval/callback', async (c) => {
         sessionId: pending.session_id,
       }),
     );
-    return resumeSession(pending.session_id);
+    return await resumeSession(pending.session_id);
   }
 
   // ---- L2: inline soft-gate approval ----
@@ -207,5 +207,5 @@ approvalCallback.post('/approval/callback', async (c) => {
       sessionId: pending.session_id,
     }),
   );
-  return resumeSession(pending.session_id);
+  return await resumeSession(pending.session_id);
 });

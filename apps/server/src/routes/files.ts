@@ -331,7 +331,7 @@ filesRoute.delete('/:key', requireRole('admin', 'trader'), async (c) => {
   const docIdMap = await findDocIdsByMinioKeys(ctx(), [key], user.id);
   const docId = docIdMap.get(key);
   if (docId) {
-    deleteDocument(ctx(), docId, user.id);
+    await deleteDocument(ctx(), docId, user.id);
   }
   // Always attempt the MinIO object removal (orphan cleanup even if no doc row).
   try {

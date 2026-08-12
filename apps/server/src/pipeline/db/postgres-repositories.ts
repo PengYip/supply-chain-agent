@@ -25,6 +25,11 @@ import type {
   ChunkInput,
   ChunkMatch,
   ChunkMeta,
+  ExtractionRow,
+  ClassificationInput,
+  ClassificationRow,
+  DocumentTagSource,
+  DocumentTagRow,
 } from './repositories.js';
 
 // Phase 2 business-data isolation: same convention as repositories.ts -- a
@@ -273,6 +278,190 @@ export async function getChunkMetaByRowidsPg(
     });
   }
   return out;
+}
+
+// ---- Counts / extraction load / classification / tags / cascade delete -------
+//
+// pg parity for the previously-stubbed fns in repositories.ts. Each mirrors its
+// SQLite twin 1:1; raw parameterized SQL over the Pool. jsonb auto-parses on
+// read; numeric(p,s) comes back as STRING so Number() on read; pg needs_review
+// is boolean so filter with `= true` (not `= 1`).
+
+export async function countDocumentsPg(ctx: PostgresDbContext, userId?: string): Promise<number> {
+  const uid = effectiveUserId(userId);
+  const res = await ctx.pool.query(
+    "SELECT COUNT(*)::int AS n FROM documents WHERE user_id = $1 OR user_id = '' OR user_id IS NULL",
+    [uid],
+  );
+  return Number(res.rows[0]?.n ?? 0);
+}
+
+export async function countExtractionsNeedingReviewPg(ctx: PostgresDbContext, userId?: string): Promise<number> {
+  const uid = effectiveUserId(userId);
+  const res = await ctx.pool.query(
+    "SELECT COUNT(*)::int AS n FROM extractions WHERE needs_review = true AND (user_id = $1 OR user_id = '' OR user_id IS NULL)",
+    [uid],
+  );
+  return Number(res.rows[0]?.n ?? 0);
+}
+
+export async function loadExtractionPg(
+  ctx: PostgresDbContext,
+  extractionId: string,
+  userId?: string,
+): Promise<ExtractionRow | null> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        "SELECT id, document_id, doc_type, fields, field_meta, overall_confidence, needs_review FROM extractions WHERE id = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)",
+        [extractionId, uid],
+      )
+    : await ctx.pool.query(
+        'SELECT id, document_id, doc_type, fields, field_meta, overall_confidence, needs_review FROM extractions WHERE id = $1',
+        [extractionId],
+      );
+  if (!res.rows[0]) return null;
+  const r = res.rows[0];
+  return {
+    id: r.id,
+    documentId: r.document_id,
+    docType: r.doc_type as DocType,
+    fields: r.fields,
+    fieldMeta: r.field_meta,
+    overallConfidence: Number(r.overall_confidence),
+    needsReview: !!r.needs_review,
+  };
+}
+
+export async function saveClassificationPg(
+  ctx: PostgresDbContext,
+  input: ClassificationInput,
+  userId?: string,
+): Promise<string> {
+  const id = rid('CL');
+  await ctx.pool.query(
+    `INSERT INTO classifications (id, document_id, doc_type, confidence, source, hint, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [id, input.documentId, input.docType, input.confidence, input.source, input.hint ?? null, effectiveUserId(userId)],
+  );
+  return id;
+}
+
+// SQLite loadClassification does `.orderBy(createdAt).all().pop()` = most recent;
+// pg equivalent is ORDER BY created_at DESC LIMIT 1.
+export async function loadClassificationPg(
+  ctx: PostgresDbContext,
+  documentId: string,
+  userId?: string,
+): Promise<ClassificationRow | null> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT id, document_id, doc_type, confidence, source, hint FROM classifications
+         WHERE document_id = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)
+         ORDER BY created_at DESC LIMIT 1`,
+        [documentId, uid],
+      )
+    : await ctx.pool.query(
+        `SELECT id, document_id, doc_type, confidence, source, hint FROM classifications
+         WHERE document_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [documentId],
+      );
+  if (!res.rows[0]) return null;
+  const r = res.rows[0];
+  return {
+    id: r.id,
+    documentId: r.document_id,
+    docType: r.doc_type as DocType,
+    confidence: Number(r.confidence),
+    source: r.source,
+    hint: (r.hint as DocType | null) ?? null,
+  };
+}
+
+export async function saveDocumentTagsPg(
+  ctx: PostgresDbContext,
+  documentId: string,
+  tags: string[],
+  source: DocumentTagSource,
+  userId?: string,
+): Promise<void> {
+  const uid = effectiveUserId(userId);
+  const existing = await ctx.pool.query(
+    `SELECT tag FROM document_tags
+     WHERE document_id = $1 AND source = $2 AND (user_id = $3 OR user_id = '' OR user_id IS NULL)`,
+    [documentId, source, uid],
+  );
+  const have = new Set(existing.rows.map((r: { tag: string }) => r.tag));
+  for (const tag of tags) {
+    if (have.has(tag)) continue;
+    const id = rid('TG');
+    await ctx.pool.query(
+      'INSERT INTO document_tags (id, document_id, tag, source, user_id) VALUES ($1, $2, $3, $4, $5)',
+      [id, documentId, tag, source, uid],
+    );
+  }
+}
+
+export async function listDocumentTagsPg(
+  ctx: PostgresDbContext,
+  documentId: string,
+  userId?: string,
+): Promise<DocumentTagRow[]> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT tag, source FROM document_tags
+         WHERE document_id = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)
+         ORDER BY tag ASC`,
+        [documentId, uid],
+      )
+    : await ctx.pool.query(
+        'SELECT tag, source FROM document_tags WHERE document_id = $1 ORDER BY tag ASC',
+        [documentId],
+      );
+  return res.rows.map((r: { tag: string; source: string }) => ({
+    tag: r.tag,
+    source: r.source as DocumentTagSource,
+  }));
+}
+
+/**
+ * Hard-delete a document and every dependent row. pg doc_chunk holds BOTH the
+ * FTS tsvector (GENERATED) AND the pgvector embedding as columns, so there are
+ * NO separate fts/vec tables to clean (contrast SQLite's doc_chunk_fts/vec).
+ * pg FKs are ON DELETE no action (migration default), so manual cascade like the
+ * SQLite twin; wrapped in a transaction for atomicity.
+ */
+export async function deleteDocumentPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  userId?: string,
+): Promise<{ deleted: boolean }> {
+  const uid = effectiveUserId(userId);
+  const owned = await ctx.pool.query(
+    "SELECT 1 FROM documents WHERE id = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL) LIMIT 1",
+    [docId, uid],
+  );
+  if ((owned.rowCount ?? 0) === 0) return { deleted: false };
+  const client = await ctx.pool.connect();
+  try {
+    await client.query('BEGIN');
+    // doc_chunk holds both the FTS tsvector (generated) and the pgvector embedding.
+    await client.query('DELETE FROM doc_chunk WHERE document_id = $1', [docId]);
+    await client.query('DELETE FROM extractions WHERE document_id = $1', [docId]);
+    await client.query('DELETE FROM classifications WHERE document_id = $1', [docId]);
+    await client.query('DELETE FROM bindings WHERE document_id = $1', [docId]);
+    await client.query('DELETE FROM document_tags WHERE document_id = $1', [docId]);
+    await client.query('DELETE FROM documents WHERE id = $1', [docId]);
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+  return { deleted: true };
 }
 
 // ---- Postgres vector store (pgvector) ---------------------------------------
