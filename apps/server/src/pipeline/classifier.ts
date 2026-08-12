@@ -45,8 +45,6 @@ function blocksToPrompt(blocks: Block[]): string {
   return `原文片段:\n${text}`;
 }
 
-const clamp = (n: number) => Math.max(0, Math.min(1, n));
-
 /**
  * L1 internal classification stage. Routing-classify: parsed blocks -> docType.
  * Uses the injected small model via DeepSeek-compatible JSON mode
@@ -69,7 +67,7 @@ export async function classifyDocument(
       // schema-in-prompt (no-op for providers that ignore providerOptions.openai).
       providerOptions: { openai: { structuredOutputs: false } },
     });
-    return { docType: object.docType, confidence: clamp(object.confidence), source: 'classified' };
+    return { docType: object.docType, confidence: object.confidence, source: 'classified' };
   } catch {
     return { docType: hint, confidence: 0, source: 'fallback' };
   }
@@ -78,8 +76,10 @@ export async function classifyDocument(
 /**
  * Offline degrade path used by ingestFile when no classifier model is wired
  * (tests, dev without a model). Returns the hint docType verbatim at confidence
- * 1 with source 'hint' so downstream stages see a confident, usable docType.
+ * 0 with source 'hint' — i.e. "we used the user hint with NO real
+ * classification", which must read as LOW confidence so downstream stages do
+ * not treat a bare hint as an authoritative high-confidence classification.
  */
 export function classifyDocumentWithoutModel(input: ClassifierInput): ClassifierResult {
-  return { docType: input.hint ?? '其他', confidence: 1, source: 'hint' };
+  return { docType: input.hint ?? '其他', confidence: 0, source: 'hint' };
 }

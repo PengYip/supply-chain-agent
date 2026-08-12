@@ -40,11 +40,14 @@ describe('classifyDocument', () => {
     expect(res.source).toBe('classified');
   });
 
-  it('clamps out-of-range confidence into 0..1', async () => {
+  it('rejects out-of-range confidence via the zod schema and falls back', async () => {
+    // confidence 1.4 violates the schema's .max(1); generateObject throws on
+    // zod parse failure and classifyDocument catches it -> fallback result.
     const model = stubModel({ docType: '合同', confidence: 1.4 });
     const res = await classifyDocument({ model }, { blocks: blocks('x'), hint: '其他' });
-    expect(res.confidence).toBeLessThanOrEqual(1);
-    expect(res.confidence).toBeGreaterThanOrEqual(0);
+    expect(res.docType).toBe('其他');
+    expect(res.confidence).toBe(0);
+    expect(res.source).toBe('fallback');
   });
 
   it('falls back to the hint docType when the LLM output is unparseable', async () => {
@@ -66,6 +69,6 @@ describe('classifyDocument', () => {
     const res = classifyDocumentWithoutModel({ blocks: blocks('x'), hint: '提单' });
     expect(res.docType).toBe('提单');
     expect(res.source).toBe('hint');
-    expect(res.confidence).toBe(1);
+    expect(res.confidence).toBe(0);
   });
 });
