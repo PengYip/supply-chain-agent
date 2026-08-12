@@ -15,6 +15,7 @@ import { sessionsRoute } from './routes/sessions.js';
 import { filesRoute } from './routes/files.js';
 import { ensureBucket } from './lib/minio.js';
 import { migrateOnStartup } from './pipeline/db/dbBackend.js';
+import { getDriver, closeNeo4j } from './graph/neo4j.js';
 import { listToolNames, type Role } from './harness/roleToolRegistry.js';
 import { auth } from './lib/auth.js';
 import {
@@ -91,6 +92,11 @@ app.use('*', serveStatic({ root: webDist }));
 
 const port = env.PORT;
 
+// Graceful shutdown: close the Neo4j driver on SIGTERM/SIGINT so in-flight
+// transactions settle and the connection pool is released before exit.
+process.on('SIGTERM', async () => { await closeNeo4j(); });
+process.on('SIGINT', async () => { await closeNeo4j(); });
+
 // Boot sequence: run DB startup migrations BEFORE accepting traffic, then start
 // the HTTP server. migrateOnStartup is a no-op on SQLite (its migration runs
 // synchronously inside getDbContext); on Postgres it adds the Phase 2 user_id
@@ -100,6 +106,17 @@ const port = env.PORT;
 (async () => {
   await migrateOnStartup();
   void ensureBucket();
+  // Phase 4: best-effort Neo4j connectivity check at boot. Warn-not-crash: an
+  // unreachable graph store logs a warning and graph tools error per-call, but
+  // the HTTP server still boots (graph is not on the request critical path).
+  if (process.env.NEO4J_PASSWORD) {
+    try {
+      await getDriver().verifyConnectivity();
+      console.log('[boot] neo4j connectivity ok');
+    } catch (e) {
+      console.warn('[boot] neo4j unreachable, graph tools will error per-call:', (e as Error).message);
+    }
+  }
   serve({ fetch: app.fetch, port }, (info) => {
     console.log(`Server running on http://localhost:${info.port}`);
   });

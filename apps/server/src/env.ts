@@ -42,6 +42,14 @@ const EnvSchema = z.object({
   MINIO_ACCESS_KEY: z.string().default('minio'),
   MINIO_SECRET_KEY: z.string().default('miniosecret'),
   MINIO_BUCKET: z.string().default('sca-files'),
+  // Neo4j graph store (Phase 4 §7). The ONLY graph store — dev/CI/prod all
+  // connect to the ubuntu-server Neo4j over the network. PASSWORD defaults to
+  // '' so env.ts zod-parses cleanly in CI (which only injects OPENAI_API_KEY)
+  // and unit tests that import env.ts; getDriver() fail-fast-throws at runtime
+  // if PASSWORD is empty. Live-graph tests gate on describe.skipIf(!NEO4J_PASSWORD).
+  NEO4J_URL: z.string().default('bolt://localhost:7687'),
+  NEO4J_USER: z.string().default('neo4j'),
+  NEO4J_PASSWORD: z.string().default(''),
   // CubeSandbox code execution (execute_code tool). Points at a deployed
   // CubeSandbox instance whose cube-api speaks the E2B-compatible REST protocol.
   // Defaults target the dev cluster on ubuntu-server; override via .env for prod.
