@@ -28,6 +28,16 @@ export const RealChatView: React.FC<{
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    // Client guard: reject oversized uploads before POSTing. Keep in sync with
+    // the server default (env.MAX_UPLOAD_BYTES); the server re-checks and
+    // returns 413, so this is a latency/UX guard, not the enforcement edge.
+    const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setUploadState('error')
+      setUploadMsg(`文件过大（${(file.size / 1024 / 1024).toFixed(1)} MiB），上限为 25 MiB`)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      return
+    }
     setUploadState('uploading')
     setUploadMsg(null)
     try {

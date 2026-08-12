@@ -94,6 +94,12 @@ function parseFileKey(key: string, userId: string): { name: string; directory: s
   return { name, directory };
 }
 
+/** Pure predicate so the upload-size guard is unit-testable without allocating
+ * a huge buffer. Returns true iff `size` strictly exceeds `limit`. */
+export function exceedsUploadLimit(size: number, limit: number): boolean {
+  return size > limit;
+}
+
 /** Upload a file -> MinIO -> INGEST_ROOT -> ingest pipeline. */
 // Phase 4 RBAC: only admin/trader may upload files (viewer cannot).
 filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
@@ -110,6 +116,15 @@ filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
   const file = body['file'];
   if (!(file instanceof File)) {
     return c.json({ error: 'no file provided (field "file")' }, 400);
+  }
+
+  // Reject oversized uploads BEFORE buffering the body (avoid allocating a
+  // huge ArrayBuffer for a request we will refuse anyway).
+  if (exceedsUploadLimit(file.size, env.MAX_UPLOAD_BYTES)) {
+    return c.json(
+      { error: 'file too large', limit: env.MAX_UPLOAD_BYTES, size: file.size },
+      413,
+    );
   }
 
   const docTypeStr = strField(body['docType'], '其他');
