@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { type RenderItem, type ToolCallStep } from '../utils/realChatUtils'
 import clsx from 'clsx'
+import { DocumentReviewCard, type DocumentReviewPayload } from './DocumentReviewCard'
 
 /** Write message text to the clipboard. Primary path is navigator.clipboard
  *  (secure context); the execCommand fallback is defensive for non-secure
@@ -229,6 +230,11 @@ const SoftGateCard: React.FC<{
 
 const RealToolStep: React.FC<{ step: ToolCallStep }> = ({ step }) => {
   const isCompleted = step.status === 'completed'
+  // `present_document_review` produces a rich 5-dimension review payload. When
+  // present (and not an error shape), render the dedicated card instead of the
+  // generic one-line result box. The error shape ({status:'error'}) and any
+  // other output fall back to the generic box below.
+  const reviewPayload = isReviewResult(step.toolName, step.result)
   return (
     <div className="flex items-start gap-3 py-2">
       <div className="relative flex flex-col items-center">
@@ -253,10 +259,14 @@ const RealToolStep: React.FC<{ step: ToolCallStep }> = ({ step }) => {
         ) : (
           <>
             {isCompleted && step.result !== undefined && (
-              <div className="mt-1.5 text-xs text-textDark bg-bgGray rounded px-2 py-1.5 border border-borderGray/50 flex items-start gap-1.5">
-                <Database className="w-3 h-3 text-steelBlue shrink-0 mt-0.5" />
-                <span className="leading-relaxed">{formatResult(step.result)}</span>
-              </div>
+              reviewPayload ? (
+                <DocumentReviewCard payload={reviewPayload} />
+              ) : (
+                <div className="mt-1.5 text-xs text-textDark bg-bgGray rounded px-2 py-1.5 border border-borderGray/50 flex items-start gap-1.5">
+                  <Database className="w-3 h-3 text-steelBlue shrink-0 mt-0.5" />
+                  <span className="leading-relaxed">{formatResult(step.result)}</span>
+                </div>
+              )
             )}
             {!isCompleted && (
               <div className="mt-1 text-[11px] text-textGray flex items-center gap-1">
@@ -268,6 +278,18 @@ const RealToolStep: React.FC<{ step: ToolCallStep }> = ({ step }) => {
       </div>
     </div>
   )
+}
+
+/** Narrow a tool step's result to the document-review payload when the tool is
+ *  `present_document_review`, the result is an object carrying a `docId`, and it
+ *  is not the `{status:'error'}` shape. Returns the typed payload or null. */
+function isReviewResult(toolName: string, result: unknown): DocumentReviewPayload | null {
+  if (toolName !== 'present_document_review') return null
+  if (result === null || typeof result !== 'object') return null
+  const r = result as Record<string, unknown>
+  if (r.status === 'error') return null
+  if (typeof r.docId !== 'string') return null
+  return r as unknown as DocumentReviewPayload
 }
 
 export const RealMessageItem: React.FC<{
