@@ -20,6 +20,7 @@
 import { Hono } from 'hono';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { promises as fs } from 'node:fs';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 import { requireAuth } from '../lib/auth-middleware.js';
 import { requireRole } from '../lib/auth-middleware.js';
@@ -139,17 +140,20 @@ filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
   const dirPart = directory ? `${directory}/` : '';
   const key = `users/${user.id}/${dirPart}${randomUUID()}-${file.name}`;
   const buffer = Buffer.from(await file.arrayBuffer());
+  // Flatten the slash-bearing key to a single filename (assertWithinRoot
+  // requires the path to live directly under INGEST_ROOT). Declared outside the
+  // try so the catch can clean it up on failure.
+  const localPath = path.join(env.INGEST_ROOT, key.replace(/\//g, '_'));
+  let minioStored = false;
 
   try {
     // 1. Store in MinIO.
     await minioClient.putObject(MINIO_BUCKET, key, buffer, buffer.length, {
       'Content-Type': file.type || 'application/octet-stream',
     });
+    minioStored = true;
 
     // 2. Download into INGEST_ROOT so the ingest path allowlist accepts it.
-    // Flatten the slash-bearing key to a single filename (assertWithinRoot
-    // requires the path to live directly under INGEST_ROOT).
-    const localPath = path.join(env.INGEST_ROOT, key.replace(/\//g, '_'));
     await minioClient.fGetObject(MINIO_BUCKET, key, localPath);
 
     // 3. Ingest: parse -> persist BlockModel -> chunk -> index (FTS5 + vectors).
@@ -178,6 +182,13 @@ filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
       201,
     );
   } catch (e) {
+    // Rollback: a failed ingest must NOT leave an orphaned MinIO object, which
+    // would appear in the file list with no docId and be un-addable to chat.
+    // Best-effort cleanup -- never let cleanup errors mask the original failure.
+    if (minioStored) {
+      try { await minioClient.removeObject(MINIO_BUCKET, key); } catch { /* best-effort */ }
+    }
+    try { await fs.unlink(localPath); } catch { /* may not have been created */ }
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[files] upload/ingest failed:', msg);
     return c.json({ error: 'upload or ingest failed', detail: msg }, 500);
