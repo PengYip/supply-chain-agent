@@ -13,6 +13,9 @@
 export interface Embedder {
   /** Embedding dimensionality (must match the vec0 table: 1024). */
   readonly dim: number;
+  /** Identity of the embedder implementation (e.g. 'deterministic', 'ollama-bge-m3').
+   *  Used to surface which vector mode an ingest used in its vectorization status. */
+  readonly kind: string;
   /** Embed a batch of texts; returns one vector per input, in order. */
   embed(texts: string[]): Promise<number[][]>;
 }
@@ -57,6 +60,7 @@ function tokenizeForEmbed(text: string): string[] {
  */
 export class DeterministicEmbedder implements Embedder {
   readonly dim: number = EMBED_DIM;
+  readonly kind = 'deterministic';
 
   async embed(texts: string[]): Promise<number[][]> {
     return texts.map((t) => this.embedOne(t));
@@ -105,6 +109,7 @@ export interface OllamaEmbedderOptions {
  */
 export class OllamaEmbedder implements Embedder {
   readonly dim: number = EMBED_DIM;
+  readonly kind = 'ollama-bge-m3';
   private readonly baseUrl: string | undefined;
   private readonly model: string;
 

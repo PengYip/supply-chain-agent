@@ -33,6 +33,22 @@ export interface ToolDeps {
   userId?: string;
 }
 
+/**
+ * Outcome of the L4 vector-embedding step of ingest. Surfaced on the ingestFile
+ * return so the model/UI can report whether vectorization succeeded and which
+ * mode was used. `status`:
+ *  - 'ok'      : vectors written for all chunks (mode = embedder.kind).
+ *  - 'skipped' : no embedder wired, OR sqlite-vec unavailable on the connection
+ *                (reason 'vec_store_not_ready'); FTS5 recall still serves.
+ *  - 'failed'  : embedder threw; FTS5 recall still serves (reason = error message).
+ */
+export type VectorizationStatus = {
+  status: 'ok' | 'skipped' | 'failed';
+  mode: string;
+  chunkCount: number;
+  reason?: string;
+};
+
 const newDocId = () => `DOC-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
 // T8 deviation from brief (per cross-task directive): T4's createDb omits the
@@ -73,6 +89,7 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   classificationConfidence: number;
   classificationSource: 'classified' | 'hint' | 'fallback';
   tags: string[];
+  vectorization: VectorizationStatus;
 }> {
   const { ctx, sourcePath, docType, modality, embedder, classifier, userId } = opts;
   ensureFk(ctx);
@@ -99,18 +116,25 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   );
   const chunks = chunkBlockModel(blockModel);
   const chunkRowIds = await saveChunks(ctx, docId, chunks);
-  if (embedder && (await isVecReady(ctx))) {
-    try {
-      const vecs = await embedder.embed(chunks.map((c) => c.text));
-      await saveChunkVectors(
-        ctx,
-        chunkRowIds.map((id, i) => ({ chunkRowId: id, vec: vecs[i] ?? [] })),
-      );
-    } catch (e) {
-      console.warn(
-        '[ingest] vector embedding skipped; FTS5 recall still available:',
-        (e as Error).message,
-      );
+  let vectorization: VectorizationStatus = { status: 'skipped', mode: 'none', chunkCount: chunks.length };
+  if (embedder) {
+    if (await isVecReady(ctx)) {
+      try {
+        const vecs = await embedder.embed(chunks.map((c) => c.text));
+        await saveChunkVectors(
+          ctx,
+          chunkRowIds.map((id, i) => ({ chunkRowId: id, vec: vecs[i] ?? [] })),
+        );
+        vectorization = { status: 'ok', mode: embedder.kind, chunkCount: chunks.length };
+      } catch (e) {
+        vectorization = {
+          status: 'failed', mode: embedder.kind, chunkCount: chunks.length,
+          reason: (e as Error).message,
+        };
+        console.warn('[ingest] vector embedding failed; FTS5 recall still available:', vectorization.reason);
+      }
+    } else {
+      vectorization = { status: 'skipped', mode: embedder.kind, chunkCount: chunks.length, reason: 'vec_store_not_ready' };
     }
   }
   // Auto-tag (Phase 2): derive a small deterministic tag set from the effective
@@ -135,6 +159,7 @@ export async function ingestFile(opts: IngestOptions): Promise<{
     classificationConfidence: cls.confidence,
     classificationSource: cls.source,
     tags,
+    vectorization,
   };
 }
 
