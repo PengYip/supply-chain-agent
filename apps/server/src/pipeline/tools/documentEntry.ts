@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { DbContext } from '../db/client.js';
 import {
   saveDocument, loadDocument, saveExtraction, loadExtraction, saveBinding, saveChunks,
-  saveClassification, saveDocumentTags, listDocumentTags,
+  saveClassification, saveDocumentTags, listDocumentTags, getReviewSnapshot,
 } from '../db/repositories.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
@@ -48,6 +48,12 @@ export type VectorizationStatus = {
   chunkCount: number;
   reason?: string;
 };
+
+/** In-process cache of the latest vectorization outcome per docId, populated by
+ *  ingest_document. Read by present_document_review to surface向量化入库 status.
+ *  Same-session only (lost on restart) — acceptable since review follows ingest
+ *  within one session. */
+const lastVectorization = new Map<string, VectorizationStatus>();
 
 const newDocId = () => `DOC-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
@@ -176,7 +182,7 @@ export function buildIngestDocumentTool(deps: ToolDeps) {
       modality: z.enum(['digital', 'scanned']),
     }),
     execute: async ({ sourceUri, docType, modality }) => {
-      return ingestFile({
+      const result = await ingestFile({
         ctx: deps.ctx,
         sourcePath: sourceUri,
         docType: docType as DocType | undefined,
@@ -185,6 +191,8 @@ export function buildIngestDocumentTool(deps: ToolDeps) {
         embedder: deps.embedder,
         userId: deps.userId,
       });
+      lastVectorization.set(result.docId, result.vectorization);
+      return result;
     },
   });
 }
@@ -388,6 +396,45 @@ export function buildBindDocumentTool(deps: ToolDeps) {
       // link_document — also reflect the binding in the in-memory contract graph.
       const linkRes = linkDocumentToContract(contractNo, documentId);
       return { ok: true as const, bindingId, contractNo, documentId, linkedToContract: linkRes.ok };
+    },
+  });
+}
+
+/**
+ * present_document_review — L1 presentation-first tool.
+ * After ingest + extract, the model calls this to surface the post-ingest
+ * "five-dimension review card" to the user: docType + classification confidence,
+ * structured fields (with per-field confidence + needsReview), proposed
+ * relationships, auto/explicit tags, and the vectorization status from ingest.
+ * The assembled payload is what the frontend renders as a DocumentReviewCard.
+ * This tool does NOT mutate data — it reads and presents. Registration into the
+ * role registry / permission gate / contract happens in Task 8.
+ */
+export function buildPresentDocumentReviewTool(deps: ToolDeps) {
+  return tool({
+    description:
+      '录入+抽取完成后向用户呈现「五维复核卡」: 业务类型、结构化字段(含置信度/需复核)、' +
+      '待确认关系、文本TAG、向量化入库状态。一次单据录入成功后必须调用, 供用户逐项确认或纠正。' +
+      '本工具仅用于展示与触发复核, 不改变已落库数据。',
+    inputSchema: z.object({
+      docId: z.string().min(1).describe('已录入单据的 docId'),
+    }),
+    execute: async ({ docId }) => {
+      const snap = await getReviewSnapshot(deps.ctx, docId, deps.userId);
+      if (!snap) return { status: 'error' as const, reason: 'document_not_found' };
+      const vectorization = lastVectorization.get(docId)
+        ?? { status: 'unknown' as const, mode: 'unknown', chunkCount: 0 };
+      return {
+        docId: snap.docId,
+        docType: snap.docType,
+        classificationConfidence: snap.classificationConfidence,
+        fields: snap.fields,
+        overallConfidence: snap.overallConfidence,
+        proposedRelationships: snap.proposedRelationships,
+        tags: snap.tags,
+        vectorization,
+        reviewStatus: snap.reviewStatus,
+      };
     },
   });
 }
