@@ -4,6 +4,7 @@ import type { BlockModel, DocType, SourceSpan } from './types.js';
 import { validateSpan, type SpanMatchStrength } from './spanValidator.js';
 import { computeFieldConfidence, decisionForField } from './confidence.js';
 import { REQUIRED_CONTRACT_FIELDS } from './schemas/contract.js';
+import type { ProposedRelationship } from './db/repositories.js';
 
 export interface GroundedField {
   name: string;
@@ -33,6 +34,8 @@ export interface ExtractionResult {
   overallConfidence: number;
   needsReview: boolean;
   missingRequired: string[];
+  /** Candidate Party/Commodity relationships lifted from flat fields (Task 5). */
+  proposedRelationships: ProposedRelationship[];
   llmRaw: unknown;
 }
 
@@ -100,6 +103,26 @@ export function attachConfidence(
   });
 }
 
+const REL_ROLE_BY_FIELD: Record<string, string> = {
+  甲方: '买方', 乙方: '卖方', 买方: '买方', 卖方: '卖方',
+};
+const COMMODITY_FIELDS = new Set(['标的物', '商品']);
+
+/** Pure: derive candidate Party/Commodity entities from flat extracted fields. */
+export function deriveProposedRelationships(fields: ExtractedField[]): ProposedRelationship[] {
+  const out: ProposedRelationship[] = [];
+  for (const f of fields) {
+    const val = typeof f.value === 'string' ? f.value.trim() : '';
+    if (!val) continue;
+    if (REL_ROLE_BY_FIELD[f.name]) {
+      out.push({ kind: 'Party', role: REL_ROLE_BY_FIELD[f.name], name: val, confidence: f.confidence });
+    } else if (COMMODITY_FIELDS.has(f.name)) {
+      out.push({ kind: 'Commodity', name: val, confidence: f.confidence });
+    }
+  }
+  return out;
+}
+
 export async function extractGroundedFields(
   deps: ExtractionDeps,
   input: ExtractionInput,
@@ -140,6 +163,7 @@ export async function extractGroundedFields(
     overallConfidence: Math.round(overallConfidence * 1000) / 1000,
     needsReview: fields.some((f) => f.needsReview) || missingRequired.length > 0,
     missingRequired,
+    proposedRelationships: deriveProposedRelationships(fields),
     llmRaw: object,
   };
 }

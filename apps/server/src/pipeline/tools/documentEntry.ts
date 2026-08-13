@@ -223,6 +223,7 @@ export function buildExtractFieldsTool(deps: ToolDeps) {
           fieldMeta,
           overallConfidence: result.overallConfidence,
           needsReview,
+          proposedRelationships: result.proposedRelationships,
         },
         deps.userId,
       );
