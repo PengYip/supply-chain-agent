@@ -24,6 +24,9 @@ export const documents = sqliteTable(
     minioKey: text('minio_key'),
     userId: text('user_id').notNull().default(''),
     createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+    reviewStatus: text('review_status').notNull().default('pending'),
+    reviewedAt: text('reviewed_at'),
+    reviewedBy: text('reviewed_by'),
   },
   (t) => ({ userIdx: index('idx_documents_user').on(t.userId) }),
 );
@@ -38,6 +41,7 @@ export const extractions = sqliteTable(
     fieldMeta: text('field_meta').notNull(),    // JSON
     overallConfidence: real('overall_confidence').notNull(),
     needsReview: integer('needs_review', { mode: 'boolean' }).notNull().default(false),
+    proposedRelationships: text('proposed_relationships'), // JSON(ProposedRelationship[])
     userId: text('user_id').notNull().default(''),
     createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
   },

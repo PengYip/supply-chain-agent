@@ -46,7 +46,10 @@ export function migrate(sqlite: Database.Database): void {
       block_model TEXT NOT NULL,
       minio_key TEXT,
       user_id TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      review_status TEXT NOT NULL DEFAULT 'pending',
+      reviewed_at TEXT,
+      reviewed_by TEXT
     );
     CREATE TABLE IF NOT EXISTS extractions (
       id TEXT PRIMARY KEY,
@@ -56,6 +59,7 @@ export function migrate(sqlite: Database.Database): void {
       field_meta TEXT NOT NULL,
       overall_confidence REAL NOT NULL,
       needs_review INTEGER NOT NULL DEFAULT 0,
+      proposed_relationships TEXT,
       user_id TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -165,6 +169,28 @@ export function migrate(sqlite: Database.Database): void {
       }
     }
   }
+
+  // Post-ingest review (design 2026-08-13): advisory review status on documents,
+  // + proposed relationships on extractions. Same guarded ALTER pattern as above.
+  {
+    const cols = sqlite.prepare('PRAGMA table_info(documents)').all() as Array<{ name: string }>;
+    const have = new Set(cols.map((c) => c.name));
+    if (!have.has('review_status')) {
+      try { sqlite.exec("ALTER TABLE documents ADD COLUMN review_status TEXT NOT NULL DEFAULT 'pending'"); } catch { /* concurrent */ }
+    }
+    if (!have.has('reviewed_at')) {
+      try { sqlite.exec('ALTER TABLE documents ADD COLUMN reviewed_at TEXT'); } catch { /* concurrent */ }
+    }
+    if (!have.has('reviewed_by')) {
+      try { sqlite.exec('ALTER TABLE documents ADD COLUMN reviewed_by TEXT'); } catch { /* concurrent */ }
+    }
+  }
+  {
+    const cols = sqlite.prepare('PRAGMA table_info(extractions)').all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'proposed_relationships')) {
+      try { sqlite.exec('ALTER TABLE extractions ADD COLUMN proposed_relationships TEXT'); } catch { /* concurrent */ }
+    }
+  }
 }
 
 /**
@@ -228,6 +254,11 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_document_tags_user ON document_tags(user_id)`,
     // Structural idempotency backstop for saveDocumentTags (see SQLite DDL comment).
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_document_tags_unique ON document_tags(document_id, tag, source, user_id)`,
+    // Post-ingest review: advisory review status + proposed relationships.
+    `ALTER TABLE documents ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'pending'`,
+    `ALTER TABLE documents ADD COLUMN IF NOT EXISTS reviewed_at timestamptz`,
+    `ALTER TABLE documents ADD COLUMN IF NOT EXISTS reviewed_by TEXT`,
+    `ALTER TABLE extractions ADD COLUMN IF NOT EXISTS proposed_relationships jsonb`,
   ];
   try {
     for (const sql of statements) {

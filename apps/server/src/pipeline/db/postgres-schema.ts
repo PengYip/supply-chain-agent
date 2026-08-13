@@ -78,6 +78,9 @@ export const documents = pgTable(
     // Phase 2 business-data isolation: owning user ('' = legacy / unscoped).
     userId: text('user_id').notNull().default(''),
     createdAt: nowTs(),
+    reviewStatus: text('review_status').notNull().default('pending'),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    reviewedBy: text('reviewed_by'),
   },
   (t) => ({
     userIdx: index('idx_documents_user').on(t.userId),
@@ -98,6 +101,7 @@ export const extractions = pgTable(
     // SQLite REAL -> Postgres numeric (avoids float64 precision drift on confidence).
     overallConfidence: numeric('overall_confidence', { precision: 5, scale: 4 }).notNull(),
     needsReview: boolean('needs_review').notNull().default(false),
+    proposedRelationships: jsonb('proposed_relationships'),
     userId: text('user_id').notNull().default(''),
     createdAt: nowTs(),
   },
