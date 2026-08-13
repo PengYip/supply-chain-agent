@@ -29,6 +29,10 @@ import {
   saveDocumentTagsPg,
   listDocumentTagsPg,
   deleteDocumentPg,
+  // post-ingest review (Task 3): pg twins for review snapshot + status + extraction update.
+  getReviewSnapshotPg,
+  setReviewStatusPg,
+  updateExtractionFieldsPg,
 } from './postgres-repositories.js';
 
 // Phase 2 business-data isolation: a normalized userId is '' / undefined when the
@@ -76,6 +80,8 @@ export interface ExtractionInput {
   fieldMeta: Record<string, { strength: SpanMatchStrength; confidence: number }>;
   overallConfidence: number;
   needsReview: boolean;
+  /** Optional proposed graph relationships extracted alongside fields (Task 3). */
+  proposedRelationships?: ProposedRelationship[];
 }
 
 export interface BindingInput {
@@ -95,6 +101,34 @@ export interface BindingRow {
   sourceRefs: SourceSpan[];
   confidence: number;
   createdBy: string;
+}
+
+// ---- Post-ingest review (Task 3) -------------------------------------------
+//
+// After ingest the user reviews the assembled snapshot (docType + tags +
+// extraction fields + proposed relationships) and either confirms it or
+// corrects the extracted fields. review_status tracks that lifecycle; the
+// snapshot is the single 5-dimension read the review UI/tools consume.
+
+export type ReviewStatus = 'pending' | 'confirmed' | 'corrected';
+
+export interface ProposedRelationship {
+  kind: 'Party' | 'Commodity' | 'Contract';
+  role?: string; // Party only: 买方|卖方
+  name: string;
+  sourceSpan?: unknown;
+  confidence: number;
+}
+
+export interface ReviewSnapshot {
+  docId: string;
+  docType: string;
+  classificationConfidence: number;
+  tags: string[];
+  reviewStatus: ReviewStatus;
+  fields: Array<{ name: string; value: string | number; confidence: number; needsReview: boolean }>;
+  overallConfidence: number;
+  proposedRelationships: ProposedRelationship[];
 }
 
 const rid = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -330,6 +364,7 @@ export async function saveExtraction(ctx: DbContext, input: ExtractionInput, use
     fieldMeta: JSON.stringify(input.fieldMeta),
     overallConfidence: input.overallConfidence,
     needsReview: input.needsReview,
+    proposedRelationships: input.proposedRelationships ? JSON.stringify(input.proposedRelationships) : null,
     userId: effectiveUserId(userId),
   }).run();
   return id;
@@ -719,4 +754,130 @@ export async function deleteFileFolder(
     .prepare('DELETE FROM file_folders WHERE user_id = ? AND path = ?')
     .run(userId, folderPath);
   return info.changes > 0;
+}
+
+// ---- Post-ingest review (Task 3) -------------------------------------------
+//
+// getReviewSnapshot assembles the 5-dimension read the review UI consumes
+// (docType + classification confidence + tags + extraction fields with
+// per-field confidence + proposed relationships). setReviewStatus stamps the
+// pending -> confirmed/corrected lifecycle. updateExtractionFields overwrites
+// the extracted fields after a user correction. All three dispatch to a pg
+// twin; the SQLite branches use raw better-sqlite3 (UPDATEs mirror
+// setDocumentMinioKey; READs are simple parameterized SELECTs).
+
+/**
+ * Assemble the post-ingest review snapshot for a document. Returns null if the
+ * document does not exist. fields come from the latest extraction row; each
+ * field's needsReview is true when its confidence is below 0.7. proposed
+ * relationships default to [] when absent.
+ */
+export async function getReviewSnapshot(
+  ctx: DbContext,
+  docId: string,
+  userId?: string,
+): Promise<ReviewSnapshot | null> {
+  if (ctx.backend === 'postgres') return getReviewSnapshotPg(ctx, docId, userId);
+  void userId; // user-scoping is optional here (doc was just ingested by the same user)
+  const sqlite = ctx.sqlite;
+  const doc = sqlite
+    .prepare('SELECT doc_type, review_status FROM documents WHERE id = ?')
+    .get(docId) as { doc_type: string; review_status: string | null } | undefined;
+  if (!doc) return null;
+
+  const ex = sqlite
+    .prepare(
+      `SELECT fields, field_meta, overall_confidence, proposed_relationships
+       FROM extractions WHERE document_id = ? ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get(docId) as
+    | {
+        fields: string;
+        field_meta: string;
+        overall_confidence: number;
+        proposed_relationships: string | null;
+      }
+    | undefined;
+
+  const cls = sqlite
+    .prepare(
+      'SELECT confidence FROM classifications WHERE document_id = ? ORDER BY created_at DESC LIMIT 1',
+    )
+    .get(docId) as { confidence: number } | undefined;
+
+  // Tags in insertion order (rowid) so the snapshot reflects the order the
+  // ingest pipeline emitted them (listDocumentTags sorts alphabetically; the
+  // review snapshot preserves ingest order for display).
+  const tagRows = sqlite
+    .prepare('SELECT tag FROM document_tags WHERE document_id = ? ORDER BY rowid')
+    .all(docId) as Array<{ tag: string }>;
+
+  const fields: ReviewSnapshot['fields'] = [];
+  if (ex) {
+    const parsedFields = JSON.parse(ex.fields) as Record<
+      string,
+      { value: string | number; sourceSpans: SourceSpan[] }
+    >;
+    const parsedMeta = JSON.parse(ex.field_meta) as Record<
+      string,
+      { strength: SpanMatchStrength; confidence: number }
+    >;
+    for (const [name, f] of Object.entries(parsedFields)) {
+      const confidence = parsedMeta[name]?.confidence ?? 0;
+      fields.push({ name, value: f.value, confidence, needsReview: confidence < 0.7 });
+    }
+  }
+
+  const proposedRelationships: ProposedRelationship[] = ex?.proposed_relationships
+    ? (JSON.parse(ex.proposed_relationships) as ProposedRelationship[])
+    : [];
+
+  return {
+    docId,
+    docType: doc.doc_type,
+    classificationConfidence: cls ? cls.confidence : 0,
+    tags: tagRows.map((r) => r.tag),
+    reviewStatus: (doc.review_status ?? 'pending') as ReviewStatus,
+    fields,
+    overallConfidence: ex ? ex.overall_confidence : 0,
+    proposedRelationships,
+  };
+}
+
+/**
+ * Transition a document's review_status (pending -> confirmed/corrected) and
+ * stamp reviewed_at/reviewed_by. Mirrors setDocumentMinioKey's raw UPDATE shape.
+ */
+export async function setReviewStatus(
+  ctx: DbContext,
+  docId: string,
+  status: ReviewStatus,
+  userId?: string,
+): Promise<void> {
+  if (ctx.backend === 'postgres') return setReviewStatusPg(ctx, docId, status, userId);
+  ctx.sqlite
+    .prepare(
+      "UPDATE documents SET review_status = ?, reviewed_at = datetime('now'), reviewed_by = ? WHERE id = ?",
+    )
+    .run(status, effectiveUserId(userId), docId);
+}
+
+/**
+ * Overwrite the extracted fields + field_meta for a document after a user
+ * correction. Updates all extraction rows for the doc (simplest; consistent
+ * with the doc-level review scope). userId is accepted for signature parity
+ * but not used in the WHERE (the doc-level scope already authorizes the caller).
+ */
+export async function updateExtractionFields(
+  ctx: DbContext,
+  docId: string,
+  fields: Record<string, { value: string | number; sourceSpans: SourceSpan[] }>,
+  fieldMeta: Record<string, { strength: SpanMatchStrength; confidence: number }>,
+  userId?: string,
+): Promise<void> {
+  if (ctx.backend === 'postgres') return updateExtractionFieldsPg(ctx, docId, fields, fieldMeta, userId);
+  void userId; // signature parity; doc-level scope already authorizes the caller
+  ctx.sqlite
+    .prepare('UPDATE extractions SET fields = ?, field_meta = ? WHERE document_id = ?')
+    .run(JSON.stringify(fields), JSON.stringify(fieldMeta), docId);
 }

@@ -30,6 +30,9 @@ import type {
   ClassificationRow,
   DocumentTagSource,
   DocumentTagRow,
+  ReviewStatus,
+  ProposedRelationship,
+  ReviewSnapshot,
 } from './repositories.js';
 
 // Phase 2 business-data isolation: same convention as repositories.ts -- a
@@ -92,8 +95,8 @@ export async function saveExtractionPg(
   const id = rid('EX');
   await ctx.pool.query(
     `INSERT INTO extractions
-       (id, document_id, doc_type, fields, field_meta, overall_confidence, needs_review, user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+       (id, document_id, doc_type, fields, field_meta, overall_confidence, needs_review, proposed_relationships, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [
       id,
       input.documentId,
@@ -102,6 +105,7 @@ export async function saveExtractionPg(
       JSON.stringify(input.fieldMeta),
       input.overallConfidence,
       input.needsReview,
+      input.proposedRelationships ? JSON.stringify(input.proposedRelationships) : null,
       effectiveUserId(userId),
     ],
   );
@@ -641,4 +645,116 @@ export async function deleteFileFolderPg(
     [userId, folderPath],
   );
   return (res.rowCount ?? 0) > 0;
+}
+
+// ---- Post-ingest review (Task 3) -------------------------------------------
+//
+// pg twins for getReviewSnapshot / setReviewStatus / updateExtractionFields.
+// Same assembly logic as the SQLite branch; jsonb columns (fields /
+// field_meta / proposed_relationships) auto-parse to JS objects on read so no
+// JSON.parse is needed (contrast the SQLite TEXT branch). numeric(p,s)
+// confidence columns come back as strings, so Number() on read.
+
+/**
+ * Assemble the post-ingest review snapshot for a document (pg). Returns null
+ * if the document does not exist. fields come from the latest extraction row;
+ * each field's needsReview is true when its confidence is below 0.7.
+ */
+export async function getReviewSnapshotPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  userId?: string,
+): Promise<ReviewSnapshot | null> {
+  void userId; // user-scoping is optional here (doc was just ingested by the same user)
+  const docRes = await ctx.pool.query(
+    'SELECT doc_type, review_status FROM documents WHERE id = $1',
+    [docId],
+  );
+  if (!docRes.rows[0]) return null;
+  const doc = docRes.rows[0] as { doc_type: string; review_status: string | null };
+
+  const exRes = await ctx.pool.query(
+    `SELECT fields, field_meta, overall_confidence, proposed_relationships
+     FROM extractions WHERE document_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [docId],
+  );
+  const ex = exRes.rows[0] as
+    | {
+        fields: Record<string, { value: string | number; sourceSpans: unknown[] }>;
+        field_meta: Record<string, { strength: unknown; confidence: number }>;
+        overall_confidence: string | number;
+        proposed_relationships: ProposedRelationship[] | null;
+      }
+    | undefined;
+
+  const clsRes = await ctx.pool.query(
+    'SELECT confidence FROM classifications WHERE document_id = $1 ORDER BY created_at DESC LIMIT 1',
+    [docId],
+  );
+  const cls = clsRes.rows[0] as { confidence: string | number } | undefined;
+
+  // Tags in insertion order (created_at, id) to mirror the SQLite rowid order
+  // on the review snapshot (ingest-emission order, not alphabetical).
+  const tagRes = await ctx.pool.query(
+    'SELECT tag FROM document_tags WHERE document_id = $1 ORDER BY created_at, id',
+    [docId],
+  );
+
+  const fields: ReviewSnapshot['fields'] = [];
+  if (ex) {
+    for (const [name, f] of Object.entries(ex.fields)) {
+      const confidence = ex.field_meta[name]?.confidence ?? 0;
+      fields.push({
+        name,
+        value: f.value,
+        confidence: Number(confidence),
+        needsReview: Number(confidence) < 0.7,
+      });
+    }
+  }
+
+  return {
+    docId,
+    docType: doc.doc_type,
+    classificationConfidence: cls ? Number(cls.confidence) : 0,
+    tags: (tagRes.rows as Array<{ tag: string }>).map((r) => r.tag),
+    reviewStatus: (doc.review_status ?? 'pending') as ReviewStatus,
+    fields,
+    overallConfidence: ex ? Number(ex.overall_confidence) : 0,
+    proposedRelationships: ex?.proposed_relationships ?? [],
+  };
+}
+
+/**
+ * Transition a document's review_status and stamp reviewed_at/reviewed_by (pg).
+ */
+export async function setReviewStatusPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  status: ReviewStatus,
+  userId?: string,
+): Promise<void> {
+  await ctx.pool.query(
+    'UPDATE documents SET review_status = $1, reviewed_at = NOW(), reviewed_by = $2 WHERE id = $3',
+    [status, effectiveUserId(userId), docId],
+  );
+}
+
+/**
+ * Overwrite the extracted fields + field_meta for a document after a user
+ * correction (pg). Updates all extraction rows for the doc. userId is accepted
+ * for signature parity but not used in the WHERE.
+ */
+export async function updateExtractionFieldsPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  fields: Record<string, { value: string | number; sourceSpans: unknown[] }>,
+  fieldMeta: Record<string, { strength: unknown; confidence: number }>,
+  userId?: string,
+): Promise<void> {
+  void userId; // signature parity; doc-level scope already authorizes the caller
+  await ctx.pool.query(
+    'UPDATE extractions SET fields = $1, field_meta = $2 WHERE document_id = $3',
+    [JSON.stringify(fields), JSON.stringify(fieldMeta), docId],
+  );
 }
