@@ -61,7 +61,7 @@ export const RealChatView: React.FC<{
         `已上传: ${data.filename ?? file.name}${data.docId ? ` (docId ${data.docId})` : ''}`,
       )
       if (data.docId && sendMessageRef.current) {
-        sendMessageRef.current({ text: `[系统提示] 已上传文件 "${data.filename ?? file.name}"（docId: ${data.docId}），文件已解析并索引。请使用 recall 工具搜索文档内容，或使用 documentEntry 工具录入单据信息。` })
+        sendMessageRef.current({ text: `[系统提示] 已上传文件 "${data.filename ?? file.name}"（docId: ${data.docId}），系统已自动完成录入(ingest)与索引，无需再调 ingest_document。请直接对该 docId 调用 extract_fields 抽取业务字段，再调用 present_document_review 向用户呈现五维复核卡。` })
       }
     } catch (err) {
       setUploadState('error')
