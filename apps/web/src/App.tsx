@@ -33,7 +33,14 @@ function App() {
   );
 
   const addToConversation = useCallback((file: FileEntry) => {
-    if (!file.docId) return;
+    if (!file.docId) {
+      // The file exists in MinIO but has no document record (docId), so it
+      // can't be recalled in chat. Surface the reason instead of failing
+      // silently -- this happens when an upload's ingest step failed but the
+      // object was already stored (upload route doesn't roll back MinIO).
+      window.alert('该文件尚未完成解析（缺少文档 ID），暂时无法添加到对话。请稍后重试或重新上传该文件。');
+      return;
+    }
     const docId = file.docId;
     setContextFiles((prev) =>
       prev.some((f) => f.key === file.key)
