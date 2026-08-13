@@ -30,6 +30,8 @@ const EXPECTED_TOOLS = [
   'create_entity',
   'link_entities',
   'graph_query',
+  'present_document_review',
+  'update_document_fields',
 ] as const;
 
 describe('tool-context contract registry', () => {
@@ -89,7 +91,7 @@ describe('contract injection-exposure mapping (integration point 1)', () => {
     // ingested doc text -> all must be wrapped in <external_content>. execute_code
     // runs user-supplied Python whose stdout can carry injection payloads too.
     expect(getTaggedOutputTools().sort()).toEqual(
-      ['execute_code', 'extract_fields', 'inspect_extraction', 'recall_documents', 'verify_document_fields'].sort(),
+      ['execute_code', 'extract_fields', 'inspect_extraction', 'present_document_review', 'recall_documents', 'verify_document_fields'].sort(),
     );
   });
 
@@ -99,7 +101,7 @@ describe('contract injection-exposure mapping (integration point 1)', () => {
     // AND return external content. recall_documents reads back that doc text.
     // execute_code runs untrusted user code (injection external).
     expect(getExternalHandlingTools().sort()).toEqual(
-      ['execute_code', 'extract_fields', 'ingest_document', 'inspect_extraction', 'recall_documents', 'verify_document_fields'].sort(),
+      ['execute_code', 'extract_fields', 'ingest_document', 'inspect_extraction', 'present_document_review', 'recall_documents', 'verify_document_fields'].sort(),
     );
   });
 

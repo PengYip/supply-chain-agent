@@ -4,7 +4,7 @@ import { createPayment } from '../tools/writes.js';
 import { escalateToHuman, verifyDocumentFields } from '../tools/hitl.js';
 import {
   buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool, buildInspectExtractionTool,
-  buildTagDocumentTool,
+  buildTagDocumentTool, buildPresentDocumentReviewTool, buildUpdateDocumentFieldsTool,
 } from '../pipeline/tools/documentEntry.js';
 import { buildRecallDocumentsTool } from '../pipeline/tools/recall.js';
 import { buildExecuteCodeTool } from '../pipeline/tools/executeCode.js';
@@ -69,7 +69,7 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
 
 // Doc-entry + recall tool names are part of the trader's capability set even
 // though constructing their instances requires a DbContext (see getToolsForRole).
-const TRADER_CTX_TOOL_NAMES = ['ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query'] as const;
+const TRADER_CTX_TOOL_NAMES = ['ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'present_document_review', 'update_document_fields'] as const;
 
 export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
   const base: GatedTool[] = (BASE_TOOLS_FOR_ROLE[role] ?? []).map((t) => ({ ...t }));
@@ -78,6 +78,10 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
     base.push(
       { ...buildIngestDocumentTool({ ctx, embedder, classifier, userId }), name: 'ingest_document' },
       { ...buildExtractFieldsTool({ ctx, extraction, userId }), name: 'extract_fields' },
+      // present_document_review is L1: read-only 5-dim review card (业务类型/字段/关系/TAG/向量化).
+      { ...buildPresentDocumentReviewTool({ ctx, userId }), name: 'present_document_review' },
+      // update_document_fields is L2: apply user field corrections (needs user consent).
+      { ...buildUpdateDocumentFieldsTool({ ctx, userId }), name: 'update_document_fields', needsApproval: true },
       // bind_document is L2: caller must attach human approval (needsApproval).
       { ...buildBindDocumentTool({ ctx, userId }), name: 'bind_document', needsApproval: true },
       // inspect_extraction is L1: on-demand evidence drill-down for a single

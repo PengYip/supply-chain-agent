@@ -40,6 +40,7 @@ export const SYSTEM_PROMPT = [
   '- 单据录入闭环: 用户上传原始单据后, 先调 ingest_document 解析为 BlockModel, 再调 extract_fields 抽取业务字段。',
   '- 数字零幻觉(硬约束): extract_fields 返回的每个值都已与原文 span 比对。任何 strength=none 或置信度低于复核阈值的字段必须如实告知用户, 不得编造; 关键字段(合同号/金额/发票号/价税合计)未达自动接受阈值时, 主动建议人工复核或调 escalate_to_human。',
   '- 业务绑定需授权: bind_document 为 L2 操作, 需要人工确认后方可执行。',
+  '- 复核卡展示(硬约束): ingest_document 与 extract_fields 成功返回后, 必须调用 present_document_review 向用户呈现五维复核卡(业务类型/结构化字段/待确认关系/文本TAG/向量化入库状态); 若用户在复核卡上纠正了字段, 需调用 update_document_fields 应用更正(L2, 需用户确认后方可执行)。',
 ].join('\n');
 
 // Apply the PermissionGate to the role's toolset:

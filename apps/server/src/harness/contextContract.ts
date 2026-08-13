@@ -156,6 +156,14 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'tagged', budget: 'summary', signal: 'counter',
     persist: 'session', risk: { level: 'L1', injection: 'external' },
   },
+  present_document_review: {
+    output: 'tagged', budget: 'summary', signal: 'none',
+    persist: 'business', risk: { level: 'L1', injection: 'external' },
+  },
+  update_document_fields: {
+    output: 'raw', budget: 'full', signal: 'none',
+    persist: 'business', risk: { level: 'L2', injection: 'safe' },
+  },
 };
 
 /** True iff a contract exists for the given tool name. */
