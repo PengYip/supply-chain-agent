@@ -301,6 +301,10 @@ export const RealChatView: React.FC<{
     if (!text || isStreaming) return
     setInput('')
     await sendMessage({ text })
+    // Context files are attached to THIS turn only. Once the message is sent
+    // they've been consumed (sent in the request body), so release them --
+    // otherwise every subsequent turn re-sends the same files.
+    setContextFiles([])
   }
 
   return (
