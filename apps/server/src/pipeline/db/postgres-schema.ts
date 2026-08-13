@@ -58,8 +58,16 @@ export const tsvector = customType<{ data: string }>({
   },
 });
 
-/** Default timestamp column: timestamptz, defaults to now(), non-null. */
-const nowTs = () => timestamp({ withTimezone: true }).defaultNow().notNull();
+/**
+ * Default timestamp column: timestamptz, defaults to now(), non-null.
+ *
+ * The explicit column name `created_at` (snake_case) is required: without it
+ * Drizzle emits the JS property name `createdAt` as the column name, which
+ * diverged from the raw SQL in postgres-repositories.ts and the SQLite schema
+ * (both `created_at`) and broke `ORDER BY created_at` on Postgres. The JS
+ * property stays `createdAt`; only the physical column name is pinned.
+ */
+const nowTs = () => timestamp('created_at', { withTimezone: true }).defaultNow().notNull();
 
 // ---- Mirror of the SQLite pipeline schema (db/schema.ts) -------------------
 

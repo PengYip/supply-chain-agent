@@ -227,6 +227,34 @@ export function migrate(sqlite: Database.Database): void {
  */
 export async function migratePostgres(pool: Pool): Promise<void> {
   const statements = [
+    // Naming fix: drizzle-kit generated the timestamp column as "createdAt"
+    // (camelCase -- see postgres-schema.ts nowTs() pre-fix and
+    // drizzle/postgres/0000_ancient_mentor.sql), but the raw SQL in
+    // postgres-repositories.ts references `created_at` (snake_case, matching
+    // the SQLite schema and auth-schema). The split broke `ORDER BY created_at`
+    // in getReviewSnapshotPg / loadLatestExtractionByDocIdPg (Postgres error
+    // 42703 "column created_at does not exist"). Rename the drizzle-migrated
+    // tables' "createdAt" -> created_at. Idempotent: only renames when the
+    // camelCase column exists and the snake_case one does not, so it is a
+    // no-op on databases already renamed and on tables created by later DDL.
+    // Runs every boot -- fixes the live DB on the next deploy without a manual
+    // drizzle-kit migrate (which is out-of-band and not in the deploy path).
+    `DO $$
+    DECLARE t text;
+    BEGIN
+      FOREACH t IN ARRAY ARRAY['documents','extractions','bindings','doc_chunk'] LOOP
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = current_schema() AND table_name = t AND column_name = 'createdAt'
+          )
+           AND NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = current_schema() AND table_name = t AND column_name = 'created_at'
+          ) THEN
+          EXECUTE format('ALTER TABLE %I RENAME COLUMN "createdAt" TO created_at', t);
+        END IF;
+      END LOOP;
+    END $$;`,
     `ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE extractions ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE bindings ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''`,
