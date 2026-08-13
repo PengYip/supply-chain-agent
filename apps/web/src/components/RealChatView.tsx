@@ -124,9 +124,10 @@ export const RealChatView: React.FC<{
       .then((data) => {
         if (cancelled || !data) return
         const msgs = (data as { messages?: UIMessage[] }).messages
-        if (Array.isArray(msgs) && msgs.length > 0) {
-          setMessages(msgs)
-        }
+        // Always replace (including empty): switching to a new/empty session
+        // must clear the previous session's messages, otherwise the old
+        // conversation stays on screen and looks like the switch never happened.
+        setMessages(Array.isArray(msgs) ? msgs : [])
       })
       .catch(() => { /* ignore */ })
     return () => {
