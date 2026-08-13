@@ -5,6 +5,7 @@ import type { DbContext } from '../db/client.js';
 import {
   saveDocument, loadDocument, saveExtraction, loadExtraction, saveBinding, saveChunks,
   saveClassification, saveDocumentTags, listDocumentTags, getReviewSnapshot,
+  updateExtractionFields, setReviewStatus, loadLatestExtractionByDocId,
 } from '../db/repositories.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
@@ -434,6 +435,61 @@ export function buildPresentDocumentReviewTool(deps: ToolDeps) {
         tags: snap.tags,
         vectorization,
         reviewStatus: snap.reviewStatus,
+      };
+    },
+  });
+}
+
+/**
+ * update_document_fields - L2 correction tool.
+ * After the user corrects fields on the review card (Task 9 UI), the model
+ * calls this with { docId, corrections:[{name,value}] }. It loads the latest
+ * extraction (full fields + fieldMeta), merges the corrections (un-corrected
+ * fieldMeta is preserved -- confidence/span grounding survives; corrected
+ * fields are overridden with confidence 1.0, human-confirmed, strength 'none'
+ * and emptied sourceSpans since the value no longer derives from a source
+ * span), writes back via updateExtractionFields, flips reviewStatus to
+ * 'corrected', and returns the refreshed snapshot. L2 = soft gate: it only
+ * runs after the user confirms a correction (the needsApproval literal is
+ * stamped at registration in Task 8, mirroring bind_document -- NOT inlined
+ * here so this builder stays registration-agnostic).
+ */
+export function buildUpdateDocumentFieldsTool(deps: ToolDeps) {
+  return tool({
+    description:
+      '用户在复核卡上纠正字段后应用更正: 将纠正值合并到已抽取字段(保留未更正字段的置信度/原文span接地信息), ' +
+      '更正字段置信度置1.0(人工确认)并标记 reviewStatus=corrected。需用户确认才执行(L2)。',
+    inputSchema: z.object({
+      docId: z.string().min(1),
+      corrections: z.array(z.object({
+        name: z.string().min(1),
+        value: z.union([z.string(), z.number()]),
+      })).min(1),
+    }),
+    execute: async ({ docId, corrections }) => {
+      const exists = await getReviewSnapshot(deps.ctx, docId, deps.userId);
+      if (!exists) return { status: 'error' as const, reason: 'document_not_found' };
+      const latest = await loadLatestExtractionByDocId(deps.ctx, docId, deps.userId);
+      if (!latest) return { status: 'error' as const, reason: 'extraction_not_found' };
+      // Merge: preserve un-corrected fieldMeta; corrected -> value overridden,
+      // confidence 1.0 (human-confirmed), strength 'none', sourceSpans cleared
+      // (the corrected value no longer traces to a source span).
+      const corrByName = new Map(corrections.map((c) => [c.name, c.value]));
+      const fields: Record<string, { value: string | number; sourceSpans: SourceSpan[] }> = { ...latest.fields };
+      const fieldMeta: Record<string, { strength: SpanMatchStrength; confidence: number }> = { ...latest.fieldMeta };
+      for (const [name, value] of corrByName) {
+        fields[name] = { value, sourceSpans: [] };
+        fieldMeta[name] = { strength: 'none', confidence: 1.0 };
+      }
+      await updateExtractionFields(deps.ctx, docId, fields, fieldMeta, deps.userId);
+      await setReviewStatus(deps.ctx, docId, 'corrected', deps.userId);
+      const snapshot = await getReviewSnapshot(deps.ctx, docId, deps.userId);
+      return {
+        ok: true as const,
+        docId,
+        reviewStatus: 'corrected' as const,
+        correctedFields: corrections.map((c) => c.name),
+        snapshot,
       };
     },
   });

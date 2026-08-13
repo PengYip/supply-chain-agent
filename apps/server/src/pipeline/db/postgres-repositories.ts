@@ -337,6 +337,43 @@ export async function loadExtractionPg(
   };
 }
 
+// Latest extraction row for a document (Task 7 update_document_fields merge
+// base). Mirrors loadExtractionPg but keyed on document_id with ORDER BY
+// created_at DESC LIMIT 1. fields/field_meta are jsonb -> node-postgres already
+// returns them parsed, so NO JSON.parse here (SQLite branch does JSON.parse).
+export async function loadLatestExtractionByDocIdPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  userId?: string,
+): Promise<ExtractionRow | null> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT id, document_id, doc_type, fields, field_meta, overall_confidence, needs_review
+         FROM extractions
+         WHERE document_id = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)
+         ORDER BY created_at DESC LIMIT 1`,
+        [docId, uid],
+      )
+    : await ctx.pool.query(
+        `SELECT id, document_id, doc_type, fields, field_meta, overall_confidence, needs_review
+         FROM extractions
+         WHERE document_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [docId],
+      );
+  if (!res.rows[0]) return null;
+  const r = res.rows[0];
+  return {
+    id: r.id,
+    documentId: r.document_id,
+    docType: r.doc_type as DocType,
+    fields: r.fields,
+    fieldMeta: r.field_meta,
+    overallConfidence: Number(r.overall_confidence),
+    needsReview: !!r.needs_review,
+  };
+}
+
 export async function saveClassificationPg(
   ctx: PostgresDbContext,
   input: ClassificationInput,

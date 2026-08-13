@@ -1,4 +1,4 @@
-import { eq, and, or, isNull } from 'drizzle-orm';
+import { eq, and, or, isNull, desc } from 'drizzle-orm';
 import { documents, extractions, bindings, classifications } from './schema.js';
 import type { DbContext } from './client.js';
 import type { BlockModel, DocType, SourceSpan } from '../types.js';
@@ -33,6 +33,8 @@ import {
   getReviewSnapshotPg,
   setReviewStatusPg,
   updateExtractionFieldsPg,
+  // post-ingest review (Task 7): pg twin for latest-extraction-by-doc lookup.
+  loadLatestExtractionByDocIdPg,
 } from './postgres-repositories.js';
 
 // Phase 2 business-data isolation: a normalized userId is '' / undefined when the
@@ -197,6 +199,46 @@ export async function loadExtraction(
       )
     : eq(extractions.id, extractionId);
   const row = ctx.db.select().from(extractions).where(filter).all()[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    documentId: row.documentId,
+    docType: row.docType as DocType,
+    fields: JSON.parse(row.fields as string),
+    fieldMeta: JSON.parse(row.fieldMeta as string),
+    overallConfidence: row.overallConfidence,
+    needsReview: !!row.needsReview,
+  };
+}
+
+/**
+ * Load the latest extraction row for a document (most recent by created_at).
+ * Used by the update_document_fields L2 correction tool (Task 7) to merge
+ * user corrections onto the current full-fields + fieldMeta state. Same
+ * userId-legacy filter as loadExtraction (rows with user_id = '' / NULL stay
+ * readable by any caller). Mirrors loadExtraction but keyed on document_id
+ * with ORDER BY created_at DESC LIMIT 1.
+ */
+export async function loadLatestExtractionByDocId(
+  ctx: DbContext,
+  docId: string,
+  userId?: string,
+): Promise<ExtractionRow | null> {
+  if (ctx.backend === 'postgres') return loadLatestExtractionByDocIdPg(ctx, docId, userId);
+  const uid = effectiveUserId(userId);
+  const filter = uid
+    ? and(
+        eq(extractions.documentId, docId),
+        or(eq(extractions.userId, uid), eq(extractions.userId, ''), isNull(extractions.userId)),
+      )
+    : eq(extractions.documentId, docId);
+  const row = ctx.db
+    .select()
+    .from(extractions)
+    .where(filter)
+    .orderBy(desc(extractions.createdAt))
+    .limit(1)
+    .all()[0];
   if (!row) return null;
   return {
     id: row.id,
