@@ -230,7 +230,20 @@ export const RealChatView: React.FC<{
 
       const contentType = res.headers.get('content-type') || ''
       if (!contentType.includes('text/event-stream') || !res.body) {
-        throw new Error('后端未返回 UIMessageStream')
+        // 2xx non-stream = backend denial/status notice (L2/L3 denied returns
+        // c.json({ok:false,status:'denied'})). A denial intentionally does NOT
+        // resume the model loop. Surface the outcome and finish cleanly instead
+        // of throwing "后端未返回 UIMessageStream" (the pre-fix bug).
+        let outcome = 'done'
+        try {
+          const body = (await res.json()) as { status?: string; ok?: boolean }
+          outcome = body.status === 'denied' || body.ok === false ? 'denied' : 'done'
+        } catch {
+          /* non-JSON body: treat as a plain completion */
+        }
+        void outcome // reserved for a future distinct denial UI (toast)
+        setCallbackState('success')
+        return
       }
 
       const chunkStream = parseJsonEventStream({ stream: res.body, schema: uiMessageChunkSchema })
