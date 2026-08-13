@@ -830,7 +830,7 @@ export async function getReviewSnapshot(
   const ex = sqlite
     .prepare(
       `SELECT fields, field_meta, overall_confidence, proposed_relationships
-       FROM extractions WHERE document_id = ? ORDER BY created_at DESC LIMIT 1`,
+       FROM extractions WHERE document_id = ? ORDER BY rowid DESC LIMIT 1`,
     )
     .get(docId) as
     | {
@@ -843,7 +843,7 @@ export async function getReviewSnapshot(
 
   const cls = sqlite
     .prepare(
-      'SELECT confidence FROM classifications WHERE document_id = ? ORDER BY created_at DESC LIMIT 1',
+      'SELECT confidence FROM classifications WHERE document_id = ? ORDER BY rowid DESC LIMIT 1',
     )
     .get(docId) as { confidence: number } | undefined;
 

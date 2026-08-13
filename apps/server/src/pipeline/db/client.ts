@@ -191,6 +191,22 @@ export function migrate(sqlite: Database.Database): void {
       try { sqlite.exec('ALTER TABLE extractions ADD COLUMN proposed_relationships TEXT'); } catch { /* concurrent */ }
     }
   }
+
+  // Backfill created_at (+ user_id) on classifications/document_tags/extractions
+  // for old prod DBs whose tables predate these columns. CREATE TABLE IF NOT
+  // EXISTS adds no columns to an existing table, and these previously had no
+  // in-place ALTER coverage — getReviewSnapshot's ORDER BY created_at surfaced
+  // the gap. Nullable + expression default is valid for ADD COLUMN.
+  for (const tbl of ['classifications', 'document_tags', 'extractions']) {
+    const cols = sqlite.prepare(`PRAGMA table_info(${tbl})`).all() as Array<{ name: string }>;
+    const have = new Set(cols.map((c) => c.name));
+    if (!have.has('created_at')) {
+      try { sqlite.exec(`ALTER TABLE ${tbl} ADD COLUMN created_at TEXT DEFAULT (datetime('now'))`); } catch { /* concurrent */ }
+    }
+    if ((tbl === 'classifications' || tbl === 'document_tags') && !have.has('user_id')) {
+      try { sqlite.exec(`ALTER TABLE ${tbl} ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`); } catch { /* concurrent */ }
+    }
+  }
 }
 
 /**
