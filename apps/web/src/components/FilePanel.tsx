@@ -198,6 +198,66 @@ function MoveDropdown({
   )
 }
 
+function DeleteConfirmOverlay({
+  message,
+  onConfirm,
+  onCancel,
+}: {
+  message: string
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleMouseDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        onCancel()
+      }
+    }
+    document.addEventListener('mousedown', handleMouseDown)
+    return () => document.removeEventListener('mousedown', handleMouseDown)
+  }, [onCancel])
+
+  return (
+    <div
+      ref={ref}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: 'absolute',
+        right: 8,
+        top: '100%',
+        marginTop: 4,
+        background: '#ffffff',
+        border: '1px solid #e5e7eb',
+        borderRadius: 6,
+        boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+        zIndex: 25,
+        padding: '6px 10px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        fontSize: 11,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <span style={{ color: '#6b7280' }}>{message}</span>
+      <span
+        onClick={onConfirm}
+        style={{ color: '#dc2626', cursor: 'pointer', fontWeight: 500 }}
+      >
+        确定
+      </span>
+      <span
+        onClick={onCancel}
+        style={{ color: '#6b7280', cursor: 'pointer' }}
+      >
+        取消
+      </span>
+    </div>
+  )
+}
+
 function FileRow(props: {
   file: FileEntry
   depth: number
@@ -307,35 +367,24 @@ function FileRow(props: {
         >
           移动
         </span>
-        {deletingFilePath === file.key ? (
-          <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
-            <span style={{ color: '#6b7280' }}>删除文件？</span>
-            <span
-              onClick={() => { onDelete(file.key); setDeletingFilePath(null) }}
-              style={{ color: '#dc2626', cursor: 'pointer', fontWeight: 500 }}
-            >
-              确定
-            </span>
-            <span
-              onClick={() => setDeletingFilePath(null)}
-              style={{ color: '#6b7280', cursor: 'pointer' }}
-            >
-              取消
-            </span>
-          </div>
-        ) : (
-          <span
-            onClick={(e) => { e.stopPropagation(); setDeletingFilePath(file.key) }}
-            style={{ fontSize: 11, color: '#dc2626', cursor: 'pointer', padding: '2px 4px', borderRadius: 3 }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = '#fef2f2' }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = '' }}
-          >
-            删除
-          </span>
-        )}
+        <span
+          onClick={(e) => { e.stopPropagation(); setDeletingFilePath(file.key) }}
+          style={{ fontSize: 11, color: '#dc2626', cursor: 'pointer', padding: '2px 4px', borderRadius: 3 }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = '#fef2f2' }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = '' }}
+        >
+          删除
+        </span>
       </div>
       {moving && (
         <MoveDropdown file={file} folders={folders} onMove={onMove} onClose={onCancelMove} />
+      )}
+      {deletingFilePath === file.key && (
+        <DeleteConfirmOverlay
+          message="删除文件？"
+          onConfirm={() => { onDelete(file.key); setDeletingFilePath(null) }}
+          onCancel={() => setDeletingFilePath(null)}
+        />
       )}
     </div>
   )
@@ -432,38 +481,27 @@ function TreeFolder(props: TreeFolderProps) {
         >
           {name}
         </span>
-        {deletingFolderPath === fullPath ? (
-          <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
-            <span style={{ color: '#6b7280' }}>移除文件夹？(文件不删)</span>
-            <span
-              onClick={() => { removeFolder(fullPath); setDeletingFolderPath(null) }}
-              style={{ color: '#dc2626', cursor: 'pointer', fontWeight: 500 }}
-            >
-              确定
-            </span>
-            <span
-              onClick={() => setDeletingFolderPath(null)}
-              style={{ color: '#6b7280', cursor: 'pointer' }}
-            >
-              取消
-            </span>
-          </div>
-        ) : (
-          <span
-            onClick={(e) => { e.stopPropagation(); setDeletingFolderPath(fullPath) }}
-            style={{
-              fontSize: 11,
-              color: '#dc2626',
-              cursor: 'pointer',
-              display: hover ? 'inline-block' : 'none',
-              padding: '2px 4px',
-              borderRadius: 3,
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = '#fef2f2' }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = '' }}
-          >
-            删除
-          </span>
+        <span
+          onClick={(e) => { e.stopPropagation(); setDeletingFolderPath(fullPath) }}
+          style={{
+            fontSize: 11,
+            color: '#dc2626',
+            cursor: 'pointer',
+            display: hover ? 'inline-block' : 'none',
+            padding: '2px 4px',
+            borderRadius: 3,
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = '#fef2f2' }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = '' }}
+        >
+          删除
+        </span>
+        {deletingFolderPath === fullPath && (
+          <DeleteConfirmOverlay
+            message="移除文件夹？(文件不删)"
+            onConfirm={() => { removeFolder(fullPath); setDeletingFolderPath(null) }}
+            onCancel={() => setDeletingFolderPath(null)}
+          />
         )}
       </div>
       {isOpen && (
