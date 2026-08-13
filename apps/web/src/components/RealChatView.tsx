@@ -295,15 +295,17 @@ export const RealChatView: React.FC<{
     setContextFiles((prev) => prev.filter((f) => f.key !== key))
   }, [setContextFiles])
 
-  const onSubmit = async (e: React.FormEvent) => {
+  const onSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     const text = input.trim()
     if (!text || isStreaming) return
     setInput('')
-    await sendMessage({ text })
-    // Context files are attached to THIS turn only. Once the message is sent
-    // they've been consumed (sent in the request body), so release them --
-    // otherwise every subsequent turn re-sends the same files.
+    // The transport's body() callback runs synchronously during sendMessage
+    // (inside send(), before its first await fetch), so it already reads the
+    // current contextFilesRef with the files attached to this message. Clear
+    // immediately so the files are consumed by THIS turn only -- awaiting
+    // sendMessage would delay the clear until the whole response stream ends.
+    void sendMessage({ text })
     setContextFiles([])
   }
 
