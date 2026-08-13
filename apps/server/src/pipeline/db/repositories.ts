@@ -33,6 +33,8 @@ import {
   getReviewSnapshotPg,
   setReviewStatusPg,
   updateExtractionFieldsPg,
+  // persisted vectorization outcome (Bug fix): pg twin for setDocumentVectorization.
+  setDocumentVectorizationPg,
   // post-ingest review (Task 7): pg twin for latest-extraction-by-doc lookup.
   loadLatestExtractionByDocIdPg,
 } from './postgres-repositories.js';
@@ -122,6 +124,28 @@ export interface ProposedRelationship {
   confidence: number;
 }
 
+/**
+ * Persisted vectorization outcome for a document. Defined here (NOT imported
+ * from documentEntry.ts) to avoid a circular dependency: documentEntry imports
+ * from repositories, so the type must live on this side. The 'unknown' status
+ * is the fallback when vectorization_meta has never been written (legacy rows,
+ * saveDocument-direct tests) — mirrors the present_document_review pre-fix
+ * default so the UI shows 'unknown' rather than crashing.
+ */
+export type DocumentVectorization = {
+  status: 'ok' | 'skipped' | 'failed' | 'unknown';
+  mode: string;
+  chunkCount: number;
+  reason?: string;
+};
+
+/** Default vectorization snapshot when no outcome has been persisted yet. */
+export const UNKNOWN_VECTORIZATION: DocumentVectorization = {
+  status: 'unknown',
+  mode: 'unknown',
+  chunkCount: 0,
+};
+
 export interface ReviewSnapshot {
   docId: string;
   docType: string;
@@ -131,6 +155,8 @@ export interface ReviewSnapshot {
   fields: Array<{ name: string; value: string | number; confidence: number; needsReview: boolean }>;
   overallConfidence: number;
   proposedRelationships: ProposedRelationship[];
+  /** Persisted L4 vector-embedding outcome (Bug fix: was a lost in-memory Map). */
+  vectorization: DocumentVectorization;
 }
 
 const rid = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -345,6 +371,12 @@ export async function saveDocumentTags(
 ): Promise<void> {
   if (ctx.backend === 'postgres') return saveDocumentTagsPg(ctx, documentId, tags, source, userId);
   const uid = effectiveUserId(userId);
+  // Resilience (Bug fix): dedup the input WITHIN this call so duplicate tags in
+  // one array don't trip the UNIQUE index, AND use INSERT OR IGNORE so a UNIQUE
+  // collision (race, or a tag that already exists for this source) is a no-op
+  // rather than throwing. The app-layer have.has pre-read stays as an
+  // optimization (skip the INSERT round-trip for known-existing tags).
+  const uniqueTags = [...new Set(tags)];
   // De-dup against existing rows with the same (document, tag, source, user).
   // 3-way OR matches listDocumentTags/loadExtraction/loadClassification (no
   // behavioral impact today since the column is NOT NULL DEFAULT '', but
@@ -362,12 +394,12 @@ export async function saveDocumentTags(
       const id = rid('TG');
       ctx.sqlite
         .prepare(
-          `INSERT INTO document_tags (id, document_id, tag, source, user_id) VALUES (?, ?, ?, ?, ?)`,
+          `INSERT OR IGNORE INTO document_tags (id, document_id, tag, source, user_id) VALUES (?, ?, ?, ?, ?)`,
         )
         .run(id, documentId, tag, source, uid);
     }
   });
-  tx(tags);
+  tx(uniqueTags);
 }
 
 /**
@@ -823,9 +855,21 @@ export async function getReviewSnapshot(
   void userId; // user-scoping is optional here (doc was just ingested by the same user)
   const sqlite = ctx.sqlite;
   const doc = sqlite
-    .prepare('SELECT doc_type, review_status FROM documents WHERE id = ?')
-    .get(docId) as { doc_type: string; review_status: string | null } | undefined;
+    .prepare('SELECT doc_type, review_status, vectorization_meta FROM documents WHERE id = ?')
+    .get(docId) as { doc_type: string; review_status: string | null; vectorization_meta: string | null } | undefined;
   if (!doc) return null;
+
+  // Parse the persisted vectorization outcome. Null/invalid (legacy rows, or a
+  // saveDocument-direct test that never ran ingest) -> the 'unknown' fallback so
+  // present_document_review reports 未知 rather than crashing.
+  let vectorization: DocumentVectorization = UNKNOWN_VECTORIZATION;
+  if (doc.vectorization_meta) {
+    try {
+      vectorization = JSON.parse(doc.vectorization_meta) as DocumentVectorization;
+    } catch {
+      vectorization = UNKNOWN_VECTORIZATION;
+    }
+  }
 
   const ex = sqlite
     .prepare(
@@ -883,6 +927,7 @@ export async function getReviewSnapshot(
     fields,
     overallConfidence: ex ? ex.overall_confidence : 0,
     proposedRelationships,
+    vectorization,
   };
 }
 
@@ -905,6 +950,26 @@ export async function setReviewStatus(
 }
 
 /**
+ * Persist the L4 vector-embedding outcome onto the document row (Bug fix: was
+ * previously only held in an in-memory Map, so it was lost on restart and never
+ * written by the /api/files upload path). Mirrors setReviewStatus's raw UPDATE
+ * shape. userId is accepted for signature parity; the doc-level scope already
+ * authorizes the caller (the same user who just ingested it).
+ */
+export async function setDocumentVectorization(
+  ctx: DbContext,
+  docId: string,
+  vectorization: DocumentVectorization,
+  userId?: string,
+): Promise<void> {
+  if (ctx.backend === 'postgres') return setDocumentVectorizationPg(ctx, docId, vectorization, userId);
+  void userId;
+  ctx.sqlite
+    .prepare('UPDATE documents SET vectorization_meta = ? WHERE id = ?')
+    .run(JSON.stringify(vectorization), docId);
+}
+
+/**
  * Overwrite the extracted fields + field_meta for a document after a user
  * correction. Updates all extraction rows for the doc (simplest; consistent
  * with the doc-level review scope). userId is accepted for signature parity
@@ -922,4 +987,42 @@ export async function updateExtractionFields(
   ctx.sqlite
     .prepare('UPDATE extractions SET fields = ?, field_meta = ? WHERE document_id = ?')
     .run(JSON.stringify(fields), JSON.stringify(fieldMeta), docId);
+}
+
+/**
+ * Apply a set of human corrections to a document's latest extraction (Feature:
+ * in-card correction, shared by the update_document_fields L2 tool AND the
+ * POST /api/documents/:docId/review HITL route so the merge+write logic lives
+ * in ONE place). Loads the latest extraction, merges corrections preserving
+ * un-corrected fieldMeta entries, and for corrected fields sets confidence
+ * 1.0 (human-confirmed), strength 'none', and empties sourceSpans (the value
+ * no longer derives from a source span). Writes back via updateExtractionFields,
+ * flips reviewStatus to 'corrected', and returns the refreshed snapshot.
+ *
+ * Returns null when no extraction exists for the doc (also covers a missing
+ * doc — there are no extractions for a nonexistent document_id). The route
+ * treats null as 404. Backend-neutral: every step dispatches internally, so no
+ * pg twin is needed.
+ */
+export async function applyDocumentCorrections(
+  ctx: DbContext,
+  docId: string,
+  corrections: Array<{ name: string; value: string | number }>,
+  userId?: string,
+): Promise<ReviewSnapshot | null> {
+  const latest = await loadLatestExtractionByDocId(ctx, docId, userId);
+  if (!latest) return null;
+  // Merge: preserve un-corrected fieldMeta; corrected -> value overridden,
+  // confidence 1.0 (human-confirmed), strength 'none', sourceSpans cleared
+  // (the corrected value no longer traces to a source span).
+  const corrByName = new Map(corrections.map((c) => [c.name, c.value]));
+  const fields: Record<string, { value: string | number; sourceSpans: SourceSpan[] }> = { ...latest.fields };
+  const fieldMeta: Record<string, { strength: SpanMatchStrength; confidence: number }> = { ...latest.fieldMeta };
+  for (const [name, value] of corrByName) {
+    fields[name] = { value, sourceSpans: [] };
+    fieldMeta[name] = { strength: 'none', confidence: 1.0 };
+  }
+  await updateExtractionFields(ctx, docId, fields, fieldMeta, userId);
+  await setReviewStatus(ctx, docId, 'corrected', userId);
+  return await getReviewSnapshot(ctx, docId, userId);
 }

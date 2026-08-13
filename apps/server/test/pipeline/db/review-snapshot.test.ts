@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createDb, migrate } from '../../../src/pipeline/db/client.js';
 import {
-  saveDocument, saveExtraction, saveDocumentTags,
+  saveDocument, saveExtraction, saveDocumentTags, listDocumentTags,
   getReviewSnapshot, setReviewStatus, updateExtractionFields,
+  setDocumentVectorization, applyDocumentCorrections,
 } from '../../../src/pipeline/db/repositories.js';
 import type { BlockModel } from '../../../src/pipeline/types.js';
 
@@ -78,5 +79,87 @@ describe('updateExtractionFields', () => {
     const snap = await getReviewSnapshot(ctx, 'DOC-t4');
     expect(snap?.fields.find((f) => f.name === '合同号')?.value).toBe('HT999');
     expect(snap?.reviewStatus).toBe('corrected');
+  });
+});
+
+// ---- Bug 1: vectorization outcome persistence -------------------------------
+//
+// lastVectorization was an in-memory Map written only by ingest_document, so the
+// /api/files upload path (which calls ingestFile directly) never populated it
+// and it was lost on restart. setDocumentVectorization persists it to the
+// documents row; getReviewSnapshot reads it back (defaulting to 'unknown' for
+// rows with no outcome, e.g. a saveDocument-direct test or a legacy DB).
+
+describe('setDocumentVectorization + getReviewSnapshot', () => {
+  it('round-trips the vectorization outcome through the documents row', async () => {
+    await saveDocument(ctx, mkModel('DOC-v1'));
+    await setDocumentVectorization(ctx, 'DOC-v1', { status: 'ok', mode: 'deterministic', chunkCount: 7 });
+    const snap = await getReviewSnapshot(ctx, 'DOC-v1');
+    expect(snap?.vectorization).toEqual({ status: 'ok', mode: 'deterministic', chunkCount: 7 });
+  });
+
+  it('carries the failure reason', async () => {
+    await saveDocument(ctx, mkModel('DOC-v2'));
+    await setDocumentVectorization(ctx, 'DOC-v2', { status: 'failed', mode: 'ollama', chunkCount: 3, reason: 'boom' });
+    const snap = await getReviewSnapshot(ctx, 'DOC-v2');
+    expect(snap?.vectorization.status).toBe('failed');
+    expect(snap?.vectorization.reason).toBe('boom');
+  });
+
+  it('defaults to unknown when no outcome was persisted', async () => {
+    await saveDocument(ctx, mkModel('DOC-v3'));
+    const snap = await getReviewSnapshot(ctx, 'DOC-v3');
+    expect(snap?.vectorization).toEqual({ status: 'unknown', mode: 'unknown', chunkCount: 0 });
+  });
+});
+
+// ---- Bug 2: saveDocumentTags resilience -------------------------------------
+//
+// Internal duplicates in one call used to trip the UNIQUE index and the error
+// was swallowed (console.warn) so tags silently disappeared. Now the input is
+// deduped AND the INSERT is OR IGNORE / ON CONFLICT DO NOTHING.
+
+describe('saveDocumentTags resilience', () => {
+  it('does not throw and does not duplicate when the input has internal duplicates', async () => {
+    await saveDocument(ctx, mkModel('DOC-tg1'));
+    await expect(saveDocumentTags(ctx, 'DOC-tg1', ['动力煤', '动力煤', '上游'], 'auto', '')).resolves.toBeUndefined();
+    const tags = await listDocumentTags(ctx, 'DOC-tg1');
+    expect(tags.map((t) => t.tag).sort()).toEqual(['上游', '动力煤']);
+  });
+
+  it('re-adding an existing tag for the same source is a no-op (idempotent)', async () => {
+    await saveDocument(ctx, mkModel('DOC-tg2'));
+    await saveDocumentTags(ctx, 'DOC-tg2', ['动力煤'], 'auto', '');
+    await expect(saveDocumentTags(ctx, 'DOC-tg2', ['动力煤'], 'auto', '')).resolves.toBeUndefined();
+    const tags = await listDocumentTags(ctx, 'DOC-tg2');
+    expect(tags.filter((t) => t.tag === '动力煤')).toHaveLength(1);
+  });
+});
+
+// ---- Feature: shared in-card correction logic -------------------------------
+
+describe('applyDocumentCorrections', () => {
+  it('merges corrections, sets confidence 1.0 on corrected fields, preserves the rest, marks corrected', async () => {
+    await saveDocument(ctx, mkModel('DOC-ac1'));
+    await saveExtraction(ctx, {
+      documentId: 'DOC-ac1', docType: '合同',
+      fields: { 合同号: { value: 'HT001', sourceSpans: [] }, 金额: { value: 1000, sourceSpans: [] } },
+      fieldMeta: { 合同号: { strength: 'exact', confidence: 0.5 }, 金额: { strength: 'fuzzy', confidence: 0.8 } },
+      overallConfidence: 0.65, needsReview: true,
+    });
+    const snap = await applyDocumentCorrections(ctx, 'DOC-ac1', [{ name: '合同号', value: 'HT-Z' }], 'u1');
+    expect(snap).not.toBeNull();
+    expect(snap?.reviewStatus).toBe('corrected');
+    const contract = snap?.fields.find((f) => f.name === '合同号');
+    const amount = snap?.fields.find((f) => f.name === '金额');
+    expect(contract?.value).toBe('HT-Z');
+    expect(contract?.confidence).toBe(1.0); // human-confirmed
+    expect(amount?.confidence).toBe(0.8);   // un-corrected field preserved
+  });
+
+  it('returns null when no extraction exists for the doc (covers doc-not-found)', async () => {
+    await saveDocument(ctx, mkModel('DOC-ac2')); // doc but no extraction
+    expect(await applyDocumentCorrections(ctx, 'DOC-ac2', [{ name: 'x', value: 'y' }])).toBeNull();
+    expect(await applyDocumentCorrections(ctx, 'DOC-missing', [{ name: 'x', value: 'y' }])).toBeNull();
   });
 });

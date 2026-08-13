@@ -184,6 +184,12 @@ export function migrate(sqlite: Database.Database): void {
     if (!have.has('reviewed_by')) {
       try { sqlite.exec('ALTER TABLE documents ADD COLUMN reviewed_by TEXT'); } catch { /* concurrent */ }
     }
+    // Persisted vectorization outcome (Bug fix: was previously an in-memory Map
+    // in documentEntry.ts, so it showed 'unknown' after upload or restart). Same
+    // guarded ALTER pattern as the review_status block above.
+    if (!have.has('vectorization_meta')) {
+      try { sqlite.exec('ALTER TABLE documents ADD COLUMN vectorization_meta TEXT'); } catch { /* concurrent */ }
+    }
   }
   {
     const cols = sqlite.prepare('PRAGMA table_info(extractions)').all() as Array<{ name: string }>;
@@ -302,6 +308,9 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     `ALTER TABLE documents ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'pending'`,
     `ALTER TABLE documents ADD COLUMN IF NOT EXISTS reviewed_at timestamptz`,
     `ALTER TABLE documents ADD COLUMN IF NOT EXISTS reviewed_by TEXT`,
+    // Persisted vectorization outcome (Bug fix: previously an in-memory Map, lost
+    // on restart and never written by the /api/files upload path).
+    `ALTER TABLE documents ADD COLUMN IF NOT EXISTS vectorization_meta jsonb`,
     `ALTER TABLE extractions ADD COLUMN IF NOT EXISTS proposed_relationships jsonb`,
   ];
   try {

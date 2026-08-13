@@ -5,7 +5,7 @@ import type { DbContext } from '../db/client.js';
 import {
   saveDocument, loadDocument, saveExtraction, loadExtraction, saveBinding, saveChunks,
   saveClassification, saveDocumentTags, listDocumentTags, getReviewSnapshot,
-  updateExtractionFields, setReviewStatus, loadLatestExtractionByDocId,
+  applyDocumentCorrections, setDocumentVectorization,
 } from '../db/repositories.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
@@ -49,12 +49,6 @@ export type VectorizationStatus = {
   chunkCount: number;
   reason?: string;
 };
-
-/** In-process cache of the latest vectorization outcome per docId, populated by
- *  ingest_document. Read by present_document_review to surface向量化入库 status.
- *  Same-session only (lost on restart) — acceptable since review follows ingest
- *  within one session. */
-const lastVectorization = new Map<string, VectorizationStatus>();
 
 const newDocId = () => `DOC-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
@@ -148,14 +142,27 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   // docType + content (design §8: auto-tags are an ingest byproduct, persisted
   // and included in the return summary). Explicit tags come from tag_document.
   // Fault-tolerant like the vector block above: by design a byproduct, so a
-  // persistence failure (UNIQUE regression, disk full, locked DB) degrades to
-  // an empty tag set instead of killing the already-committed primary result.
+  // persistence failure degrades to an empty tag set instead of killing the
+  // already-committed primary result. saveDocumentTags is now INSERT OR IGNORE /
+  // ON CONFLICT DO NOTHING (Bug fix), so this catch only fires on GENUINE errors
+  // (disk full, locked DB, schema mismatch) — logged at error level so real
+  // failures are not silently swallowed.
   let tags: string[] = [];
   try {
     tags = deriveAutoTags({ docType: blockModel.docType, blocks: blockModel.blocks });
     await saveDocumentTags(ctx, docId, tags, 'auto', userId);
   } catch (e) {
-    console.warn('[ingest] auto-tag persistence skipped:', (e as Error).message);
+    console.error('[ingest] auto-tag persistence failed:', (e as Error).message);
+  }
+
+  // Persist the vectorization outcome onto the document row (Bug fix: previously
+  // only stored in an in-memory Map written by ingest_document, so it was lost
+  // on restart and never written by the /api/files upload path — which calls
+  // ingestFile directly — leaving present_document_review showing 'unknown').
+  try {
+    await setDocumentVectorization(ctx, docId, vectorization, userId);
+  } catch (e) {
+    console.error('[ingest] vectorization_meta persistence failed:', (e as Error).message);
   }
 
   return {
@@ -192,7 +199,9 @@ export function buildIngestDocumentTool(deps: ToolDeps) {
         embedder: deps.embedder,
         userId: deps.userId,
       });
-      lastVectorization.set(result.docId, result.vectorization);
+      // Vectorization outcome is now persisted inside ingestFile (Bug fix), so
+      // present_document_review reads it back via getReviewSnapshot — no in-memory
+      // cache to populate (which was lost on restart / never written by uploads).
       return result;
     },
   });
@@ -423,8 +432,9 @@ export function buildPresentDocumentReviewTool(deps: ToolDeps) {
     execute: async ({ docId }) => {
       const snap = await getReviewSnapshot(deps.ctx, docId, deps.userId);
       if (!snap) return { status: 'error' as const, reason: 'document_not_found' };
-      const vectorization = lastVectorization.get(docId)
-        ?? { status: 'unknown' as const, mode: 'unknown', chunkCount: 0 };
+      // Vectorization outcome now comes from the persisted documents row (Bug
+      // fix: previously read an in-memory Map that the /api/files upload path
+      // never populated and that was lost on restart — always showed 'unknown').
       return {
         docId: snap.docId,
         docType: snap.docType,
@@ -433,7 +443,7 @@ export function buildPresentDocumentReviewTool(deps: ToolDeps) {
         overallConfidence: snap.overallConfidence,
         proposedRelationships: snap.proposedRelationships,
         tags: snap.tags,
-        vectorization,
+        vectorization: snap.vectorization,
         reviewStatus: snap.reviewStatus,
       };
     },
@@ -469,21 +479,12 @@ export function buildUpdateDocumentFieldsTool(deps: ToolDeps) {
     execute: async ({ docId, corrections }) => {
       const exists = await getReviewSnapshot(deps.ctx, docId, deps.userId);
       if (!exists) return { status: 'error' as const, reason: 'document_not_found' };
-      const latest = await loadLatestExtractionByDocId(deps.ctx, docId, deps.userId);
-      if (!latest) return { status: 'error' as const, reason: 'extraction_not_found' };
-      // Merge: preserve un-corrected fieldMeta; corrected -> value overridden,
-      // confidence 1.0 (human-confirmed), strength 'none', sourceSpans cleared
-      // (the corrected value no longer traces to a source span).
-      const corrByName = new Map(corrections.map((c) => [c.name, c.value]));
-      const fields: Record<string, { value: string | number; sourceSpans: SourceSpan[] }> = { ...latest.fields };
-      const fieldMeta: Record<string, { strength: SpanMatchStrength; confidence: number }> = { ...latest.fieldMeta };
-      for (const [name, value] of corrByName) {
-        fields[name] = { value, sourceSpans: [] };
-        fieldMeta[name] = { strength: 'none', confidence: 1.0 };
-      }
-      await updateExtractionFields(deps.ctx, docId, fields, fieldMeta, deps.userId);
-      await setReviewStatus(deps.ctx, docId, 'corrected', deps.userId);
-      const snapshot = await getReviewSnapshot(deps.ctx, docId, deps.userId);
+      // Merge + write delegated to the shared applyDocumentCorrections (Feature:
+      // in-card correction HITL route reuses the same logic). Returns null when
+      // no extraction exists for the doc. Preserves the prior tool contract
+      // (extraction_not_found) without duplicating the merge code here.
+      const snapshot = await applyDocumentCorrections(deps.ctx, docId, corrections, deps.userId);
+      if (!snapshot) return { status: 'error' as const, reason: 'extraction_not_found' };
       return {
         ok: true as const,
         docId,

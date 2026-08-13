@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createDb, migrate, type SqliteDbContext } from '../../src/pipeline/db/client.js';
-import { saveDocument, saveExtraction, saveDocumentTags } from '../../src/pipeline/db/repositories.js';
+import { saveDocument, saveExtraction, saveDocumentTags, setDocumentVectorization } from '../../src/pipeline/db/repositories.js';
 import { buildPresentDocumentReviewTool } from '../../src/pipeline/tools/documentEntry.js';
 import type { BlockModel } from '../../src/pipeline/types.js';
 
@@ -46,5 +46,23 @@ describe('present_document_review', () => {
     const res: any = await t.execute({ docId: 'DOC-missing' }, execOpts);
     expect(res.status).toBe('error');
     expect(res.reason).toBe('document_not_found');
+  });
+
+  // Bug 1: vectorization status is persisted on the documents row and read back
+  // via getReviewSnapshot (was an in-memory Map that the /api/files upload path
+  // never populated and that was lost on restart -> always showed 'unknown').
+  it('surfaces the persisted vectorization outcome', async () => {
+    await saveDocument(ctx, mkModel('DOC-p2'));
+    await saveDocumentTags(ctx, 'DOC-p2', ['动力煤'], 'auto', '');
+    await saveExtraction(ctx, {
+      documentId: 'DOC-p2', docType: '合同',
+      fields: { 合同号: { value: 'HT001', sourceSpans: [] } },
+      fieldMeta: { 合同号: { strength: 'exact', confidence: 0.95 } },
+      overallConfidence: 0.95, needsReview: false,
+    });
+    await setDocumentVectorization(ctx, 'DOC-p2', { status: 'ok', mode: 'deterministic', chunkCount: 5 });
+    const t = buildPresentDocumentReviewTool({ ctx });
+    const res: any = await t.execute({ docId: 'DOC-p2' }, execOpts);
+    expect(res.vectorization).toEqual({ status: 'ok', mode: 'deterministic', chunkCount: 5 });
   });
 });

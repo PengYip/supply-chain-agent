@@ -14,6 +14,7 @@ import { approvalCallback } from './routes/approvalCallback.js';
 import { statusRoute } from './routes/status.js';
 import { sessionsRoute } from './routes/sessions.js';
 import { filesRoute } from './routes/files.js';
+import { reviewRoute } from './routes/review.js';
 import { ensureBucket } from './lib/minio.js';
 import { migrateOnStartup } from './pipeline/db/dbBackend.js';
 import { getDriver, closeNeo4j } from './graph/neo4j.js';
@@ -88,6 +89,7 @@ app.get('/api/health', (c) =>
 app.use('/api/chat/*', requireAuth);
 app.use('/api/sessions/*', requireAuth);
 app.use('/api/approval/*', requireAuth);
+app.use('/api/documents/*', requireAuth);
 
 app.route('/api', chatRoute);
 app.route('/api', approvalCallback);
@@ -98,6 +100,10 @@ app.route('/api/sessions', sessionsRoute);
 
 // Phase 3: file upload (MinIO) + ingest bridge, scoped to the auth user.
 app.route('/api/files', filesRoute);
+
+// Feature: in-card correction HITL. Mounted at /api/documents so the route's
+// POST /:docId/review resolves to the final path /api/documents/:docId/review.
+app.route('/api/documents', reviewRoute);
 
 // Production: serve frontend static files from apps/web/dist on the same port.
 // Same-origin => no CORS needed; dev mode uses Vite on :5173 with /api proxy.

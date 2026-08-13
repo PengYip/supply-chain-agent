@@ -33,6 +33,7 @@ import type {
   ReviewStatus,
   ProposedRelationship,
   ReviewSnapshot,
+  DocumentVectorization,
 } from './repositories.js';
 
 // Phase 2 business-data isolation: same convention as repositories.ts -- a
@@ -428,17 +429,24 @@ export async function saveDocumentTagsPg(
   userId?: string,
 ): Promise<void> {
   const uid = effectiveUserId(userId);
+  // Resilience (Bug fix): dedup the input WITHIN this call so duplicate tags in
+  // one array don't trip the UNIQUE index, AND use ON CONFLICT DO NOTHING so a
+  // UNIQUE collision (race, or an already-existing tag) is a no-op rather than
+  // throwing. The app-layer have.has pre-read stays as an optimization.
+  const uniqueTags = [...new Set(tags)];
   const existing = await ctx.pool.query(
     `SELECT tag FROM document_tags
      WHERE document_id = $1 AND source = $2 AND (user_id = $3 OR user_id = '' OR user_id IS NULL)`,
     [documentId, source, uid],
   );
   const have = new Set(existing.rows.map((r: { tag: string }) => r.tag));
-  for (const tag of tags) {
+  for (const tag of uniqueTags) {
     if (have.has(tag)) continue;
     const id = rid('TG');
     await ctx.pool.query(
-      'INSERT INTO document_tags (id, document_id, tag, source, user_id) VALUES ($1, $2, $3, $4, $5)',
+      `INSERT INTO document_tags (id, document_id, tag, source, user_id)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT DO NOTHING`,
       [id, documentId, tag, source, uid],
     );
   }
@@ -704,11 +712,23 @@ export async function getReviewSnapshotPg(
 ): Promise<ReviewSnapshot | null> {
   void userId; // user-scoping is optional here (doc was just ingested by the same user)
   const docRes = await ctx.pool.query(
-    'SELECT doc_type, review_status FROM documents WHERE id = $1',
+    'SELECT doc_type, review_status, vectorization_meta FROM documents WHERE id = $1',
     [docId],
   );
   if (!docRes.rows[0]) return null;
-  const doc = docRes.rows[0] as { doc_type: string; review_status: string | null };
+  const doc = docRes.rows[0] as {
+    doc_type: string;
+    review_status: string | null;
+    vectorization_meta: DocumentVectorization | null;
+  };
+
+  // jsonb auto-parses to an object on read; a NULL/legacy row falls back to the
+  // 'unknown' snapshot so present_document_review reports 未知 (mirrors SQLite).
+  const vectorization: DocumentVectorization = doc.vectorization_meta ?? {
+    status: 'unknown',
+    mode: 'unknown',
+    chunkCount: 0,
+  };
 
   const exRes = await ctx.pool.query(
     `SELECT fields, field_meta, overall_confidence, proposed_relationships
@@ -759,6 +779,7 @@ export async function getReviewSnapshotPg(
     fields,
     overallConfidence: ex ? Number(ex.overall_confidence) : 0,
     proposedRelationships: ex?.proposed_relationships ?? [],
+    vectorization,
   };
 }
 
@@ -774,6 +795,24 @@ export async function setReviewStatusPg(
   await ctx.pool.query(
     'UPDATE documents SET review_status = $1, reviewed_at = NOW(), reviewed_by = $2 WHERE id = $3',
     [status, effectiveUserId(userId), docId],
+  );
+}
+
+/**
+ * Persist the L4 vector-embedding outcome onto the document row (pg twin of
+ * setDocumentVectorization). vectorization_meta is jsonb; node-postgres casts
+ * the JSON string to jsonb on write.
+ */
+export async function setDocumentVectorizationPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  vectorization: DocumentVectorization,
+  userId?: string,
+): Promise<void> {
+  void userId; // signature parity; doc-level scope already authorizes the caller
+  await ctx.pool.query(
+    'UPDATE documents SET vectorization_meta = $1::jsonb WHERE id = $2',
+    [JSON.stringify(vectorization), docId],
   );
 }
 
