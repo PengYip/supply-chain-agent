@@ -54,8 +54,32 @@ jobs:
           git reset --hard origin/main
           npm install
           npm run build
+          EXPECTED_SHA="$(git rev-parse --short HEAD)"
+          # Bake build info (read by /api/health at boot) AFTER build, BEFORE reload.
+          printf '{"sha":"%s","builtAt":"%s"}\n' "$EXPECTED_SHA" "$(date -u +%FT%TZ)" > apps/server/dist/build-info.json
           pm2 reload sca-server || pm2 start ecosystem.config.cjs
           pm2 save
+          # Self-verify: pm2 reload can silently no-op (esp. under concurrent
+          # pushes), leaving a stale process on old code. Confirm the running
+          # process serves the new SHA; force restart on mismatch; fail loudly.
+          sleep 5
+          verify_sha() {
+            curl -fsS localhost:3001/api/health 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{process.stdout.write(JSON.parse(d).sha||"")}catch(e){process.stdout.write("parse-error")}})' || true
+          }
+          RUNNING_SHA="$(verify_sha)"
+          attempt=0
+          while [ "$RUNNING_SHA" != "$EXPECTED_SHA" ] && [ "$attempt" -lt 3 ]; do
+            attempt=$((attempt+1))
+            echo "Running SHA '$RUNNING_SHA' != expected '$EXPECTED_SHA'; forcing pm2 restart (attempt $attempt)"
+            pm2 restart sca-server
+            sleep 5
+            RUNNING_SHA="$(verify_sha)"
+          done
+          if [ "$RUNNING_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error::Deploy did not take effect: running '$RUNNING_SHA' != expected '$EXPECTED_SHA'" >&2
+            exit 1
+          fi
+          echo "Deploy verified: server running SHA $RUNNING_SHA"
 
   # NOTE: Postgres integration tests (11) currently skip without DB_BACKEND=postgres.
   # To enable them, add a pgvector service container and set DB_BACKEND=postgres + DB_* creds.

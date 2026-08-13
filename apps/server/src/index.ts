@@ -7,6 +7,7 @@ import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import { env } from './env.js';
 import { chatRoute } from './routes/chat.js';
 import { approvalCallback } from './routes/approvalCallback.js';
@@ -25,6 +26,19 @@ import {
 } from './lib/auth-middleware.js';
 
 const DEFAULT_ROLE: Role = 'trader';
+
+// Build info baked by CD into apps/server/dist/build-info.json. Read ONCE at
+// boot so a stale pm2 process reports the SHA it was built with — lets the
+// deploy verify the running code matches the deployed commit (catches reload
+// no-ops that otherwise leave the server on old code).
+let BUILD_SHA = 'unknown';
+try {
+  BUILD_SHA =
+    (JSON.parse(readFileSync(new URL('./build-info.json', import.meta.url), 'utf-8')) as { sha?: string }).sha ??
+    'unknown';
+} catch {
+  /* dev / build without build-info.json — leave 'unknown' */
+}
 
 // AuthEnv gives the auth middlewares a typed `user` slot on the context.
 const app = new Hono<AuthEnv>();
@@ -66,6 +80,7 @@ app.get('/api/health', (c) =>
     model: env.OPENAI_MODEL,
     role: DEFAULT_ROLE,
     tools: listToolNames(DEFAULT_ROLE),
+    sha: BUILD_SHA,
   }),
 );
 
