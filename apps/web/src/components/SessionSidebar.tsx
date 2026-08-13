@@ -109,7 +109,7 @@ export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, c
                   >
                     删除
                   </span>
-                  <div style={{ fontSize: 14 }}>{s.title ?? `角色：${s.role}`}</div>
+                  <div style={{ fontSize: 14 }}>{s.title ?? '新建会话'}</div>
                   <div style={{ fontSize: 12, color: '#888' }}>
                     {relativeTime(s.updatedAt || s.createdAt)}
                   </div>
