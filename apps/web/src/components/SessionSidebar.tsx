@@ -32,6 +32,7 @@ export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, c
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation()
+    if (!window.confirm('确定删除此会话？删除后无法恢复。')) return
     await deleteSession(id)
   }
 

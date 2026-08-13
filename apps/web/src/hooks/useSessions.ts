@@ -35,18 +35,22 @@ export function useSessions() {
     });
     if (res.ok) {
       const session: Session = await res.json();
-      setSessions(prev => [session, ...prev]);
+      // The POST endpoint returns only {id, role}; re-fetch the full list so
+      // the new session appears with complete fields (createdAt/title).
+      await refresh();
       return session;
     }
     return null;
-  }, []);
+  }, [refresh]);
 
   const deleteSession = useCallback(async (id: string) => {
     try {
       await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
-      setSessions(prev => prev.filter(s => s.id !== id));
+      // Re-fetch authoritative state from the server instead of optimistic
+      // local mutation, so the list stays consistent.
+      await refresh();
     } catch { /* ignore */ }
-  }, []);
+  }, [refresh]);
 
   return { sessions, loading, refresh, createSession, deleteSession };
 }

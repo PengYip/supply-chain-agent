@@ -143,6 +143,12 @@ export const RealChatView: React.FC<{
   useEffect(() => {
     if (prevStatusRef.current !== 'ready' && status === 'ready') {
       onSessionChangedRef.current?.()
+      // Title generation is a fire-and-forget second LLM call that finishes
+      // ~1-3s AFTER the stream ends (server chat.ts). The immediate refresh
+      // above races ahead of the title being written, so schedule a delayed
+      // second refresh to pick up the freshly-generated session title.
+      const t = window.setTimeout(() => onSessionChangedRef.current?.(), 4000)
+      return () => window.clearTimeout(t)
     }
     prevStatusRef.current = status
   }, [status])
