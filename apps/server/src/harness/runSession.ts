@@ -51,7 +51,7 @@ export interface RunSessionOpts {
  * Duplicated from routes/chat.ts pending Task 7b consolidation (chat.ts will
  * delegate to runSession and drop its own copy).
  */
-function extractMessageText(msg: any): string {
+export function extractMessageText(msg: any): string {
   const content = msg?.content;
   if (typeof content === 'string') return content;
   const parts = Array.isArray(content) ? content : msg?.parts;

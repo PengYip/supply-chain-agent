@@ -19,6 +19,7 @@ import {
   sessionBelongsTo,
 } from '../harness/sessionStore.js';
 import { subscribe } from '../harness/sessionEvents.js';
+import { abortSessionRun } from '../harness/runManager.js';
 import type { Role } from '../harness/roleToolRegistry.js';
 
 export const sessionsRoute = new Hono<AuthEnv>();
@@ -90,6 +91,19 @@ sessionsRoute.delete('/:id', requireRole('admin', 'trader'), (c) => {
   const removed = deleteSession(id);
   if (!removed) return c.json({ error: 'not_found' }, 404);
   return c.json({ ok: true });
+});
+
+// Abort an in-flight background run for a session. Signals the run's
+// AbortController; the run decides how to unwind (AI SDK streamText propagates
+// the abort to tool calls). Returns aborted=false when no run is in-flight.
+// Phase 4 RBAC: only admin/trader may abort (same as delete).
+sessionsRoute.post('/:id/abort', requireRole('admin', 'trader'), (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const id = c.req.param('id');
+  if (!sessionBelongsTo(id, user.id)) return c.json({ error: 'not found' }, 404);
+  const aborted = abortSessionRun(id);
+  return c.json({ ok: true, aborted });
 });
 
 // SSE event stream for a session. Subscribes to the in-memory event bus and

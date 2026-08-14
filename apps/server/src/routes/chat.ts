@@ -1,58 +1,20 @@
 import { Hono } from 'hono';
 import { randomUUID } from 'node:crypto';
-import { convertToModelMessages, type ModelMessage, type UIMessage, type LanguageModel } from 'ai';
+import { convertToModelMessages, type ModelMessage, type UIMessage } from 'ai';
 import { z } from 'zod';
-import { createDeepSeek } from '@ai-sdk/deepseek';
-import { runStream, recordL2PendingFromResponse } from '../harness/agent.js';
 import type { Role } from '../harness/roleToolRegistry.js';
 import {
   createSession,
   loadSession,
   appendMessages,
   sessionBelongsTo,
-  setSessionTitle,
+  getSessionStatus,
 } from '../harness/sessionStore.js';
-import { setSessionContext } from '../harness/sessionContext.js';
-import { generateSessionTitle } from '../harness/titleGen.js';
-import { env } from '../env.js';
+import { startSessionRun } from '../harness/runManager.js';
+import { runSession, extractMessageText } from '../harness/runSession.js';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 
 export const chatRoute = new Hono<AuthEnv>();
-
-// Phase 5: title-generation model handle. Lazy singleton reusing the SAME
-// factory as agent.ts (createDeepSeek(...).chat(env.OPENAI_MODEL)). Only used on
-// the first turn of a session (one-shot title), so construction amortizes.
-let titleModel: LanguageModel | null = null;
-function getTitleModel(): LanguageModel {
-  if (!titleModel) {
-    titleModel = createDeepSeek({
-      baseURL: env.OPENAI_BASE_URL,
-      apiKey: env.OPENAI_API_KEY,
-    }).chat(env.OPENAI_MODEL);
-  }
-  return titleModel;
-}
-
-/**
- * Defensively extract text from a message, handling BOTH shapes:
- *   - ModelMessage: `.content` is a string or an array of `{type:'text', text}` parts.
- *   - UIMessage (AI SDK 6 parts format): `.parts` is an array of `{type:'text', text}`.
- * Without the `.parts` fallback, firstUserText/firstReplyText come back empty and
- * the title falls back to '新会话' every time. `any` is intentional — the two
- * message shapes don't share a TS structural field for text content.
- */
-function extractMessageText(msg: any): string {
-  const content = msg?.content;
-  if (typeof content === 'string') return content;
-  const parts = Array.isArray(content) ? content : msg?.parts;
-  if (Array.isArray(parts)) {
-    return parts
-      .filter((p: any) => p?.type === 'text')
-      .map((p: any) => String(p?.text ?? ''))
-      .join('');
-  }
-  return '';
-}
 
 // AI SDK 6 `useChat` posts UIMessages in the `parts` format
 // ({ id, role, parts: [...] }), NOT the legacy { role, content: string }.
@@ -70,12 +32,6 @@ const BodySchema = z.object({
     .optional()
     .default([]),
 });
-
-function isModelNotFound(message: string): boolean {
-  return /model not found|model .* does not exist|invalid model|unknown model/i.test(
-    message,
-  );
-}
 
 chatRoute.post('/chat', async (c) => {
   let json: unknown;
@@ -97,7 +53,8 @@ chatRoute.post('/chat', async (c) => {
 
   // Session: reuse x-session-id if it exists AND belongs to the authenticated
   // user (Phase 2 data isolation), else create a new one owned by the user.
-  // Sets the request context so L3 tool execute can attribute pending tickets.
+  // Background runtime: session context is set via ALS inside RunManager's
+  // runSessionContext wrapper (not the legacy single-slot setSessionContext).
   const user = c.get('user');
   const userId = user?.id ?? null;
   // Phase 4 RBAC: map the authenticated user's role to the agent role. For now
@@ -115,7 +72,6 @@ chatRoute.post('/chat', async (c) => {
   // first message carries that x-session-id, loadSession returns the empty
   // session (loaded != null) but with zero messages — title-gen must still fire.
   const isFirstTurn = priorMessages.length === 0;
-  setSessionContext(sessionId);
 
   const auditTraceId = randomUUID();
   console.log(
@@ -164,75 +120,39 @@ chatRoute.post('/chat', async (c) => {
     streamMessages = [...priorModelMessages, ...newModelMessages];
   }
 
+  // firstUserText for title-gen (runSession handles title-gen via isFirstTurn).
+  const firstUserText = isFirstTurn
+    ? extractMessageText(newModelMessages.find((m) => m.role === 'user'))
+    : undefined;
+
   try {
-    const result = await runStream({
-      messages: streamMessages,
-      role: agentRole,
-      auditTraceId,
-      sessionId,
-      userId: userId ?? undefined,
-    });
-
-    // After the stream completes, record any L2 soft-gate approvals requested
-    // this turn. The assistant UIMessage itself is persisted via
-    // toUIMessageStreamResponse onFinish (the clean server-side source).
-    // `result.response` is a PromiseLike (no .catch), so use the 2-arg .then.
-    result.response.then(
-      async (r) => {
-        try {
-          recordL2PendingFromResponse(sessionId, r.messages);
-        } catch (err) {
-          console.error('[chat] L2 record failed:', err instanceof Error ? err.message : err);
-        }
-        // Phase 5: fire-and-forget title generation on the first exchange.
-        // void + .catch so title-gen NEVER breaks a chat turn.
-        if (isFirstTurn) {
-          const firstUserText = extractMessageText(
-            newModelMessages.find((m) => m.role === 'user'),
-          );
-          const firstReplyText = extractMessageText(
-            r.messages.find((m) => m.role === 'assistant'),
-          );
-          void generateSessionTitle(getTitleModel(), firstUserText, firstReplyText)
-            .then((title) => setSessionTitle(sessionId, title))
-            .catch(() => {
-              /* title-gen is best-effort; never surface to the user */
-            });
-        }
-      },
-      () => {
-        /* stream errors surface via onError below */
-      },
+    // Background runtime: start a detached run via RunManager and return
+    // immediately. The run consumes the stream + persists via onFinish +
+    // emits to the session event bus (GET /api/sessions/:id/events). The HTTP
+    // response no longer carries the stream — disconnects do NOT abort the run.
+    const start = startSessionRun(sessionId, userId ?? undefined, agentRole, (signal) =>
+      runSession({
+        sessionId,
+        userId: userId ?? undefined,
+        role: agentRole,
+        messages: streamMessages,
+        auditTraceId,
+        abortSignal: signal,
+        isFirstTurn,
+        firstUserText,
+      }),
     );
-
-    const streamResp = result.toUIMessageStreamResponse({
-      originalMessages: messages as UIMessage[],
-      generateMessageId: randomUUID,
-      onFinish: ({ responseMessage }) => {
-        try {
-          appendMessages(sessionId, [responseMessage]);
-        } catch (err) {
-          console.error('[chat] persist failed:', err instanceof Error ? err.message : err);
-        }
-      },
-      onError: (error: unknown) => {
-        const msg = error instanceof Error ? error.message : String(error);
-        console.error('[chat] streamText error:', msg);
-        if (isModelNotFound(msg)) {
-          return `Model "${process.env.OPENAI_MODEL ?? ''}" was rejected by the provider (${msg}). Try OPENAI_MODEL=deepseek-chat.`;
-        }
-        return msg;
-      },
-    });
-
-    // Return the stream with the session id so the client can resume.
-    return new Response(streamResp.body, {
-      status: streamResp.status,
-      headers: { ...streamResp.headers, 'x-session-id': sessionId },
-    });
+    if ('conflict' in start) {
+      const st = getSessionStatus(sessionId);
+      return c.json({ error: 'session_busy', activeRunId: st?.runId }, 409);
+    }
+    return c.json(
+      { sessionId, runId: start.runId, status: 'busy' },
+      { status: 200, headers: { 'x-session-id': sessionId } },
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[chat] setup error:', msg);
-    return c.json({ error: 'Chat stream failed', detail: msg }, 500);
+    return c.json({ error: 'Chat run failed', detail: msg }, 500);
   }
 });
