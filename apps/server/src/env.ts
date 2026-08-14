@@ -71,6 +71,13 @@ const EnvSchema = z.object({
   // 启动抽取回填(接线闭环): 每次启动重新跑历史上抽取 pending/skipped/failed/NULL
   // 的已解析文档(上限条数), 把合同台账回填齐。0 = 禁用。
   EXTRACTION_BACKFILL_LIMIT: z.coerce.number().int().min(0).default(20),
+  // LLM-as-judge eval (apps/server/eval/agent). Independent judge endpoint so
+  // the judge can be a different model family than the agent (book Ch6: multi-
+  // source judging avoids correlated blind spots). All optional; unset values
+  // fall back to the main OPENAI_* model config.
+  EVAL_JUDGE_BASE_URL: z.string().url().optional(),
+  EVAL_JUDGE_API_KEY: z.string().optional(),
+  EVAL_JUDGE_MODEL: z.string().optional(),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
