@@ -2,14 +2,56 @@ import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react'
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport, generateId, lastAssistantMessageIsCompleteWithApprovalResponses, lastAssistantMessageIsCompleteWithToolCalls, parseJsonEventStream, readUIMessageStream, uiMessageChunkSchema } from 'ai'
 import type { UIMessage, UIMessageChunk } from 'ai'
-import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, LogOut, Paperclip } from 'lucide-react'
+import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, LogOut, Paperclip, Check } from 'lucide-react'
 import { RealMessageItem, ErrorMessage } from './RealMessageItem'
 import { HumanAgentStatusBar } from './HumanAgentStatusBar'
 import { useHumanAgentStatus } from '../hooks/useHumanAgentStatus'
 import { type ContextFile } from '../hooks/useFiles'
+import { type DocParseState } from '../api/process'
 import { buildRenderItems } from '../utils/realChatUtils'
 import { authClient } from '../lib/auth'
 import clsx from 'clsx'
+
+/** Per-file parse status segment shown inside a context chip. Extends the
+ *  existing chip (no restyle): spinner+解析中 in flight, green check+已解析,
+ *  amber 需OCR, red 解析失败. needs_ocr keeps the file referenced; no
+ *  auto-retry in v1. */
+function ContextChipStatus({ state }: { state?: DocParseState }) {
+  if (!state) return null
+  const base: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 3,
+    fontSize: 11,
+    lineHeight: 1,
+    whiteSpace: 'nowrap',
+  }
+  if (state === 'parsing') {
+    return (
+      <span style={{ ...base, color: '#6b7280' }}>
+        <Loader2 size={11} className="animate-spin" />
+        解析中
+      </span>
+    )
+  }
+  if (state === 'parsed') {
+    return (
+      <span style={{ ...base, color: '#16a34a' }}>
+        <Check size={11} />
+        已解析
+      </span>
+    )
+  }
+  if (state === 'needs_ocr') {
+    return <span style={{ ...base, color: '#d97706' }}>需OCR</span>
+  }
+  return (
+    <span style={{ ...base, color: '#dc2626' }}>
+      <AlertCircle size={11} />
+      解析失败
+    </span>
+  )
+}
 
 export const RealChatView: React.FC<{
   onSignOut?: () => void;
@@ -19,14 +61,20 @@ export const RealChatView: React.FC<{
   /** Phase 5: called when a chat turn finishes so the sidebar can refresh
    *  (a newly-generated session title appears). */
   onSessionChanged?: () => void;
-}> = ({ onSignOut, sessionId, contextFiles, setContextFiles, onSessionChanged }) => {
+  /** Called after an upload lands so App's shared file list (and the file
+   *  panel) shows the new object. */
+  onFilesChanged?: () => void;
+  /** Per-docId parse state for referenced files, shown on the context chips
+   *  (owned by App, where 添加到对话 fires the parse). */
+  docParseStates: Record<string, DocParseState>;
+}> = ({ onSignOut, sessionId, contextFiles, setContextFiles, onSessionChanged, onFilesChanged, docParseStates }) => {
   const [input, setInput] = useState('')
 
-  // Phase 3: file upload state. Uploads POST to /api/files (MinIO + ingest bridge).
+  // File upload state. Uploads POST to /api/files — storage-only; parsing
+  // activates when the file is added to a conversation as a reference.
   const [uploadState, setUploadState] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle')
   const [uploadMsg, setUploadMsg] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const sendMessageRef = useRef<((msg: { text: string }) => void) | null>(null)
 
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -55,21 +103,19 @@ export const RealChatView: React.FC<{
         const j = (await res.json().catch(() => ({}))) as { error?: string; detail?: string }
         throw new Error(j.error || j.detail || `upload failed (${res.status})`)
       }
-      const data = (await res.json()) as { docId?: string; filename?: string }
+      const data = (await res.json()) as { filename?: string }
       setUploadState('success')
-      setUploadMsg(
-        `已上传: ${data.filename ?? file.name}${data.docId ? ` (docId ${data.docId})` : ''}`,
-      )
-      if (data.docId && sendMessageRef.current) {
-        sendMessageRef.current({ text: `[系统提示] 已上传文件 "${data.filename ?? file.name}"（docId: ${data.docId}），系统已自动完成录入(ingest)与索引，无需再调 ingest_document。请直接对该 docId 调用 extract_fields 抽取业务字段，再调用 present_document_review 向用户呈现五维复核卡。` })
-      }
+      setUploadMsg(`已上传「${data.filename ?? file.name}」，可在右侧文件管理中添加到对话`)
+      // Storage-only: no agent turn, no auto-parse here. Refresh the shared
+      // file list so the new object (with its 未解析 badge) shows immediately.
+      onFilesChanged?.()
     } catch (err) {
       setUploadState('error')
       setUploadMsg(err instanceof Error ? err.message : String(err))
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
-  }, [])
+  }, [onFilesChanged])
   // sessionIdRef is read synchronously by the transport headers callback
   // (must be a ref, not state). We mirror it into `sessionId` state purely so
   // HumanAgentStatusBar / useHumanAgentStatus can react to it once the chat response
@@ -109,7 +155,6 @@ export const RealChatView: React.FC<{
       lastAssistantMessageIsCompleteWithApprovalResponses({ messages }) ||
       lastAssistantMessageIsCompleteWithToolCalls({ messages }),
   })
-  sendMessageRef.current = sendMessage
 
   // Load session history when the externally-provided sessionId changes.
   // Also seed sessionIdRef so the very first outbound chat request carries the
@@ -456,6 +501,7 @@ export const RealChatView: React.FC<{
               {contextFiles.map((f) => (
                 <span key={f.key} style={{ background: '#e3f2fd', border: '1px solid #90caf9', borderRadius: 3, padding: '2px 6px', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   {f.filename}
+                  <ContextChipStatus state={docParseStates[f.docId]} />
                   <span onClick={() => removeFromConversation(f.key)} style={{ cursor: 'pointer', color: '#666' }}>x</span>
                 </span>
               ))}

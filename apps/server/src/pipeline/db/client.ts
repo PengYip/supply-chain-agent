@@ -49,7 +49,10 @@ export function migrate(sqlite: Database.Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       review_status TEXT NOT NULL DEFAULT 'pending',
       reviewed_at TEXT,
-      reviewed_by TEXT
+      reviewed_by TEXT,
+      -- Model B parse lifecycle: 'uploaded' stub -> 'parsing' -> 'parsed' |
+      -- 'needs_ocr' | 'failed'. Decouples upload (storage-only) from parsing.
+      parse_status TEXT NOT NULL DEFAULT 'uploaded'
     );
     CREATE TABLE IF NOT EXISTS extractions (
       id TEXT PRIMARY KEY,
@@ -198,6 +201,11 @@ export function migrate(sqlite: Database.Database): void {
     if (!have.has('extraction_status')) {
       try { sqlite.exec('ALTER TABLE documents ADD COLUMN extraction_status TEXT'); } catch { /* concurrent */ }
     }
+    // Model B parse lifecycle column. Same guarded ALTER pattern as
+    // review_status / vectorization_meta above (duplicate column -> SQLITE_ERROR).
+    if (!have.has('parse_status')) {
+      try { sqlite.exec("ALTER TABLE documents ADD COLUMN parse_status TEXT NOT NULL DEFAULT 'uploaded'"); } catch { /* concurrent */ }
+    }
   }
   // Lane B: per-chunk semantic tags. Pre-existing dev DBs created doc_chunk
   // WITHOUT this column (CREATE TABLE IF NOT EXISTS adds no columns), so a
@@ -334,6 +342,8 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     `ALTER TABLE documents ADD COLUMN IF NOT EXISTS extraction_status TEXT`,
     // Lane B: per-chunk semantic tags (JSON string[] | NULL).
     `ALTER TABLE doc_chunk ADD COLUMN IF NOT EXISTS tags JSONB`,
+    // Model B parse lifecycle column (mirror of the SQLite guarded ALTER above).
+    `ALTER TABLE documents ADD COLUMN IF NOT EXISTS parse_status TEXT NOT NULL DEFAULT 'uploaded'`,
   ];
   try {
     for (const sql of statements) {

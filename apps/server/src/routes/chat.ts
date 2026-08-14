@@ -16,8 +16,20 @@ import { setSessionContext } from '../harness/sessionContext.js';
 import { generateSessionTitle } from '../harness/titleGen.js';
 import { env } from '../env.js';
 import type { AuthEnv } from '../lib/auth-middleware.js';
+import { getDbContext } from '../pipeline/db/dbBackend.js';
+import type { DbContext } from '../pipeline/db/client.js';
+import { ensureDocumentParsed } from '../pipeline/tools/documentEntry.js';
+import { buildIngestDeps } from '../pipeline/ingestModel.js';
 
 export const chatRoute = new Hono<AuthEnv>();
+
+// One DbContext reused across requests (same 'pipeline.db' file / DB as the
+// agent + uploads + review). Same lazy-singleton shape as routes/files.ts.
+let _ctx: DbContext | null = null;
+function ctx(): DbContext {
+  if (!_ctx) _ctx = getDbContext();
+  return _ctx;
+}
 
 // Phase 5: title-generation model handle. Lazy singleton reusing the SAME
 // factory as agent.ts (createDeepSeek(...).chat(env.OPENAI_MODEL)). Only used on
@@ -145,19 +157,49 @@ chatRoute.post('/chat', async (c) => {
     : ([] as ModelMessage[]);
 
   // When the user @-references files this turn, surface them as a leading system
-  // message so the agent has the docIds/filenames up front. The model is told to
-  // use recall_documents to read the actual content (we never inline file bytes
-  // into the prompt -- the recall tool is the grounded read path).
+  // message so the agent has the docIds/filenames up front. Model B: uploads are
+  // STORAGE-ONLY (parse_status='uploaded'), so referencing a file triggers
+  // on-demand parsing right here (the chat backstop). ensureDocumentParsed
+  // single-flights with the /process endpoint (one run per doc, shared), skips
+  // already-terminal docs, and re-runs 'uploaded'/'failed' ones. We cap the
+  // total wait (~180s) and proceed regardless: the message notes each file's
+  // resulting state so the agent tells the user honestly about needs_ocr files.
   let streamMessages: ModelMessage[];
   if (contextFiles.length > 0) {
+    const deps = buildIngestDeps();
+    const deadlineMs = Date.now() + 180_000;
+    const statusByDoc = new Map<string, string>();
+    await Promise.all(
+      contextFiles.map(async (f) => {
+        const remaining = deadlineMs - Date.now();
+        if (remaining <= 0) return;
+        try {
+          const res = await Promise.race([
+            ensureDocumentParsed(ctx(), f.docId, deps, userId ?? undefined),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), remaining)),
+          ]);
+          if (res) statusByDoc.set(f.docId, res.parseStatus);
+        } catch {
+          // unknown doc / unexpected error -> the message below just omits state.
+        }
+      }),
+    );
     const fileList = contextFiles
-      .map((f, i) => `${i + 1}. ${f.filename} (docId: ${f.docId})`)
+      .map((f, i) => {
+        const st = statusByDoc.get(f.docId) ?? 'unknown';
+        return `${i + 1}. ${f.filename} (docId: ${f.docId}, parseStatus: ${st})`;
+      })
       .join('\n');
     const contextMsg: ModelMessage = {
       role: 'system',
       content:
-        '用户在本次对话中引用了以下文件。请使用 recall 工具搜索文档内容来回答关于这些文件的问题：\n' +
-        fileList,
+        '用户在本次对话中引用了以下文件。系统已自动解析并自动抽取这些文件(结构化字段/关系/标签/向量均已就绪), 无需再次录入。\n' +
+        '规则:\n' +
+        '- 已解析(parsed)的文件: 直接调用 present_document_review 向用户呈现复核卡。\n' +
+        '- 仅当上下文明确说明抽取缺失/失败时, 才调用 extract_fields 重新抽取。\n' +
+        '- 禁止对已上传文件调用 ingest_document(上传为仅存储, 且路径不在录入根目录, 会失败)。\n' +
+        '- 若某文件为 needs_ocr, 如实告知用户该文件需 OCR 处理后才能使用。\n' +
+        '文件列表:\n' + fileList,
     };
     streamMessages = [contextMsg, ...priorModelMessages, ...newModelMessages];
   } else {

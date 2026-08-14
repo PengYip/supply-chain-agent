@@ -1,11 +1,15 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
+
 import type { DbContext } from '../db/client.js';
 import {
   saveDocument, loadDocument, saveExtraction, loadExtraction, saveBinding, saveChunks,
   saveClassification, saveDocumentTags, listDocumentTags, getReviewSnapshot,
   applyDocumentCorrections, setDocumentVectorization,
+  // Model B (decouple upload from parse): stub + parse-lifecycle repo fns.
+  getDocumentSourceUri, setDocumentParseStatus, getDocumentParseStatus, updateDocumentMeta,
+  type ParseStatus,
 } from '../db/repositories.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
@@ -19,7 +23,7 @@ import { linkDocumentToContract } from '../../data/seed.js';
 import { tagExternal, assertWithinRoot } from '../../harness/injectionDefense.js';
 import type { Embedder } from '../embedder.js';
 import { isVecReady, saveChunkVectors } from '../db/vecStore.js';
-import type { DocType, Modality, SourceSpan } from '../types.js';
+import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
 import { validateSpan, type SpanMatchStrength } from '../spanValidator.js';
 
 export interface ToolDeps {
@@ -204,6 +208,15 @@ export async function ingestFile(opts: IngestOptions): Promise<{
     }
   }
 
+  // Model B: tool-created docs are fully parsed at the end of ingest, so stamp
+  // parse_status='parsed' for consistency with the upload-then-process path.
+  // Wrapped like the vectorization write above so a status write can't break ingest.
+  try {
+    await setDocumentParseStatus(ctx, docId, 'parsed', userId);
+  } catch (e) {
+    console.error('[ingest] parse_status persistence failed:', (e as Error).message);
+  }
+
   return {
     docId,
     blockCount: blockModel.blocks.length,
@@ -214,6 +227,283 @@ export async function ingestFile(opts: IngestOptions): Promise<{
     tags,
     vectorization,
   };
+}
+
+// ---- Model B: on-demand parse of an upload stub ----------------------------
+//
+// Upload (POST /api/files) is STORAGE-ONLY: it creates a lightweight documents
+// stub (parse_status='uploaded') and returns immediately. Parsing runs on demand
+// when the document is referenced (添加到对话 triggers POST
+// /api/documents/:docId/process; the chat route also backstops via
+// ensureDocumentParsed). Parse/OCR failure becomes a STATE (parse_status
+// 'needs_ocr' / 'failed'), NOT a thrown exception, so upload is never coupled to
+// parsing.
+
+/** Options for processDocument / ensureDocumentParsed (all deps optional). */
+export interface ProcessDocumentOptions {
+  docType?: DocType;
+  modality?: Modality;
+  embedder?: Embedder;
+  classifier?: ClassifierDeps;
+  extraction?: ExtractionDeps;
+  tagger?: ChunkTagger;
+  userId?: string;
+}
+
+export interface ProcessDocumentResult {
+  docId: string;
+  parseStatus: ParseStatus;
+  blockCount?: number;
+  classifiedDocType?: DocType;
+  classificationConfidence?: number;
+  classificationSource?: 'classified' | 'hint' | 'fallback';
+  tags?: string[];
+  vectorization?: VectorizationStatus;
+  reason?: string;
+}
+
+/**
+ * In-memory single-flight registry for parse runs, keyed by docId. Concurrent
+ * callers (the /process endpoint + the chat backstop) share one run per doc so
+ * a document is never parsed twice at the same time.
+ */
+const parseFlights = new Map<string, Promise<ProcessDocumentResult>>();
+
+/** Terminal parse states: an already-terminal doc is never re-parsed. */
+function isTerminalParseStatus(status: ParseStatus | null): boolean {
+  return status === 'parsed' || status === 'needs_ocr';
+}
+
+/**
+ * Parse a stub with a one-shot digital->scanned (MinerU OCR) retry. A 'digital'
+ * parse that throws or yields 0 blocks is retried ONCE as 'scanned' before the
+ * caller settles on 'needs_ocr'; an already-'scanned' parse that fails stays
+ * failed. Throws the last parse error when both attempts fail.
+ */
+async function parseWithOcrRetry(
+  sourceUri: string,
+  docType: DocType,
+  docId: string,
+  modality: Modality | undefined,
+): Promise<BlockModel> {
+  const first = modality ?? 'digital';
+  let lastError: unknown;
+  const attempt = async (m: Modality): Promise<BlockModel | null> => {
+    const model = await parseDocument({
+      sourcePath: assertWithinRoot(sourceUri),
+      docType,
+      docId,
+      modality: m,
+    });
+    return model.blocks.length > 0 ? model : null;
+  };
+  try {
+    const m = await attempt(first);
+    if (m) return m;
+    lastError = new Error('文件解析得到 0 个内容块');
+  } catch (e) {
+    lastError = e;
+  }
+  // digital failed (0 blocks or threw): retry ONCE as scanned (MinerU OCR).
+  if (first === 'digital') {
+    try {
+      const m = await attempt('scanned');
+      if (m) return m;
+      lastError = new Error('文件解析得到 0 个内容块');
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+/**
+ * On-demand parse of an EXISTING document stub (Model B). Upload creates a
+ * lightweight documents row (parse_status='uploaded'); this fn runs the parse
+ * pipeline against that stub when triggered by POST /api/documents/:docId/process
+ * or by the chat backstop. OCR/parse failure becomes a STATE (parse_status
+ * 'needs_ocr' / 'failed'), NOT a thrown exception — so upload is never coupled
+ * to parsing. The ONLY thrown case is a missing doc row ('document_not_found').
+ *
+ * Mirrors ingestFile's body but operates on an EXISTING docId (the stub already
+ * inserted by createDocumentStub), so it UPDATEs the row (updateDocumentMeta)
+ * instead of INSERT-ing (saveDocument), and threads the same modern deps:
+ * classifier, tagger (Lane B), embedder and auto-extraction (Lane A).
+ */
+export async function processDocument(
+  ctx: DbContext,
+  docId: string,
+  opts: ProcessDocumentOptions = {},
+): Promise<ProcessDocumentResult> {
+  ensureFk(ctx);
+  // 1. Resolve the stub's source path. A missing row is the one case that throws
+  //    (the caller asked to process a doc that does not exist).
+  const sourceUri = await getDocumentSourceUri(ctx, docId, opts.userId);
+  if (!sourceUri) throw new Error('document_not_found');
+
+  // 2. Mark parsing in progress.
+  await setDocumentParseStatus(ctx, docId, 'parsing', opts.userId);
+
+  // 3. Parse with a one-shot digital->scanned OCR retry. OCR failure -> a
+  //    'needs_ocr' STATE (no throw), so upload/parse decoupling holds.
+  let blockModel: BlockModel;
+  try {
+    blockModel = await parseWithOcrRetry(sourceUri, opts.docType ?? '其他', docId, opts.modality);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    await setDocumentParseStatus(ctx, docId, 'needs_ocr', opts.userId).catch(() => {});
+    return { docId, parseStatus: 'needs_ocr', blockCount: 0, reason };
+  }
+
+  // Steps 4-12 mirror ingestFile's body; an unexpected error -> 'failed' STATE
+  // (no throw — process-layer failures are states, not exceptions).
+  try {
+    // 4. Classify (Phase 2 routing-classify): parsed blocks -> effective docType.
+    const cls = opts.classifier
+      ? await classifyDocument(opts.classifier, { blocks: blockModel.blocks, hint: opts.docType })
+      : classifyDocumentWithoutModel({ blocks: blockModel.blocks, hint: opts.docType });
+    blockModel.docType = cls.docType;
+
+    // 5. UPDATE the stub with the real docType/modality/block_model (replaces
+    //    ingestFile's saveDocument INSERT).
+    await updateDocumentMeta(
+      ctx,
+      docId,
+      { docType: blockModel.docType, modality: blockModel.modality, blockModel },
+      opts.userId,
+    );
+
+    // 6. Persist classification.
+    await saveClassification(
+      ctx,
+      { documentId: docId, docType: cls.docType, confidence: cls.confidence, source: cls.source, hint: opts.docType },
+      opts.userId,
+    );
+
+    // 7. Chunk + tag + save chunks (Lane B, same as ingestFile). tagChunks never
+    //    throws and short-circuits to all-null when the tagger is unset or the
+    //    taxonomy is empty (其他).
+    const chunks = chunkBlockModel(blockModel);
+    const taxonomy = getTaxonomy(blockModel.docType);
+    const chunkTagResult = opts.tagger
+      ? await tagChunks({ chunks: chunks.map((c) => ({ text: c.text })), taxonomy, tagger: opts.tagger })
+      : chunks.map(() => null);
+    const chunkRowIds = await saveChunks(ctx, docId, chunks, chunkTagResult);
+
+    // 8. Vector block (verbatim from ingestFile).
+    let vectorization: VectorizationStatus = { status: 'skipped', mode: 'none', chunkCount: chunks.length };
+    if (opts.embedder) {
+      if (await isVecReady(ctx)) {
+        try {
+          const vecs = await opts.embedder.embed(chunks.map((c) => c.text));
+          await saveChunkVectors(
+            ctx,
+            chunkRowIds.map((id, i) => ({ chunkRowId: id, vec: vecs[i] ?? [] })),
+          );
+          vectorization = { status: 'ok', mode: opts.embedder.kind, chunkCount: chunks.length };
+        } catch (e) {
+          vectorization = {
+            status: 'failed', mode: opts.embedder.kind, chunkCount: chunks.length,
+            reason: (e as Error).message,
+          };
+          console.warn('[processDocument] vector embedding failed; FTS5 recall still available:', vectorization.reason);
+        }
+      } else {
+        vectorization = { status: 'skipped', mode: opts.embedder.kind, chunkCount: chunks.length, reason: 'vec_store_not_ready' };
+      }
+    }
+
+    // 9. Auto-tag (verbatim from ingestFile; fault-tolerant byproduct).
+    let tags: string[] = [];
+    try {
+      tags = deriveAutoTags({ docType: blockModel.docType, blocks: blockModel.blocks });
+      await saveDocumentTags(ctx, docId, tags, 'auto', opts.userId);
+    } catch (e) {
+      console.error('[processDocument] auto-tag persistence failed:', (e as Error).message);
+    }
+
+    // 10. Persist the vectorization outcome.
+    try {
+      await setDocumentVectorization(ctx, docId, vectorization, opts.userId);
+    } catch (e) {
+      console.error('[processDocument] vectorization_meta persistence failed:', (e as Error).message);
+    }
+
+    // 11. Lane A (2a): auto-extraction (fault-isolated; same as ingestFile).
+    if (opts.extraction) {
+      try {
+        await runAutoExtraction({
+          ctx,
+          docId,
+          blockModel,
+          userId: opts.userId,
+          deps: buildAutoExtractionDeps({ ctx, extraction: opts.extraction, userId: opts.userId }),
+        });
+      } catch (e) {
+        console.error('[processDocument] auto-extraction failed:', (e as Error).message);
+      }
+    }
+
+    // 12. Parsed.
+    await setDocumentParseStatus(ctx, docId, 'parsed', opts.userId);
+
+    return {
+      docId,
+      parseStatus: 'parsed',
+      blockCount: blockModel.blocks.length,
+      classifiedDocType: cls.docType,
+      classificationConfidence: cls.confidence,
+      classificationSource: cls.source,
+      tags,
+      vectorization,
+    };
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    await setDocumentParseStatus(ctx, docId, 'failed', opts.userId).catch(() => {});
+    return { docId, parseStatus: 'failed', reason };
+  }
+}
+
+/**
+ * Single-flighted parse trigger (Model B). Safe to call from anywhere a docId is
+ * referenced (the /process endpoint, the chat backstop):
+ *  - a run already in flight for this docId -> await the SAME run (never double-parse);
+ *  - terminal state ('parsed' | 'needs_ocr') -> return immediately (no re-parse);
+ *  - 'uploaded' / 'failed' / missing -> start a run.
+ * A missing doc row propagates 'document_not_found' from processDocument.
+ */
+export async function ensureDocumentParsed(
+  ctx: DbContext,
+  docId: string,
+  opts: ProcessDocumentOptions = {},
+  userId?: string,
+): Promise<ProcessDocumentResult> {
+  const fullOpts = userId ? { ...opts, userId } : opts;
+
+  // 1. In-flight -> share the run (single-flight).
+  const inFlight = parseFlights.get(docId);
+  if (inFlight) return inFlight;
+
+  // 2. Terminal -> no-op. 'needs_ocr' is a user-facing state the caller decides
+  //    how to handle (e.g. tell the user honestly), never silently re-parsed.
+  const status = await getDocumentParseStatus(ctx, docId, userId);
+  if (isTerminalParseStatus(status)) {
+    return { docId, parseStatus: status! };
+  }
+
+  // 3. Re-check the map AFTER the await: a concurrent caller may have started a
+  //    run while we were reading the status. parseFlights.set runs synchronously
+  //    right after processDocument() is invoked, so a second caller resuming
+  //    later cannot slip in between the two.
+  const started = parseFlights.get(docId);
+  if (started) return started;
+
+  // 4. 'uploaded' / 'failed' / 'parsing'-without-flight / missing -> start a run.
+  const run = processDocument(ctx, docId, fullOpts).finally(() => {
+    parseFlights.delete(docId);
+  });
+  parseFlights.set(docId, run);
+  return run;
 }
 
 export function buildIngestDocumentTool(deps: ToolDeps) {

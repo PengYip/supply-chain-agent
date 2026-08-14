@@ -6,8 +6,9 @@
 // the logic lives in ONE place). Also surfaces the previously-dead 'confirmed'
 // review state via a { confirm: true } body.
 //
-// Mounted at /api/documents in index.ts, so the route below resolves to the
-// final path: POST /api/documents/:docId/review. requireAuth-gated in index.ts
+// Mounted at /api/documents in index.ts, so the routes below resolve to the
+// final paths: POST /api/documents/:docId/review and
+// POST /api/documents/:docId/process. requireAuth-gated in index.ts
 // (app.use('/api/documents/*', requireAuth)), so a user is always attached here.
 
 import { Hono } from 'hono';
@@ -19,8 +20,15 @@ import {
   getReviewSnapshot,
   setReviewStatus,
 } from '../pipeline/db/repositories.js';
+import { ensureDocumentParsed } from '../pipeline/tools/documentEntry.js';
+import { buildIngestDeps } from '../pipeline/ingestModel.js';
+import type { DocType, Modality } from '../pipeline/types.js';
 
 export const reviewRoute = new Hono<AuthEnv>();
+
+// Allowed docType hints (mirror of routes/files.ts). Used to validate the
+// optional docType on POST /api/documents/:docId/process.
+const ALLOWED_DOCTYPES: ReadonlySet<string> = new Set(['合同', '发票', '提单', '装箱单', '其他']);
 
 // One DbContext reused across requests (same 'pipeline.db' file / DB as the
 // agent + uploads, so corrections land where recall_documents / the review
@@ -123,6 +131,69 @@ reviewRoute.post('/:docId/review', async (c) => {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[review] correction failed:', msg);
+    return c.json({ ok: false, error: msg }, 500);
+  }
+});
+
+/**
+ * POST /api/documents/:docId/process
+ *
+ * Model B: run the parse pipeline on an EXISTING upload stub
+ * (parse_status='uploaded') on demand. Upload is storage-only; this is where
+ * OCR / block extraction / chunking / indexing / auto-extraction actually
+ * happen. Parse/OCR failure becomes a STATE (parse_status='needs_ocr' /
+ * 'failed') in the response body, NOT a thrown 500 — so the caller can react
+ * (e.g. prompt the user to retry as 'scanned'). requireAuth-gated in index.ts
+ * (a user is always attached).
+ *
+ * Single-flighted via ensureDocumentParsed: concurrent calls for the same docId
+ * share one run; terminal docs ('parsed' / 'needs_ocr') return immediately.
+ *
+ * Request body (JSON, all optional):
+ *   { docType?: string; modality?: string }
+ *   - docType: '合同'|'发票'|'提单'|'装箱单'|'其他' (default '其他')
+ *   - modality: 'digital'|'scanned' (default 'digital')
+ *
+ * Responses:
+ *   200 { ok: true, docId, parseStatus: 'parsed'|'needs_ocr'|'failed',
+ *        blockCount?, classifiedDocType?, ... }
+ *   404 { ok: false, error: 'document_not_found' }  (unknown docId)
+ *   500 { ok: false, error: <message> }             (only for truly unexpected
+ *        errors; parse failures are states, never 500s)
+ */
+reviewRoute.post('/:docId/process', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+
+  let body: { docType?: unknown; modality?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    body = {};
+  }
+
+  const docId = c.req.param('docId');
+  const docTypeStr = typeof body.docType === 'string' ? body.docType : '其他';
+  const docType = (ALLOWED_DOCTYPES.has(docTypeStr) ? docTypeStr : '其他') as DocType;
+  const modalityStr = typeof body.modality === 'string' ? body.modality : 'digital';
+  const modality = (modalityStr === 'scanned' ? 'scanned' : 'digital') as Modality;
+
+  try {
+    const result = await ensureDocumentParsed(
+      ctx(),
+      docId,
+      { docType, modality, ...buildIngestDeps() },
+      user.id,
+    );
+    // result already carries docId + parseStatus (and blockCount/classifiedDocType
+    // when the run actually parsed), so spread it into the response.
+    return c.json({ ok: true, ...result });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg === 'document_not_found') {
+      return c.json({ ok: false, error: 'document_not_found' }, 404);
+    }
+    console.error('[review] process failed:', msg);
     return c.json({ ok: false, error: msg }, 500);
   }
 });

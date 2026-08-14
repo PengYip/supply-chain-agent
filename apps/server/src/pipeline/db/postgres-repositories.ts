@@ -16,7 +16,7 @@
 // "more negative = better" + ORDER BY ascending holds on both backends.
 
 import type { PostgresDbContext } from './client.js';
-import type { BlockModel, DocType, SourceSpan } from '../types.js';
+import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
 import type { SpanMatchStrength } from '../spanValidator.js';
 import type {
   ExtractionInput,
@@ -35,6 +35,8 @@ import type {
   ReviewSnapshot,
   DocumentVectorization,
   ExtractionStatus,
+  ParseStatus,
+  DocumentStubInput,
 } from './repositories.js';
 
 // Phase 2 business-data isolation: same convention as repositories.ts -- a
@@ -45,6 +47,9 @@ function effectiveUserId(userId?: string): string {
 
 const rid = (p: string) =>
   `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
+/** Doc-id generator mirroring newDocId (documentEntry.ts) for stub rows. */
+const newDocRowId = () => `DOC-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
 export async function saveDocumentPg(
   ctx: PostgresDbContext,
@@ -871,4 +876,122 @@ export async function updateExtractionFieldsPg(
     'UPDATE extractions SET fields = $1, field_meta = $2 WHERE document_id = $3',
     [JSON.stringify(fields), JSON.stringify(fieldMeta), docId],
   );
+}
+
+// ---- Model B: decouple upload from parse (pg twins) ------------------------
+//
+// Mirror of the SQLite helpers in repositories.ts. createDocumentStub inserts a
+// parse_status='uploaded' row at upload time; the lifecycle fns drive it through
+// parsing. Raw parameterized SQL over the Pool, same conventions as the rest of
+// this file (jsonb columns cast on write; block_model placeholder is valid JSON).
+
+/** Insert a lightweight documents stub at upload time (parse_status='uploaded'). */
+export async function createDocumentStubPg(
+  ctx: PostgresDbContext,
+  input: DocumentStubInput,
+): Promise<{ docId: string }> {
+  const docId = newDocRowId();
+  const docType: DocType = input.docType ?? '其他';
+  const modality: Modality = 'digital';
+  const blockModel = JSON.stringify({
+    docId,
+    docType,
+    modality,
+    blocks: [],
+    sourceUri: input.sourceUri,
+    createdAt: new Date().toISOString(),
+  });
+  await ctx.pool.query(
+    `INSERT INTO documents (id, doc_type, modality, source_uri, block_model, minio_key, user_id, parse_status)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, 'uploaded')`,
+    [
+      docId,
+      docType,
+      modality,
+      input.sourceUri,
+      blockModel,
+      input.minioKey ?? null,
+      effectiveUserId(input.userId),
+    ],
+  );
+  return { docId };
+}
+
+/**
+ * UPDATE doc_type / modality / block_model on an existing documents row (pg
+ * twin). blockModel is written to the jsonb block_model column when provided so
+ * downstream tools can read the parsed BlockModel after processDocument.
+ */
+export async function updateDocumentMetaPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  input: { docType?: DocType; modality?: Modality; blockModel?: BlockModel },
+  userId?: string,
+): Promise<void> {
+  void userId; // signature parity; doc-level scope already authorizes the caller
+  const sets: string[] = [];
+  const params: Array<string | null> = [];
+  let pi = 1;
+  if (input.docType !== undefined) {
+    sets.push(`doc_type = $${pi++}`);
+    params.push(input.docType);
+  }
+  if (input.modality !== undefined) {
+    sets.push(`modality = $${pi++}`);
+    params.push(input.modality);
+  }
+  if (input.blockModel !== undefined) {
+    sets.push(`block_model = $${pi++}::jsonb`);
+    params.push(JSON.stringify(input.blockModel));
+  }
+  if (sets.length === 0) return;
+  params.push(docId);
+  await ctx.pool.query(
+    `UPDATE documents SET ${sets.join(', ')} WHERE id = $${pi}`,
+    params,
+  );
+}
+
+/** Set the parse_status lifecycle on a document (pg twin). */
+export async function setDocumentParseStatusPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  status: ParseStatus,
+  userId?: string,
+): Promise<void> {
+  void userId; // signature parity; doc-level scope already authorizes the caller
+  await ctx.pool.query(
+    'UPDATE documents SET parse_status = $1 WHERE id = $2',
+    [status, docId],
+  );
+}
+
+/** Read the parse_status for a document, or null if the row does not exist (pg). */
+export async function getDocumentParseStatusPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  userId?: string,
+): Promise<ParseStatus | null> {
+  void userId; // signature parity; doc-level scope already authorizes the caller
+  const res = await ctx.pool.query(
+    'SELECT parse_status FROM documents WHERE id = $1',
+    [docId],
+  );
+  if (!res.rows[0]) return null;
+  return res.rows[0].parse_status as ParseStatus;
+}
+
+/** Read the source_uri for a document, or null if the row does not exist (pg). */
+export async function getDocumentSourceUriPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  userId?: string,
+): Promise<string | null> {
+  void userId; // signature parity; doc-level scope already authorizes the caller
+  const res = await ctx.pool.query(
+    'SELECT source_uri FROM documents WHERE id = $1',
+    [docId],
+  );
+  if (!res.rows[0]) return null;
+  return res.rows[0].source_uri as string;
 }
