@@ -124,11 +124,11 @@ export const RealChatView: React.FC<{
   const sessionIdRef = useRef<string | null>(null)
   const [liveSessionId, setLiveSessionId] = useState<string | null>(null)
 
-  // Mirror the latest contextFiles into a ref so the transport's `body` callback
-  // (created once via useMemo) always reads the current value without recreating
-  // the transport (which would reset chat state).
-  const contextFilesRef = useRef(contextFiles)
-  useEffect(() => { contextFilesRef.current = contextFiles }, [contextFiles])
+  // Referenced files travel as a PER-CALL request body from onSubmit's submit-
+  // time snapshot (see onSubmit for why: the transport body() resolves
+  // asynchronously, so a ref read there races with the post-send state clear).
+  // The transport-level body below only carries the default role; auto-resume
+  // turns (tool approvals) correctly re-send NO context files.
 
   const fetchWrapper = useCallback<typeof fetch>(async (input, init) => {
     const res = await fetch(input, init)
@@ -143,10 +143,7 @@ export const RealChatView: React.FC<{
   const transport = useMemo(() => new DefaultChatTransport({
     api: '/api/chat',
     headers: () => (sessionIdRef.current ? { 'x-session-id': sessionIdRef.current } : {}) as Record<string, string>,
-    body: () => ({
-      role: 'trader',
-      contextFiles: contextFilesRef.current.map((f) => ({ docId: f.docId, filename: f.filename })),
-    }),
+    body: () => ({ role: 'trader' }),
     fetch: fetchWrapper,
   }), [fetchWrapper])
   const { messages, sendMessage, status, error, addToolApprovalResponse, setMessages } = useChat<UIMessage>({
@@ -345,12 +342,19 @@ export const RealChatView: React.FC<{
     const text = input.trim()
     if (!text || isStreaming) return
     setInput('')
-    // The transport's body() callback runs synchronously during sendMessage
-    // (inside send(), before its first await fetch), so it already reads the
-    // current contextFilesRef with the files attached to this message. Clear
-    // immediately so the files are consumed by THIS turn only -- awaiting
-    // sendMessage would delay the clear until the whole response stream ends.
-    void sendMessage({ text })
+    // Snapshot the referenced files at submit time and pass them as a PER-CALL
+    // request body. The transport-level body() callback is resolved
+    // asynchronously inside the SDK's send pipeline (await resolve2(this.body)),
+    // so clearing state right after sendMessage() empties the ref BEFORE body()
+    // reads it -- the files would silently never reach /api/chat. The per-call
+    // body is merged over the transport body ({...resolvedBody, ...options.body})
+    // at send time from this synchronous snapshot, so the race is impossible.
+    // Clear immediately after: the files belong to THIS turn only.
+    const attachedFiles = contextFiles.map((f) => ({ docId: f.docId, filename: f.filename }))
+    void sendMessage(
+      { text },
+      attachedFiles.length > 0 ? { body: { role: 'trader', contextFiles: attachedFiles } } : undefined,
+    )
     setContextFiles([])
   }
 
