@@ -214,6 +214,11 @@ export interface RunStreamOpts {
    * injection (tests that don't need it).
    */
   sessionId?: string;
+  /**
+   * Background-runtime seam: abort signal forwarded to streamText so a
+   * background run can be cancelled (RunManager.abortSessionRun).
+   */
+  abortSignal?: AbortSignal;
 }
 
 // Scan a turn's response messages for v6 tool-approval-request parts (emitted
@@ -308,7 +313,7 @@ export async function buildAgentStatusSnapshot({
 // to pre-H1 behavior. When supplied (tests), no provider client is constructed and
 // no network/env is required, so the agent loop can be exercised offline against
 // a canned fake model + in-memory DbContext.
-export async function runStream({ messages, role, auditTraceId, model, deps, userId, sessionId }: RunStreamOpts) {
+export async function runStream({ messages, role, auditTraceId, model, deps, userId, sessionId, abortSignal }: RunStreamOpts) {
   // Production default: real DeepSeek model. If a model was injected, skip
   // building the provider client so tests need no API key / network.
   //
@@ -392,6 +397,9 @@ export async function runStream({ messages, role, auditTraceId, model, deps, use
         return {};
       }
     },
+    // Background-runtime seam: forwarded so RunManager can cancel a background
+    // run via its AbortController (AI SDK 6 option name: abortSignal).
+    ...(abortSignal ? { abortSignal } : {}),
     // Phase 6 T3: experimental_onToolCallFinish was REMOVED. After T3,
     // withAudit catches all throws and records the success/fail signal directly
     // into `failures` (certain knowledge from its try/catch + result shape). The
