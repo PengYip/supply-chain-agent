@@ -122,11 +122,11 @@ scenarios:
   - id: dup-1
     tier: 1
     persona: { facts: ["x"], disclosure: "y", goal: "z" }
-    rubric: { dimensions: [{ name: a, weight: essential, scoring: { 4: p, 1: q } }] }
+    rubric: { dimensions: [{ name: "a", weight: essential, scoring: { "4": "p", "1": "q" } }] }
   - id: dup-1
     tier: 1
     persona: { facts: ["x"], disclosure: "y", goal: "z" }
-    rubric: { dimensions: [{ name: a, weight: essential, scoring: { 4: p, 1: q } }] }
+    rubric: { dimensions: [{ name: "a", weight: essential, scoring: { "4": "p", "1": "q" } }] }
 `);
     expect(() => loadDataset(join(dir, 'dup.yaml'))).toThrow(/duplicate scenario id/);
   });
@@ -1658,7 +1658,7 @@ describe('aggregateScore', () => {
   it('all pass -> pass with weighted score', () => {
     const s = aggregateScore(artifact(), vPass, judgeOk);
     expect(s.verdict).toBe('pass');
-    expect(s.rubricScore).toBe(3); // (4*1.0 + 2*0.5) / 1.5 = 3
+    expect(s.rubricScore).toBe(3.333); // (4*1.0 + 2*0.5) / 1.5, toFixed(3)
   });
   it('judge veto -> fail regardless of dimension scores', () => {
     const s = aggregateScore(artifact(), vPass, { ...judgeOk, vetoTriggered: true, vetoRationale: '编造' });
@@ -1972,10 +1972,12 @@ import { listPending } from '../../src/harness/sessionStore.js';
 import { payments } from '../../src/data/seed.js';
 import type { Scenario } from '../../eval/agent/types.js';
 
-// Fake agent model: turn 1 emits an L3 create_payment tool call (blocked),
-// later turns emit final text. Records prompts so we can assert persistence.
+// Fake agent model, scripted BY PROMPT CONTENT (not call count): whenever the
+// model sees the L3-authorized instruction in its prompt, it re-emits the
+// create_payment call WITH authorizedTicketId (the real behavior under test);
+// otherwise it emits final text. This mirrors how the production model behaves
+// across the resume turn.
 function fakeAgentModel(finalText: string, prompts: unknown[]) {
-  let calls = 0;
   const usage = () => ({ inputTokens: 5, outputTokens: 7, totalTokens: 12 });
   return {
     specificationVersion: 'v2' as const, provider: 'fake', modelId: 'fake-agent',
@@ -1984,11 +1986,17 @@ function fakeAgentModel(finalText: string, prompts: unknown[]) {
       return { content: [{ type: 'text' as const, text: 'ok' }], finishReason: 'stop' as const, usage: usage(), warnings: [] as unknown[] };
     },
     async doStream(options: { tools?: Array<{ name?: string }>; prompt?: unknown }) {
-      calls++;
       prompts.push(options.prompt);
+      const promptJson = JSON.stringify(options.prompt ?? '');
+      const authorized = /authorizedTicketId=?(PAY-pending-[^"']*)/.exec(promptJson);
+      const paymentPending = promptJson.includes('create_payment') === false && promptJson.includes('帮我安排');
       const stream = new ReadableStream<unknown>({
         start(controller) {
-          if (calls === 1) {
+          if (authorized) {
+            // Resume turn: re-run create_payment with the ticket -> truly executes.
+            controller.enqueue({ type: 'tool-call', toolCallId: `call_pay_${Date.now()}`, toolName: 'create_payment', input: JSON.stringify({ contractNo: 'HT-2024-001', amount: 858000, authorizedTicketId: authorized[1] }) });
+            controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: usage() });
+          } else if (paymentPending) {
             controller.enqueue({ type: 'tool-call', toolCallId: 'call_pay_1', toolName: 'create_payment', input: JSON.stringify({ contractNo: 'HT-2024-001', amount: 858000 }) });
             controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: usage() });
           } else {
@@ -2489,26 +2497,28 @@ export function buildReport(
   artifacts: EpisodeArtifact[],
   scores: EpisodeScore[],
 ): string {
-  const k = Math.max(...scenarios.map((s) => {
-    const runs = scores.filter((x) => x.scenarioId === s.id).length;
-    return runs;
-  }), 1);
+  // Matrix rows derive from scores grouped by scenarioId (works even when the
+  // scenarios array is empty); scenarios only enrich tier/capability columns.
+  const metaById = new Map(scenarios.map((s) => [s.id, s]));
+  const ids = [...new Set(scores.map((s) => s.scenarioId))];
+  const k = Math.max(1, ...ids.map((id) => scores.filter((x) => x.scenarioId === id).length));
   const lines: string[] = [];
   lines.push('# Agent Eval Report');
   lines.push('');
   lines.push(`Generated: ${new Date().toISOString()}`);
-  lines.push(`Scenarios: ${scenarios.length} | Episodes: ${artifacts.length} | Runs/scenario: ${k}`);
+  lines.push(`Scenarios: ${scenarios.length || ids.length} | Episodes: ${artifacts.length} | Runs/scenario: ${k}`);
   lines.push('');
   lines.push('## Scenario matrix');
   lines.push('');
   lines.push('| Scenario | Tier | Verdicts | Pass@' + k + ' | Pass^' + k + ' | Avg score | Veto |');
   lines.push('|---|---|---|---|---|---|---|');
-  for (const s of scenarios) {
-    const ss = scores.filter((x) => x.scenarioId === s.id).sort((a, b) => a.runIndex - b.runIndex);
+  for (const id of ids) {
+    const ss = scores.filter((x) => x.scenarioId === id).sort((a, b) => a.runIndex - b.runIndex);
     const verdicts = ss.map((x) => x.verdict).join(', ');
     const avg = ss.filter((x) => x.rubricScore != null);
     const avgStr = avg.length ? (avg.reduce((t, x) => t + x.rubricScore!, 0) / avg.length).toFixed(2) : '-';
-    lines.push(`| ${s.id} | ${s.tier} | ${verdicts} | ${passAtK(ss, k) ? 'Y' : 'N'} | ${passConsecutiveK(ss, k) ? 'Y' : 'N'} | ${avgStr} | ${ss.some((x) => x.vetoTriggered) ? 'TRIGGERED' : '-'} |`);
+    const tier = metaById.get(id)?.tier ?? '-';
+    lines.push(`| ${id} | ${tier} | ${verdicts} | ${passAtK(ss, k) ? 'Y' : 'N'} | ${passConsecutiveK(ss, k) ? 'Y' : 'N'} | ${avgStr} | ${ss.some((x) => x.vetoTriggered) ? 'TRIGGERED' : '-'} |`);
   }
   lines.push('');
   lines.push('## Failure clustering');
