@@ -108,6 +108,13 @@ export const RealChatView: React.FC<{
     }
   }, [isBusy])
 
+  // When switching back to a session whose run ENDED while we were viewing
+  // another session, nobody was subscribed to its SSE to refresh the sidebar —
+  // the busy badge would stay stale forever. Always refresh on session switch.
+  useEffect(() => {
+    onSessionChangedRef.current?.()
+  }, [sessionId])
+
   const handleApprove = (id: string) => {
     void postApproval({ approvalId: id, approved: true })
   }
