@@ -19,6 +19,7 @@ import { ensureBucket } from './lib/minio.js';
 import { migrateOnStartup } from './pipeline/db/dbBackend.js';
 import { getDriver, closeNeo4j } from './graph/neo4j.js';
 import { listToolNames, type Role } from './harness/roleToolRegistry.js';
+import { resetBusyOnStartup } from './harness/sessionStore.js';
 import { auth } from './lib/auth.js';
 import {
   attachSession,
@@ -126,6 +127,11 @@ process.on('SIGINT', async () => { await closeNeo4j(); });
 // runtime rather than crashing startup). ensureBucket stays best-effort.
 (async () => {
   await migrateOnStartup();
+  // Background session runtime: any session left 'busy' by a previous process
+  // was interrupted by a crash/restart. Flip it to 'interrupted' so the UI can
+  // flag it and the caller can decide to resume or discard. Best-effort: a
+  // failure here would only leave a stale 'busy' flag, not crash the boot.
+  resetBusyOnStartup();
   void ensureBucket();
   // Phase 4: best-effort Neo4j connectivity check at boot. Warn-not-crash: an
   // unreachable graph store logs a warning and graph tools error per-call, but

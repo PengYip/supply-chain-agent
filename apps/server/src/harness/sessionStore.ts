@@ -67,6 +67,24 @@ CREATE TABLE IF NOT EXISTS authorized_tickets (
   }
 }
 
+// Background session runtime: add status / run_id / current_run_started_at to
+// pre-existing dev databases. Same idempotent PRAGMA-check guard as user_id
+// above (CREATE TABLE IF NOT EXISTS cannot add columns to an existing table).
+// Defaults to 'idle' so legacy rows are treated as not running.
+{
+  const cols = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
+  const has = (name: string): boolean => cols.some((c) => c.name === name);
+  if (!has('status')) {
+    db.exec("ALTER TABLE sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'idle'");
+  }
+  if (!has('run_id')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN run_id TEXT');
+  }
+  if (!has('current_run_started_at')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN current_run_started_at TEXT');
+  }
+}
+
 // ---- types ----
 
 export interface SessionInfo {
@@ -86,6 +104,15 @@ export interface LoadedSession {
 
 export type ApprovalLevel = 'L2' | 'L3';
 export type ApprovalStatus = 'pending' | 'approved' | 'denied';
+
+/**
+ * Background session runtime lifecycle state.
+ * - 'idle': no agent run in flight.
+ * - 'busy': a background agent run is currently executing (run_id set).
+ * - 'interrupted': a run was in-flight when the process restarted; the caller
+ *   must decide whether to resume or discard. Set by resetBusyOnStartup().
+ */
+export type SessionStatus = 'idle' | 'busy' | 'interrupted';
 
 export interface PendingApprovalRow {
   id: string;
@@ -121,7 +148,7 @@ const stmtInsertSession = db.prepare(
 );
 const stmtGetSession = db.prepare('SELECT * FROM sessions WHERE id = ?');
 const stmtListSessionsForUser = db.prepare(
-  'SELECT id, role, created_at, metadata_json FROM sessions WHERE user_id = ? ORDER BY created_at DESC',
+  'SELECT id, role, created_at, metadata_json, status FROM sessions WHERE user_id = ? ORDER BY created_at DESC',
 );
 const stmtTouchSession = db.prepare(
   'UPDATE sessions SET updated_at = ? WHERE id = ?',
@@ -229,19 +256,71 @@ export function setSessionTitle(sessionId: string, title: string): void {
 /** List chat sessions owned by a user (Phase 2 data isolation). */
 export function listSessionsForUser(
   userId: string,
-): Array<{ id: string; role: Role; createdAt: string; title?: string }> {
+): Array<{ id: string; role: Role; createdAt: string; title?: string; status: SessionStatus }> {
   const rows = stmtListSessionsForUser.all(userId) as Array<{
     id: string;
     role: Role;
     created_at: string;
     metadata_json: string | null;
+    status: SessionStatus;
   }>;
   return rows.map((r) => ({
     id: r.id,
     role: r.role,
     createdAt: r.created_at,
     title: parseTitle(r.metadata_json),
+    status: r.status,
   }));
+}
+
+/**
+ * Set the background-run status of a session. When transitioning to 'busy',
+ * pass a runId and the current timestamp is recorded as current_run_started_at.
+ * Setting any non-'busy' status clears run_id and current_run_started_at so a
+ * stale run cannot be confused with a live one. No-op if the session does not
+ * exist (UPDATE matches zero rows).
+ */
+export function setSessionStatus(id: string, status: SessionStatus, runId?: string): void {
+  const now = new Date().toISOString();
+  const startedAt = status === 'busy' ? now : null;
+  db.prepare(
+    `UPDATE sessions
+       SET status = @status,
+           run_id = @runId,
+           current_run_started_at = @startedAt,
+           updated_at = @now
+     WHERE id = @id`,
+  ).run({ status, runId: runId ?? null, startedAt, now, id });
+}
+
+/**
+ * Read the background-run status of a session. Returns null if the session does
+ * not exist. runId/startedAt are omitted from the result when NULL in the row.
+ */
+export function getSessionStatus(
+  id: string,
+): { status: SessionStatus; runId?: string; startedAt?: string } | null {
+  const row = db
+    .prepare('SELECT status, run_id, current_run_started_at FROM sessions WHERE id = ?')
+    .get(id) as
+    | { status: SessionStatus; run_id: string | null; current_run_started_at: string | null }
+    | undefined;
+  if (!row) return null;
+  return {
+    status: row.status,
+    runId: row.run_id ?? undefined,
+    startedAt: row.current_run_started_at ?? undefined,
+  };
+}
+
+/**
+ * Boot-time recovery: any session left 'busy' from a previous process was
+ * interrupted by a crash/restart. Flip it to 'interrupted' so the UI can flag
+ * it and the caller can decide to resume or discard. Safe to call when there
+ * are no busy rows (UPDATE matches zero rows).
+ */
+export function resetBusyOnStartup(): void {
+  db.prepare("UPDATE sessions SET status = 'interrupted' WHERE status = 'busy'").run();
 }
 
 /**
