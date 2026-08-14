@@ -33,4 +33,26 @@ describe('runSession', () => {
     // Note: status lifecycle is no longer runSession's responsibility (Task 7a
     // delegates it to RunManager), so we do not assert on it here.
   });
+
+  it('abort signal stops the run and it resolves without hanging', async () => {
+    const s = createSession('trader', 'u-abort');
+    const controller = new AbortController();
+    controller.abort(); // pre-aborted signal
+    const messages: ModelMessage[] = [{ role: 'user', content: 'hi' }];
+
+    const runPromise = runSession({
+      sessionId: s.id,
+      userId: 'u-abort',
+      role: 'trader',
+      messages,
+      auditTraceId: 't-abort',
+      abortSignal: controller.signal,
+      model: fakeStreamingModel(['hel', 'lo']),
+    });
+
+    // Key assertion: with a pre-aborted signal the run must not hang. AI SDK 6
+    // streamText emits an 'abort' stream part and closes instead of throwing, so
+    // runSession resolves normally (reaching this line = pass).
+    await runPromise;
+  });
 });

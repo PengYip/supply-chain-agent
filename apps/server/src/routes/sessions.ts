@@ -126,9 +126,10 @@ sessionsRoute.get('/:id/events', (c) => {
   const send = (obj: unknown) =>
     writer.write(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`)).catch(() => {});
 
-  // First event: current status snapshot.
+  // First event: current status snapshot. runId is always present (null when
+  // idle) so JSON.stringify never drops the field — stable SSE event contract.
   const st = getSessionStatus(id);
-  void send({ type: 'session.status', sessionId: id, status: st?.status ?? 'idle', runId: st?.runId });
+  void send({ type: 'session.status', sessionId: id, status: st?.status ?? 'idle', runId: st?.runId ?? null });
 
   const unsub = subscribe(id, (e) => {
     void send(e);

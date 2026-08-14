@@ -48,4 +48,12 @@ describe('sessionEvents', () => {
     u2();
     expect(subscriberCount('s-count')).toBe(0);
   });
+
+  it('a throwing subscriber does not break others or emit', () => {
+    let ok = 0
+    subscribe('s-throw', () => { throw new Error('boom') })
+    subscribe('s-throw', () => { ok++ })
+    expect(() => emit({ type: 'x', sessionId: 's-throw' })).not.toThrow()
+    expect(ok).toBe(1)
+  });
 });
