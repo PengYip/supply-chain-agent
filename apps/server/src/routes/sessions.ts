@@ -13,10 +13,12 @@ import { requireRole } from '../lib/auth-middleware.js';
 import {
   createSession,
   deleteSession,
+  getSessionStatus,
   listSessionsForUser,
   loadSession,
   sessionBelongsTo,
 } from '../harness/sessionStore.js';
+import { subscribe } from '../harness/sessionEvents.js';
 import type { Role } from '../harness/roleToolRegistry.js';
 
 export const sessionsRoute = new Hono<AuthEnv>();
@@ -88,4 +90,53 @@ sessionsRoute.delete('/:id', requireRole('admin', 'trader'), (c) => {
   const removed = deleteSession(id);
   if (!removed) return c.json({ error: 'not_found' }, 404);
   return c.json({ ok: true });
+});
+
+// SSE event stream for a session. Subscribes to the in-memory event bus and
+// fans out events. Client disconnect (req.signal abort) unsubscribes; the
+// background run is unaffected (runs live in RunManager, not this request).
+sessionsRoute.get('/:id/events', (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const id = c.req.param('id');
+  if (!sessionBelongsTo(id, user.id)) {
+    return c.json({ error: 'not found' }, 404);
+  }
+
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+  // Catch on every write: after cleanup closes the writer, a late write (or a
+  // write racing the client disconnect) must reject silently, never surface as
+  // an unhandled rejection.
+  const send = (obj: unknown) =>
+    writer.write(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`)).catch(() => {});
+
+  // First event: current status snapshot.
+  const st = getSessionStatus(id);
+  void send({ type: 'session.status', sessionId: id, status: st?.status ?? 'idle', runId: st?.runId });
+
+  const unsub = subscribe(id, (e) => {
+    void send(e);
+  });
+
+  const heartbeat = setInterval(() => {
+    void writer.write(encoder.encode(`: heartbeat\n\n`)).catch(() => {});
+  }, 10000);
+
+  const cleanup = () => {
+    unsub();
+    clearInterval(heartbeat);
+    void writer.close().catch(() => {});
+  };
+  // Client disconnect: Hono/node-server aborts req.raw.signal.
+  c.req.raw.signal?.addEventListener('abort', cleanup);
+
+  return new Response(readable, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+    },
+  });
 });
