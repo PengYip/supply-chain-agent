@@ -68,6 +68,9 @@ const EnvSchema = z.object({
   // Comma-separated list of additional trusted origins for Better Auth.
   // Needed when the app is accessed from a different host/IP than BETTER_AUTH_URL.
   TRUSTED_ORIGINS: z.string().optional(),
+  // 启动抽取回填(接线闭环): 每次启动重新跑历史上抽取 pending/skipped/failed/NULL
+  // 的已解析文档(上限条数), 把合同台账回填齐。0 = 禁用。
+  EXTRACTION_BACKFILL_LIMIT: z.coerce.number().int().min(0).default(20),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

@@ -16,7 +16,8 @@ import { sessionsRoute } from './routes/sessions.js';
 import { filesRoute } from './routes/files.js';
 import { reviewRoute } from './routes/review.js';
 import { ensureBucket } from './lib/minio.js';
-import { migrateOnStartup } from './pipeline/db/dbBackend.js';
+import { migrateOnStartup, getDbContext } from './pipeline/db/dbBackend.js';
+import { runExtractionBackfill } from './pipeline/extractionBackfill.js';
 import { getDriver, closeNeo4j } from './graph/neo4j.js';
 import { listToolNames, type Role } from './harness/roleToolRegistry.js';
 import { auth } from './lib/auth.js';
@@ -126,6 +127,12 @@ process.on('SIGINT', async () => { await closeNeo4j(); });
 // runtime rather than crashing startup). ensureBucket stays best-effort.
 (async () => {
   await migrateOnStartup();
+  // 接线闭环: 启动抽取回填(不 await, 不阻塞启动)。重新跑历史上抽取
+  // pending/skipped/failed/NULL 的已解析文档, 把合同台账回填齐。失败只记日志。
+  void runExtractionBackfill({
+    ctx: getDbContext(),
+    limit: env.EXTRACTION_BACKFILL_LIMIT,
+  }).catch((e) => console.error('[extractionBackfill]', e instanceof Error ? e.message : e));
   void ensureBucket();
   // Phase 4: best-effort Neo4j connectivity check at boot. Warn-not-crash: an
   // unreachable graph store logs a warning and graph tools error per-call, but

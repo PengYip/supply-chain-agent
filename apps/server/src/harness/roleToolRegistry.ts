@@ -1,5 +1,5 @@
 import type { Tool } from 'ai';
-import { queryContract, queryOrders, crossCheck } from '../tools/queries.js';
+import { buildQueryContractTool, queryOrders, crossCheck } from '../tools/queries.js';
 import { createPayment } from '../tools/writes.js';
 import { escalateToHuman, verifyDocumentFields } from '../tools/hitl.js';
 import {
@@ -59,9 +59,12 @@ export type GatedTool = Tool<any, any> & { name: string };
 // `activeTools` per step based on the current role + parsed intent, so each step
 // only sees the tools it is allowed to call. For now we hand the role its full
 // toolset and let the model pick.
+//
+// 接线闭环: query_contract 已从静态 BASE 表移除 -- 它是台账优先的 builder
+// (buildQueryContractTool), 需要可选 DbContext, 所以在 getToolsForRole 中对
+// trader 无条件 push(无 ctx 时降级为纯 seed 行为)。
 const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
   trader: [
-    { ...queryContract, name: 'query_contract' },
     { ...queryOrders, name: 'query_orders' },
     { ...crossCheck, name: 'cross_check' },
     { ...createPayment, name: 'create_payment' },
@@ -72,44 +75,51 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
 
 // Doc-entry + recall tool names are part of the trader's capability set even
 // though constructing their instances requires a DbContext (see getToolsForRole).
-const TRADER_CTX_TOOL_NAMES = ['ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'present_document_review', 'update_document_fields'] as const;
+// query_contract is listed here too: after the BASE removal above its name would
+// otherwise drop out of listToolNames (it is still always registered for trader).
+const TRADER_CTX_TOOL_NAMES = ['query_contract', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'present_document_review', 'update_document_fields'] as const;
 
 export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
   const base: GatedTool[] = (BASE_TOOLS_FOR_ROLE[role] ?? []).map((t) => ({ ...t }));
-  if (role === 'trader' && deps?.ctx) {
-    const { ctx, extraction, embedder, classifier, tagger, userId } = deps;
-    base.push(
-      { ...buildIngestDocumentTool({ ctx, embedder, classifier, extraction, tagger, userId }), name: 'ingest_document' },
-      { ...buildExtractFieldsTool({ ctx, extraction, userId }), name: 'extract_fields' },
-      // present_document_review is L1: read-only 5-dim review card (业务类型/字段/关系/TAG/向量化).
-      { ...buildPresentDocumentReviewTool({ ctx, userId }), name: 'present_document_review' },
-      // update_document_fields is L2: apply user field corrections (needs user consent).
-      { ...buildUpdateDocumentFieldsTool({ ctx, userId }), name: 'update_document_fields', needsApproval: true },
-      // bind_document is L2: caller must attach human approval (needsApproval).
-      { ...buildBindDocumentTool({ ctx, userId }), name: 'bind_document', needsApproval: true },
-      // inspect_extraction is L1: on-demand evidence drill-down for a single
-      // already-extracted field (citedText recomputed from persisted spans).
-      { ...buildInspectExtractionTool({ ctx, userId }), name: 'inspect_extraction' },
-      // tag_document is L2: explicit user/agent labels, post-ingest, any time.
-      // needsApproval = soft gate (v6): the agent must have user consent to label.
-      { ...buildTagDocumentTool({ ctx, userId }), name: 'tag_document', needsApproval: true },
-      // Graph layer (§7): create/link/query entities in Neo4j. All L2 (mutate
-      // graph state / soft gate). Builders take no deps (use getDriver() directly).
-      { ...buildCreateEntityTool(), name: 'create_entity', needsApproval: true },
-      { ...buildLinkEntitiesTool(), name: 'link_entities', needsApproval: true },
-      { ...buildGraphQueryTool(), name: 'graph_query', needsApproval: true },
-      // recall_documents is L1: FTS5/vector/hybrid recall over ingested chunks.
-      { ...buildRecallDocumentsTool({ ctx, embedder, userId }), name: 'recall_documents' },
-      // execute_code is L1: run Python in an isolated CubeSandbox microVM.
-      {
-        ...buildExecuteCodeTool({
-          cubeApiUrl: env.CUBE_API_URL,
-          sandboxDomain: env.CUBE_SANDBOX_DOMAIN,
-          templateAlias: env.CUBE_TEMPLATE_ALIAS,
-        }),
-        name: 'execute_code',
-      },
-    );
+  if (role === 'trader') {
+    const { userId } = deps ?? {};
+    // query_contract 无条件注册(台账优先; deps.ctx 缺省时降级纯 seed)。
+    base.push({ ...buildQueryContractTool({ ctx: deps?.ctx, userId }), name: 'query_contract' });
+    if (deps?.ctx) {
+      const { ctx, extraction, embedder, classifier, tagger, userId } = deps;
+      base.push(
+        { ...buildIngestDocumentTool({ ctx, embedder, classifier, extraction, tagger, userId }), name: 'ingest_document' },
+        { ...buildExtractFieldsTool({ ctx, extraction, userId }), name: 'extract_fields' },
+        // present_document_review is L1: read-only 5-dim review card (业务类型/字段/关系/TAG/向量化).
+        { ...buildPresentDocumentReviewTool({ ctx, userId }), name: 'present_document_review' },
+        // update_document_fields is L2: apply user field corrections (needs user consent).
+        { ...buildUpdateDocumentFieldsTool({ ctx, userId }), name: 'update_document_fields', needsApproval: true },
+        // bind_document is L2: caller must attach human approval (needsApproval).
+        { ...buildBindDocumentTool({ ctx, userId }), name: 'bind_document', needsApproval: true },
+        // inspect_extraction is L1: on-demand evidence drill-down for a single
+        // already-extracted field (citedText recomputed from persisted spans).
+        { ...buildInspectExtractionTool({ ctx, userId }), name: 'inspect_extraction' },
+        // tag_document is L2: explicit user/agent labels, post-ingest, any time.
+        // needsApproval = soft gate (v6): the agent must have user consent to label.
+        { ...buildTagDocumentTool({ ctx, userId }), name: 'tag_document', needsApproval: true },
+        // Graph layer (§7): create/link/query entities in Neo4j. All L2 (mutate
+        // graph state / soft gate). Builders take no deps (use getDriver() directly).
+        { ...buildCreateEntityTool(), name: 'create_entity', needsApproval: true },
+        { ...buildLinkEntitiesTool(), name: 'link_entities', needsApproval: true },
+        { ...buildGraphQueryTool(), name: 'graph_query', needsApproval: true },
+        // recall_documents is L1: FTS5/vector/hybrid recall over ingested chunks.
+        { ...buildRecallDocumentsTool({ ctx, embedder, userId }), name: 'recall_documents' },
+        // execute_code is L1: run Python in an isolated CubeSandbox microVM.
+        {
+          ...buildExecuteCodeTool({
+            cubeApiUrl: env.CUBE_API_URL,
+            sandboxDomain: env.CUBE_SANDBOX_DOMAIN,
+            templateAlias: env.CUBE_TEMPLATE_ALIAS,
+          }),
+          name: 'execute_code',
+        },
+      );
+    }
   }
   return base;
 }

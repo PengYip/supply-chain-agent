@@ -3,6 +3,8 @@ import { documents, extractions, bindings, classifications } from './schema.js';
 import type { DbContext } from './client.js';
 import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
 import type { SpanMatchStrength } from '../spanValidator.js';
+import { normalizeContractNo } from '../contractLedger.js';
+import type { ContractLedgerEntry } from '../contractLedger.js';
 // Postgres impls. Static import: pg is a declared dep on both backends now; the
 // functions are only CALLED on the postgres branch (lazy Pool connect), so the
 // import cost is one module load. Type-only for the input/output types below.
@@ -46,6 +48,9 @@ import {
   setDocumentParseStatusPg,
   getDocumentParseStatusPg,
   getDocumentSourceUriPg,
+  // contract ledger (ingest extraction write-back): pg twins.
+  upsertContractLedgerEntryPg,
+  findContractLedgerByNoPg,
 } from './postgres-repositories.js';
 
 // Phase 2 business-data isolation: a normalized userId is '' / undefined when the
@@ -1380,4 +1385,121 @@ export async function applyDocumentCorrections(
   await updateExtractionFields(ctx, docId, fields, fieldMeta, userId);
   await setReviewStatus(ctx, docId, 'corrected', userId);
   return await getReviewSnapshot(ctx, docId, userId);
+}
+
+// ---- Contract ledger (ingest extraction write-back) ------------------------
+//
+// 合同台账 persistence: extraction results carrying a contract number are
+// upserted here keyed on the NORMALIZED (contract_no, user_id) so lookups by
+// contract number hit regardless of OCR full-width/whitespace/case noise. The
+// builder (contractLedger.ts) guarantees entry.contractNo / entry.userId are
+// already normalized, so no re-normalization happens on this side.
+
+/**
+ * Insert-or-update a contract ledger row. Keyed on (contract_no, user_id): a
+ * second write for the same normalized key updates the row in place (UNIQUE
+ * index backs the ON CONFLICT). entry.userId is authoritative (already
+ * normalized by buildLedgerEntryFromExtraction) -- the userId param is kept
+ * for signature parity only.
+ */
+export async function upsertContractLedgerEntry(
+  ctx: DbContext,
+  entry: ContractLedgerEntry,
+  userId?: string,
+): Promise<void> {
+  if (ctx.backend === 'postgres') return upsertContractLedgerEntryPg(ctx, entry, userId);
+  void userId; // entry.userId is authoritative (already normalized by the builder)
+  const id = rid('CLD');
+  ctx.sqlite
+    .prepare(
+      `INSERT INTO contract_ledger
+         (id, contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+          overall_confidence, needs_review, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(contract_no, user_id) DO UPDATE SET
+         display_contract_no = excluded.display_contract_no,
+         doc_type = excluded.doc_type,
+         document_id = excluded.document_id,
+         title = excluded.title,
+         fields = excluded.fields,
+         field_meta = excluded.field_meta,
+         overall_confidence = excluded.overall_confidence,
+         needs_review = excluded.needs_review,
+         updated_at = datetime('now')`,
+    )
+    .run(
+      id,
+      entry.contractNo,
+      entry.displayContractNo,
+      entry.docType,
+      entry.documentId,
+      entry.title,
+      JSON.stringify(entry.fields),
+      JSON.stringify(entry.fieldMeta),
+      entry.overallConfidence,
+      entry.needsReview ? 1 : 0,
+      entry.userId,
+    );
+}
+
+/**
+ * Look up a contract ledger row by contract number. The query key is normalized
+ * the same way writes are (full-width/whitespace/case-insensitive). userId
+ * filtering follows the legacy convention: when a non-empty uid is in scope,
+ * rows with user_id = '' / NULL stay readable by any caller (same 3-way OR as
+ * loadDocument / loadExtraction); unscoped callers skip the filter entirely.
+ * fields/field_meta are TEXT(JSON) on SQLite -> JSON.parse back to objects.
+ */
+export async function findContractLedgerByNo(
+  ctx: DbContext,
+  contractNo: string,
+  userId?: string,
+): Promise<ContractLedgerEntry | null> {
+  if (ctx.backend === 'postgres') return findContractLedgerByNoPg(ctx, contractNo, userId);
+  const normalized = normalizeContractNo(contractNo);
+  if (!normalized) return null; // no usable key -> no match
+  const uid = effectiveUserId(userId);
+  const row = (uid
+    ? ctx.sqlite
+        .prepare(
+          `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+                  overall_confidence, needs_review, user_id
+           FROM contract_ledger
+           WHERE contract_no = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)`,
+        )
+        .get(normalized, uid)
+    : ctx.sqlite
+        .prepare(
+          `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+                  overall_confidence, needs_review, user_id
+           FROM contract_ledger
+           WHERE contract_no = ?`,
+        )
+        .get(normalized)) as
+    | {
+        contract_no: string;
+        display_contract_no: string;
+        doc_type: string;
+        document_id: string;
+        title: string;
+        fields: string;
+        field_meta: string;
+        overall_confidence: number;
+        needs_review: number;
+        user_id: string;
+      }
+    | undefined;
+  if (!row) return null;
+  return {
+    contractNo: row.contract_no,
+    displayContractNo: row.display_contract_no,
+    docType: row.doc_type,
+    documentId: row.document_id,
+    title: row.title,
+    fields: JSON.parse(row.fields) as ContractLedgerEntry['fields'],
+    fieldMeta: JSON.parse(row.field_meta) as ContractLedgerEntry['fieldMeta'],
+    overallConfidence: row.overall_confidence,
+    needsReview: !!row.needs_review,
+    userId: row.user_id,
+  };
 }

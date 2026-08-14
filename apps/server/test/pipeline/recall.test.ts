@@ -5,6 +5,7 @@ import { createDb, migrate, type SqliteDbContext } from '../../src/pipeline/db/c
 import { env } from '../../src/env.js';
 import { buildIngestDocumentTool } from '../../src/pipeline/tools/documentEntry.js';
 import { buildRecallDocumentsTool } from '../../src/pipeline/tools/recall.js';
+import { saveBinding } from '../../src/pipeline/db/repositories.js';
 import type { ChunkTagger } from '../../src/pipeline/chunkTagging.js';
 
 let ctx: SqliteDbContext;
@@ -164,12 +165,74 @@ describe('recall_documents wantTags (chunk-tag filter)', () => {
     expect(hit.matchCount).toBeGreaterThan(0);
     expect(hit.matches.some((m) => m.document_id === docId)).toBe(true);
 
-    // Non-matching tag -> everything filtered out, no hallucinated results.
+    // Non-matching tag -> 标签过滤无命中, 但候选非空: 自动放宽(不返回空), 并
+    // 标记 tagFilterFallback=true 供 agent 如实说明。
     const miss = (await recall.execute(
       { query: 'diesel', strategy: 'fts', wantTags: ['不存在的标签'] },
       execOpts,
-    )) as { matchCount: number; matches: unknown[] };
-    expect(miss.matchCount).toBe(0);
-    expect(miss.matches).toEqual([]);
+    )) as { matchCount: number; matches: unknown[]; tagFilterFallback?: boolean };
+    expect(miss.matchCount).toBeGreaterThan(0);
+    expect(miss.matches.length).toBeGreaterThan(0);
+    expect(miss.tagFilterFallback).toBe(true);
+  });
+
+  it('relaxes wantTags when chunks are untagged (tagFilterFallback=true)', async () => {
+    // 无 tagger -> chunks 的 tags 为 NULL, 任何 wantTags 都不会命中。
+    await ingest();
+    const recall = buildRecallDocumentsTool({ ctx });
+    const res = (await recall.execute(
+      { query: 'diesel', strategy: 'fts', wantTags: ['违约责任'] },
+      execOpts,
+    )) as { matchCount: number; matches: unknown[]; tagFilterFallback?: boolean };
+    expect(res.matchCount).toBeGreaterThan(0);
+    expect(res.tagFilterFallback).toBe(true);
+  });
+});
+
+describe('recall_documents contractNo filter (接线闭环)', () => {
+  it('only returns chunks bound to the given contract', async () => {
+    const docA = await ingest();
+    // 第二份文档也含 diesel, 但不绑定到该合同。
+    const file2 = join(env.INGEST_ROOT, `recall-cno-${Date.now()}.txt`);
+    writeFileSync(file2, 'diesel shipment for a different deal', 'utf-8');
+    const ingestTool = buildIngestDocumentTool({ ctx });
+    const docB = (await ingestTool.execute(
+      { sourceUri: file2, docType: '合同', modality: 'digital' },
+      execOpts,
+    )) as { docId: string };
+    expect(docB.docId).not.toBe(docA);
+    // 只把 docA 绑定到 HT-2024-001(bindings 按原文匹配)。
+    await saveBinding(ctx, {
+      documentId: docA,
+      contractNo: 'HT-2024-001',
+      relation: 'primary',
+      sourceRefs: [],
+      confidence: 1,
+      createdBy: 'test',
+    });
+
+    const recall = buildRecallDocumentsTool({ ctx });
+    const res = (await recall.execute(
+      { query: 'diesel', strategy: 'fts', contractNo: 'HT-2024-001' },
+      execOpts,
+    )) as { matchCount: number; matches: Array<{ document_id: string }>; contractNo?: string };
+    expect(res.matchCount).toBeGreaterThan(0);
+    // 过滤后只回 docA 的片段。
+    expect(res.matches.every((m) => m.document_id === docA)).toBe(true);
+    // 响应回显归一化后的合同号。
+    expect(res.contractNo).toBe('HT-2024-001');
+  });
+
+  it('returns an empty result with a note when no document is bound to the contract', async () => {
+    await ingest(); // 存在 diesel 片段, 但没有任何文档绑定到该合同号
+    const recall = buildRecallDocumentsTool({ ctx });
+    const res = (await recall.execute(
+      { query: 'diesel', strategy: 'fts', contractNo: 'HT-2024-777' },
+      execOpts,
+    )) as { matchCount: number; matches: unknown[]; note?: string; contractNo?: string };
+    expect(res.matchCount).toBe(0);
+    expect(res.matches).toEqual([]);
+    expect(res.note).toBe('未找到与该合同号绑定的文档');
+    expect(res.contractNo).toBe('HT-2024-777');
   });
 });

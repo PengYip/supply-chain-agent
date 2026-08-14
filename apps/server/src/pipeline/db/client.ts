@@ -146,6 +146,28 @@ export function migrate(sqlite: Database.Database): void {
       content='doc_chunk',
       content_rowid='id'
     );
+
+    -- Contract ledger persistence layer (ingest extraction write-back): one row
+    -- per normalized (contract_no, user_id). The UNIQUE index is the idempotency
+    -- backstop for the ON CONFLICT upsert in upsertContractLedgerEntry -- re-
+    -- extracting the same contract for the same user updates in place instead of
+    -- duplicating rows.
+    CREATE TABLE IF NOT EXISTS contract_ledger (
+      id TEXT PRIMARY KEY,
+      contract_no TEXT NOT NULL,
+      display_contract_no TEXT NOT NULL,
+      doc_type TEXT NOT NULL,
+      document_id TEXT NOT NULL,
+      title TEXT NOT NULL DEFAULT '',
+      fields TEXT NOT NULL,
+      field_meta TEXT NOT NULL,
+      overall_confidence REAL NOT NULL,
+      needs_review INTEGER NOT NULL DEFAULT 0,
+      user_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_ledger_no_user ON contract_ledger(contract_no, user_id);
   `);
 
   // Phase 2 business-data isolation: add user_id to pre-existing dev databases.
@@ -344,6 +366,25 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     `ALTER TABLE doc_chunk ADD COLUMN IF NOT EXISTS tags JSONB`,
     // Model B parse lifecycle column (mirror of the SQLite guarded ALTER above).
     `ALTER TABLE documents ADD COLUMN IF NOT EXISTS parse_status TEXT NOT NULL DEFAULT 'uploaded'`,
+    // Contract ledger persistence layer (ingest extraction write-back). Mirror
+    // of the SQLite contract_ledger; timestamptz / jsonb / boolean per the pg
+    // convention (extractions parity). UNIQUE index backs the ON CONFLICT upsert.
+    `CREATE TABLE IF NOT EXISTS contract_ledger (
+       id TEXT PRIMARY KEY,
+       contract_no TEXT NOT NULL,
+       display_contract_no TEXT NOT NULL,
+       doc_type TEXT NOT NULL,
+       document_id TEXT NOT NULL,
+       title TEXT NOT NULL DEFAULT '',
+       fields jsonb NOT NULL,
+       field_meta jsonb NOT NULL,
+       overall_confidence numeric(5,4) NOT NULL,
+       needs_review boolean NOT NULL DEFAULT false,
+       user_id TEXT NOT NULL DEFAULT '',
+       created_at timestamptz NOT NULL DEFAULT NOW(),
+       updated_at timestamptz NOT NULL DEFAULT NOW()
+     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_ledger_no_user ON contract_ledger(contract_no, user_id)`,
   ];
   try {
     for (const sql of statements) {

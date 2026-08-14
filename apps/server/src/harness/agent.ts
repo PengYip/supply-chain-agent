@@ -43,6 +43,7 @@ export const SYSTEM_PROMPT = [
   '- 业务绑定需授权: bind_document 为 L2 操作, 需要人工确认后方可执行。',
   '- 复核卡展示(硬约束): 单据录入完成(上传自动录入或 ingest_document)后, 一旦 extract_fields 对该 docId 成功返回, 必须立即调用 present_document_review 向用户呈现五维复核卡(业务类型/结构化字段/待确认关系/文本TAG/向量化入库状态); 若用户在复核卡上纠正了字段, 需调用 update_document_fields 应用更正(L2, 需用户确认后方可执行)。',
   '- 文档检索(recall_documents): 需按内容召回已录入单据片段时调用。query 为检索文本; strategy=hybrid(默认)会对 query 做语义向量+FTS5 关键词融合检索(想用同义词/意图而非精确词时用 vector 或 hybrid, 不要只靠关键词)。每个 chunk 入库时已按文档类型打了语义标签(合同:当事人信息/标的物/数量与计量/价格与金额/付款条款/交付与运输/检验与验收/权利义务/违约责任/不可抗力/争议解决/期限与生效/签署信息; 发票/提单/装箱单各有体系), 用 wantTags[] 可按标签过滤召回, tagMode any=命中任一即保留, all=须命中全部。建议: 用户问某类条款时, 用语义 query 配 wantTags 组合(如"付款金额和币种"配 wantTags:["价格与金额","付款条款"])提升精度。未命中返回空数组, 不得编造。',
+  '- 合同台账(接线闭环): 录入的合同经抽取回写后可用 query_contract 查到(source=ledger)。查具体合同条款时, query_contract 命中后应接着用 recall_documents 传 contractNo(加条款关键词如 交货/违约)检索原文片段作答, 并以返回的 document_id 说明出处; recall 返回 tagFilterFallback=true 表示标签过滤已自动放宽, 如实说明即可。',
 ].join('\n');
 
 // Apply the PermissionGate to the role's toolset:

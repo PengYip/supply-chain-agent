@@ -16,7 +16,7 @@ import {
 } from '../db/repositories.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
-import { runAutoExtraction, buildAutoExtractionDeps } from '../autoExtraction.js';
+import { runAutoExtraction, buildAutoExtractionDeps, type AutoExtractionDeps } from '../autoExtraction.js';
 import { tagChunks, type ChunkTagger } from '../chunkTagging.js';
 import { getTaxonomy } from '../tag-taxonomy.js';
 import { classifyDocument, classifyDocumentWithoutModel, type ClassifierDeps } from '../classifier.js';
@@ -28,6 +28,8 @@ import type { Embedder } from '../embedder.js';
 import { isVecReady, saveChunkVectors } from '../db/vecStore.js';
 import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
 import { validateSpan, type SpanMatchStrength } from '../spanValidator.js';
+import { buildLedgerEntryFromExtraction } from '../contractLedger.js';
+import { upsertContractLedgerEntry } from '../db/repositories.js';
 
 export interface ToolDeps {
   ctx: DbContext;
@@ -74,6 +76,65 @@ function ensureFk(ctx: DbContext): void {
   if (ctx.backend === 'sqlite') {
     ctx.sqlite.pragma('foreign_keys = ON');
   }
+}
+
+// ---- 接线闭环: 合同台账回写 -----------------------------------------------
+//
+// 抽取成功后把合同号等字段回写到 contract_ledger 台账, 使 query_contract 能立即
+// 查到录入文档的合同(而不是 notFound)。台账回写是抽取的旁路 byproduct:
+// writeContractLedger 永不抛出, 任何失败只 console.error, 绝不把已完成的
+// save/抽取结果翻成失败。
+
+/**
+ * Fault-isolated ledger write-back. buildLedgerEntryFromExtraction 返回 null
+ * (无有效合同号, 如发票/提单) 时静默跳过; 其余路径的失败也只记日志。
+ */
+async function writeContractLedger(args: {
+  ctx: DbContext;
+  docId: string;
+  docType: DocType;
+  fields: Record<string, { value: string | number; sourceSpans: SourceSpan[] }>;
+  fieldMeta: Record<string, { strength: SpanMatchStrength; confidence: number }>;
+  userId?: string;
+}): Promise<void> {
+  try {
+    const entry = buildLedgerEntryFromExtraction({
+      documentId: args.docId,
+      docType: args.docType,
+      fields: args.fields,
+      fieldMeta: args.fieldMeta,
+      userId: args.userId,
+    });
+    if (!entry) return; // 无有效合同号 -> 不回写台账
+    await upsertContractLedgerEntry(args.ctx, entry, args.userId);
+  } catch (e) {
+    console.error('[contractLedger] 台账回写失败:', (e as Error).message);
+  }
+}
+
+/**
+ * 复用点(extractionBackfill 等): 把台账回写挂到 AutoExtractionDeps.save 之后。
+ * 原 save 成功后写台账(writeContractLedger 永不抛出, 所以 runAutoExtraction
+ * 的容错语义不变 -- ledger 失败不会把 outcome 从 ok 翻成 failed)。
+ */
+export function buildLedgerWritingDeps(
+  baseDeps: AutoExtractionDeps,
+  opts: { ctx: DbContext; docType: DocType; userId?: string },
+): AutoExtractionDeps {
+  return {
+    ...baseDeps,
+    save: async (args) => {
+      await baseDeps.save(args);
+      await writeContractLedger({
+        ctx: opts.ctx,
+        docId: args.docId,
+        docType: opts.docType,
+        fields: args.fields,
+        fieldMeta: args.fieldMeta,
+        userId: args.userId,
+      });
+    },
+  };
 }
 
 /**
@@ -445,7 +506,12 @@ export async function processDocument(
           docId,
           blockModel,
           userId: opts.userId,
-          deps: buildAutoExtractionDeps({ ctx, extraction: opts.extraction, userId: opts.userId }),
+          // 接线闭环: 抽取成功后回写合同台账(buildLedgerWritingDeps 挂到
+          // save 之后; writeContractLedger 永不抛出, 不影响 outcome)。
+          deps: buildLedgerWritingDeps(
+            buildAutoExtractionDeps({ ctx, extraction: opts.extraction, userId: opts.userId }),
+            { ctx, docType: blockModel.docType, userId: opts.userId },
+          ),
         });
         // Surface non-ok outcomes (timeout / model error) so a silently-missing
         // extraction is never mistaken for success (processDocument discards the
@@ -693,6 +759,15 @@ export function buildExtractFieldsTool(deps: ToolDeps) {
         },
         deps.userId,
       );
+      // 接线闭环: 手动抽取成功后同样回写合同台账(旁路 byproduct, 永不抛出)。
+      await writeContractLedger({
+        ctx: deps.ctx,
+        docId,
+        docType: docType as DocType,
+        fields,
+        fieldMeta,
+        userId: deps.userId,
+      });
       // Bounded summary for the model trajectory. Full evidence (citedText,
       // sourceSpans) stays persisted via saveExtraction and is retrievable on
       // demand via inspect_extraction(extractionId, fieldName). The field VALUE

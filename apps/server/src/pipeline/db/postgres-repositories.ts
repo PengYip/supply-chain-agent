@@ -18,6 +18,8 @@
 import type { PostgresDbContext } from './client.js';
 import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
 import type { SpanMatchStrength } from '../spanValidator.js';
+import { normalizeContractNo } from '../contractLedger.js';
+import type { ContractLedgerEntry } from '../contractLedger.js';
 import type {
   ExtractionInput,
   BindingInput,
@@ -1090,4 +1092,114 @@ export async function getDocumentSourceUriPg(
   );
   if (!res.rows[0]) return null;
   return res.rows[0].source_uri as string;
+}
+
+// ---- Contract ledger (ingest extraction write-back, pg twins) --------------
+//
+// Mirror of upsertContractLedgerEntry / findContractLedgerByNoPg in
+// repositories.ts. fields / field_meta are jsonb -> node-postgres auto-parses
+// them to objects on read (no JSON.parse, contrast the SQLite TEXT branch);
+// overall_confidence is numeric(5,4) -> Number() on read; needs_review is
+// boolean. entry.contractNo / entry.userId are already normalized by the
+// builder (contractLedger.ts), so no re-normalization on this side.
+
+/**
+ * Insert-or-update a contract ledger row (pg). Keyed on (contract_no, user_id);
+ * the UNIQUE index backs ON CONFLICT, so a re-extraction of the same contract
+ * for the same user updates the row in place. entry.userId is authoritative
+ * (already normalized); the userId param is signature parity only.
+ */
+export async function upsertContractLedgerEntryPg(
+  ctx: PostgresDbContext,
+  entry: ContractLedgerEntry,
+  userId?: string,
+): Promise<void> {
+  void userId; // entry.userId is authoritative (already normalized by the builder)
+  const id = rid('CLD');
+  await ctx.pool.query(
+    `INSERT INTO contract_ledger
+       (id, contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+        overall_confidence, needs_review, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     ON CONFLICT (contract_no, user_id) DO UPDATE SET
+       display_contract_no = EXCLUDED.display_contract_no,
+       doc_type = EXCLUDED.doc_type,
+       document_id = EXCLUDED.document_id,
+       title = EXCLUDED.title,
+       fields = EXCLUDED.fields,
+       field_meta = EXCLUDED.field_meta,
+       overall_confidence = EXCLUDED.overall_confidence,
+       needs_review = EXCLUDED.needs_review,
+       updated_at = NOW()`,
+    [
+      id,
+      entry.contractNo,
+      entry.displayContractNo,
+      entry.docType,
+      entry.documentId,
+      entry.title,
+      JSON.stringify(entry.fields),
+      JSON.stringify(entry.fieldMeta),
+      entry.overallConfidence,
+      entry.needsReview,
+      entry.userId,
+    ],
+  );
+}
+
+/**
+ * Look up a contract ledger row by contract number (pg). The query key is
+ * normalized the same way writes are (full-width/whitespace/case-insensitive).
+ * userId filtering follows the legacy convention (3-way OR when uid is in
+ * scope; unscoped callers skip the filter).
+ */
+export async function findContractLedgerByNoPg(
+  ctx: PostgresDbContext,
+  contractNo: string,
+  userId?: string,
+): Promise<ContractLedgerEntry | null> {
+  const normalized = normalizeContractNo(contractNo);
+  if (!normalized) return null; // no usable key -> no match
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+                overall_confidence, needs_review, user_id
+         FROM contract_ledger
+         WHERE contract_no = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)`,
+        [normalized, uid],
+      )
+    : await ctx.pool.query(
+        `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+                overall_confidence, needs_review, user_id
+         FROM contract_ledger
+         WHERE contract_no = $1`,
+        [normalized],
+      );
+  if (!res.rows[0]) return null;
+  const r = res.rows[0] as {
+    contract_no: string;
+    display_contract_no: string;
+    doc_type: string;
+    document_id: string;
+    title: string;
+    fields: ContractLedgerEntry['fields'];
+    field_meta: ContractLedgerEntry['fieldMeta'];
+    overall_confidence: string | number;
+    needs_review: boolean;
+    user_id: string;
+  };
+  return {
+    contractNo: r.contract_no,
+    displayContractNo: r.display_contract_no,
+    docType: r.doc_type,
+    documentId: r.document_id,
+    title: r.title,
+    // jsonb auto-parsed to objects by node-postgres on read.
+    fields: r.fields,
+    fieldMeta: r.field_meta,
+    overallConfidence: Number(r.overall_confidence),
+    needsReview: !!r.needs_review,
+    userId: r.user_id,
+  };
 }
