@@ -58,3 +58,6 @@ apps/server/eval/contracts/real-mineru-out/
 apps/server/eval/contracts/invoice-mineru-out/
 apps/server/eval/contracts/*-mineru-out/
 
+# Agent eval CLI output (JSONL episodes + markdown reports)
+apps/server/eval/agent/results/
+
