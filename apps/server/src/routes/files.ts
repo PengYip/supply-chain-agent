@@ -185,6 +185,10 @@ filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
       modality,
       embedder: defaultEmbedder(),
       extraction: { model: ingestModel },
+      // Wire the model classifier so uploads get a REAL docType (合同/发票/...)
+      // instead of falling back to the form's docType hint (which defaults to
+      // '其他' when the upload form sends none). Mirrors extraction/tagger.
+      classifier: { model: ingestModel },
       tagger: makeLlmTagger(ingestModel),
       userId: user.id,
     });
