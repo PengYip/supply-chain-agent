@@ -2,7 +2,6 @@ import { Hono } from 'hono';
 import { randomUUID } from 'node:crypto';
 import { convertToModelMessages, type ModelMessage, type UIMessage } from 'ai';
 import { z } from 'zod';
-import { runStream, recordL2PendingFromResponse } from '../harness/agent.js';
 import {
   getPending,
   resolveApproval,
@@ -10,10 +9,26 @@ import {
   loadSession,
   appendMessages,
   sessionBelongsTo,
+  getSessionStatus,
 } from '../harness/sessionStore.js';
-import { setSessionContext } from '../harness/sessionContext.js';
+import { startSessionRun, isRunning } from '../harness/runManager.js';
+import { runSession } from '../harness/runSession.js';
 import type { Role } from '../harness/roleToolRegistry.js';
 import type { AuthEnv } from '../lib/auth-middleware.js';
+
+// Approval callbacks (L2 soft-gate / L3 external ticket) are fire-and-forget,
+// symmetric with POST /api/chat: resolve the approval in the DB, then start a
+// background resume run through RunManager. The resume output streams on the
+// per-session SSE bus (GET /api/sessions/:id/events); this route never
+// returns a model stream.
+//
+// Resume mechanics (verified against ai@6.0.246, see phase-4 spec §2): the
+// L2 path appends a TRANSIENT role:'tool' message carrying a
+// tool-approval-response part matching the persisted tool-approval-request;
+// streamText re-pairs them at startup and re-executes the gated tool
+// (approved) or feeds the model an execution-denied tool-result (denied).
+// The L3 path has no SDK approval semantics: it persists a user instruction
+// and reruns the full history.
 
 export const approvalCallback = new Hono<AuthEnv>();
 
@@ -28,93 +43,6 @@ const CallbackSchema = z
     message: 'ticketId (L3) or approvalId (L2) is required',
   });
 
-function isModelNotFound(message: string): boolean {
-  return /model not found|model .* does not exist|invalid model|unknown model/i.test(
-    message,
-  );
-}
-
-// Resume a session: re-run the agent over the full persisted history (including
-// any message the caller just appended) and return the stream. Persists the
-// assistant UIMessage via toUIMessageStreamResponse onFinish and records any new
-// L2 pending approvals when done. `extraModelMessages` carries transient
-// ModelMessages (e.g. the L2 tool-approval-response, role:'tool') that have no
-// UIMessage form and must NOT be persisted.
-async function resumeSession(sessionId: string, extraModelMessages: ModelMessage[] = []): Promise<Response> {
-  setSessionContext(sessionId);
-  const session = loadSession(sessionId);
-  const role: Role = (session?.role ?? 'trader') as Role;
-  const uiMessages = (session?.messages ?? []) as UIMessage[];
-  const baseModelMessages = uiMessages.length > 0
-    ? (await convertToModelMessages(uiMessages))
-    : ([] as ModelMessage[]);
-  const messages: ModelMessage[] = [...baseModelMessages, ...extraModelMessages];
-  const auditTraceId = randomUUID();
-  console.log(
-    JSON.stringify({
-      event: 'approval_resume',
-      traceId: auditTraceId,
-      sessionId,
-      role,
-      historyLen: messages.length,
-    }),
-  );
-
-  // userId is not threaded here: LoadedSession ({id, role, messages}) does not
-  // expose the session owner, so the Phase 3 status-bar counts on the resume
-  // path are unscoped. (The authenticated user.id IS available in the route
-  // handler; threading it for scoped resume-path counts is a future improvement.)
-  const result = await runStream({ messages, role, auditTraceId, sessionId });
-  // After the stream completes, record any L2 soft-gate approvals requested
-  // this turn. The assistant UIMessage is persisted via onFinish below.
-  // `result.response` is a PromiseLike (no .catch), so use the 2-arg .then.
-  result.response.then(
-    (r) => {
-      try {
-        recordL2PendingFromResponse(sessionId, r.messages);
-      } catch (err) {
-        console.error(
-          '[approval] L2 record failed:',
-          err instanceof Error ? err.message : err,
-        );
-      }
-    },
-    () => {},
-  );
-
-  const resp = result.toUIMessageStreamResponse({
-    originalMessages: uiMessages,
-    generateMessageId: randomUUID,
-    onFinish: ({ responseMessage }) => {
-      try {
-        appendMessages(sessionId, [responseMessage]);
-      } catch (err) {
-        console.error(
-          '[approval] persist failed:',
-          err instanceof Error ? err.message : err,
-        );
-      }
-    },
-    onError: (error: unknown) => {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error('[approval] streamText error:', msg);
-      if (isModelNotFound(msg)) {
-        return `Model rejected by provider (${msg}). Try OPENAI_MODEL=deepseek-chat.`;
-      }
-      return msg;
-    },
-  });
-  return new Response(resp.body, {
-    status: resp.status,
-    headers: { ...resp.headers, 'x-session-id': sessionId },
-  });
-}
-
-// Mock 飞书 webhook. Two paths:
-//  - L3 (ticketId): mark ticket authorized, append a user instruction telling
-//    the model to re-run create_payment with authorizedTicketId, resume.
-//  - L2 (approvalId): append a tool-approval-response message that matches the
-//    prior tool-approval-request, resume (the SDK then runs the gated execute).
 approvalCallback.post('/approval/callback', async (c) => {
   let json: unknown;
   try {
@@ -133,40 +61,55 @@ approvalCallback.post('/approval/callback', async (c) => {
 
   const { ticketId, approvalId, approved, reason } = parsed.data;
 
-  // Phase 2 ownership gate: the authenticated user must own the session the
-  // pending approval belongs to. /api/approval/* is requireAuth-gated in
-  // index.ts, so a user is always attached here. External systems that need to
-  // post webhooks without a user session would use a separate, separately-
-  // authenticated route (not this one).
+  // requireAuth attaches the user; defensive re-check for direct-mount tests.
   const user = c.get('user');
-  const assertOwnership = (sessionId: string): Response | null => {
-    if (!user) return c.json({ error: 'unauthorized' }, 401);
-    if (!sessionBelongsTo(sessionId, user.id)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    return null;
-  };
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
 
-  // ---- L3: external approval ticket ----
+  const pending = getPending((ticketId ?? approvalId) as string);
+  if (!pending) {
+    return ticketId
+      ? c.json({ error: 'ticket not found', ticketId }, 404)
+      : c.json({ error: 'approval not found', approvalId }, 404);
+  }
+
+  const sessionId = pending.session_id;
+  if (!sessionBelongsTo(sessionId, user.id)) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+
+  // Pre-check single-flight BEFORE touching any state: reject early with
+  // approvalResolved=false (the pending row is untouched).
+  if (isRunning(sessionId)) {
+    return c.json(
+      {
+        error: 'session_busy',
+        approvalResolved: false,
+        activeRunId: getSessionStatus(sessionId)?.runId ?? null,
+      },
+      409,
+    );
+  }
+
+  const session = loadSession(sessionId);
+  const role: Role = (session?.role ?? 'trader') as Role;
+  const uiMessages = (session?.messages ?? []) as UIMessage[];
+  const baseModelMessages = uiMessages.length > 0
+    ? await convertToModelMessages(uiMessages)
+    : ([] as ModelMessage[]);
+
+  // Assemble the resume input. `extraModelMessages` carries one-shot messages
+  // appended AFTER the persisted history:
+  //  - L3: the just-persisted user instruction (also appended to the store).
+  //  - L2: the transient tool-approval-response (never persisted).
+  const extraModelMessages: ModelMessage[] = [];
+
   if (ticketId) {
-    const pending = getPending(ticketId);
-    if (!pending) {
-      return c.json({ error: 'ticket not found', ticketId }, 404);
-    }
-    const forbidden = assertOwnership(pending.session_id);
-    if (forbidden) return forbidden;
-    resolveApproval(ticketId, approved ? 'approved' : 'denied');
-    if (!approved) {
-      return c.json({ ok: false, status: 'denied', ticketId });
-    }
-    addAuthorizedTicket(ticketId, pending.session_id);
-    // Resume instruction is tool-specific: escalate_to_human is a generic human
-    // review (model should just continue from human feedback), every other L3
-    // ticket today is create_payment (must re-run create_payment with the
-    // authorizedTicketId to truly execute).
-    const pendingToolName = pending.tool_name;
     let instruction: string;
-    if (pendingToolName === 'escalate_to_human') {
+    if (!approved) {
+      instruction =
+        `外部审批已拒绝（票据 ${ticketId}，理由：${reason ?? '用户拒绝'}）。` +
+        `请告知用户该操作未执行，并停止该操作的后续尝试。`;
+    } else if (pending.tool_name === 'escalate_to_human') {
       instruction =
         `人工已复核工单 ${ticketId}（理由：${reason ?? '已处理'}）。` +
         `请根据人工判断继续处理用户之前的请求。如果人工反馈解决了不确定性，请直接回答用户；如果需要执行后续操作，请继续。`;
@@ -175,58 +118,84 @@ approvalCallback.post('/approval/callback', async (c) => {
         `外部审批已通过（票据 ${ticketId}，理由：${reason ?? '财务已审批'}）。` +
         `请立即调用 create_payment 并传入 authorizedTicketId=${ticketId} 续跑付款以真正执行。`;
     }
-    appendMessages(pending.session_id, [
+    appendMessages(sessionId, [
       { id: randomUUID(), role: 'user', parts: [{ type: 'text', text: instruction }] } as UIMessage,
     ]);
-    console.log(
-      JSON.stringify({
-        event: 'approval_authorized',
-        ticketId,
-        sessionId: pending.session_id,
-      }),
-    );
-    return await resumeSession(pending.session_id);
+    extraModelMessages.push({ role: 'user', content: instruction });
+  } else {
+    // L2 resume message: role:'tool' has NO valid UIMessage form, so this is
+    // TRANSIENT — passed into this resume turn only, never persisted. The TS
+    // ToolContent union only models tool-result parts, hence the cast.
+    const id = approvalId as string;
+    extraModelMessages.push({
+      role: 'tool',
+      content: [
+        {
+          type: 'tool-approval-response',
+          approvalId: id,
+          toolCallId: pending.tool_call_id ?? id,
+          approved,
+          reason: reason ?? (approved ? '用户已确认' : '用户已拒绝'),
+        },
+      ],
+    } as unknown as ModelMessage);
   }
 
-  // ---- L2: inline soft-gate approval ----
-  const id = approvalId as string;
-  const pending = getPending(id);
-  if (!pending) {
-    return c.json({ error: 'approval not found', approvalId: id }, 404);
-  }
-  {
-    const forbidden = assertOwnership(pending.session_id);
-    if (forbidden) return forbidden;
-  }
-  resolveApproval(id, approved ? 'approved' : 'denied');
-  if (!approved) {
-    return c.json({ ok: false, status: 'denied', approvalId: id });
-  }
-  // v6 resume message: a tool message whose content carries a
-  // tool-approval-response part matching the prior tool-approval-request's
-  // approvalId. The TS ToolContent union only models tool-result parts, so the
-  // approval-response part is cast through unknown. role:'tool' has NO valid
-  // UIMessage form, so this message is TRANSIENT -- never persisted, only passed
-  // into resumeSession as a one-shot ModelMessage for this resume turn.
-  const toolCallId = pending.tool_call_id ?? id;
-  const resumeMessage = {
-    role: 'tool',
-    content: [
-      {
-        type: 'tool-approval-response',
-        approvalId: id,
-        toolCallId,
-        approved: true,
-        reason: reason ?? '用户已确认',
-      },
-    ],
-  } as unknown as ModelMessage;
+  // DB state first: the decision is durable even if the run fails to start
+  // or errors later.
+  resolveApproval(pending.id, approved ? 'approved' : 'denied');
+  if (ticketId && approved) addAuthorizedTicket(ticketId, sessionId);
+
   console.log(
     JSON.stringify({
-      event: 'approval_l2_resolved',
-      approvalId: id,
-      sessionId: pending.session_id,
+      event: ticketId ? 'approval_authorized' : 'approval_l2_resolved',
+      id: pending.id,
+      approved,
+      sessionId,
     }),
   );
-  return await resumeSession(pending.session_id, [resumeMessage]);
+
+  const messages: ModelMessage[] = [...baseModelMessages, ...extraModelMessages];
+  const auditTraceId = randomUUID();
+  console.log(
+    JSON.stringify({
+      event: 'approval_resume',
+      traceId: auditTraceId,
+      sessionId,
+      role,
+      historyLen: messages.length,
+    }),
+  );
+
+  const start = startSessionRun(sessionId, user.id, role, (signal) =>
+    runSession({
+      sessionId,
+      userId: user.id,
+      role,
+      messages,
+      auditTraceId,
+      abortSignal: signal,
+      isFirstTurn: false,
+    }),
+  );
+
+  if ('conflict' in start) {
+    // Narrow race: the pre-check passed, but another run grabbed the slot
+    // while we awaited convertToModelMessages. The approval IS resolved;
+    // only the resume did not start. The user's next message naturally
+    // resumes the conversation.
+    return c.json(
+      {
+        error: 'session_busy',
+        approvalResolved: true,
+        activeRunId: getSessionStatus(sessionId)?.runId ?? null,
+      },
+      409,
+    );
+  }
+
+  return c.json(
+    { ok: true, status: approved ? 'approved' : 'denied', sessionId, runId: start.runId },
+    { status: 200, headers: { 'x-session-id': sessionId } },
+  );
 });
