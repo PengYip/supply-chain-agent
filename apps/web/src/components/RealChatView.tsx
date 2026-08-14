@@ -143,9 +143,11 @@ export const RealChatView: React.FC<{
 
   const [callbackState, setCallbackState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
   const [callbackError, setCallbackError] = useState<string | null>(null)
+  const [lastApprovalApproved, setLastApprovalApproved] = useState(true)
+  const [sendError, setSendError] = useState<string | null>(null)
 
   const postApproval = async (body: { approvalId?: string; ticketId?: string; approved: boolean }) => {
-    if (!sessionId) return
+    if (!sessionId || callbackState === 'loading') return
     setCallbackState('loading')
     setCallbackError(null)
     try {
@@ -163,11 +165,12 @@ export const RealChatView: React.FC<{
         } catch {}
         throw new Error(`${res.status}: ${detail}`)
       }
-      const contentType = res.headers.get('content-type') || ''
-      if (!contentType.includes('text/event-stream') || !res.body) {
-        setCallbackState('success')
-        return
-      }
+    const contentType = res.headers.get('content-type') || ''
+    if (!contentType.includes('text/event-stream') || !res.body) {
+      setLastApprovalApproved(body.approved)
+      setCallbackState('success')
+      return
+    }
       const chunkStream = parseJsonEventStream({ stream: res.body, schema: uiMessageChunkSchema })
       const parsedStream = chunkStream.pipeThrough(
         new TransformStream({
@@ -191,6 +194,7 @@ export const RealChatView: React.FC<{
           setMessages((prev) => [...prev, msg])
         }
       }
+      setLastApprovalApproved(body.approved)
       setCallbackState('success')
     } catch (err) {
       console.error('[approval callback] failed:', err)
@@ -222,15 +226,21 @@ export const RealChatView: React.FC<{
     setContextFiles((prev) => prev.filter((f) => f.key !== key))
   }, [setContextFiles])
 
-  const onSubmit = (e: React.FormEvent) => {
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     const text = input.trim()
     if (!text || isBusy) return
     setInput('')
+    setSendError(null)
     // sendMessage reads contextFiles synchronously from the closure and
-    // consumes them for THIS turn only. Clear immediately so the files do not
-    // linger for the next message.
-    void sendMessage(text, { contextFiles })
+    // consumes them for THIS turn only. Clear after the call resolves so the
+    // files do not linger for the next message.
+    const res = await sendMessage(text, { contextFiles })
+    if (res.error) {
+      // Restore the draft so the user does not lose their text.
+      setInput(text)
+      setSendError(res.error === 'session_busy' ? '会话正在处理上一条消息，请稍候再发送' : `发送失败：${res.error}`)
+    }
     setContextFiles([])
   }
 
@@ -372,9 +382,20 @@ export const RealChatView: React.FC<{
             </div>
           )}
           {callbackState === 'success' && (
-            <div className="mb-3 rounded-lg border border-success/20 bg-success/5 px-3 py-2 text-xs text-success flex items-center gap-1.5">
+            <div className={clsx(
+              'mb-3 rounded-lg border px-3 py-2 text-xs flex items-center gap-1.5',
+              lastApprovalApproved
+                ? 'border-success/20 bg-success/5 text-success'
+                : 'border-borderGray bg-bgGray text-textGray',
+            )}>
               <ShieldCheck className="w-3.5 h-3.5" />
-              审批已通过，新消息已追加到对话
+              {lastApprovalApproved ? '审批已通过，新消息已追加到对话' : '已拒绝执行该操作'}
+            </div>
+          )}
+          {sendError && (
+            <div className="mb-3 rounded-lg border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger flex items-center gap-1.5">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              <span className="break-all">{sendError}</span>
             </div>
           )}
           {contextFiles.length > 0 && (
