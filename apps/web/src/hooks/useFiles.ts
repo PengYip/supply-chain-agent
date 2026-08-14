@@ -1,5 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 
+/** Server-side parse state for a stored file, as reported by GET /api/files.
+ *  `null` means the backend has no parse record for the object yet. */
+export type FileParseStatus =
+  | 'uploaded'
+  | 'parsing'
+  | 'parsed'
+  | 'needs_ocr'
+  | 'failed';
+
 export interface FileEntry {
   key: string;
   name: string;        // extracted filename
@@ -7,6 +16,7 @@ export interface FileEntry {
   lastModified: string;
   docId?: string;      // document ID from backend
   directory: string;   // directory path (e.g. "/" or "/合同文件")
+  parseStatus: FileParseStatus | null;
 }
 
 export interface FileFolder {
@@ -27,12 +37,21 @@ type RawFile = {
   lastModified?: unknown;
   docId?: unknown;
   directory?: unknown;
+  parseStatus?: unknown;
 };
 
 type RawFolder = {
   id?: unknown;
   path?: unknown;
 };
+
+const FILE_PARSE_STATUSES: readonly string[] = [
+  'uploaded',
+  'parsing',
+  'parsed',
+  'needs_ocr',
+  'failed',
+];
 
 function normalizeFile(raw: RawFile): FileEntry {
   const key = typeof raw.key === 'string' ? raw.key : '';
@@ -59,6 +78,10 @@ function normalizeFile(raw: RawFile): FileEntry {
     lastModified: typeof raw.lastModified === 'string' ? raw.lastModified : '',
     docId: typeof raw.docId === 'string' ? raw.docId : undefined,
     directory,
+    parseStatus:
+      typeof raw.parseStatus === 'string' && FILE_PARSE_STATUSES.includes(raw.parseStatus)
+        ? (raw.parseStatus as FileParseStatus)
+        : null,
   };
 }
 
@@ -139,3 +162,7 @@ export function useFiles() {
 
   return { files, folders, loading, refresh, downloadFile, moveFile, createFolder, removeFolder, deleteFile };
 }
+
+/** The full useFiles() return value, so App can own one instance and hand it
+ *  to FilePanel as a single prop (files live above the panel now). */
+export type FilesApi = ReturnType<typeof useFiles>;

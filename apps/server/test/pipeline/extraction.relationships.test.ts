@@ -14,10 +14,19 @@ describe('deriveProposedRelationships', () => {
     expect(rels).toContainEqual(expect.objectContaining({ kind: 'Party', role: '买方', name: 'ABC公司' }));
     expect(rels).toContainEqual(expect.objectContaining({ kind: 'Party', role: '卖方', name: 'XYZ公司' }));
     expect(rels).toContainEqual(expect.objectContaining({ kind: 'Commodity', name: '动力煤' }));
-    expect(rels.find((r) => r.name === 'HT001')).toBeUndefined();
+    // Lane A (2a): 合同号 now also lifts a Contract proposal.
+    expect(rels).toContainEqual(expect.objectContaining({ kind: 'Contract', name: 'HT001' }));
   });
-  it('returns [] when no counterparty/commodity fields present', () => {
-    expect(deriveProposedRelationships([f('合同号', 'HT001')])).toEqual([]);
+  it('returns [] when no relatable fields are present', () => {
+    // 合同号 now lifts a Contract proposal, so use an inert field for the
+    // empty-array case.
+    expect(deriveProposedRelationships([f('金额', '1000')])).toEqual([]);
+  });
+  it('derives Contract from 合同号 / 合同编号 and carries confidence', () => {
+    const a = deriveProposedRelationships([f('合同号', 'HT-2024-001', 0.97)]);
+    expect(a).toEqual([{ kind: 'Contract', name: 'HT-2024-001', confidence: 0.97 }]);
+    const b = deriveProposedRelationships([f('合同编号', 'CN-9', 0.8)]);
+    expect(b).toEqual([{ kind: 'Contract', name: 'CN-9', confidence: 0.8 }]);
   });
   it('skips empty/whitespace values', () => {
     expect(deriveProposedRelationships([f('甲方', '   ')])).toEqual([]);

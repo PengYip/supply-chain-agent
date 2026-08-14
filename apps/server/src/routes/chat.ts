@@ -13,8 +13,20 @@ import {
 import { startSessionRun } from '../harness/runManager.js';
 import { runSession, extractMessageText } from '../harness/runSession.js';
 import type { AuthEnv } from '../lib/auth-middleware.js';
+import { getDbContext } from '../pipeline/db/dbBackend.js';
+import type { DbContext } from '../pipeline/db/client.js';
+import { ensureDocumentExtracted } from '../pipeline/tools/documentEntry.js';
+import { buildIngestDeps } from '../pipeline/ingestModel.js';
 
 export const chatRoute = new Hono<AuthEnv>();
+
+// One DbContext reused across requests (same 'pipeline.db' file / DB as the
+// agent + uploads + review). Same lazy-singleton shape as routes/files.ts.
+let _ctx: DbContext | null = null;
+function ctx(): DbContext {
+  if (!_ctx) _ctx = getDbContext();
+  return _ctx;
+}
 
 // AI SDK 6 `useChat` posts UIMessages in the `parts` format
 // ({ id, role, parts: [...] }), NOT the legacy { role, content: string }.
@@ -100,25 +112,11 @@ chatRoute.post('/chat', async (c) => {
     ? (await convertToModelMessages(priorMessages as UIMessage[]))
     : ([] as ModelMessage[]);
 
-  // When the user @-references files this turn, surface them as a leading system
-  // message so the agent has the docIds/filenames up front. The model is told to
-  // use recall_documents to read the actual content (we never inline file bytes
-  // into the prompt -- the recall tool is the grounded read path).
-  let streamMessages: ModelMessage[];
-  if (contextFiles.length > 0) {
-    const fileList = contextFiles
-      .map((f, i) => `${i + 1}. ${f.filename} (docId: ${f.docId})`)
-      .join('\n');
-    const contextMsg: ModelMessage = {
-      role: 'system',
-      content:
-        '用户在本次对话中引用了以下文件。请使用 recall 工具搜索文档内容来回答关于这些文件的问题：\n' +
-        fileList,
-    };
-    streamMessages = [contextMsg, ...priorModelMessages, ...newModelMessages];
-  } else {
-    streamMessages = [...priorModelMessages, ...newModelMessages];
-  }
+  // Base conversation for this run (prior history + this turn's new messages).
+  // When the user @-references files this turn, the file-parsing backstop
+  // (Model B) runs INSIDE the background run below — not here — so the HTTP
+  // response stays fire-and-forget and the session shows busy while parsing.
+  const baseMessages: ModelMessage[] = [...priorModelMessages, ...newModelMessages];
 
   // firstUserText for title-gen (runSession handles title-gen via isFirstTurn).
   const firstUserText = isFirstTurn
@@ -130,8 +128,56 @@ chatRoute.post('/chat', async (c) => {
     // immediately. The run consumes the stream + persists via onFinish +
     // emits to the session event bus (GET /api/sessions/:id/events). The HTTP
     // response no longer carries the stream — disconnects do NOT abort the run.
-    const start = startSessionRun(sessionId, userId ?? undefined, agentRole, (signal) =>
-      runSession({
+    const start = startSessionRun(sessionId, userId ?? undefined, agentRole, async (signal) => {
+      let streamMessages = baseMessages;
+      if (contextFiles.length > 0) {
+        // Model B chat backstop (moved inside the background run): uploads are
+        // STORAGE-ONLY (parse_status='uploaded'), so referencing a file triggers
+        // on-demand parsing here. ensureDocumentExtracted single-flights with
+        // the /process endpoint (one run per doc, shared), skips already-terminal
+        // docs, re-runs 'uploaded'/'failed' ones, and re-extracts docs whose
+        // auto-extraction was skipped/failed (e.g. a 60s timeout). We cap the
+        // total wait (~180s) and proceed regardless: the message notes each
+        // file's resulting state so the agent tells the user honestly about
+        // needs_ocr files.
+        const deps = buildIngestDeps();
+        const deadlineMs = Date.now() + 180_000;
+        const statusByDoc = new Map<string, string>();
+        await Promise.all(
+          contextFiles.map(async (f) => {
+            const remaining = deadlineMs - Date.now();
+            if (remaining <= 0 || signal.aborted) return;
+            try {
+              const res = await Promise.race([
+                ensureDocumentExtracted(ctx(), f.docId, deps, userId ?? undefined),
+                new Promise<null>((resolve) => setTimeout(() => resolve(null), remaining)),
+              ]);
+              if (res) statusByDoc.set(f.docId, res.parseStatus);
+            } catch {
+              // unknown doc / unexpected error -> the message below just omits state.
+            }
+          }),
+        );
+        const fileList = contextFiles
+          .map((f, i) => {
+            const st = statusByDoc.get(f.docId) ?? 'unknown';
+            return `${i + 1}. ${f.filename} (docId: ${f.docId}, parseStatus: ${st})`;
+          })
+          .join('\n');
+        const contextMsg: ModelMessage = {
+          role: 'system',
+          content:
+            '用户在本次对话中引用了以下文件。系统已自动解析并自动抽取这些文件(结构化字段/关系/标签/向量均已就绪), 无需再次录入。\n' +
+            '规则:\n' +
+            '- 已解析(parsed)的文件: 直接调用 present_document_review 向用户呈现复核卡。\n' +
+            '- 仅当上下文明确说明抽取缺失/失败时, 才调用 extract_fields 重新抽取。\n' +
+            '- 禁止对已上传文件调用 ingest_document(上传为仅存储, 且路径不在录入根目录, 会失败)。\n' +
+            '- 若某文件为 needs_ocr, 如实告知用户该文件需 OCR 处理后才能使用。\n' +
+            '文件列表:\n' + fileList,
+        };
+        streamMessages = [contextMsg, ...baseMessages];
+      }
+      await runSession({
         sessionId,
         userId: userId ?? undefined,
         role: agentRole,
@@ -140,8 +186,8 @@ chatRoute.post('/chat', async (c) => {
         abortSignal: signal,
         isFirstTurn,
         firstUserText,
-      }),
-    );
+      });
+    });
     if ('conflict' in start) {
       const st = getSessionStatus(sessionId);
       return c.json({ error: 'session_busy', activeRunId: st?.runId }, 409);

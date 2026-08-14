@@ -4,12 +4,16 @@ import type { DbContext } from '../db/client.js';
 import {
   searchChunks,
   getChunkMetaByRowids,
+  listBindingsForContract,
+  findContractLedgerByNo,
   type ChunkMeta,
   type ChunkMatch,
 } from '../db/repositories.js';
 import { vectorKnn, isVecReady, type VecKnnHit } from '../db/vecStore.js';
 import { tagExternal } from '../../harness/injectionDefense.js';
 import type { Embedder } from '../embedder.js';
+import { filterChunksByTag, type TagFilterMode } from '../chunkTagFilter.js';
+import { normalizeContractNo } from '../contractLedger.js';
 
 // L4 document recall (Task 6 v2). Three strategies over the same chunk index:
 //   fts    -- FTS5 BM25 keyword recall (Task 6 v1), exact "no match -> []".
@@ -55,6 +59,8 @@ interface FusedMatch {
   bm25: number | null;
   vectorDistance: number | null;
   rrf: number;
+  /** doc_chunk.tags attached at fusion so the hybrid list can be tag-filtered. */
+  tags: string[] | null;
 }
 
 function snippetFromText(text: string): string {
@@ -89,6 +95,7 @@ function reciprocalRankFusion(
         bm25: null,
         vectorDistance: null,
         rrf: 0,
+        tags: m?.tags ?? null,
       };
       acc.set(rowid, e);
     }
@@ -114,6 +121,27 @@ function reciprocalRankFusion(
   return [...acc.values()].sort((a, b) => b.rrf - a.rrf).slice(0, limit);
 }
 
+/**
+ * Narrow FTS hits (ChunkMatch carries no tags) by chunk tags. Loads doc_chunk
+ * tags in one batched call and applies filterChunksByTag. Only used on the
+ * fts-feeding return paths; the vector/hybrid paths already hold meta in scope.
+ */
+async function attachTagsAndFilter(
+  ctx: DbContext,
+  userId: string | undefined,
+  hits: ChunkMatch[],
+  wantTags: string[],
+  tagMode: TagFilterMode,
+): Promise<(ChunkMatch & { tags: string[] | null })[]> {
+  const meta = await getChunkMetaByRowids(
+    ctx,
+    hits.map((h) => h.chunkRowId),
+    userId,
+  );
+  const tagged = hits.map((h) => ({ ...h, tags: meta.get(h.chunkRowId)?.tags ?? null }));
+  return filterChunksByTag(tagged, wantTags, tagMode);
+}
+
 /** Downgrade vector/hybrid to fts when the vector backend is unavailable (sqlite). */
 async function resolveStrategy(
   strategy: RecallStrategy,
@@ -130,7 +158,7 @@ async function resolveStrategy(
 export function buildRecallDocumentsTool(deps: RecallToolDeps) {
   return tool({
     description:
-      '召回已录入单据的文本片段(L4 检索层)。strategy: fts=FTS5 BM25 关键词; vector=sqlite-vec 余弦 KNN 语义; hybrid=两者 RRF 融合(默认)。返回片段 + document_id + score + source。未命中时 fts 返回空(不编造); vector/hybrid 在 sqlite-vec 不可用时自动降级为 fts。',
+      '召回已录入单据的文本片段(L4 检索层)。strategy: fts=FTS5 BM25 关键词; vector=sqlite-vec 余弦 KNN 语义; hybrid=两者 RRF 融合(默认)。返回片段 + document_id + score + source。未命中时 fts 返回空(不编造); vector/hybrid 在 sqlite-vec 不可用时自动降级为 fts。contractNo 可按合同号过滤, 只返回绑定到该合同的文档片段。wantTags 标签过滤无命中时已自动放宽(响应带 tagFilterFallback=true, 如实说明即可)。',
     inputSchema: z.object({
       query: z
         .string()
@@ -147,19 +175,80 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
         .enum(['fts', 'vector', 'hybrid'])
         .default('hybrid')
         .describe('检索策略, 默认 hybrid'),
+      wantTags: z
+        .array(z.string())
+        .optional()
+        .describe(
+          '可选: 按 chunk 标签过滤召回片段 (与 doc_chunk.tags 取交集, 标签来自入库时按文档类型打的语义标签)。配合 tagMode 使用。无命中时自动放宽(不返回空)',
+        ),
+      tagMode: z
+        .enum(['any', 'all'])
+        .default('any')
+        .describe('wantTags 匹配模式: any=命中任一标签即保留(默认); all=须命中全部标签'),
+      contractNo: z
+        .string()
+        .optional()
+        .describe('可选: 按合同号过滤, 只返回绑定到该合同的文档片段'),
     }),
-    execute: async ({ query, limit, strategy }) => {
+    execute: async ({ query, limit, strategy, wantTags, tagMode, contractNo }) => {
       const effective = await resolveStrategy(strategy, deps.ctx);
 
+      // contractNo 过滤(接线闭环): 归一化后先从合同台账取绑定文档, 再对 bindings
+      // 表按原文(归一化值 + 原始值)各查一遍取并集, 得到该合同号对应的 docId 集合。
+      const normalizedContractNo =
+        contractNo && contractNo.trim().length > 0 ? normalizeContractNo(contractNo) : undefined;
+      let docIdSet: Set<string> | undefined;
+      if (normalizedContractNo && contractNo) {
+        docIdSet = new Set<string>();
+        const ledgerEntry = await findContractLedgerByNo(deps.ctx, normalizedContractNo, deps.userId);
+        if (ledgerEntry) docIdSet.add(ledgerEntry.documentId);
+        for (const raw of new Set([contractNo, normalizedContractNo])) {
+          const binds = await listBindingsForContract(deps.ctx, raw);
+          for (const b of binds) docIdSet.add(b.documentId);
+        }
+      }
+      // 响应回显归一化后的合同号(仅当传入时); tagFilterFallback 标记标签过滤已放宽。
+      const contractNoField = normalizedContractNo ? { contractNo: normalizedContractNo } : {};
+
+      // Tag filter (chunk-level): when wantTags is set, over-fetch candidates so a
+      // selective tag filter still leaves enough survivors to fill `limit`, then
+      // narrow by doc_chunk.tags via filterChunksByTag before truncating. No-op
+      // (candidateLimit === limit) when wantTags is empty/absent.
+      const filtering = Array.isArray(wantTags) && wantTags.length > 0;
+      const candidateLimit = filtering ? Math.min(Math.max(limit * 4, 20), 200) : limit;
+
       // FTS path (always cheap; also feeds hybrid).
-      const ftsHits = await searchChunks(deps.ctx, query, limit, deps.userId);
+      const ftsHits = await searchChunks(deps.ctx, query, candidateLimit, deps.userId);
 
       if (effective === 'fts') {
+        // 先按合同号收窄候选, 再做标签过滤; 都在截断到 limit 之前。
+        const inScope = docIdSet ? ftsHits.filter((h) => docIdSet.has(h.documentId)) : ftsHits;
+        if (docIdSet && inScope.length === 0) {
+          return {
+            query,
+            strategy: 'fts' as const,
+            matchCount: 0,
+            matches: [],
+            ...contractNoField,
+            note: '未找到与该合同号绑定的文档',
+          };
+        }
+        const kept = filtering
+          ? await attachTagsAndFilter(deps.ctx, deps.userId, inScope, wantTags!, tagMode)
+          : inScope;
+        let candidates = kept;
+        let tagFilterFallback = false;
+        if (filtering && kept.length === 0 && inScope.length > 0) {
+          // 标签过滤无命中但候选非空 -> 自动放宽(用未过滤候选填充)。
+          candidates = inScope;
+          tagFilterFallback = true;
+        }
+        const matches = candidates.slice(0, limit);
         return {
           query,
           strategy: 'fts' as const,
-          matchCount: ftsHits.length,
-          matches: ftsHits.map((h) => ({
+          matchCount: matches.length,
+          matches: matches.map((h) => ({
             document_id: h.documentId,
             chunk_index: h.chunkIndex,
             snippet: tagExternal(h.snippet),
@@ -168,6 +257,8 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
             bm25_score: h.bm25Score,
             vector_distance: null,
           })),
+          ...contractNoField,
+          ...(tagFilterFallback ? { tagFilterFallback: true as const } : {}),
         };
       }
 
@@ -180,7 +271,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
       }
       if (embedder) {
         const [queryVec] = await embedder.embed([query]);
-        const knn = await vectorKnn(deps.ctx, queryVec ?? [], limit);
+        const knn = await vectorKnn(deps.ctx, queryVec ?? [], candidateLimit);
 
         if (effective === 'vector') {
           const meta = await getChunkMetaByRowids(
@@ -188,11 +279,37 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
             knn.map((k) => k.chunkRowId),
             deps.userId,
           );
+          const knnTagged = knn.map((k) => ({
+            ...k,
+            tags: meta.get(k.chunkRowId)?.tags ?? null,
+          }));
+          // 合同号过滤: documentId 来自 meta, 在截断前按集合成员过滤。
+          const inScope = docIdSet
+            ? knnTagged.filter((k) => docIdSet.has(meta.get(k.chunkRowId)?.documentId ?? ''))
+            : knnTagged;
+          if (docIdSet && inScope.length === 0) {
+            return {
+              query,
+              strategy: 'vector' as const,
+              matchCount: 0,
+              matches: [],
+              ...contractNoField,
+              note: '未找到与该合同号绑定的文档',
+            };
+          }
+          const kept = filtering ? filterChunksByTag(inScope, wantTags!, tagMode) : inScope;
+          let candidates = kept;
+          let tagFilterFallback = false;
+          if (filtering && kept.length === 0 && inScope.length > 0) {
+            candidates = inScope;
+            tagFilterFallback = true;
+          }
+          const matches = candidates.slice(0, limit);
           return {
             query,
             strategy: 'vector' as const,
-            matchCount: knn.length,
-            matches: knn.map((k) => {
+            matchCount: matches.length,
+            matches: matches.map((k) => {
               const m = meta.get(k.chunkRowId);
               return {
                 document_id: m?.documentId ?? '',
@@ -204,21 +321,45 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
                 vector_distance: k.distance,
               };
             }),
+            ...contractNoField,
+            ...(tagFilterFallback ? { tagFilterFallback: true as const } : {}),
           };
         }
 
-        // hybrid: RRF over fts + vector.
-        const meta = await getChunkMetaByRowids(
-          deps.ctx,
-          knn.map((k) => k.chunkRowId),
-          deps.userId,
-        );
-        const fused = reciprocalRankFusion(ftsHits, knn, meta, limit);
+        // hybrid: RRF over fts + vector. When filtering, meta must cover FTS-only
+        // rowids too -- a chunk FTS found but KNN missed still has tags to filter on.
+        const metaRowids = filtering
+          ? Array.from(
+              new Set([...ftsHits.map((h) => h.chunkRowId), ...knn.map((k) => k.chunkRowId)]),
+            )
+          : knn.map((k) => k.chunkRowId);
+        const meta = await getChunkMetaByRowids(deps.ctx, metaRowids, deps.userId);
+        const fusedAll = reciprocalRankFusion(ftsHits, knn, meta, candidateLimit);
+        // 合同号过滤 + 标签过滤, 都在截断到 limit 之前。
+        const inScope = docIdSet ? fusedAll.filter((f) => docIdSet.has(f.documentId)) : fusedAll;
+        if (docIdSet && inScope.length === 0) {
+          return {
+            query,
+            strategy: 'hybrid' as const,
+            matchCount: 0,
+            matches: [],
+            ...contractNoField,
+            note: '未找到与该合同号绑定的文档',
+          };
+        }
+        const fused = filtering ? filterChunksByTag(inScope, wantTags!, tagMode) : inScope;
+        let candidates = fused;
+        let tagFilterFallback = false;
+        if (filtering && fused.length === 0 && inScope.length > 0) {
+          candidates = inScope;
+          tagFilterFallback = true;
+        }
+        const matches = candidates.slice(0, limit);
         return {
           query,
           strategy: 'hybrid' as const,
-          matchCount: fused.length,
-          matches: fused.map((f) => ({
+          matchCount: matches.length,
+          matches: matches.map((f) => ({
             document_id: f.documentId,
             chunk_index: f.chunkIndex,
             snippet: tagExternal(f.snippet),
@@ -227,16 +368,39 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
             bm25_score: f.bm25,
             vector_distance: f.vectorDistance,
           })),
+          ...contractNoField,
+          ...(tagFilterFallback ? { tagFilterFallback: true as const } : {}),
         };
       }
 
       // Fallback (no embedder, or vec unavailable): emit fts results. Report
       // strategy as 'fts' since that is what actually produced these matches.
+      const inScope = docIdSet ? ftsHits.filter((h) => docIdSet.has(h.documentId)) : ftsHits;
+      if (docIdSet && inScope.length === 0) {
+        return {
+          query,
+          strategy: 'fts' as const,
+          matchCount: 0,
+          matches: [],
+          ...contractNoField,
+          note: '未找到与该合同号绑定的文档',
+        };
+      }
+      const kept = filtering
+        ? await attachTagsAndFilter(deps.ctx, deps.userId, inScope, wantTags!, tagMode)
+        : inScope;
+      let candidates = kept;
+      let tagFilterFallback = false;
+      if (filtering && kept.length === 0 && inScope.length > 0) {
+        candidates = inScope;
+        tagFilterFallback = true;
+      }
+      const matches = candidates.slice(0, limit);
       return {
         query,
         strategy: 'fts' as const,
-        matchCount: ftsHits.length,
-        matches: ftsHits.map((h) => ({
+        matchCount: matches.length,
+        matches: matches.map((h) => ({
           document_id: h.documentId,
           chunk_index: h.chunkIndex,
           snippet: tagExternal(h.snippet),
@@ -245,6 +409,8 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
           bm25_score: h.bm25Score,
           vector_distance: null,
         })),
+        ...contractNoField,
+        ...(tagFilterFallback ? { tagFilterFallback: true as const } : {}),
       };
     },
   });

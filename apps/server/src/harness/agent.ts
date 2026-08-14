@@ -17,6 +17,7 @@ import { appendStatusMessage, type AgentStatusSnapshot } from './agentStatus.js'
 import { getToolCallCounts } from './statusAggregator.js';
 import { countDocuments, countExtractionsNeedingReview } from '../pipeline/db/repositories.js';
 import { DeterministicEmbedder, OllamaEmbedder, type Embedder } from '../pipeline/embedder.js';
+import { makeLlmTagger } from '../pipeline/chunkTagging.js';
 import { type DbContext } from '../pipeline/db/client.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
 
@@ -37,10 +38,12 @@ export const SYSTEM_PROMPT = [
   '7. 若用户消息指示某付款票据已审批通过，并要求用 create_payment 传入 authorizedTicketId 续跑，请按指示调用 create_payment 并带上 authorizedTicketId 完成付款。',
   '8. 不确定回退：当遇到数据冲突、置信度低、数据缺失、或业务规则边界等无法确定的情况，必须调用 escalate_to_human 工具转人工，生成工单号 ESC-xxx，不得自行编造或猜测。需明确告知用户已生成工单号。',
   '9. 单据字段核验：涉及提单/发票等单据的字段核验时调用 verify_document_fields；对返回 needsReview=true 的字段，必须如实告知用户"OCR 置信度低，建议人工复核"，不得自行决定该字段值。',
-  '- 单据录入闭环: 用户经上传按钮上传的文件已由系统自动录入(ingest)并索引, 已持有 docId; 切勿对已上传文件再次调用 ingest_document(会因路径不在录入根目录而失败), 应直接对该 docId 调 extract_fields 抽取业务字段。仅当用户给出录入根目录内的本地文件路径、且该文件尚未录入时, 才调 ingest_document。',
+  '- 单据录入闭环(Model B): 用户经上传按钮上传的文件为"仅存储"状态(未解析, parse_status=uploaded)。当该文件的 docId 出现在上下文消息中, 说明系统已自动解析并自动抽取(结构化字段/关系/标签/向量均已就绪), 无需再次录入; 此时直接调用 present_document_review 向用户呈现复核卡。仅当上下文明确说明抽取缺失/失败时才调用 extract_fields 重新抽取。禁止对已上传文件调用 ingest_document(会因路径不在录入根目录而失败)。若某文件状态为 needs_ocr, 如实告知用户该文件需 OCR 处理。仅当用户给出录入根目录内的本地文件路径、且该文件尚未录入时, 才调 ingest_document。',
   '- 数字零幻觉(硬约束): extract_fields 返回的每个值都已与原文 span 比对。任何 strength=none 或置信度低于复核阈值的字段必须如实告知用户, 不得编造; 关键字段(合同号/金额/发票号/价税合计)未达自动接受阈值时, 主动建议人工复核或调 escalate_to_human。',
   '- 业务绑定需授权: bind_document 为 L2 操作, 需要人工确认后方可执行。',
   '- 复核卡展示(硬约束): 单据录入完成(上传自动录入或 ingest_document)后, 一旦 extract_fields 对该 docId 成功返回, 必须立即调用 present_document_review 向用户呈现五维复核卡(业务类型/结构化字段/待确认关系/文本TAG/向量化入库状态); 若用户在复核卡上纠正了字段, 需调用 update_document_fields 应用更正(L2, 需用户确认后方可执行)。',
+  '- 文档检索(recall_documents): 需按内容召回已录入单据片段时调用。query 为检索文本; strategy=hybrid(默认)会对 query 做语义向量+FTS5 关键词融合检索(想用同义词/意图而非精确词时用 vector 或 hybrid, 不要只靠关键词)。每个 chunk 入库时已按文档类型打了语义标签(合同:当事人信息/标的物/数量与计量/价格与金额/付款条款/交付与运输/检验与验收/权利义务/违约责任/不可抗力/争议解决/期限与生效/签署信息; 发票/提单/装箱单各有体系), 用 wantTags[] 可按标签过滤召回, tagMode any=命中任一即保留, all=须命中全部。建议: 用户问某类条款时, 用语义 query 配 wantTags 组合(如"付款金额和币种"配 wantTags:["价格与金额","付款条款"])提升精度。未命中返回空数组, 不得编造。',
+  '- 合同台账(接线闭环): 录入的合同经抽取回写后可用 query_contract 查到(source=ledger)。查具体合同条款时, query_contract 命中后应接着用 recall_documents 传 contractNo(加条款关键词如 交货/违约)检索原文片段作答, 并以返回的 document_id 说明出处; recall 返回 tagFilterFallback=true 表示标签过滤已自动放宽, 如实说明即可。',
 ].join('\n');
 
 // Apply the PermissionGate to the role's toolset:
@@ -341,6 +344,9 @@ export async function runStream({ messages, role, auditTraceId, model, deps, use
     extraction: { model: resolvedModel },
     classifier: { model: resolvedModel },
     embedder: defaultEmbedder(),
+    // Lane B: reuse the same DeepSeek model handle for chunk tagging so there is
+    // one provider client per turn (matches extraction/classifier).
+    tagger: makeLlmTagger(resolvedModel),
     userId,
   };
   const ctx = harnessDeps.ctx;

@@ -4,7 +4,8 @@ import { LoginPage } from './components/LoginPage';
 import { RealChatView } from './components/RealChatView';
 import { SessionSidebar } from './components/SessionSidebar';
 import { FilePanel } from './components/FilePanel';
-import { type FileEntry, type ContextFile } from './hooks/useFiles';
+import { type FileEntry, type ContextFile, useFiles } from './hooks/useFiles';
+import { processDocument, type DocParseState } from './api/process';
 import { useSessions } from './hooks/useSessions';
 
 function App() {
@@ -16,6 +17,14 @@ function App() {
   // Phase 5: sessions live at App so the sidebar (data) and RealChatView
   // (refresh trigger) can share one useSessions instance.
   const { sessions, loading: sessionsLoading, refresh: refreshSessions, createSession, deleteSession } = useSessions();
+  // Files live at App so RealChatView (upload) and FilePanel (list) share one
+  // useFiles instance; upload success refreshes the list via onFilesChanged.
+  const filesApi = useFiles();
+  // Stable re-fetch reference (useCallback inside useFiles) for effect deps.
+  const refreshFiles = filesApi.refresh;
+  // Per-docId parse state for files referenced in the conversation, shown on
+  // the context chips in RealChatView (解析中 -> 已解析 / 需OCR / 解析失败).
+  const [docParseStates, setDocParseStates] = useState<Record<string, DocParseState>>({});
 
   const refetchSession = useCallback(async () => {
     const { data } = await authClient.getSession();
@@ -33,21 +42,33 @@ function App() {
   );
 
   const addToConversation = useCallback((file: FileEntry) => {
-    if (!file.docId) {
-      // The file exists in MinIO but has no document record (docId), so it
-      // can't be recalled in chat. Surface the reason instead of failing
-      // silently -- this happens when an upload's ingest step failed but the
-      // object was already stored (upload route doesn't roll back MinIO).
-      window.alert('该文件尚未完成解析（缺少文档 ID），暂时无法添加到对话。请稍后重试或重新上传该文件。');
-      return;
-    }
+    // Upload now always creates a document stub, so docId is guaranteed. The
+    // guard only trips for objects stored before that contract existed --
+    // they can't be referenced in chat, so skip silently rather than block.
+    if (!file.docId) return;
     const docId = file.docId;
     setContextFiles((prev) =>
       prev.some((f) => f.key === file.key)
         ? prev
         : [...prev, { docId, filename: file.name, key: file.key }],
     );
-  }, []);
+    // Adding to a conversation activates parsing: fire the background process
+    // immediately and track the per-doc state for the context chip. Sending
+    // mid-parse is fine -- the backend waits for referenced docs before the
+    // agent runs.
+    setDocParseStates((prev) => ({ ...prev, [docId]: 'parsing' }));
+    processDocument(docId)
+      .then((res) => {
+        setDocParseStates((prev) => ({ ...prev, [docId]: res.parseStatus }));
+      })
+      .catch(() => {
+        setDocParseStates((prev) => ({ ...prev, [docId]: 'failed' }));
+      })
+      .finally(() => {
+        // Sync the file panel so the row badge reflects the stored status.
+        void refreshFiles();
+      });
+  }, [refreshFiles]);
 
   if (loading) {
     return (
@@ -79,6 +100,8 @@ function App() {
           setContextFiles={setContextFiles}
           onSessionChanged={() => { void refreshSessions(); }}
           onSessionCreated={(id) => { setActiveSessionId(id); void refreshSessions(); }}
+          onFilesChanged={() => { void filesApi.refresh(); }}
+          docParseStates={docParseStates}
         />
         <button
           type="button"
@@ -105,6 +128,7 @@ function App() {
         onClose={() => setFilePanelVisible(false)}
         onAddToConversation={addToConversation}
         contextFileKeys={contextFileKeys}
+        filesApi={filesApi}
       />
     </div>
   );

@@ -5,6 +5,8 @@ import {
   ListChecks,
   Link2,
   Tag,
+  Layers,
+  ChevronDown,
   Database,
   AlertTriangle,
   AlertCircle,
@@ -15,6 +17,20 @@ import {
   Save,
 } from 'lucide-react'
 import { submitReview, type ReviewCorrection } from '../api/review'
+
+/** One chunk classified under a semantic tag. `text` is server-capped (800
+ *  chars + '...'); the card renders it verbatim, never truncated client-side. */
+export type ChunkTagChunkDetail = {
+  chunkIndex: number
+  text: string
+}
+
+/** Per-tag grouping of the document's chunks, sorted by tag first-appearance;
+ *  each tag's chunks are in chunkIndex order. */
+export type ChunkTagDetail = {
+  tag: string
+  chunks: ChunkTagChunkDetail[]
+}
 
 /** Shape of the `present_document_review` tool output. When `reviewStatus` is
  *  `'pending'` the card is editable: each structured-field value can be
@@ -39,6 +55,10 @@ export type DocumentReviewPayload = {
     confidence: number
   }>
   tags: string[]
+  /** Chunk-level semantic tag groupings. null/undefined = the doc has no
+   *  chunk tags (old docs, tagging failed, or docType 其他). Part of the
+   *  snapshot: the review endpoint returns the same shape. */
+  chunkTagDetails?: ChunkTagDetail[] | null
   vectorization: {
     status: 'ok' | 'skipped' | 'failed' | 'unknown'
     mode: string
@@ -165,6 +185,82 @@ const VectorizationStatus: React.FC<{ v: DocumentReviewPayload['vectorization'] 
   )
 }
 
+/** Collapsible 「分段标签」 section: for each semantic tag, the chunks
+ *  classified under it. Purely presentational in every reviewStatus state —
+ *  owns only its own open/closed toggle, never touches the card's edit state
+ *  or action bar. Absent data (null/undefined/empty) renders nothing:
+ *  absence means the doc has no chunk tags, not a missing section. Default
+ *  collapsed to keep the card scannable — chunk texts are bulky. */
+const ChunkTagSection: React.FC<{ details: DocumentReviewPayload['chunkTagDetails'] }> = ({
+  details,
+}) => {
+  const [open, setOpen] = useState(false)
+
+  // Defensive: tolerate malformed entries (tool payload is external data).
+  const entries = useMemo(
+    () =>
+      (Array.isArray(details) ? details : []).filter(
+        (d): d is ChunkTagDetail =>
+          !!d &&
+          typeof d.tag === 'string' &&
+          d.tag.length > 0 &&
+          Array.isArray(d.chunks) &&
+          d.chunks.length > 0,
+      ),
+    [details],
+  )
+
+  if (entries.length === 0) return null
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 text-textGray mb-1.5 cursor-pointer select-none"
+      >
+        <Layers className="w-3 h-3 shrink-0" />
+        <span className="text-[11px] font-medium tracking-wide">
+          分段标签 ({entries.length})
+        </span>
+        <ChevronDown
+          className={clsx('w-3 h-3 shrink-0 transition-transform', open && 'rotate-180')}
+        />
+      </button>
+      {open && (
+        <div className="space-y-2">
+          {entries.map((d, i) => (
+            <div key={`${d.tag}-${i}`} className="space-y-1">
+              <div className="flex items-center gap-1.5">
+                <span className="inline-flex items-center text-[11px] px-2 py-0.5 rounded border bg-bgGray/50 text-textDark border-borderGray/50">
+                  {d.tag}
+                </span>
+                <span className="text-[10px] text-textGray">{d.chunks.length} 段</span>
+              </div>
+              <div className="space-y-1">
+                {d.chunks.map((c, j) => (
+                  <div
+                    key={`${c.chunkIndex}-${j}`}
+                    className="flex items-start gap-2 px-2 py-1.5 rounded border bg-bgGray/50 border-borderGray/50"
+                  >
+                    <span className="font-mono text-[10px] text-textGray shrink-0 mt-0.5">
+                      #{typeof c.chunkIndex === 'number' ? c.chunkIndex : '--'}
+                    </span>
+                    <span className="flex-1 min-w-0 text-[11px] text-textDark leading-relaxed whitespace-pre-wrap break-words max-h-36 overflow-y-auto">
+                      {typeof c.text === 'string' ? c.text : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export const DocumentReviewCard: React.FC<{
   payload: DocumentReviewPayload
   /** Optional callback fired after a successful review POST, with the updated
@@ -191,6 +287,7 @@ export const DocumentReviewCard: React.FC<{
     overallConfidence,
     proposedRelationships = [],
     tags = [],
+    chunkTagDetails,
     vectorization,
     reviewStatus,
   } = snapshot || {}
@@ -407,7 +504,11 @@ export const DocumentReviewCard: React.FC<{
           )}
         </div>
 
-        {/* 5. 向量化入库状态 — semantic-recall health */}
+        {/* 5. 分段标签 — chunk-level semantic tags; collapsed by default,
+            renders nothing when the payload carries no chunk tags. */}
+        <ChunkTagSection details={chunkTagDetails} />
+
+        {/* 6. 向量化入库状态 — semantic-recall health */}
         <div>
           <SectionLabel icon={<Database className="w-3 h-3" />}>向量化入库状态</SectionLabel>
           <VectorizationStatus v={vectorization} />

@@ -16,8 +16,10 @@
 // "more negative = better" + ORDER BY ascending holds on both backends.
 
 import type { PostgresDbContext } from './client.js';
-import type { BlockModel, DocType, SourceSpan } from '../types.js';
+import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
 import type { SpanMatchStrength } from '../spanValidator.js';
+import { normalizeContractNo } from '../contractLedger.js';
+import type { ContractLedgerEntry } from '../contractLedger.js';
 import type {
   ExtractionInput,
   BindingInput,
@@ -34,6 +36,10 @@ import type {
   ProposedRelationship,
   ReviewSnapshot,
   DocumentVectorization,
+  ChunkTagDetail,
+  ExtractionStatus,
+  ParseStatus,
+  DocumentStubInput,
 } from './repositories.js';
 
 // Phase 2 business-data isolation: same convention as repositories.ts -- a
@@ -44,6 +50,9 @@ function effectiveUserId(userId?: string): string {
 
 const rid = (p: string) =>
   `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
+/** Doc-id generator mirroring newDocId (documentEntry.ts) for stub rows. */
+const newDocRowId = () => `DOC-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
 export async function saveDocumentPg(
   ctx: PostgresDbContext,
@@ -166,21 +175,36 @@ export async function saveChunksPg(
   ctx: PostgresDbContext,
   documentId: string,
   chunks: ChunkInput[],
+  chunkTags?: (string[] | null)[],
 ): Promise<number[]> {
   const rowids: number[] = [];
   // Single multi-row INSERT returning ids in the same order as the VALUES list.
   // Build a parameterized VALUES list ($n triples) so it is one round-trip.
   if (chunks.length === 0) return rowids;
+  // Lane B: when chunkTags is supplied (aligned by index), write a 4th JSONB
+  // column. Omitted -> 3-column insert (unchanged behavior; tags=NULL).
+  const writeTags = Array.isArray(chunkTags) && chunkTags.length > 0;
   const values: unknown[] = [];
   const placeholders: string[] = [];
   let p = 1;
-  for (const c of chunks) {
-    placeholders.push(`($${p}, $${p + 1}, $${p + 2})`);
-    values.push(documentId, c.text, c.index);
-    p += 3;
+  for (let i = 0; i < chunks.length; i++) {
+    const c = chunks[i]!;
+    if (writeTags) {
+      placeholders.push(`($${p}, $${p + 1}, $${p + 2}, $${p + 3}::jsonb)`);
+      const t = chunkTags![i] ?? null;
+      values.push(documentId, c.text, c.index, t === null ? null : JSON.stringify(t));
+      p += 4;
+    } else {
+      placeholders.push(`($${p}, $${p + 1}, $${p + 2})`);
+      values.push(documentId, c.text, c.index);
+      p += 3;
+    }
   }
+  const cols = writeTags
+    ? 'document_id, chunk_text, chunk_index, tags'
+    : 'document_id, chunk_text, chunk_index';
   const res = await ctx.pool.query(
-    `INSERT INTO doc_chunk (document_id, chunk_text, chunk_index)
+    `INSERT INTO doc_chunk (${cols})
      VALUES ${placeholders.join(', ')}
      RETURNING id`,
     values,
@@ -263,23 +287,28 @@ export async function getChunkMetaByRowidsPg(
   const uid = effectiveUserId(userId);
   const res = uid
     ? await ctx.pool.query(
-        `SELECT c.id, c.document_id, c.chunk_index, c.chunk_text
+        `SELECT c.id, c.document_id, c.chunk_index, c.chunk_text, c.tags
          FROM doc_chunk AS c
          JOIN documents AS d ON d.id = c.document_id
          WHERE c.id = ANY($1) AND (d.user_id = $2 OR d.user_id = '' OR d.user_id IS NULL)`,
         [rowids, uid],
       )
     : await ctx.pool.query(
-        `SELECT id, document_id, chunk_index, chunk_text
+        `SELECT id, document_id, chunk_index, chunk_text, tags
          FROM doc_chunk
          WHERE id = ANY($1)`,
         [rowids],
       );
   for (const r of res.rows) {
+    // jsonb auto-parses to a JS value on read; coerce non-arrays to null so the
+    // ChunkMeta.tags contract (string[] | null) always holds.
+    const rawTags = (r as { tags?: unknown }).tags;
+    const tags: string[] | null = Array.isArray(rawTags) ? rawTags : null;
     out.set(Number(r.id), {
       documentId: r.document_id,
       chunkIndex: r.chunk_index,
       text: r.chunk_text,
+      tags,
     });
   }
   return out;
@@ -700,6 +729,67 @@ export async function deleteFileFolderPg(
 // JSON.parse is needed (contrast the SQLite TEXT branch). numeric(p,s)
 // confidence columns come back as strings, so Number() on read.
 
+/** Max distinct chunk tags surfaced on the review snapshot (mirror of
+ *  repositories.CHUNK_TAGS_CAP — kept local to avoid a circular runtime import). */
+const CHUNK_TAGS_CAP = 16;
+
+/** repositories.CHUNK_TAG_TEXT_CAP twin (local — circular-import avoidance). */
+const CHUNK_TAG_TEXT_CAP = 800;
+
+/**
+ * Lane B (pg twin of repositories.collectChunkTags): flatten a doc_chunk tags
+ * jsonb column into a DISTINCT, first-appearance-ordered list, skipping
+ * null/non-array entries, capped at CHUNK_TAGS_CAP.
+ */
+function collectChunkTagsPg(rows: Array<{ tags: unknown }>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const r of rows) {
+    if (!Array.isArray(r.tags)) continue;
+    for (const t of r.tags) {
+      if (typeof t === 'string' && !seen.has(t)) {
+        seen.add(t);
+        out.push(t);
+        if (out.length >= CHUNK_TAGS_CAP) break;
+      }
+    }
+    if (out.length >= CHUNK_TAGS_CAP) break;
+  }
+  return out;
+}
+
+/**
+ * Lane B detail view (pg twin of repositories.collectChunkTagDetails): group
+ * per-chunk jsonb tag arrays into tag -> chunk entries. Same first-appearance
+ * order + CHUNK_TAGS_CAP + CHUNK_TAG_TEXT_CAP rules; pg column names are
+ * snake_case (chunk_index / chunk_text / tags).
+ */
+function collectChunkTagDetailsPg(
+  rows: Array<{ chunk_index: number | null; chunk_text: string | null; tags: unknown }>,
+): ChunkTagDetail[] {
+  const byTag = new Map<string, ChunkTagDetail>();
+  const ordered: ChunkTagDetail[] = [];
+  for (const r of rows) {
+    if (!Array.isArray(r.tags)) continue;
+    for (const t of r.tags) {
+      if (typeof t !== 'string') continue;
+      let entry = byTag.get(t);
+      if (!entry) {
+        if (ordered.length >= CHUNK_TAGS_CAP) continue;
+        entry = { tag: t, chunks: [] };
+        byTag.set(t, entry);
+        ordered.push(entry);
+      }
+      const raw = r.chunk_text ?? '';
+      entry.chunks.push({
+        chunkIndex: r.chunk_index ?? entry.chunks.length,
+        text: raw.length > CHUNK_TAG_TEXT_CAP ? `${raw.slice(0, CHUNK_TAG_TEXT_CAP)}...` : raw,
+      });
+    }
+  }
+  return ordered;
+}
+
 /**
  * Assemble the post-ingest review snapshot for a document (pg). Returns null
  * if the document does not exist. fields come from the latest extraction row;
@@ -710,7 +800,6 @@ export async function getReviewSnapshotPg(
   docId: string,
   userId?: string,
 ): Promise<ReviewSnapshot | null> {
-  void userId; // user-scoping is optional here (doc was just ingested by the same user)
   const docRes = await ctx.pool.query(
     'SELECT doc_type, review_status, vectorization_meta FROM documents WHERE id = $1',
     [docId],
@@ -757,6 +846,22 @@ export async function getReviewSnapshotPg(
     [docId],
   );
 
+  // Lane B: per-chunk semantic tags + chunk text for the detail view. jsonb
+  // auto-parses to arrays on read; scoped by userId like getChunkMetaByRowidsPg.
+  const uid = effectiveUserId(userId);
+  const chunkTagRes = uid
+    ? await ctx.pool.query(
+        `SELECT c.chunk_index, c.chunk_text, c.tags FROM doc_chunk AS c
+         JOIN documents AS d ON d.id = c.document_id
+         WHERE c.document_id = $1 AND (d.user_id = $2 OR d.user_id = '' OR d.user_id IS NULL)
+         ORDER BY c.chunk_index`,
+        [docId, uid],
+      )
+    : await ctx.pool.query(
+        'SELECT chunk_index, chunk_text, tags FROM doc_chunk WHERE document_id = $1 ORDER BY chunk_index',
+        [docId],
+      );
+
   const fields: ReviewSnapshot['fields'] = [];
   if (ex) {
     for (const [name, f] of Object.entries(ex.fields)) {
@@ -775,6 +880,10 @@ export async function getReviewSnapshotPg(
     docType: doc.doc_type,
     classificationConfidence: cls ? Number(cls.confidence) : 0,
     tags: (tagRes.rows as Array<{ tag: string }>).map((r) => r.tag),
+    chunkTags: collectChunkTagsPg(chunkTagRes.rows as Array<{ tags: unknown }>),
+    chunkTagDetails: collectChunkTagDetailsPg(
+      chunkTagRes.rows as Array<{ chunk_index: number | null; chunk_text: string | null; tags: unknown }>,
+    ),
     reviewStatus: (doc.review_status ?? 'pending') as ReviewStatus,
     fields,
     overallConfidence: ex ? Number(ex.overall_confidence) : 0,
@@ -817,6 +926,38 @@ export async function setDocumentVectorizationPg(
 }
 
 /**
+ * Lane A (2a): stamp the auto-extraction lifecycle status onto a document row
+ * (pg twin of setExtractionStatus). userId accepted for signature parity only.
+ */
+export async function setExtractionStatusPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  status: ExtractionStatus,
+  userId?: string,
+): Promise<void> {
+  void userId; // signature parity; doc-level scope already authorizes the caller
+  await ctx.pool.query(
+    'UPDATE documents SET extraction_status = $1 WHERE id = $2',
+    [status, docId],
+  );
+}
+
+/** Read the extraction_status for a document, or null if the row does not exist (pg). */
+export async function getExtractionStatusPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  userId?: string,
+): Promise<ExtractionStatus | null> {
+  void userId; // signature parity; doc-level scope already authorizes the caller
+  const res = await ctx.pool.query(
+    'SELECT extraction_status FROM documents WHERE id = $1',
+    [docId],
+  );
+  if (!res.rows[0]) return null;
+  return res.rows[0].extraction_status as ExtractionStatus;
+}
+
+/**
  * Overwrite the extracted fields + field_meta for a document after a user
  * correction (pg). Updates all extraction rows for the doc. userId is accepted
  * for signature parity but not used in the WHERE.
@@ -833,4 +974,232 @@ export async function updateExtractionFieldsPg(
     'UPDATE extractions SET fields = $1, field_meta = $2 WHERE document_id = $3',
     [JSON.stringify(fields), JSON.stringify(fieldMeta), docId],
   );
+}
+
+// ---- Model B: decouple upload from parse (pg twins) ------------------------
+//
+// Mirror of the SQLite helpers in repositories.ts. createDocumentStub inserts a
+// parse_status='uploaded' row at upload time; the lifecycle fns drive it through
+// parsing. Raw parameterized SQL over the Pool, same conventions as the rest of
+// this file (jsonb columns cast on write; block_model placeholder is valid JSON).
+
+/** Insert a lightweight documents stub at upload time (parse_status='uploaded'). */
+export async function createDocumentStubPg(
+  ctx: PostgresDbContext,
+  input: DocumentStubInput,
+): Promise<{ docId: string }> {
+  const docId = newDocRowId();
+  const docType: DocType = input.docType ?? '其他';
+  const modality: Modality = 'digital';
+  const blockModel = JSON.stringify({
+    docId,
+    docType,
+    modality,
+    blocks: [],
+    sourceUri: input.sourceUri,
+    createdAt: new Date().toISOString(),
+  });
+  await ctx.pool.query(
+    `INSERT INTO documents (id, doc_type, modality, source_uri, block_model, minio_key, user_id, parse_status)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, 'uploaded')`,
+    [
+      docId,
+      docType,
+      modality,
+      input.sourceUri,
+      blockModel,
+      input.minioKey ?? null,
+      effectiveUserId(input.userId),
+    ],
+  );
+  return { docId };
+}
+
+/**
+ * UPDATE doc_type / modality / block_model on an existing documents row (pg
+ * twin). blockModel is written to the jsonb block_model column when provided so
+ * downstream tools can read the parsed BlockModel after processDocument.
+ */
+export async function updateDocumentMetaPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  input: { docType?: DocType; modality?: Modality; blockModel?: BlockModel },
+  userId?: string,
+): Promise<void> {
+  void userId; // signature parity; doc-level scope already authorizes the caller
+  const sets: string[] = [];
+  const params: Array<string | null> = [];
+  let pi = 1;
+  if (input.docType !== undefined) {
+    sets.push(`doc_type = $${pi++}`);
+    params.push(input.docType);
+  }
+  if (input.modality !== undefined) {
+    sets.push(`modality = $${pi++}`);
+    params.push(input.modality);
+  }
+  if (input.blockModel !== undefined) {
+    sets.push(`block_model = $${pi++}::jsonb`);
+    params.push(JSON.stringify(input.blockModel));
+  }
+  if (sets.length === 0) return;
+  params.push(docId);
+  await ctx.pool.query(
+    `UPDATE documents SET ${sets.join(', ')} WHERE id = $${pi}`,
+    params,
+  );
+}
+
+/** Set the parse_status lifecycle on a document (pg twin). */
+export async function setDocumentParseStatusPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  status: ParseStatus,
+  userId?: string,
+): Promise<void> {
+  void userId; // signature parity; doc-level scope already authorizes the caller
+  await ctx.pool.query(
+    'UPDATE documents SET parse_status = $1 WHERE id = $2',
+    [status, docId],
+  );
+}
+
+/** Read the parse_status for a document, or null if the row does not exist (pg). */
+export async function getDocumentParseStatusPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  userId?: string,
+): Promise<ParseStatus | null> {
+  void userId; // signature parity; doc-level scope already authorizes the caller
+  const res = await ctx.pool.query(
+    'SELECT parse_status FROM documents WHERE id = $1',
+    [docId],
+  );
+  if (!res.rows[0]) return null;
+  return res.rows[0].parse_status as ParseStatus;
+}
+
+/** Read the source_uri for a document, or null if the row does not exist (pg). */
+export async function getDocumentSourceUriPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  userId?: string,
+): Promise<string | null> {
+  void userId; // signature parity; doc-level scope already authorizes the caller
+  const res = await ctx.pool.query(
+    'SELECT source_uri FROM documents WHERE id = $1',
+    [docId],
+  );
+  if (!res.rows[0]) return null;
+  return res.rows[0].source_uri as string;
+}
+
+// ---- Contract ledger (ingest extraction write-back, pg twins) --------------
+//
+// Mirror of upsertContractLedgerEntry / findContractLedgerByNoPg in
+// repositories.ts. fields / field_meta are jsonb -> node-postgres auto-parses
+// them to objects on read (no JSON.parse, contrast the SQLite TEXT branch);
+// overall_confidence is numeric(5,4) -> Number() on read; needs_review is
+// boolean. entry.contractNo / entry.userId are already normalized by the
+// builder (contractLedger.ts), so no re-normalization on this side.
+
+/**
+ * Insert-or-update a contract ledger row (pg). Keyed on (contract_no, user_id);
+ * the UNIQUE index backs ON CONFLICT, so a re-extraction of the same contract
+ * for the same user updates the row in place. entry.userId is authoritative
+ * (already normalized); the userId param is signature parity only.
+ */
+export async function upsertContractLedgerEntryPg(
+  ctx: PostgresDbContext,
+  entry: ContractLedgerEntry,
+  userId?: string,
+): Promise<void> {
+  void userId; // entry.userId is authoritative (already normalized by the builder)
+  const id = rid('CLD');
+  await ctx.pool.query(
+    `INSERT INTO contract_ledger
+       (id, contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+        overall_confidence, needs_review, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     ON CONFLICT (contract_no, user_id) DO UPDATE SET
+       display_contract_no = EXCLUDED.display_contract_no,
+       doc_type = EXCLUDED.doc_type,
+       document_id = EXCLUDED.document_id,
+       title = EXCLUDED.title,
+       fields = EXCLUDED.fields,
+       field_meta = EXCLUDED.field_meta,
+       overall_confidence = EXCLUDED.overall_confidence,
+       needs_review = EXCLUDED.needs_review,
+       updated_at = NOW()`,
+    [
+      id,
+      entry.contractNo,
+      entry.displayContractNo,
+      entry.docType,
+      entry.documentId,
+      entry.title,
+      JSON.stringify(entry.fields),
+      JSON.stringify(entry.fieldMeta),
+      entry.overallConfidence,
+      entry.needsReview,
+      entry.userId,
+    ],
+  );
+}
+
+/**
+ * Look up a contract ledger row by contract number (pg). The query key is
+ * normalized the same way writes are (full-width/whitespace/case-insensitive).
+ * userId filtering follows the legacy convention (3-way OR when uid is in
+ * scope; unscoped callers skip the filter).
+ */
+export async function findContractLedgerByNoPg(
+  ctx: PostgresDbContext,
+  contractNo: string,
+  userId?: string,
+): Promise<ContractLedgerEntry | null> {
+  const normalized = normalizeContractNo(contractNo);
+  if (!normalized) return null; // no usable key -> no match
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+                overall_confidence, needs_review, user_id
+         FROM contract_ledger
+         WHERE contract_no = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)`,
+        [normalized, uid],
+      )
+    : await ctx.pool.query(
+        `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+                overall_confidence, needs_review, user_id
+         FROM contract_ledger
+         WHERE contract_no = $1`,
+        [normalized],
+      );
+  if (!res.rows[0]) return null;
+  const r = res.rows[0] as {
+    contract_no: string;
+    display_contract_no: string;
+    doc_type: string;
+    document_id: string;
+    title: string;
+    fields: ContractLedgerEntry['fields'];
+    field_meta: ContractLedgerEntry['fieldMeta'];
+    overall_confidence: string | number;
+    needs_review: boolean;
+    user_id: string;
+  };
+  return {
+    contractNo: r.contract_no,
+    displayContractNo: r.display_contract_no,
+    docType: r.doc_type,
+    documentId: r.document_id,
+    title: r.title,
+    // jsonb auto-parsed to objects by node-postgres on read.
+    fields: r.fields,
+    fieldMeta: r.field_meta,
+    overallConfidence: Number(r.overall_confidence),
+    needsReview: !!r.needs_review,
+    userId: r.user_id,
+  };
 }

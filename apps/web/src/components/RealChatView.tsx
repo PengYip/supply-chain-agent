@@ -2,14 +2,56 @@ import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react'
 import { generateId, parseJsonEventStream, readUIMessageStream, uiMessageChunkSchema } from 'ai'
 import type { UIMessage, UIMessageChunk } from 'ai'
 import { useSessionMessages } from '../hooks/useSessionMessages'
-import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, LogOut, Paperclip } from 'lucide-react'
+import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, LogOut, Paperclip, Check } from 'lucide-react'
 import { RealMessageItem, ErrorMessage } from './RealMessageItem'
 import { HumanAgentStatusBar } from './HumanAgentStatusBar'
 import { useHumanAgentStatus } from '../hooks/useHumanAgentStatus'
 import { type ContextFile } from '../hooks/useFiles'
+import { type DocParseState } from '../api/process'
 import { buildRenderItems } from '../utils/realChatUtils'
 import { authClient } from '../lib/auth'
 import clsx from 'clsx'
+
+/** Per-file parse status segment shown inside a context chip. Extends the
+ *  existing chip (no restyle): spinner+解析中 in flight, green check+已解析,
+ *  amber 需OCR, red 解析失败. needs_ocr keeps the file referenced; no
+ *  auto-retry in v1. */
+function ContextChipStatus({ state }: { state?: DocParseState }) {
+  if (!state) return null
+  const base: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 3,
+    fontSize: 11,
+    lineHeight: 1,
+    whiteSpace: 'nowrap',
+  }
+  if (state === 'parsing') {
+    return (
+      <span style={{ ...base, color: '#6b7280' }}>
+        <Loader2 size={11} className="animate-spin" />
+        解析中
+      </span>
+    )
+  }
+  if (state === 'parsed') {
+    return (
+      <span style={{ ...base, color: '#16a34a' }}>
+        <Check size={11} />
+        已解析
+      </span>
+    )
+  }
+  if (state === 'needs_ocr') {
+    return <span style={{ ...base, color: '#d97706' }}>需OCR</span>
+  }
+  return (
+    <span style={{ ...base, color: '#dc2626' }}>
+      <AlertCircle size={11} />
+      解析失败
+    </span>
+  )
+}
 
 export const RealChatView: React.FC<{
   onSignOut?: () => void;
@@ -22,14 +64,20 @@ export const RealChatView: React.FC<{
   /** Called when the composer auto-created a session on the welcome screen
    *  so the app can make it active (sidebar + SSE follow). */
   onSessionCreated?: (id: string) => void;
-}> = ({ onSignOut, sessionId, contextFiles, setContextFiles, onSessionChanged, onSessionCreated }) => {
+  /** Called after an upload lands so App's shared file list (and the file
+   *  panel) shows the new object. */
+  onFilesChanged?: () => void;
+  /** Per-docId parse state for referenced files, shown on the context chips
+   *  (owned by App, where 添加到对话 fires the parse). */
+  docParseStates: Record<string, DocParseState>;
+}> = ({ onSignOut, sessionId, contextFiles, setContextFiles, onSessionChanged, onSessionCreated, onFilesChanged, docParseStates }) => {
   const [input, setInput] = useState('')
 
-  // Phase 3: file upload state. Uploads POST to /api/files (MinIO + ingest bridge).
+  // File upload state. Uploads POST to /api/files — storage-only; parsing
+  // activates when the file is added to a conversation as a reference.
   const [uploadState, setUploadState] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle')
   const [uploadMsg, setUploadMsg] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const sendMessageRef = useRef<((msg: { text: string }) => void) | null>(null)
 
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -58,21 +106,19 @@ export const RealChatView: React.FC<{
         const j = (await res.json().catch(() => ({}))) as { error?: string; detail?: string }
         throw new Error(j.error || j.detail || `upload failed (${res.status})`)
       }
-      const data = (await res.json()) as { docId?: string; filename?: string }
+      const data = (await res.json()) as { filename?: string }
       setUploadState('success')
-      setUploadMsg(
-        `已上传: ${data.filename ?? file.name}${data.docId ? ` (docId ${data.docId})` : ''}`,
-      )
-      if (data.docId && sendMessageRef.current) {
-        sendMessageRef.current({ text: `[系统提示] 已上传文件 "${data.filename ?? file.name}"（docId: ${data.docId}），系统已自动完成录入(ingest)与索引，无需再调 ingest_document。请直接对该 docId 调用 extract_fields 抽取业务字段，再调用 present_document_review 向用户呈现五维复核卡。` })
-      }
+      setUploadMsg(`已上传「${data.filename ?? file.name}」，可在右侧文件管理中添加到对话`)
+      // Storage-only: no agent turn, no auto-parse here. Refresh the shared
+      // file list so the new object (with its 未解析 badge) shows immediately.
+      onFilesChanged?.()
     } catch (err) {
       setUploadState('error')
       setUploadMsg(err instanceof Error ? err.message : String(err))
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
-  }, [])
+  }, [onFilesChanged])
   // Mirror the latest contextFiles into a ref so the upload-triggered system
   // prompt and sendMessage always read the current value.
   const contextFilesRef = useRef(contextFiles)
@@ -84,7 +130,6 @@ export const RealChatView: React.FC<{
   const liveSessionId = sessionId ?? null
   const isBusy = status === 'busy'
   const isStreaming = isBusy
-  sendMessageRef.current = (msg: { text: string }) => { void sendMessage(msg.text) }
 
   // Phase 5: refresh the sidebar when a run finishes (isBusy transitions to
   // false). Uses a ref so it only fires on the transition, not on mount.
@@ -249,9 +294,10 @@ export const RealChatView: React.FC<{
     if (!text || isBusy) return
     setInput('')
     setSendError(null)
-    // sendMessage reads contextFiles synchronously from the closure and
-    // consumes them for THIS turn only. Clear after the call resolves so the
-    // files do not linger for the next message.
+    // contextFiles travel as a PER-CALL argument from this submit-time
+    // snapshot (useSessionMessages reads them synchronously from the closure,
+    // so there is no transport-ref race). Clear after the call resolves so
+    // the files belong to THIS turn only.
     const res = await sendMessage(text, { contextFiles })
     if (res.error) {
       // Restore the draft so the user does not lose their text.
@@ -420,6 +466,7 @@ export const RealChatView: React.FC<{
               {contextFiles.map((f) => (
                 <span key={f.key} style={{ background: '#e3f2fd', border: '1px solid #90caf9', borderRadius: 3, padding: '2px 6px', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   {f.filename}
+                  <ContextChipStatus state={docParseStates[f.docId]} />
                   <span onClick={() => removeFromConversation(f.key)} style={{ cursor: 'pointer', color: '#666' }}>x</span>
                 </span>
               ))}

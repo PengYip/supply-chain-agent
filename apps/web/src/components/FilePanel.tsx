@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useFiles, type FileEntry, type FileFolder } from '../hooks/useFiles'
+import { type FileEntry, type FileFolder, type FilesApi } from '../hooks/useFiles'
 
 interface FilePanelProps {
   visible: boolean
   onClose: () => void
   onAddToConversation: (file: FileEntry) => void
   contextFileKeys: Set<string>
+  /** Shared file list owned by App (upload + panel share one useFiles). */
+  filesApi: FilesApi
 }
 
 interface TreeNode {
@@ -46,6 +48,27 @@ function normalizeMoveDirectory(directory: string): string {
     .map((s) => s.trim())
     .filter((s) => s.length > 0)
     .join('/')
+}
+
+/** Subtle parse-status badge config for a file row, from the server-reported
+ *  parseStatus. null (no parse record) renders no badge. uploaded/parsing both
+ *  read as 未解析 until parsing resolves server-side. */
+function parseBadge(
+  parseStatus: FileEntry['parseStatus'],
+): { text: string; color: string; bg: string } | null {
+  switch (parseStatus) {
+    case 'uploaded':
+    case 'parsing':
+      return { text: '未解析', color: '#6b7280', bg: '#f3f4f6' }
+    case 'parsed':
+      return { text: '已解析', color: '#16a34a', bg: '#f0fdf4' }
+    case 'needs_ocr':
+      return { text: '需OCR', color: '#b45309', bg: '#fffbeb' }
+    case 'failed':
+      return { text: '解析失败', color: '#dc2626', bg: '#fef2f2' }
+    default:
+      return null
+  }
 }
 
 // Inline SVG icons (no emoji, no icon library)
@@ -329,6 +352,24 @@ function FileRow(props: {
       >
         {file.name}
       </span>
+      {(() => {
+        const badge = parseBadge(file.parseStatus)
+        return badge ? (
+          <span
+            style={{
+              fontSize: 10,
+              color: badge.color,
+              background: badge.bg,
+              borderRadius: 3,
+              padding: '1px 5px',
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+            }}
+          >
+            {badge.text}
+          </span>
+        ) : null
+      })()}
       <span style={{ fontSize: 11, color: '#9ca3af', marginRight: 8, whiteSpace: 'nowrap', display: hover ? 'inline' : 'none' }}>{formatSize(file.size)}</span>
       <div
         onClick={(e) => e.stopPropagation()}
@@ -567,8 +608,8 @@ function TreeFolder(props: TreeFolderProps) {
 }
 
 export function FilePanel(props: FilePanelProps) {
-  const { visible, onClose, onAddToConversation, contextFileKeys } = props
-  const { files, folders, loading, downloadFile, moveFile, createFolder, removeFolder, deleteFile } = useFiles()
+  const { visible, onClose, onAddToConversation, contextFileKeys, filesApi } = props
+  const { files, folders, loading, downloadFile, moveFile, createFolder, removeFolder, deleteFile } = filesApi
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [movingFileKey, setMovingFileKey] = useState<string | null>(null)

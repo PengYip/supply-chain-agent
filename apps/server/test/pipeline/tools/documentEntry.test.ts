@@ -6,6 +6,7 @@ import { env } from '../../../src/env.js';
 import {
   buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool, buildInspectExtractionTool,
   buildTagDocumentTool,
+  processDocument, ensureDocumentParsed, ensureDocumentExtracted,
 } from '../../../src/pipeline/tools/documentEntry.js';
 
 let ctx: ReturnType<typeof createDb>;
@@ -393,5 +394,208 @@ describe('document-entry tools', () => {
     );
     expect(out.status).toBe('error');
     expect(out.reason).toBe('no_tags_provided');
+  });
+});
+
+// Model B: processDocument runs the parse pipeline on an EXISTING upload stub
+// (created by createDocumentStub). Upload is storage-only; parse runs on demand.
+describe('processDocument (on-demand parse of an existing stub)', () => {
+  it('parses a stub with real text to parseStatus=parsed and persists the BlockModel', async () => {
+    const f = join(dir, 'proc.txt');
+    writeFileSync(f, '合同号：HT-2024-001\n金额：100000\n', 'utf-8');
+    const { createDocumentStub, getDocumentParseStatus, loadDocument } = await import(
+      '../../../src/pipeline/db/repositories.js'
+    );
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f, docType: '合同' });
+    expect(await getDocumentParseStatus(ctx, docId)).toBe('uploaded');
+
+    const res = await processDocument(ctx, docId, { docType: '合同', modality: 'digital' });
+
+    expect(res.parseStatus).toBe('parsed');
+    expect(res.blockCount).toBeGreaterThan(0);
+    expect(await getDocumentParseStatus(ctx, docId)).toBe('parsed');
+    // The parsed BlockModel is persisted onto the stub row (updateDocumentMeta),
+    // so downstream tools (extract_fields / recall) can read it back.
+    const model = await loadDocument(ctx, docId);
+    expect(model?.blocks.length).toBeGreaterThan(0);
+    expect(model?.docType).toBe('合同');
+  });
+
+  it('returns needs_ocr (does NOT throw) when the file yields 0 blocks', async () => {
+    // Empty .txt -> digitalAdapter skips empty lines -> 0 blocks -> parseDocument
+    // throws; the digital->scanned retry (MinerU, no sidecar) also fails.
+    // processDocument's try/catch around the parse must land on 'needs_ocr'.
+    const f = join(dir, 'empty.txt');
+    writeFileSync(f, '', 'utf-8');
+    const { createDocumentStub, getDocumentParseStatus } = await import(
+      '../../../src/pipeline/db/repositories.js'
+    );
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f });
+
+    const res = await processDocument(ctx, docId, { modality: 'digital' });
+
+    expect(res.parseStatus).toBe('needs_ocr');
+    expect(res.blockCount).toBe(0);
+    expect(typeof res.reason).toBe('string');
+    expect(res.reason!.length).toBeGreaterThan(0);
+    expect(await getDocumentParseStatus(ctx, docId)).toBe('needs_ocr');
+  });
+
+  it('throws document_not_found when the docId does not exist', async () => {
+    await expect(
+      processDocument(ctx, 'DOC-does-not-exist', { modality: 'digital' }),
+    ).rejects.toThrow(/document_not_found/);
+  });
+});
+
+// Model B single-flight: ensureDocumentParsed shares one run per doc across
+// concurrent callers and skips terminal docs (no double-parse).
+describe('ensureDocumentParsed (single-flight on-demand parse)', () => {
+  // Slow fake classifier: counts invocations + delays inside doGenerate so two
+  // concurrent calls overlap in the classify step, letting the test observe
+  // single-flight (the classifier must run exactly once across both callers).
+  let classifyCalls: number;
+  const slowClassifierModel = {
+    specificationVersion: 'v2',
+    provider: 'fake',
+    modelId: 'fake-model',
+    supportedUrls: {} as Record<string, RegExp[]>,
+    async doGenerate() {
+      classifyCalls++;
+      await new Promise((r) => setTimeout(r, 30));
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ docType: '合同', confidence: 0.88 }) }],
+        finishReason: 'stop' as const,
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        warnings: [] as unknown[],
+      };
+    },
+    async doStream() {
+      throw new Error('doStream not used by classify');
+    },
+  } as any;
+
+  beforeEach(() => {
+    classifyCalls = 0;
+  });
+
+  it('single-flights concurrent calls: one run, shared result', async () => {
+    const f = join(dir, 'sf.txt');
+    writeFileSync(f, '合同号：HT-001\n', 'utf-8');
+    const { createDocumentStub } = await import('../../../src/pipeline/db/repositories.js');
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f });
+
+    const [r1, r2] = await Promise.all([
+      ensureDocumentParsed(ctx, docId, { modality: 'digital', classifier: { model: slowClassifierModel } }),
+      ensureDocumentParsed(ctx, docId, { modality: 'digital', classifier: { model: slowClassifierModel } }),
+    ]);
+
+    expect(r1.parseStatus).toBe('parsed');
+    expect(r2.parseStatus).toBe('parsed');
+    expect(r1.docId).toBe(docId);
+    expect(r2.docId).toBe(docId);
+    // Single-flight: the classifier ran exactly ONCE across both callers.
+    expect(classifyCalls).toBe(1);
+  });
+
+  it('skips an already-parsed doc (no re-parse)', async () => {
+    const f = join(dir, 'term.txt');
+    writeFileSync(f, '发票号：INV-9\n', 'utf-8');
+    const { createDocumentStub } = await import('../../../src/pipeline/db/repositories.js');
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f });
+
+    const r1 = await ensureDocumentParsed(ctx, docId, { modality: 'digital' });
+    expect(r1.parseStatus).toBe('parsed');
+
+    const r2 = await ensureDocumentParsed(ctx, docId, { modality: 'digital' });
+    expect(r2.parseStatus).toBe('parsed');
+    // No re-parse: exactly one classification row persisted for the doc.
+    const row = ctx.sqlite
+      .prepare('SELECT COUNT(*) AS n FROM classifications WHERE document_id = ?')
+      .get(docId) as { n: number };
+    expect(row.n).toBe(1);
+  });
+
+  it('re-runs after a failed parse (state -> retry)', async () => {
+    const f = join(dir, 'retry.txt');
+    writeFileSync(f, '合同号：HT-R1\n', 'utf-8');
+    const { createDocumentStub, getDocumentParseStatus } = await import(
+      '../../../src/pipeline/db/repositories.js'
+    );
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f });
+    // Break the pipeline mid-run: drop classifications so saveClassification throws.
+    ctx.sqlite.exec('DROP TABLE classifications');
+    const r1 = await ensureDocumentParsed(ctx, docId, { modality: 'digital' });
+    expect(r1.parseStatus).toBe('failed');
+
+    // Fix + retry -> re-runs to parsed (migrate re-creates classifications;
+    // it is idempotent guarded DDL, safe to re-run on the same connection).
+    migrate(ctx.sqlite);
+    const r2 = await ensureDocumentParsed(ctx, docId, { modality: 'digital' });
+    expect(r2.parseStatus).toBe('parsed');
+    expect(await getDocumentParseStatus(ctx, docId)).toBe('parsed');
+  });
+});
+
+// Model B bug fix: auto-extraction could be silently killed by the 60s timeout
+// (extraction_status='skipped'), leaving the review card empty. ensureDocumentExtracted
+// re-runs extraction ONLY when needed; these tests verify the decision logic
+// with NO real model (fast paths never touch opts.extraction).
+describe('ensureDocumentExtracted (parse + extraction assurance)', () => {
+  it('returns fast when extraction_status=ok (no re-extraction, no model needed)', async () => {
+    const f = join(dir, 'ext-ok.txt');
+    writeFileSync(f, '合同号：HT-E1\n', 'utf-8');
+    const { createDocumentStub, setDocumentParseStatus, setExtractionStatus } = await import(
+      '../../../src/pipeline/db/repositories.js'
+    );
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f });
+    await setDocumentParseStatus(ctx, docId, 'parsed');
+    await setExtractionStatus(ctx, docId, 'ok');
+
+    // opts has NO extraction dep: the fast path must not require a model.
+    const res = await ensureDocumentExtracted(ctx, docId, { modality: 'digital' });
+    expect(res.docId).toBe(docId);
+    expect(res.parseStatus).toBe('parsed');
+    expect(res.extractionStatus).toBe('ok');
+  });
+
+  it('returns early (no model) when re-extraction is needed but no extraction dep is wired', async () => {
+    const f = join(dir, 'ext-skip.txt');
+    writeFileSync(f, '合同号：HT-E2\n', 'utf-8');
+    const { createDocumentStub, setDocumentParseStatus, setExtractionStatus } = await import(
+      '../../../src/pipeline/db/repositories.js'
+    );
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f });
+    await setDocumentParseStatus(ctx, docId, 'parsed');
+    // 'skipped' (the timeout outcome) is in the re-extract set -> enters the
+    // re-extract branch; opts.extraction is absent -> early return, status as-is.
+    await setExtractionStatus(ctx, docId, 'skipped');
+
+    const res = await ensureDocumentExtracted(ctx, docId, { modality: 'digital' });
+    expect(res.parseStatus).toBe('parsed');
+    expect(res.extractionStatus).toBe('skipped');
+  });
+
+  it('re-extracts when extraction_status is null AND no extraction row exists (no model -> early return)', async () => {
+    const f = join(dir, 'ext-null.txt');
+    writeFileSync(f, '合同号：HT-E3\n', 'utf-8');
+    const { createDocumentStub, setDocumentParseStatus } = await import(
+      '../../../src/pipeline/db/repositories.js'
+    );
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f });
+    await setDocumentParseStatus(ctx, docId, 'parsed');
+    // extraction_status left NULL (never stamped) + no extraction rows.
+
+    const res = await ensureDocumentExtracted(ctx, docId, { modality: 'digital' });
+    expect(res.parseStatus).toBe('parsed');
+    // Enters the re-extract branch but has no extraction dep -> returns early
+    // with extractionStatus undefined (status is NULL).
+    expect(res.extractionStatus).toBeUndefined();
+  });
+
+  it('propagates document_not_found for an unknown doc', async () => {
+    await expect(
+      ensureDocumentExtracted(ctx, 'DOC-does-not-exist', { modality: 'digital' }),
+    ).rejects.toThrow(/document_not_found/);
   });
 });
