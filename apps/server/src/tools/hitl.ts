@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { findDocument, type OcrField } from '../data/seed.js';
 import { tagExternal } from '../harness/injectionDefense.js';
 import { recordPendingApproval } from '../harness/sessionStore.js';
-import { getSessionContext } from '../harness/sessionContext.js';
+import { getSessionId } from '../harness/sessionContext.js';
 
 // HITL tools (T3 + T4). Both L1 (auto-execute, no approval gate).
 // AI SDK 6 uses `inputSchema` (not v5 `parameters`).
@@ -44,7 +44,7 @@ export const escalateToHuman = tool({
     '不确定回退：当遇到数据冲突、置信度低、数据缺失或业务规则边界情况无法确定时，转人工处理。不要自行编造或猜测，调用本工具生成人工处理工单。',
   inputSchema: escalateSchema,
   execute: async ({ issue, category, context, severity }) => {
-    const sessionId = getSessionContext();
+    const sessionId = getSessionId();
     const ticketId = `ESC-${randomUUID().slice(0, 8)}`;
     if (sessionId) {
       recordPendingApproval({

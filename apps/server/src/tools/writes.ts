@@ -6,7 +6,7 @@ import {
   recordPendingApproval,
   isAuthorized,
 } from '../harness/sessionStore.js';
-import { getSessionContext } from '../harness/sessionContext.js';
+import { getSessionId } from '../harness/sessionContext.js';
 
 // NOTE: AI SDK 6 uses `inputSchema` (not v5 `parameters`).
 // Permission gating (L2/L3) is applied by the chat route via PermissionGate,
@@ -48,7 +48,7 @@ export const createPayment = tool({
     '对合同发起付款。属于资金类不可逆操作，必须经财务主管外部审批（飞书审批流）。首次调用会返回 blocked 与审批票据号 ticketId；审批通过后，带上 authorizedTicketId 重新调用才会真正执行付款。',
   inputSchema: createPaymentSchema,
   execute: async ({ contractNo, amount, authorizedTicketId }) => {
-    const sessionId = getSessionContext();
+    const sessionId = getSessionId();
 
     // Case 1: first call, no authorization yet -> block + open a ticket.
     if (!authorizedTicketId) {

@@ -6,7 +6,7 @@
 // `trace_id` through the whole call chain (request -> step -> tool call) so the
 // full agent trajectory can be reconstructed and audited.
 
-import { getSessionContext } from './sessionContext.js';
+import { getSessionId } from './sessionContext.js';
 
 export interface ToolCallRecord {
   toolName: string;
@@ -37,7 +37,7 @@ export function createAuditRecorder(): AuditRecorder {
   return {
     records,
     recordToolCall({ toolName, args, result, durationMs }) {
-      const sessionId = getSessionContext() ?? undefined;
+      const sessionId = getSessionId() ?? undefined;
       const record: ToolCallRecord = {
         toolName,
         args,
