@@ -6,6 +6,9 @@ import {
   saveDocument, loadDocument, saveExtraction, loadExtraction, saveBinding, saveChunks,
   saveClassification, saveDocumentTags, listDocumentTags, getReviewSnapshot,
   applyDocumentCorrections, setDocumentVectorization,
+  // Model B (decouple upload from parse): stub + parse-lifecycle repo fns.
+  getDocumentSourceUri, setDocumentParseStatus, updateDocumentMeta,
+  type ParseStatus,
 } from '../db/repositories.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
@@ -165,6 +168,15 @@ export async function ingestFile(opts: IngestOptions): Promise<{
     console.error('[ingest] vectorization_meta persistence failed:', (e as Error).message);
   }
 
+  // Model B: tool-created docs are fully parsed at the end of ingest, so stamp
+  // parse_status='parsed' for consistency with the upload-then-process path.
+  // Wrapped like the vectorization write above so a status write can't break ingest.
+  try {
+    await setDocumentParseStatus(ctx, docId, 'parsed', userId);
+  } catch (e) {
+    console.error('[ingest] parse_status persistence failed:', (e as Error).message);
+  }
+
   return {
     docId,
     blockCount: blockModel.blocks.length,
@@ -175,6 +187,158 @@ export async function ingestFile(opts: IngestOptions): Promise<{
     tags,
     vectorization,
   };
+}
+
+/**
+ * On-demand parse of an EXISTING document stub (Model B). Upload creates a
+ * lightweight documents row (parse_status='uploaded') and returns immediately;
+ * this fn runs the parse pipeline against that stub when triggered by
+ * POST /api/documents/:docId/process. Parse/OCR failure becomes a STATE
+ * (parse_status='needs_ocr' / 'failed'), NOT a thrown exception at the process
+ * layer — so upload is never coupled to parsing.
+ *
+ * NOTE: this intentionally mirrors ingestFile's body above but operates on an
+ * EXISTING docId (the stub already inserted by createDocumentStub), so it UPDATEs
+ * the row (updateDocumentMeta) instead of INSERT-ing (saveDocument).
+ * TODO(refactor): extract a shared parse/classify/chunk/index helper and have
+ * both ingestFile and processDocument call it; left inline for now to avoid
+ * touching ingestFile (the agent tool path) in this change.
+ */
+export interface ProcessDocumentOptions {
+  docType?: DocType;
+  modality?: Modality;
+  embedder?: Embedder;
+  classifier?: ClassifierDeps;
+}
+
+export interface ProcessDocumentResult {
+  docId: string;
+  parseStatus: ParseStatus;
+  blockCount: number;
+  classifiedDocType?: DocType;
+  classificationConfidence?: number;
+  classificationSource?: 'classified' | 'hint' | 'fallback';
+  tags?: string[];
+  vectorization?: VectorizationStatus;
+  reason?: string;
+}
+
+export async function processDocument(
+  ctx: DbContext,
+  docId: string,
+  opts: ProcessDocumentOptions,
+  userId?: string,
+): Promise<ProcessDocumentResult> {
+  ensureFk(ctx);
+  // 1. Resolve the stub's source path. A missing row is the one case that throws
+  //    (the caller asked to process a doc that does not exist).
+  const sourceUri = await getDocumentSourceUri(ctx, docId, userId);
+  if (!sourceUri) throw new Error('document_not_found');
+
+  // 2. Mark parsing in progress.
+  await setDocumentParseStatus(ctx, docId, 'parsing', userId);
+
+  // 3. Parse. Wrapped: 0 blocks / OCR error -> 'needs_ocr' STATE (no throw).
+  let blockModel;
+  try {
+    blockModel = await parseDocument({
+      sourcePath: assertWithinRoot(sourceUri),
+      docType: opts.docType ?? '其他',
+      docId,
+      modality: opts.modality ?? 'digital',
+    });
+  } catch (e) {
+    const reason = (e as Error).message;
+    await setDocumentParseStatus(ctx, docId, 'needs_ocr', userId);
+    return { docId, parseStatus: 'needs_ocr', blockCount: 0, reason };
+  }
+
+  // Steps 4-11 mirror ingestFile's body; an unexpected error -> 'failed' STATE
+  // (no throw — process-layer failures are states, not exceptions).
+  try {
+    // 4. Classify (Phase 2 routing-classify): parsed blocks -> effective docType.
+    const cls = opts.classifier
+      ? await classifyDocument(opts.classifier, { blocks: blockModel.blocks, hint: opts.docType })
+      : classifyDocumentWithoutModel({ blocks: blockModel.blocks, hint: opts.docType });
+    blockModel.docType = cls.docType;
+
+    // 5. UPDATE the stub with the real docType/modality/block_model (replaces
+    //    ingestFile's saveDocument INSERT).
+    await updateDocumentMeta(
+      ctx,
+      docId,
+      { docType: blockModel.docType, modality: blockModel.modality, blockModel },
+      userId,
+    );
+
+    // 6. Persist classification.
+    await saveClassification(
+      ctx,
+      { documentId: docId, docType: cls.docType, confidence: cls.confidence, source: cls.source, hint: opts.docType },
+      userId,
+    );
+
+    // 7. Chunk + save chunks.
+    const chunks = chunkBlockModel(blockModel);
+    const chunkRowIds = await saveChunks(ctx, docId, chunks);
+
+    // 8. Vector block (verbatim from ingestFile).
+    let vectorization: VectorizationStatus = { status: 'skipped', mode: 'none', chunkCount: chunks.length };
+    if (opts.embedder) {
+      if (await isVecReady(ctx)) {
+        try {
+          const vecs = await opts.embedder.embed(chunks.map((c) => c.text));
+          await saveChunkVectors(
+            ctx,
+            chunkRowIds.map((id, i) => ({ chunkRowId: id, vec: vecs[i] ?? [] })),
+          );
+          vectorization = { status: 'ok', mode: opts.embedder.kind, chunkCount: chunks.length };
+        } catch (e) {
+          vectorization = {
+            status: 'failed', mode: opts.embedder.kind, chunkCount: chunks.length,
+            reason: (e as Error).message,
+          };
+          console.warn('[processDocument] vector embedding failed; FTS5 recall still available:', vectorization.reason);
+        }
+      } else {
+        vectorization = { status: 'skipped', mode: opts.embedder.kind, chunkCount: chunks.length, reason: 'vec_store_not_ready' };
+      }
+    }
+
+    // 9. Auto-tag (verbatim from ingestFile; fault-tolerant byproduct).
+    let tags: string[] = [];
+    try {
+      tags = deriveAutoTags({ docType: blockModel.docType, blocks: blockModel.blocks });
+      await saveDocumentTags(ctx, docId, tags, 'auto', userId);
+    } catch (e) {
+      console.error('[processDocument] auto-tag persistence failed:', (e as Error).message);
+    }
+
+    // 10. Persist the vectorization outcome.
+    try {
+      await setDocumentVectorization(ctx, docId, vectorization, userId);
+    } catch (e) {
+      console.error('[processDocument] vectorization_meta persistence failed:', (e as Error).message);
+    }
+
+    // 11. Parsed.
+    await setDocumentParseStatus(ctx, docId, 'parsed', userId);
+
+    return {
+      docId,
+      parseStatus: 'parsed',
+      blockCount: blockModel.blocks.length,
+      classifiedDocType: cls.docType,
+      classificationConfidence: cls.confidence,
+      classificationSource: cls.source,
+      tags,
+      vectorization,
+    };
+  } catch (e) {
+    const reason = (e as Error).message;
+    await setDocumentParseStatus(ctx, docId, 'failed', userId);
+    return { docId, parseStatus: 'failed', blockCount: 0, reason };
+  }
 }
 
 export function buildIngestDocumentTool(deps: ToolDeps) {

@@ -49,7 +49,10 @@ export function migrate(sqlite: Database.Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       review_status TEXT NOT NULL DEFAULT 'pending',
       reviewed_at TEXT,
-      reviewed_by TEXT
+      reviewed_by TEXT,
+      -- Model B parse lifecycle: 'uploaded' stub -> 'parsing' -> 'parsed' |
+      -- 'needs_ocr' | 'failed'. Decouples upload (storage-only) from parsing.
+      parse_status TEXT NOT NULL DEFAULT 'uploaded'
     );
     CREATE TABLE IF NOT EXISTS extractions (
       id TEXT PRIMARY KEY,
@@ -190,6 +193,11 @@ export function migrate(sqlite: Database.Database): void {
     if (!have.has('vectorization_meta')) {
       try { sqlite.exec('ALTER TABLE documents ADD COLUMN vectorization_meta TEXT'); } catch { /* concurrent */ }
     }
+    // Model B parse lifecycle column. Same guarded ALTER pattern as
+    // review_status / vectorization_meta above (duplicate column -> SQLITE_ERROR).
+    if (!have.has('parse_status')) {
+      try { sqlite.exec("ALTER TABLE documents ADD COLUMN parse_status TEXT NOT NULL DEFAULT 'uploaded'"); } catch { /* concurrent */ }
+    }
   }
   {
     const cols = sqlite.prepare('PRAGMA table_info(extractions)').all() as Array<{ name: string }>;
@@ -312,6 +320,8 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     // on restart and never written by the /api/files upload path).
     `ALTER TABLE documents ADD COLUMN IF NOT EXISTS vectorization_meta jsonb`,
     `ALTER TABLE extractions ADD COLUMN IF NOT EXISTS proposed_relationships jsonb`,
+    // Model B parse lifecycle column (mirror of the SQLite guarded ALTER above).
+    `ALTER TABLE documents ADD COLUMN IF NOT EXISTS parse_status TEXT NOT NULL DEFAULT 'uploaded'`,
   ];
   try {
     for (const sql of statements) {

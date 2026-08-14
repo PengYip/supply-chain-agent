@@ -6,7 +6,13 @@ import { env } from '../../../src/env.js';
 import {
   buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool, buildInspectExtractionTool,
   buildTagDocumentTool,
+  processDocument,
 } from '../../../src/pipeline/tools/documentEntry.js';
+import {
+  createDocumentStub,
+  getDocumentParseStatus,
+  loadDocument,
+} from '../../../src/pipeline/db/repositories.js';
 
 let ctx: ReturnType<typeof createDb>;
 let dir: string;
@@ -393,5 +399,50 @@ describe('document-entry tools', () => {
     );
     expect(out.status).toBe('error');
     expect(out.reason).toBe('no_tags_provided');
+  });
+});
+
+// Model B: processDocument runs the parse pipeline on an EXISTING upload stub
+// (created by createDocumentStub). Upload is storage-only; parse runs on demand.
+describe('processDocument (on-demand parse of an existing stub)', () => {
+  it('parses a stub with real text to parseStatus=parsed and persists the BlockModel', async () => {
+    const f = join(dir, 'proc.txt');
+    writeFileSync(f, '合同号：HT-2024-001\n金额：100000\n', 'utf-8');
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f, docType: '合同' });
+    expect(await getDocumentParseStatus(ctx, docId)).toBe('uploaded');
+
+    const res = await processDocument(ctx, docId, { docType: '合同', modality: 'digital' });
+
+    expect(res.parseStatus).toBe('parsed');
+    expect(res.blockCount).toBeGreaterThan(0);
+    expect(await getDocumentParseStatus(ctx, docId)).toBe('parsed');
+    // The parsed BlockModel is persisted onto the stub row (updateDocumentMeta),
+    // so downstream tools (extract_fields / recall) can read it back.
+    const model = await loadDocument(ctx, docId);
+    expect(model?.blocks.length).toBeGreaterThan(0);
+    expect(model?.docType).toBe('合同');
+  });
+
+  it('returns needs_ocr (does NOT throw) when the file yields 0 blocks', async () => {
+    // Empty .txt -> digitalAdapter skips empty lines -> 0 blocks -> parseDocument
+    // throws (parseDocument.ts:45-51). processDocument's try/catch around
+    // parseDocument must catch it and set parse_status='needs_ocr'.
+    const f = join(dir, 'empty.txt');
+    writeFileSync(f, '', 'utf-8');
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f });
+
+    const res = await processDocument(ctx, docId, { modality: 'digital' });
+
+    expect(res.parseStatus).toBe('needs_ocr');
+    expect(res.blockCount).toBe(0);
+    expect(typeof res.reason).toBe('string');
+    expect(res.reason!.length).toBeGreaterThan(0);
+    expect(await getDocumentParseStatus(ctx, docId)).toBe('needs_ocr');
+  });
+
+  it('throws document_not_found when the docId does not exist', async () => {
+    await expect(
+      processDocument(ctx, 'DOC-does-not-exist', { modality: 'digital' }),
+    ).rejects.toThrow(/document_not_found/);
   });
 });

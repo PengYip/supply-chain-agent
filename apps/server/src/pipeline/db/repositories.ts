@@ -1,7 +1,7 @@
 import { eq, and, or, isNull, desc } from 'drizzle-orm';
 import { documents, extractions, bindings, classifications } from './schema.js';
 import type { DbContext } from './client.js';
-import type { BlockModel, DocType, SourceSpan } from '../types.js';
+import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
 import type { SpanMatchStrength } from '../spanValidator.js';
 // Postgres impls. Static import: pg is a declared dep on both backends now; the
 // functions are only CALLED on the postgres branch (lazy Pool connect), so the
@@ -37,6 +37,12 @@ import {
   setDocumentVectorizationPg,
   // post-ingest review (Task 7): pg twin for latest-extraction-by-doc lookup.
   loadLatestExtractionByDocIdPg,
+  // Model B (decouple upload from parse): pg twins for stub + parse lifecycle.
+  createDocumentStubPg,
+  updateDocumentMetaPg,
+  setDocumentParseStatusPg,
+  getDocumentParseStatusPg,
+  getDocumentSourceUriPg,
 } from './postgres-repositories.js';
 
 // Phase 2 business-data isolation: a normalized userId is '' / undefined when the
@@ -115,6 +121,15 @@ export interface BindingRow {
 // snapshot is the single 5-dimension read the review UI/tools consume.
 
 export type ReviewStatus = 'pending' | 'confirmed' | 'corrected';
+
+/**
+ * Model B parse lifecycle for a document stub. Upload creates the row as
+ * 'uploaded' (storage-only, no parse); POST /api/documents/:docId/process drives
+ * it through 'parsing' -> 'parsed' on success, or 'needs_ocr' (0 blocks / OCR
+ * error) / 'failed' (unexpected error) on failure. Process-layer failures are
+ * STATES, not thrown exceptions, so upload is never coupled to parsing.
+ */
+export type ParseStatus = 'uploaded' | 'parsing' | 'parsed' | 'needs_ocr' | 'failed';
 
 export interface ProposedRelationship {
   kind: 'Party' | 'Commodity' | 'Contract';
@@ -967,6 +982,150 @@ export async function setDocumentVectorization(
   ctx.sqlite
     .prepare('UPDATE documents SET vectorization_meta = ? WHERE id = ?')
     .run(JSON.stringify(vectorization), docId);
+}
+
+// ---- Model B: decouple upload from parse -----------------------------------
+//
+// Upload (POST /api/files) now creates a lightweight documents "stub" row with
+// parse_status='uploaded' and returns immediately; parsing runs on demand via
+// processDocument (POST /api/documents/:docId/process). OCR/parse failure
+// becomes a STATE ('needs_ocr' / 'failed'), NOT a thrown exception. These fns
+// dispatch to pg twins like the rest of the repo layer.
+
+/** Doc-id generator mirroring newDocId (documentEntry.ts) for stub rows. */
+const newDocRowId = () => `DOC-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
+/** Input for createDocumentStub: the minimal fields known at upload time. */
+export interface DocumentStubInput {
+  sourceUri: string;
+  minioKey?: string;
+  userId?: string;
+  filename?: string;
+  docType?: DocType;
+}
+
+/**
+ * Insert a lightweight documents "stub" row at upload time (parse_status=
+ * 'uploaded'). Upload is storage-only: it does NOT parse. The row satisfies all
+ * NOT NULL columns of `documents` (doc_type/modality/block_model have no DB
+ * default, so the stub fills placeholders that processDocument later overwrites
+ * via updateDocumentMeta). block_model is a valid empty BlockModel JSON so a
+ * pre-parse loadDocument does not crash. Returns the generated docId.
+ */
+export async function createDocumentStub(
+  ctx: DbContext,
+  input: DocumentStubInput,
+): Promise<{ docId: string }> {
+  if (ctx.backend === 'postgres') return createDocumentStubPg(ctx, input);
+  const docId = newDocRowId();
+  const docType: DocType = input.docType ?? '其他';
+  const modality: Modality = 'digital';
+  const blockModel = JSON.stringify({
+    docId,
+    docType,
+    modality,
+    blocks: [],
+    sourceUri: input.sourceUri,
+    createdAt: new Date().toISOString(),
+  });
+  ctx.sqlite
+    .prepare(
+      `INSERT INTO documents (id, doc_type, modality, source_uri, block_model, minio_key, user_id, parse_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'uploaded')`,
+    )
+    .run(
+      docId,
+      docType,
+      modality,
+      input.sourceUri,
+      blockModel,
+      input.minioKey ?? null,
+      effectiveUserId(input.userId),
+    );
+  return { docId };
+}
+
+/**
+ * UPDATE the doc_type / modality / block_model on an existing documents row.
+ * Used by processDocument to fill in the parsed values on a stub (only the
+ * provided fields are written). blockModel is accepted (deviation from the
+ * literal spec which listed only docType/modality): persisting the parsed
+ * BlockModel is REQUIRED for downstream tools (extract_fields / inspect_extraction
+ * / recall all read block_model), otherwise the Model B refactor would leave
+ * uploaded docs unparseable by the agent. userId is accepted for parity (void,
+ * like setReviewStatus).
+ */
+export async function updateDocumentMeta(
+  ctx: DbContext,
+  docId: string,
+  input: { docType?: DocType; modality?: Modality; blockModel?: BlockModel },
+  userId?: string,
+): Promise<void> {
+  if (ctx.backend === 'postgres') return updateDocumentMetaPg(ctx, docId, input, userId);
+  void userId;
+  const sets: string[] = [];
+  const params: Array<string | null> = [];
+  if (input.docType !== undefined) {
+    sets.push('doc_type = ?');
+    params.push(input.docType);
+  }
+  if (input.modality !== undefined) {
+    sets.push('modality = ?');
+    params.push(input.modality);
+  }
+  if (input.blockModel !== undefined) {
+    sets.push('block_model = ?');
+    params.push(JSON.stringify(input.blockModel));
+  }
+  if (sets.length === 0) return;
+  params.push(docId);
+  ctx.sqlite.prepare(`UPDATE documents SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+}
+
+/**
+ * Set the parse_status lifecycle on a document. Mirrors setReviewStatus's raw
+ * UPDATE shape. userId is accepted for signature parity (void).
+ */
+export async function setDocumentParseStatus(
+  ctx: DbContext,
+  docId: string,
+  status: ParseStatus,
+  userId?: string,
+): Promise<void> {
+  if (ctx.backend === 'postgres') return setDocumentParseStatusPg(ctx, docId, status, userId);
+  void userId;
+  ctx.sqlite.prepare('UPDATE documents SET parse_status = ? WHERE id = ?').run(status, docId);
+}
+
+/** Read the parse_status for a document, or null if the row does not exist. */
+export async function getDocumentParseStatus(
+  ctx: DbContext,
+  docId: string,
+  userId?: string,
+): Promise<ParseStatus | null> {
+  if (ctx.backend === 'postgres') return getDocumentParseStatusPg(ctx, docId, userId);
+  void userId;
+  const row = ctx.sqlite
+    .prepare('SELECT parse_status FROM documents WHERE id = ?')
+    .get(docId) as { parse_status: string } | undefined;
+  return row ? (row.parse_status as ParseStatus) : null;
+}
+
+/**
+ * Read the source_uri for a document (processDocument resolves the stub's source
+ * path through this), or null if the row does not exist.
+ */
+export async function getDocumentSourceUri(
+  ctx: DbContext,
+  docId: string,
+  userId?: string,
+): Promise<string | null> {
+  if (ctx.backend === 'postgres') return getDocumentSourceUriPg(ctx, docId, userId);
+  void userId;
+  const row = ctx.sqlite
+    .prepare('SELECT source_uri FROM documents WHERE id = ?')
+    .get(docId) as { source_uri: string } | undefined;
+  return row ? row.source_uri : null;
 }
 
 /**

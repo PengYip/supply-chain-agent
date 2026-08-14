@@ -19,8 +19,15 @@ import {
   getReviewSnapshot,
   setReviewStatus,
 } from '../pipeline/db/repositories.js';
+import { processDocument } from '../pipeline/tools/documentEntry.js';
+import { defaultEmbedder } from './files.js';
+import type { DocType, Modality } from '../pipeline/types.js';
 
 export const reviewRoute = new Hono<AuthEnv>();
+
+// Allowed docType hints (mirror of routes/files.ts). Used to validate the
+// optional docType on POST /api/documents/:docId/process.
+const ALLOWED_DOCTYPES: ReadonlySet<string> = new Set(['合同', '发票', '提单', '装箱单', '其他']);
 
 // One DbContext reused across requests (same 'pipeline.db' file / DB as the
 // agent + uploads, so corrections land where recall_documents / the review
@@ -123,6 +130,61 @@ reviewRoute.post('/:docId/review', async (c) => {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[review] correction failed:', msg);
+    return c.json({ ok: false, error: msg }, 500);
+  }
+});
+
+/**
+ * POST /api/documents/:docId/process
+ *
+ * Model B: run the parse pipeline on an EXISTING upload stub
+ * (parse_status='uploaded') on demand. Upload is storage-only; this is where
+ * OCR / block extraction / chunking / indexing actually happen. Parse/OCR
+ * failure becomes a STATE (parse_status='needs_ocr' / 'failed') in the response
+ * body, NOT a thrown 500 — so the caller can react (e.g. prompt the user to
+ * retry as 'scanned'). requireAuth-gated in index.ts (a user is always attached).
+ *
+ * Request body (JSON, all optional):
+ *   { docType?: string; modality?: string }
+ *   - docType: '合同'|'发票'|'提单'|'装箱单'|'其他' (default '其他')
+ *   - modality: 'digital'|'scanned' (default 'digital')
+ *
+ * Responses (200):
+ *   { ok: true, docId, parseStatus, blockCount, ... }
+ *   parseStatus: 'parsed' | 'needs_ocr' | 'failed'
+ *
+ *   500 { ok: false, error: <message> }  (only for truly unexpected errors;
+ *      processDocument itself returns states rather than throwing for OCR failure)
+ */
+reviewRoute.post('/:docId/process', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+
+  let body: { docType?: unknown; modality?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    body = {};
+  }
+
+  const docId = c.req.param('docId');
+  const docTypeStr = typeof body.docType === 'string' ? body.docType : '其他';
+  const docType = (ALLOWED_DOCTYPES.has(docTypeStr) ? docTypeStr : '其他') as DocType;
+  const modalityStr = typeof body.modality === 'string' ? body.modality : 'digital';
+  const modality = (modalityStr === 'scanned' ? 'scanned' : 'digital') as Modality;
+
+  try {
+    const result = await processDocument(
+      ctx(),
+      docId,
+      { docType, modality, embedder: defaultEmbedder() },
+      user.id,
+    );
+    // result already carries docId, so spread it (docId, parseStatus, blockCount, ...).
+    return c.json({ ok: true, ...result });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[review] process failed:', msg);
     return c.json({ ok: false, error: msg }, 500);
   }
 });
