@@ -128,6 +128,9 @@ export function migrate(sqlite: Database.Database): void {
       document_id TEXT NOT NULL REFERENCES documents(id),
       chunk_text TEXT NOT NULL,
       chunk_index INTEGER,
+      -- Lane B: per-chunk semantic tags (JSON string[] | NULL). NULL when the
+      -- tagger was unset, taxonomy empty (其他), or the tagger errored.
+      tags TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_doc_chunk_doc ON doc_chunk(document_id);
@@ -189,6 +192,21 @@ export function migrate(sqlite: Database.Database): void {
     // guarded ALTER pattern as the review_status block above.
     if (!have.has('vectorization_meta')) {
       try { sqlite.exec('ALTER TABLE documents ADD COLUMN vectorization_meta TEXT'); } catch { /* concurrent */ }
+    }
+    // Lane A (2a): auto-extraction lifecycle status (pending/running/ok/skipped/
+    // failed). NULL on legacy rows is treated as 'pending' (opt-in; no backfill).
+    if (!have.has('extraction_status')) {
+      try { sqlite.exec('ALTER TABLE documents ADD COLUMN extraction_status TEXT'); } catch { /* concurrent */ }
+    }
+  }
+  // Lane B: per-chunk semantic tags. Pre-existing dev DBs created doc_chunk
+  // WITHOUT this column (CREATE TABLE IF NOT EXISTS adds no columns), so a
+  // guarded ALTER is needed alongside the CREATE above. Same pattern as the
+  // documents user_id / review_status blocks.
+  {
+    const cols = sqlite.prepare('PRAGMA table_info(doc_chunk)').all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'tags')) {
+      try { sqlite.exec('ALTER TABLE doc_chunk ADD COLUMN tags TEXT'); } catch { /* concurrent */ }
     }
   }
   {
@@ -312,6 +330,10 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     // on restart and never written by the /api/files upload path).
     `ALTER TABLE documents ADD COLUMN IF NOT EXISTS vectorization_meta jsonb`,
     `ALTER TABLE extractions ADD COLUMN IF NOT EXISTS proposed_relationships jsonb`,
+    // Lane A (2a): auto-extraction lifecycle status. NULL = 'pending' (opt-in).
+    `ALTER TABLE documents ADD COLUMN IF NOT EXISTS extraction_status TEXT`,
+    // Lane B: per-chunk semantic tags (JSON string[] | NULL).
+    `ALTER TABLE doc_chunk ADD COLUMN IF NOT EXISTS tags JSONB`,
   ];
   try {
     for (const sql of statements) {

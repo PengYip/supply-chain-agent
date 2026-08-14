@@ -21,6 +21,8 @@ import { Hono } from 'hono';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
+import { createDeepSeek } from '@ai-sdk/deepseek';
+import type { LanguageModel } from 'ai';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 import { requireAuth } from '../lib/auth-middleware.js';
 import { requireRole } from '../lib/auth-middleware.js';
@@ -29,6 +31,7 @@ import { env } from '../env.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
 import type { DbContext } from '../pipeline/db/client.js';
 import { ingestFile } from '../pipeline/tools/documentEntry.js';
+import { makeLlmTagger } from '../pipeline/chunkTagging.js';
 import {
   setDocumentMinioKey,
   findDocIdsByMinioKeys,
@@ -56,6 +59,21 @@ function defaultEmbedder(): Embedder {
   return env.OLLAMA_BASE_URL
     ? new OllamaEmbedder({ baseUrl: env.OLLAMA_BASE_URL, model: env.OLLAMA_EMBED_MODEL })
     : new DeterministicEmbedder();
+}
+
+// Lane A (2a) + Lane B: DeepSeek model handle for upload-path auto-extraction +
+// chunk tagging. Lazy singleton reusing the SAME factory as agent.ts
+// (createDeepSeek(...).chat(env.OPENAI_MODEL)) so uploads run the exact same
+// model the agent loop uses. Mirrors chat.ts's getTitleModel pattern.
+let ingestModel: LanguageModel | null = null;
+function getIngestModel(): LanguageModel {
+  if (!ingestModel) {
+    ingestModel = createDeepSeek({
+      baseURL: env.OPENAI_BASE_URL,
+      apiKey: env.OPENAI_API_KEY,
+    }).chat(env.OPENAI_MODEL);
+  }
+  return ingestModel;
 }
 
 const ALLOWED_DOCTYPES: ReadonlySet<string> = new Set(['合同', '发票', '提单', '装箱单', '其他']);
@@ -157,12 +175,17 @@ filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
     await minioClient.fGetObject(MINIO_BUCKET, key, localPath);
 
     // 3. Ingest: parse -> persist BlockModel -> chunk -> index (FTS5 + vectors).
+    //    Lane A (2a) + Lane B: thread the DeepSeek model so uploads ALSO run
+    //    auto-extraction + chunk tagging (same model the agent uses).
+    const ingestModel = getIngestModel();
     const result = await ingestFile({
       ctx: ctx(),
       sourcePath: localPath,
       docType,
       modality,
       embedder: defaultEmbedder(),
+      extraction: { model: ingestModel },
+      tagger: makeLlmTagger(ingestModel),
       userId: user.id,
     });
 

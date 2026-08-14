@@ -89,6 +89,8 @@ export const documents = pgTable(
     reviewStatus: text('review_status').notNull().default('pending'),
     reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
     reviewedBy: text('reviewed_by'),
+    // Lane A (2a): auto-extraction lifecycle status. NULL = 'pending' (opt-in).
+    extractionStatus: text('extraction_status'),
   },
   (t) => ({
     userIdx: index('idx_documents_user').on(t.userId),
@@ -169,6 +171,8 @@ export const docChunk = pgTable(
     // Populated via a GENERATED column (raw SQL) + GIN index; declared here so
     // the Drizzle table object is column-complete for typed repository work.
     ftsVector: tsvector('fts_vector'),
+    // Lane B: per-chunk semantic tags (JSON string[] | NULL).
+    tags: jsonb('tags'),
     createdAt: nowTs(),
   },
   (t) => ({

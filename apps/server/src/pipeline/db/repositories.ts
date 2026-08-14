@@ -35,6 +35,8 @@ import {
   updateExtractionFieldsPg,
   // persisted vectorization outcome (Bug fix): pg twin for setDocumentVectorization.
   setDocumentVectorizationPg,
+  // Lane A (2a): pg twin for setExtractionStatus (auto-extraction lifecycle).
+  setExtractionStatusPg,
   // post-ingest review (Task 7): pg twin for latest-extraction-by-doc lookup.
   loadLatestExtractionByDocIdPg,
 } from './postgres-repositories.js';
@@ -115,6 +117,14 @@ export interface BindingRow {
 // snapshot is the single 5-dimension read the review UI/tools consume.
 
 export type ReviewStatus = 'pending' | 'confirmed' | 'corrected';
+
+/**
+ * Lane A (2a): auto-extraction lifecycle status stamped on documents.
+ * NULL on legacy rows is read as 'pending' (opt-in; no backfill). 'running' is
+ * set just before the model call; the terminal states are written by
+ * runAutoExtraction via setExtractionStatus.
+ */
+export type ExtractionStatus = 'pending' | 'running' | 'ok' | 'skipped' | 'failed';
 
 export interface ProposedRelationship {
   kind: 'Party' | 'Commodity' | 'Contract';
@@ -497,18 +507,35 @@ export async function saveChunks(
   ctx: DbContext,
   documentId: string,
   chunks: ChunkInput[],
+  chunkTags?: (string[] | null)[],
 ): Promise<number[]> {
-  if (ctx.backend === 'postgres') return saveChunksPg(ctx, documentId, chunks);
+  if (ctx.backend === 'postgres') return saveChunksPg(ctx, documentId, chunks, chunkTags);
+  // Lane B: when chunkTags is supplied (aligned by index), persist JSON into the
+  // tags column. Omitted -> 3-column insert (unchanged behavior; tags=NULL).
+  const writeTags = Array.isArray(chunkTags) && chunkTags.length > 0;
+  // The two inserts bind different arg counts, so type the prepared statement
+  // permissively (run returns lastInsertRowid either way) to avoid a union of
+  // differently-parameterized Statement generics.
+  type AnyStmt = { run: (...params: unknown[]) => { lastInsertRowid: number | bigint } };
   const insertChunk = ctx.sqlite.prepare(
-    'INSERT INTO doc_chunk (document_id, chunk_text, chunk_index) VALUES (?, ?, ?)',
-  );
+    writeTags
+      ? 'INSERT INTO doc_chunk (document_id, chunk_text, chunk_index, tags) VALUES (?, ?, ?, ?)'
+      : 'INSERT INTO doc_chunk (document_id, chunk_text, chunk_index) VALUES (?, ?, ?)',
+  ) as unknown as AnyStmt;
   const insertFts = ctx.sqlite.prepare(
     'INSERT INTO doc_chunk_fts (rowid, chunk_text) VALUES (?, ?)',
   );
   const rowids: number[] = [];
   const tx = ctx.sqlite.transaction((rows: ChunkInput[]) => {
-    for (const c of rows) {
-      const info = insertChunk.run(documentId, c.text, c.index);
+    for (let i = 0; i < rows.length; i++) {
+      const c = rows[i]!;
+      let info: { lastInsertRowid: number | bigint };
+      if (writeTags) {
+        const t = chunkTags![i] ?? null;
+        info = insertChunk.run(documentId, c.text, c.index, t === null ? null : JSON.stringify(t));
+      } else {
+        info = insertChunk.run(documentId, c.text, c.index);
+      }
       const rowid = Number(info.lastInsertRowid);
       rowids.push(rowid);
       // External-content FTS5: index entry keyed by the doc_chunk rowid.
@@ -612,6 +639,8 @@ export interface ChunkMeta {
   documentId: string;
   chunkIndex: number | null;
   text: string;
+  /** Lane B: per-chunk semantic tags (null when untagged). */
+  tags: string[] | null;
 }
 
 /**
@@ -633,11 +662,11 @@ export async function getChunkMetaByRowids(
   // caller cannot pull chunk text for a document they do not own. Unscoped path
   // (uid === '') keeps the pre-isolation query shape.
   const sql = uid
-    ? `SELECT dc.id, dc.document_id, dc.chunk_index, dc.chunk_text
+    ? `SELECT dc.id, dc.document_id, dc.chunk_index, dc.chunk_text, dc.tags
        FROM doc_chunk AS dc
        JOIN documents AS d ON d.id = dc.document_id
        WHERE dc.id IN (${placeholders}) AND (d.user_id = ? OR d.user_id = '' OR d.user_id IS NULL)`
-    : `SELECT id, document_id, chunk_index, chunk_text
+    : `SELECT id, document_id, chunk_index, chunk_text, tags
        FROM doc_chunk
        WHERE id IN (${placeholders})`;
   const params: Array<string | number> = uid ? [...rowids, uid] : rowids;
@@ -646,12 +675,25 @@ export async function getChunkMetaByRowids(
     document_id: string;
     chunk_index: number | null;
     chunk_text: string;
+    tags: string | null;
   }>;
   for (const r of rows) {
+    // null-safe parse: legacy rows / NULL -> null; corrupt JSON -> null (treat as
+    // untagged rather than throwing — tags are a retrieval hint, not a correctness boundary).
+    let tags: string[] | null = null;
+    if (r.tags) {
+      try {
+        const parsed = JSON.parse(r.tags);
+        tags = Array.isArray(parsed) ? parsed : null;
+      } catch {
+        tags = null;
+      }
+    }
     out.set(Number(r.id), {
       documentId: r.document_id,
       chunkIndex: r.chunk_index,
       text: r.chunk_text,
+      tags,
     });
   }
   return out;
@@ -967,6 +1009,25 @@ export async function setDocumentVectorization(
   ctx.sqlite
     .prepare('UPDATE documents SET vectorization_meta = ? WHERE id = ?')
     .run(JSON.stringify(vectorization), docId);
+}
+
+/**
+ * Lane A (2a): stamp the auto-extraction lifecycle status onto a document row.
+ * Mirrors setDocumentVectorization's raw UPDATE shape (pending -> running ->
+ * ok/skipped/failed). userId is accepted for signature parity; the doc-level
+ * scope already authorizes the caller.
+ */
+export async function setExtractionStatus(
+  ctx: DbContext,
+  docId: string,
+  status: ExtractionStatus,
+  userId?: string,
+): Promise<void> {
+  if (ctx.backend === 'postgres') return setExtractionStatusPg(ctx, docId, status, userId);
+  void userId;
+  ctx.sqlite
+    .prepare('UPDATE documents SET extraction_status = ? WHERE id = ?')
+    .run(status, docId);
 }
 
 /**

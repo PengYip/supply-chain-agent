@@ -9,6 +9,9 @@ import {
 } from '../db/repositories.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
+import { runAutoExtraction, buildAutoExtractionDeps } from '../autoExtraction.js';
+import { tagChunks, type ChunkTagger } from '../chunkTagging.js';
+import { getTaxonomy } from '../tag-taxonomy.js';
 import { classifyDocument, classifyDocumentWithoutModel, type ClassifierDeps } from '../classifier.js';
 import { deriveAutoTags } from '../tagging.js';
 import { chunkBlockModel } from '../chunking.js';
@@ -22,6 +25,9 @@ import { validateSpan, type SpanMatchStrength } from '../spanValidator.js';
 export interface ToolDeps {
   ctx: DbContext;
   extraction?: ExtractionDeps; // inject for extract_fields; defaults to real model
+  /** Lane B: per-chunk semantic tagger. When set, ingest tags chunks against the
+   *  docType's closed taxonomy (getTaxonomy); unset -> chunks stored untagged. */
+  tagger?: ChunkTagger;
   /** Phase 2 routing-classify stage. When unset, ingest degrades to the
    *  caller-supplied docType hint (source 'hint', confidence 0). */
   classifier?: ClassifierDeps;
@@ -80,6 +86,12 @@ export interface IngestOptions {
   embedder?: Embedder;
   /** Phase 2: owning user for the new document + its chunks. */
   userId?: string;
+  /** Lane A (2a): when set, ingest runs auto-extraction (extractGroundedFields +
+   *  saveExtraction) as a fault-isolated post-ingest stage. Unset -> skipped. */
+  extraction?: ExtractionDeps;
+  /** Lane B: per-chunk semantic tagger. When set + taxonomy non-empty, chunks are
+   *  tagged against getTaxonomy(docType) and stored on doc_chunk.tags. */
+  tagger?: ChunkTagger;
 }
 
 export async function ingestFile(opts: IngestOptions): Promise<{
@@ -92,7 +104,7 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   tags: string[];
   vectorization: VectorizationStatus;
 }> {
-  const { ctx, sourcePath, docType, modality, embedder, classifier, userId } = opts;
+  const { ctx, sourcePath, docType, modality, embedder, classifier, userId, extraction, tagger } = opts;
   ensureFk(ctx);
   // Path allowlist (injection defense): reject anything outside INGEST_ROOT.
   const safePath = assertWithinRoot(sourcePath);
@@ -116,7 +128,14 @@ export async function ingestFile(opts: IngestOptions): Promise<{
     userId,
   );
   const chunks = chunkBlockModel(blockModel);
-  const chunkRowIds = await saveChunks(ctx, docId, chunks);
+  // Lane B: tag chunks against the (closed) docType taxonomy. tagChunks never
+  // throws and short-circuits to all-null when the tagger is unset or the
+  // taxonomy is empty (其他), so this degrades cleanly in tests / offline.
+  const taxonomy = getTaxonomy(blockModel.docType);
+  const chunkTagResult = tagger
+    ? await tagChunks({ chunks: chunks.map((c) => ({ text: c.text })), taxonomy, tagger })
+    : chunks.map(() => null);
+  const chunkRowIds = await saveChunks(ctx, docId, chunks, chunkTagResult);
   let vectorization: VectorizationStatus = { status: 'skipped', mode: 'none', chunkCount: chunks.length };
   if (embedder) {
     if (await isVecReady(ctx)) {
@@ -165,6 +184,26 @@ export async function ingestFile(opts: IngestOptions): Promise<{
     console.error('[ingest] vectorization_meta persistence failed:', (e as Error).message);
   }
 
+  // Lane A (2a): auto-extraction. Additive post-ingest stage: when a model is
+  // wired, run extractGroundedFields + saveExtraction automatically so the
+  // document is field-ready without an explicit extract_fields call. Fully
+  // fault-isolated (runAutoExtraction never throws; failures -> 'failed' status
+  // on the doc row), and wrapped here too for defense-in-depth. A failure never
+  // blocks ingest -- the document stays searchable via FTS5 + vectors.
+  if (extraction) {
+    try {
+      await runAutoExtraction({
+        ctx,
+        docId,
+        blockModel,
+        userId,
+        deps: buildAutoExtractionDeps({ ctx, extraction, userId }),
+      });
+    } catch (e) {
+      console.error('[ingest] auto-extraction failed:', (e as Error).message);
+    }
+  }
+
   return {
     docId,
     blockCount: blockModel.blocks.length,
@@ -198,6 +237,8 @@ export function buildIngestDocumentTool(deps: ToolDeps) {
         classifier: deps.classifier,
         embedder: deps.embedder,
         userId: deps.userId,
+        extraction: deps.extraction,
+        tagger: deps.tagger,
       });
       // Vectorization outcome is now persisted inside ingestFile (Bug fix), so
       // present_document_review reads it back via getReviewSnapshot — no in-memory

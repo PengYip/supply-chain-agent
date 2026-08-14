@@ -107,8 +107,11 @@ const REL_ROLE_BY_FIELD: Record<string, string> = {
   甲方: '买方', 乙方: '卖方', 买方: '买方', 卖方: '卖方',
 };
 const COMMODITY_FIELDS = new Set(['标的物', '商品']);
+// Lane A (2a): contract-number fields also lift a Contract proposal so the
+// document can be graph-linked to its contract without an explicit bind call.
+const CONTRACT_FIELDS = new Set(['合同号', '合同编号']);
 
-/** Pure: derive candidate Party/Commodity entities from flat extracted fields. */
+/** Pure: derive candidate Party/Commodity/Contract entities from flat extracted fields. */
 export function deriveProposedRelationships(fields: ExtractedField[]): ProposedRelationship[] {
   const out: ProposedRelationship[] = [];
   for (const f of fields) {
@@ -118,6 +121,8 @@ export function deriveProposedRelationships(fields: ExtractedField[]): ProposedR
       out.push({ kind: 'Party', role: REL_ROLE_BY_FIELD[f.name], name: val, confidence: f.confidence });
     } else if (COMMODITY_FIELDS.has(f.name)) {
       out.push({ kind: 'Commodity', name: val, confidence: f.confidence });
+    } else if (CONTRACT_FIELDS.has(f.name)) {
+      out.push({ kind: 'Contract', name: val, confidence: f.confidence });
     }
   }
   return out;

@@ -13,6 +13,7 @@ import type { DbContext } from '../pipeline/db/client.js';
 import type { ExtractionDeps } from '../pipeline/extraction.js';
 import type { ClassifierDeps } from '../pipeline/classifier.js';
 import type { Embedder } from '../pipeline/embedder.js';
+import type { ChunkTagger } from '../pipeline/chunkTagging.js';
 import { env } from '../env.js';
 
 // MVP roles. Later phases add risk / finance / management with their own toolsets.
@@ -29,6 +30,8 @@ export interface HarnessDeps {
   /** Phase 2 routing-classify stage. Unset -> ingest degrades to the hint docType. */
   classifier?: ClassifierDeps;
   embedder?: Embedder;
+  /** Lane B: per-chunk semantic tagger for ingest. Unset -> chunks stored untagged. */
+  tagger?: ChunkTagger;
   /** Phase 2 business-data isolation: stamp + filter doc/extraction/binding/chunk
    *  rows by this user. Empty/undefined = unscoped (legacy/tests; no filtering). */
   userId?: string;
@@ -74,9 +77,9 @@ const TRADER_CTX_TOOL_NAMES = ['ingest_document', 'extract_fields', 'bind_docume
 export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
   const base: GatedTool[] = (BASE_TOOLS_FOR_ROLE[role] ?? []).map((t) => ({ ...t }));
   if (role === 'trader' && deps?.ctx) {
-    const { ctx, extraction, embedder, classifier, userId } = deps;
+    const { ctx, extraction, embedder, classifier, tagger, userId } = deps;
     base.push(
-      { ...buildIngestDocumentTool({ ctx, embedder, classifier, userId }), name: 'ingest_document' },
+      { ...buildIngestDocumentTool({ ctx, embedder, classifier, extraction, tagger, userId }), name: 'ingest_document' },
       { ...buildExtractFieldsTool({ ctx, extraction, userId }), name: 'extract_fields' },
       // present_document_review is L1: read-only 5-dim review card (业务类型/字段/关系/TAG/向量化).
       { ...buildPresentDocumentReviewTool({ ctx, userId }), name: 'present_document_review' },

@@ -17,6 +17,7 @@ import { appendStatusMessage, type AgentStatusSnapshot } from './agentStatus.js'
 import { getToolCallCounts } from './statusAggregator.js';
 import { countDocuments, countExtractionsNeedingReview } from '../pipeline/db/repositories.js';
 import { DeterministicEmbedder, OllamaEmbedder, type Embedder } from '../pipeline/embedder.js';
+import { makeLlmTagger } from '../pipeline/chunkTagging.js';
 import { type DbContext } from '../pipeline/db/client.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
 
@@ -336,6 +337,9 @@ export async function runStream({ messages, role, auditTraceId, model, deps, use
     extraction: { model: resolvedModel },
     classifier: { model: resolvedModel },
     embedder: defaultEmbedder(),
+    // Lane B: reuse the same DeepSeek model handle for chunk tagging so there is
+    // one provider client per turn (matches extraction/classifier).
+    tagger: makeLlmTagger(resolvedModel),
     userId,
   };
   const ctx = harnessDeps.ctx;

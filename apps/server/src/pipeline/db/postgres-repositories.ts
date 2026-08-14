@@ -34,6 +34,7 @@ import type {
   ProposedRelationship,
   ReviewSnapshot,
   DocumentVectorization,
+  ExtractionStatus,
 } from './repositories.js';
 
 // Phase 2 business-data isolation: same convention as repositories.ts -- a
@@ -166,21 +167,36 @@ export async function saveChunksPg(
   ctx: PostgresDbContext,
   documentId: string,
   chunks: ChunkInput[],
+  chunkTags?: (string[] | null)[],
 ): Promise<number[]> {
   const rowids: number[] = [];
   // Single multi-row INSERT returning ids in the same order as the VALUES list.
   // Build a parameterized VALUES list ($n triples) so it is one round-trip.
   if (chunks.length === 0) return rowids;
+  // Lane B: when chunkTags is supplied (aligned by index), write a 4th JSONB
+  // column. Omitted -> 3-column insert (unchanged behavior; tags=NULL).
+  const writeTags = Array.isArray(chunkTags) && chunkTags.length > 0;
   const values: unknown[] = [];
   const placeholders: string[] = [];
   let p = 1;
-  for (const c of chunks) {
-    placeholders.push(`($${p}, $${p + 1}, $${p + 2})`);
-    values.push(documentId, c.text, c.index);
-    p += 3;
+  for (let i = 0; i < chunks.length; i++) {
+    const c = chunks[i]!;
+    if (writeTags) {
+      placeholders.push(`($${p}, $${p + 1}, $${p + 2}, $${p + 3}::jsonb)`);
+      const t = chunkTags![i] ?? null;
+      values.push(documentId, c.text, c.index, t === null ? null : JSON.stringify(t));
+      p += 4;
+    } else {
+      placeholders.push(`($${p}, $${p + 1}, $${p + 2})`);
+      values.push(documentId, c.text, c.index);
+      p += 3;
+    }
   }
+  const cols = writeTags
+    ? 'document_id, chunk_text, chunk_index, tags'
+    : 'document_id, chunk_text, chunk_index';
   const res = await ctx.pool.query(
-    `INSERT INTO doc_chunk (document_id, chunk_text, chunk_index)
+    `INSERT INTO doc_chunk (${cols})
      VALUES ${placeholders.join(', ')}
      RETURNING id`,
     values,
@@ -263,23 +279,28 @@ export async function getChunkMetaByRowidsPg(
   const uid = effectiveUserId(userId);
   const res = uid
     ? await ctx.pool.query(
-        `SELECT c.id, c.document_id, c.chunk_index, c.chunk_text
+        `SELECT c.id, c.document_id, c.chunk_index, c.chunk_text, c.tags
          FROM doc_chunk AS c
          JOIN documents AS d ON d.id = c.document_id
          WHERE c.id = ANY($1) AND (d.user_id = $2 OR d.user_id = '' OR d.user_id IS NULL)`,
         [rowids, uid],
       )
     : await ctx.pool.query(
-        `SELECT id, document_id, chunk_index, chunk_text
+        `SELECT id, document_id, chunk_index, chunk_text, tags
          FROM doc_chunk
          WHERE id = ANY($1)`,
         [rowids],
       );
   for (const r of res.rows) {
+    // jsonb auto-parses to a JS value on read; coerce non-arrays to null so the
+    // ChunkMeta.tags contract (string[] | null) always holds.
+    const rawTags = (r as { tags?: unknown }).tags;
+    const tags: string[] | null = Array.isArray(rawTags) ? rawTags : null;
     out.set(Number(r.id), {
       documentId: r.document_id,
       chunkIndex: r.chunk_index,
       text: r.chunk_text,
+      tags,
     });
   }
   return out;
@@ -813,6 +834,23 @@ export async function setDocumentVectorizationPg(
   await ctx.pool.query(
     'UPDATE documents SET vectorization_meta = $1::jsonb WHERE id = $2',
     [JSON.stringify(vectorization), docId],
+  );
+}
+
+/**
+ * Lane A (2a): stamp the auto-extraction lifecycle status onto a document row
+ * (pg twin of setExtractionStatus). userId accepted for signature parity only.
+ */
+export async function setExtractionStatusPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  status: ExtractionStatus,
+  userId?: string,
+): Promise<void> {
+  void userId; // signature parity; doc-level scope already authorizes the caller
+  await ctx.pool.query(
+    'UPDATE documents SET extraction_status = $1 WHERE id = $2',
+    [status, docId],
   );
 }
 
