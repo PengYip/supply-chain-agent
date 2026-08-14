@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtemp } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Block, BlockModel, BBox, DocType } from './types.js';
@@ -162,14 +162,29 @@ export async function ingestWithMinerU(
       '-d', 'cpu',      // no GPU on server
       '-m', 'auto',     // auto-download models on first run
     ], { timeout: 600_000 });  // 10 min timeout per PDF
-    // MinerU outputs to <outDir>/<basename>/<basename>_middle.json
-    const baseName = path.basename(sourceUri, path.extname(sourceUri));
-    const middleJsonPath = path.join(outDir, baseName, `${baseName}_middle.json`);
-    if (!existsSync(middleJsonPath)) {
-      // MinerU sometimes names the output dir differently; we do not scan
-      // subdirectories here -- surface the failure with the expected path so
-      // operators can investigate. stdout/stderr are included for diagnosis.
-      throw new Error(`MinerU output not found at ${middleJsonPath}. stdout: ${stdout}. stderr: ${stderr}`);
+    // MinerU 3.4.4 with `-m auto` writes its outputs one level deeper than the
+    // documented layout: <outDir>/<baseName>/auto/<baseName>_middle.json (the
+    // `auto/` subdir comes from the -m auto mode). The previous exact-path
+    // assumption (<outDir>/<baseName>/<baseName>_middle.json) therefore missed
+    // the file -- surfacing as "MinerU output not found" even though OCR had
+    // completed successfully. Filenames with irregular spaces (common on trade
+    // contracts) further rule out string-matching the path. Recursively scan
+    // outDir for the first *_middle.json instead; MinerU emits exactly one per
+    // PDF, so the match is unambiguous and survives future layout changes.
+    const findMiddleJson = (dir: string): string | null => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isFile() && e.name.endsWith('_middle.json')) return full;
+        if (e.isDirectory()) {
+          const found = findMiddleJson(full);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    const middleJsonPath = findMiddleJson(outDir);
+    if (!middleJsonPath) {
+      throw new Error(`MinerU output (*_middle.json) not found under ${outDir}. stdout: ${stdout}. stderr: ${stderr}`);
     }
     const raw = JSON.parse(readFileSync(middleJsonPath, 'utf-8'));
     return normalizeMinerUOutput({ docId, docType, sourceUri, minerUOutput: raw });
