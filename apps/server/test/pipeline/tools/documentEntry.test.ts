@@ -6,7 +6,7 @@ import { env } from '../../../src/env.js';
 import {
   buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool, buildInspectExtractionTool,
   buildTagDocumentTool,
-  processDocument, ensureDocumentParsed,
+  processDocument, ensureDocumentParsed, ensureDocumentExtracted,
 } from '../../../src/pipeline/tools/documentEntry.js';
 
 let ctx: ReturnType<typeof createDb>;
@@ -534,5 +534,68 @@ describe('ensureDocumentParsed (single-flight on-demand parse)', () => {
     const r2 = await ensureDocumentParsed(ctx, docId, { modality: 'digital' });
     expect(r2.parseStatus).toBe('parsed');
     expect(await getDocumentParseStatus(ctx, docId)).toBe('parsed');
+  });
+});
+
+// Model B bug fix: auto-extraction could be silently killed by the 60s timeout
+// (extraction_status='skipped'), leaving the review card empty. ensureDocumentExtracted
+// re-runs extraction ONLY when needed; these tests verify the decision logic
+// with NO real model (fast paths never touch opts.extraction).
+describe('ensureDocumentExtracted (parse + extraction assurance)', () => {
+  it('returns fast when extraction_status=ok (no re-extraction, no model needed)', async () => {
+    const f = join(dir, 'ext-ok.txt');
+    writeFileSync(f, '合同号：HT-E1\n', 'utf-8');
+    const { createDocumentStub, setDocumentParseStatus, setExtractionStatus } = await import(
+      '../../../src/pipeline/db/repositories.js'
+    );
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f });
+    await setDocumentParseStatus(ctx, docId, 'parsed');
+    await setExtractionStatus(ctx, docId, 'ok');
+
+    // opts has NO extraction dep: the fast path must not require a model.
+    const res = await ensureDocumentExtracted(ctx, docId, { modality: 'digital' });
+    expect(res.docId).toBe(docId);
+    expect(res.parseStatus).toBe('parsed');
+    expect(res.extractionStatus).toBe('ok');
+  });
+
+  it('returns early (no model) when re-extraction is needed but no extraction dep is wired', async () => {
+    const f = join(dir, 'ext-skip.txt');
+    writeFileSync(f, '合同号：HT-E2\n', 'utf-8');
+    const { createDocumentStub, setDocumentParseStatus, setExtractionStatus } = await import(
+      '../../../src/pipeline/db/repositories.js'
+    );
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f });
+    await setDocumentParseStatus(ctx, docId, 'parsed');
+    // 'skipped' (the timeout outcome) is in the re-extract set -> enters the
+    // re-extract branch; opts.extraction is absent -> early return, status as-is.
+    await setExtractionStatus(ctx, docId, 'skipped');
+
+    const res = await ensureDocumentExtracted(ctx, docId, { modality: 'digital' });
+    expect(res.parseStatus).toBe('parsed');
+    expect(res.extractionStatus).toBe('skipped');
+  });
+
+  it('re-extracts when extraction_status is null AND no extraction row exists (no model -> early return)', async () => {
+    const f = join(dir, 'ext-null.txt');
+    writeFileSync(f, '合同号：HT-E3\n', 'utf-8');
+    const { createDocumentStub, setDocumentParseStatus } = await import(
+      '../../../src/pipeline/db/repositories.js'
+    );
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f });
+    await setDocumentParseStatus(ctx, docId, 'parsed');
+    // extraction_status left NULL (never stamped) + no extraction rows.
+
+    const res = await ensureDocumentExtracted(ctx, docId, { modality: 'digital' });
+    expect(res.parseStatus).toBe('parsed');
+    // Enters the re-extract branch but has no extraction dep -> returns early
+    // with extractionStatus undefined (status is NULL).
+    expect(res.extractionStatus).toBeUndefined();
+  });
+
+  it('propagates document_not_found for an unknown doc', async () => {
+    await expect(
+      ensureDocumentExtracted(ctx, 'DOC-does-not-exist', { modality: 'digital' }),
+    ).rejects.toThrow(/document_not_found/);
   });
 });

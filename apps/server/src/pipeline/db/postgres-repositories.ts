@@ -34,6 +34,7 @@ import type {
   ProposedRelationship,
   ReviewSnapshot,
   DocumentVectorization,
+  ChunkTagDetail,
   ExtractionStatus,
   ParseStatus,
   DocumentStubInput,
@@ -726,6 +727,67 @@ export async function deleteFileFolderPg(
 // JSON.parse is needed (contrast the SQLite TEXT branch). numeric(p,s)
 // confidence columns come back as strings, so Number() on read.
 
+/** Max distinct chunk tags surfaced on the review snapshot (mirror of
+ *  repositories.CHUNK_TAGS_CAP — kept local to avoid a circular runtime import). */
+const CHUNK_TAGS_CAP = 16;
+
+/** repositories.CHUNK_TAG_TEXT_CAP twin (local — circular-import avoidance). */
+const CHUNK_TAG_TEXT_CAP = 800;
+
+/**
+ * Lane B (pg twin of repositories.collectChunkTags): flatten a doc_chunk tags
+ * jsonb column into a DISTINCT, first-appearance-ordered list, skipping
+ * null/non-array entries, capped at CHUNK_TAGS_CAP.
+ */
+function collectChunkTagsPg(rows: Array<{ tags: unknown }>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const r of rows) {
+    if (!Array.isArray(r.tags)) continue;
+    for (const t of r.tags) {
+      if (typeof t === 'string' && !seen.has(t)) {
+        seen.add(t);
+        out.push(t);
+        if (out.length >= CHUNK_TAGS_CAP) break;
+      }
+    }
+    if (out.length >= CHUNK_TAGS_CAP) break;
+  }
+  return out;
+}
+
+/**
+ * Lane B detail view (pg twin of repositories.collectChunkTagDetails): group
+ * per-chunk jsonb tag arrays into tag -> chunk entries. Same first-appearance
+ * order + CHUNK_TAGS_CAP + CHUNK_TAG_TEXT_CAP rules; pg column names are
+ * snake_case (chunk_index / chunk_text / tags).
+ */
+function collectChunkTagDetailsPg(
+  rows: Array<{ chunk_index: number | null; chunk_text: string | null; tags: unknown }>,
+): ChunkTagDetail[] {
+  const byTag = new Map<string, ChunkTagDetail>();
+  const ordered: ChunkTagDetail[] = [];
+  for (const r of rows) {
+    if (!Array.isArray(r.tags)) continue;
+    for (const t of r.tags) {
+      if (typeof t !== 'string') continue;
+      let entry = byTag.get(t);
+      if (!entry) {
+        if (ordered.length >= CHUNK_TAGS_CAP) continue;
+        entry = { tag: t, chunks: [] };
+        byTag.set(t, entry);
+        ordered.push(entry);
+      }
+      const raw = r.chunk_text ?? '';
+      entry.chunks.push({
+        chunkIndex: r.chunk_index ?? entry.chunks.length,
+        text: raw.length > CHUNK_TAG_TEXT_CAP ? `${raw.slice(0, CHUNK_TAG_TEXT_CAP)}...` : raw,
+      });
+    }
+  }
+  return ordered;
+}
+
 /**
  * Assemble the post-ingest review snapshot for a document (pg). Returns null
  * if the document does not exist. fields come from the latest extraction row;
@@ -736,7 +798,6 @@ export async function getReviewSnapshotPg(
   docId: string,
   userId?: string,
 ): Promise<ReviewSnapshot | null> {
-  void userId; // user-scoping is optional here (doc was just ingested by the same user)
   const docRes = await ctx.pool.query(
     'SELECT doc_type, review_status, vectorization_meta FROM documents WHERE id = $1',
     [docId],
@@ -783,6 +844,22 @@ export async function getReviewSnapshotPg(
     [docId],
   );
 
+  // Lane B: per-chunk semantic tags + chunk text for the detail view. jsonb
+  // auto-parses to arrays on read; scoped by userId like getChunkMetaByRowidsPg.
+  const uid = effectiveUserId(userId);
+  const chunkTagRes = uid
+    ? await ctx.pool.query(
+        `SELECT c.chunk_index, c.chunk_text, c.tags FROM doc_chunk AS c
+         JOIN documents AS d ON d.id = c.document_id
+         WHERE c.document_id = $1 AND (d.user_id = $2 OR d.user_id = '' OR d.user_id IS NULL)
+         ORDER BY c.chunk_index`,
+        [docId, uid],
+      )
+    : await ctx.pool.query(
+        'SELECT chunk_index, chunk_text, tags FROM doc_chunk WHERE document_id = $1 ORDER BY chunk_index',
+        [docId],
+      );
+
   const fields: ReviewSnapshot['fields'] = [];
   if (ex) {
     for (const [name, f] of Object.entries(ex.fields)) {
@@ -801,6 +878,10 @@ export async function getReviewSnapshotPg(
     docType: doc.doc_type,
     classificationConfidence: cls ? Number(cls.confidence) : 0,
     tags: (tagRes.rows as Array<{ tag: string }>).map((r) => r.tag),
+    chunkTags: collectChunkTagsPg(chunkTagRes.rows as Array<{ tags: unknown }>),
+    chunkTagDetails: collectChunkTagDetailsPg(
+      chunkTagRes.rows as Array<{ chunk_index: number | null; chunk_text: string | null; tags: unknown }>,
+    ),
     reviewStatus: (doc.review_status ?? 'pending') as ReviewStatus,
     fields,
     overallConfidence: ex ? Number(ex.overall_confidence) : 0,
@@ -857,6 +938,21 @@ export async function setExtractionStatusPg(
     'UPDATE documents SET extraction_status = $1 WHERE id = $2',
     [status, docId],
   );
+}
+
+/** Read the extraction_status for a document, or null if the row does not exist (pg). */
+export async function getExtractionStatusPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  userId?: string,
+): Promise<ExtractionStatus | null> {
+  void userId; // signature parity; doc-level scope already authorizes the caller
+  const res = await ctx.pool.query(
+    'SELECT extraction_status FROM documents WHERE id = $1',
+    [docId],
+  );
+  if (!res.rows[0]) return null;
+  return res.rows[0].extraction_status as ExtractionStatus;
 }
 
 /**

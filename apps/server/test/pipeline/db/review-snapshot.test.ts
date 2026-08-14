@@ -3,7 +3,7 @@ import { createDb, migrate } from '../../../src/pipeline/db/client.js';
 import {
   saveDocument, saveExtraction, saveDocumentTags, listDocumentTags,
   getReviewSnapshot, setReviewStatus, updateExtractionFields,
-  setDocumentVectorization, applyDocumentCorrections,
+  setDocumentVectorization, applyDocumentCorrections, saveChunks,
 } from '../../../src/pipeline/db/repositories.js';
 import type { BlockModel } from '../../../src/pipeline/types.js';
 
@@ -161,5 +161,76 @@ describe('applyDocumentCorrections', () => {
     await saveDocument(ctx, mkModel('DOC-ac2')); // doc but no extraction
     expect(await applyDocumentCorrections(ctx, 'DOC-ac2', [{ name: 'x', value: 'y' }])).toBeNull();
     expect(await applyDocumentCorrections(ctx, 'DOC-missing', [{ name: 'x', value: 'y' }])).toBeNull();
+  });
+});
+
+// ---- Lane B: chunk tags on the review snapshot (分段标签) -------------------
+
+describe('getReviewSnapshot chunkTags (Lane B)', () => {
+  it('returns distinct chunk tags in first-appearance order, skipping null-tag chunks', async () => {
+    await saveDocument(ctx, mkModel('DOC-ct1'));
+    await saveChunks(ctx, 'DOC-ct1', [
+      { text: 'a', index: 0 },
+      { text: 'b', index: 1 },
+      { text: 'c', index: 2 },
+    ], [['当事人信息', '标的物'], null, ['标的物', '付款条款']]);
+    const snap = await getReviewSnapshot(ctx, 'DOC-ct1');
+    // Deduped (标的物 appears in chunk 0 and 2 -> once), first-appearance order
+    // across chunk_index; the null-tags chunk (index 1) contributes nothing.
+    expect(snap?.chunkTags).toEqual(['当事人信息', '标的物', '付款条款']);
+  });
+
+  it('caps chunkTags at 16 entries', async () => {
+    await saveDocument(ctx, mkModel('DOC-ct2'));
+    const many = Array.from({ length: 20 }, (_, i) => `标签${i}`);
+    await saveChunks(ctx, 'DOC-ct2', [{ text: 'x', index: 0 }], [many]);
+    const snap = await getReviewSnapshot(ctx, 'DOC-ct2');
+    expect(snap?.chunkTags.length).toBe(16);
+    expect(snap?.chunkTags[0]).toBe('标签0');
+    expect(snap?.chunkTags[15]).toBe('标签15');
+  });
+
+  it('defaults to [] when no chunks are tagged', async () => {
+    await saveDocument(ctx, mkModel('DOC-ct3'));
+    await saveChunks(ctx, 'DOC-ct3', [{ text: 'x', index: 0 }]); // no tags param
+    const snap = await getReviewSnapshot(ctx, 'DOC-ct3');
+    expect(snap?.chunkTags).toEqual([]);
+  });
+});
+
+describe('getReviewSnapshot chunkTagDetails (Lane B detail view)', () => {
+  it('groups each tag with its chunks (first-appearance order, deduped, null-tags chunk skipped)', async () => {
+    await saveDocument(ctx, mkModel('DOC-ctd1'));
+    await saveChunks(ctx, 'DOC-ctd1', [
+      { text: 'a', index: 0 },
+      { text: 'b', index: 1 },
+      { text: 'c', index: 2 },
+    ], [['当事人信息', '标的物'], null, ['标的物', '付款条款']]);
+    const snap = await getReviewSnapshot(ctx, 'DOC-ctd1');
+    // 标的物 spans chunks 0 and 2 (both listed, chunk_index order); the
+    // null-tags chunk (index 1) appears under no tag; tags in first-appearance order.
+    expect(snap?.chunkTagDetails).toEqual([
+      { tag: '当事人信息', chunks: [{ chunkIndex: 0, text: 'a' }] },
+      { tag: '标的物', chunks: [{ chunkIndex: 0, text: 'a' }, { chunkIndex: 2, text: 'c' }] },
+      { tag: '付款条款', chunks: [{ chunkIndex: 2, text: 'c' }] },
+    ]);
+  });
+
+  it('caps each chunk text at 800 chars with an ellipsis marker', async () => {
+    await saveDocument(ctx, mkModel('DOC-ctd2'));
+    const long = '长'.repeat(900);
+    await saveChunks(ctx, 'DOC-ctd2', [{ text: long, index: 0 }], [['付款条款']]);
+    const snap = await getReviewSnapshot(ctx, 'DOC-ctd2');
+    const entry = snap?.chunkTagDetails[0];
+    expect(entry?.tag).toBe('付款条款');
+    expect(entry?.chunks[0]?.text.length).toBe(803); // 800 + '...'
+    expect(entry?.chunks[0]?.text.endsWith('...')).toBe(true);
+  });
+
+  it('defaults to [] when no chunks are tagged', async () => {
+    await saveDocument(ctx, mkModel('DOC-ctd3'));
+    await saveChunks(ctx, 'DOC-ctd3', [{ text: 'x', index: 0 }]);
+    const snap = await getReviewSnapshot(ctx, 'DOC-ctd3');
+    expect(snap?.chunkTagDetails).toEqual([]);
   });
 });

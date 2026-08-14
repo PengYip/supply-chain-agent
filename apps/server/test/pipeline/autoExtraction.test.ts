@@ -152,7 +152,7 @@ describe('runAutoExtraction', () => {
     expect(out.reason).toBe('weird non-error');
   });
 
-  it('default timeout is 60s', () => {
-    expect(DEFAULT_AUTO_EXTRACTION_TIMEOUT_MS).toBe(60_000);
+  it('default timeout is 150s (DeepSeek scanned-contract extraction can exceed 60s)', () => {
+    expect(DEFAULT_AUTO_EXTRACTION_TIMEOUT_MS).toBe(150_000);
   });
 });

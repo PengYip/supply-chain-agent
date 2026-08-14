@@ -85,8 +85,16 @@ export interface AutoExtractionOutcome {
   relationshipCount?: number;
 }
 
-/** Default auto-extraction timeout (ms). Overridable per call (tests). */
-export const DEFAULT_AUTO_EXTRACTION_TIMEOUT_MS = 60_000;
+/**
+ * Default auto-extraction timeout (ms). Overridable per call (tests).
+ *
+ * 150s, not 60s: DeepSeek JSON-mode extraction over a scanned OCR contract
+ * (10+ blocks, per-field sourceSpans) can legitimately exceed 60s. A premature
+ * timeout silently kills extraction (runAutoExtraction's ONLY 'skipped' path),
+ * leaving the review card with 暂无 fields. 150s stays comfortably under the
+ * 180s chat-reference backstop cap (chat.ts).
+ */
+export const DEFAULT_AUTO_EXTRACTION_TIMEOUT_MS = 150_000;
 
 /**
  * Sentinel thrown by the internal timeout timer. Using a distinct class (rather

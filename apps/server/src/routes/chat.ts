@@ -18,7 +18,7 @@ import { env } from '../env.js';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
 import type { DbContext } from '../pipeline/db/client.js';
-import { ensureDocumentParsed } from '../pipeline/tools/documentEntry.js';
+import { ensureDocumentExtracted } from '../pipeline/tools/documentEntry.js';
 import { buildIngestDeps } from '../pipeline/ingestModel.js';
 
 export const chatRoute = new Hono<AuthEnv>();
@@ -159,10 +159,11 @@ chatRoute.post('/chat', async (c) => {
   // When the user @-references files this turn, surface them as a leading system
   // message so the agent has the docIds/filenames up front. Model B: uploads are
   // STORAGE-ONLY (parse_status='uploaded'), so referencing a file triggers
-  // on-demand parsing right here (the chat backstop). ensureDocumentParsed
+  // on-demand parsing right here (the chat backstop). ensureDocumentExtracted
   // single-flights with the /process endpoint (one run per doc, shared), skips
-  // already-terminal docs, and re-runs 'uploaded'/'failed' ones. We cap the
-  // total wait (~180s) and proceed regardless: the message notes each file's
+  // already-terminal docs, re-runs 'uploaded'/'failed' ones, and re-extracts
+  // docs whose auto-extraction was skipped/failed (e.g. a 60s timeout). We cap
+  // the total wait (~180s) and proceed regardless: the message notes each file's
   // resulting state so the agent tells the user honestly about needs_ocr files.
   let streamMessages: ModelMessage[];
   if (contextFiles.length > 0) {
@@ -175,7 +176,7 @@ chatRoute.post('/chat', async (c) => {
         if (remaining <= 0) return;
         try {
           const res = await Promise.race([
-            ensureDocumentParsed(ctx(), f.docId, deps, userId ?? undefined),
+            ensureDocumentExtracted(ctx(), f.docId, deps, userId ?? undefined),
             new Promise<null>((resolve) => setTimeout(() => resolve(null), remaining)),
           ]);
           if (res) statusByDoc.set(f.docId, res.parseStatus);

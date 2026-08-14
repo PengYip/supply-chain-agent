@@ -37,6 +37,7 @@ import {
   setDocumentVectorizationPg,
   // Lane A (2a): pg twin for setExtractionStatus (auto-extraction lifecycle).
   setExtractionStatusPg,
+  getExtractionStatusPg,
   // post-ingest review (Task 7): pg twin for latest-extraction-by-doc lookup.
   loadLatestExtractionByDocIdPg,
   // Model B (decouple upload from parse): pg twins for stub + parse lifecycle.
@@ -176,6 +177,14 @@ export interface ReviewSnapshot {
   docType: string;
   classificationConfidence: number;
   tags: string[];
+  /** Lane B: distinct per-chunk semantic tags, order of first appearance across
+   *  chunk_index (deduped, capped at CHUNK_TAGS_CAP). Surfaces 分段标签 on the card. */
+  chunkTags: string[];
+  /** Lane B detail view: each tag with the chunks it classified (分段标签详情).
+   *  Tags in first-appearance order (CHUNK_TAGS_CAP), chunks per tag by
+   *  chunk_index, chunk text capped at CHUNK_TAG_TEXT_CAP. Empty array when the
+   *  doc has no chunk tags. */
+  chunkTagDetails: ChunkTagDetail[];
   reviewStatus: ReviewStatus;
   fields: Array<{ name: string; value: string | number; confidence: number; needsReview: boolean }>;
   overallConfidence: number;
@@ -897,6 +906,94 @@ export async function deleteFileFolder(
 // twin; the SQLite branches use raw better-sqlite3 (UPDATEs mirror
 // setDocumentMinioKey; READs are simple parameterized SELECTs).
 
+/** Max distinct chunk tags surfaced on the review snapshot (分段标签). */
+export const CHUNK_TAGS_CAP = 16;
+
+/** Max characters of chunk text carried per entry in chunkTagDetails. */
+export const CHUNK_TAG_TEXT_CAP = 800;
+
+/** One chunk classified under a tag (分段标签详情 leaf). */
+export interface ChunkTagChunkDetail {
+  chunkIndex: number;
+  text: string;
+}
+
+/** One tag entry with the chunks it classified, first-appearance tag order. */
+export interface ChunkTagDetail {
+  tag: string;
+  chunks: ChunkTagChunkDetail[];
+}
+
+/**
+ * Lane B detail builder: group per-chunk tag arrays into tag -> chunk entries.
+ * Same ordering/dedupe/cap rules as collectChunkTags (first appearance across
+ * chunk_index, CHUNK_TAGS_CAP distinct tags); each tag's chunks stay in
+ * chunk_index order with text capped at CHUNK_TAG_TEXT_CAP. Pure so the
+ * SQLite + Postgres branches share one rule set (each feeds its own row shape).
+ */
+export function collectChunkTagDetails(
+  rows: Array<{ chunk_index: number | null; chunk_text: string | null; tags: string | null }>,
+): ChunkTagDetail[] {
+  const byTag = new Map<string, ChunkTagDetail>();
+  const ordered: ChunkTagDetail[] = [];
+  for (const r of rows) {
+    if (!r.tags) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(r.tags);
+    } catch {
+      continue; // corrupt -> treat as untagged (retrieval hint, not a boundary)
+    }
+    if (!Array.isArray(parsed)) continue;
+    for (const t of parsed) {
+      if (typeof t !== 'string') continue;
+      let entry = byTag.get(t);
+      if (!entry) {
+        if (ordered.length >= CHUNK_TAGS_CAP) continue;
+        entry = { tag: t, chunks: [] };
+        byTag.set(t, entry);
+        ordered.push(entry);
+      }
+      const raw = r.chunk_text ?? '';
+      entry.chunks.push({
+        chunkIndex: r.chunk_index ?? entry.chunks.length,
+        text: raw.length > CHUNK_TAG_TEXT_CAP ? `${raw.slice(0, CHUNK_TAG_TEXT_CAP)}...` : raw,
+      });
+    }
+  }
+  return ordered;
+}
+
+/**
+ * Lane B: flatten a doc_chunk tags column (JSON string[] per chunk) into a
+ * DISTINCT, first-appearance-ordered list, skipping null/empty/corrupt entries,
+ * capped at CHUNK_TAGS_CAP. Pure so the SQLite + Postgres branches share the
+ * same ordering/cap rule (each branch feeds it its own row shape).
+ */
+export function collectChunkTags(rows: Array<{ tags: string | null }>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const r of rows) {
+    if (!r.tags) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(r.tags);
+    } catch {
+      continue; // corrupt -> treat as untagged (retrieval hint, not a boundary)
+    }
+    if (!Array.isArray(parsed)) continue;
+    for (const t of parsed) {
+      if (typeof t === 'string' && !seen.has(t)) {
+        seen.add(t);
+        out.push(t);
+        if (out.length >= CHUNK_TAGS_CAP) break;
+      }
+    }
+    if (out.length >= CHUNK_TAGS_CAP) break;
+  }
+  return out;
+}
+
 /**
  * Assemble the post-ingest review snapshot for a document. Returns null if the
  * document does not exist. fields come from the latest extraction row; each
@@ -909,7 +1006,6 @@ export async function getReviewSnapshot(
   userId?: string,
 ): Promise<ReviewSnapshot | null> {
   if (ctx.backend === 'postgres') return getReviewSnapshotPg(ctx, docId, userId);
-  void userId; // user-scoping is optional here (doc was just ingested by the same user)
   const sqlite = ctx.sqlite;
   const doc = sqlite
     .prepare('SELECT doc_type, review_status, vectorization_meta FROM documents WHERE id = ?')
@@ -955,6 +1051,29 @@ export async function getReviewSnapshot(
     .prepare('SELECT tag FROM document_tags WHERE document_id = ? ORDER BY rowid')
     .all(docId) as Array<{ tag: string }>;
 
+  // Lane B: per-chunk semantic tags + the chunk text for the detail view.
+  // Scoped by userId like getChunkMetaByRowids (JOIN documents + legacy-row
+  // allow-list) so a caller cannot read chunk tags for a document they do not own.
+  const uid = effectiveUserId(userId);
+  const chunkTagRows = (uid
+    ? sqlite
+        .prepare(
+          `SELECT dc.chunk_index, dc.chunk_text, dc.tags FROM doc_chunk AS dc
+           JOIN documents AS d ON d.id = dc.document_id
+           WHERE dc.document_id = ? AND (d.user_id = ? OR d.user_id = '' OR d.user_id IS NULL)
+           ORDER BY dc.chunk_index`,
+        )
+        .all(docId, uid)
+    : sqlite
+        .prepare(
+          'SELECT chunk_index, chunk_text, tags FROM doc_chunk WHERE document_id = ? ORDER BY chunk_index',
+        )
+        .all(docId)) as Array<{
+    chunk_index: number | null;
+    chunk_text: string | null;
+    tags: string | null;
+  }>;
+
   const fields: ReviewSnapshot['fields'] = [];
   if (ex) {
     const parsedFields = JSON.parse(ex.fields) as Record<
@@ -980,6 +1099,8 @@ export async function getReviewSnapshot(
     docType: doc.doc_type,
     classificationConfidence: cls ? cls.confidence : 0,
     tags: tagRows.map((r) => r.tag),
+    chunkTags: collectChunkTags(chunkTagRows),
+    chunkTagDetails: collectChunkTagDetails(chunkTagRows),
     reviewStatus: (doc.review_status ?? 'pending') as ReviewStatus,
     fields,
     overallConfidence: ex ? ex.overall_confidence : 0,
@@ -1043,6 +1164,20 @@ export async function setExtractionStatus(
   ctx.sqlite
     .prepare('UPDATE documents SET extraction_status = ? WHERE id = ?')
     .run(status, docId);
+}
+
+/** Read the extraction_status for a document, or null if the row does not exist. */
+export async function getExtractionStatus(
+  ctx: DbContext,
+  docId: string,
+  userId?: string,
+): Promise<ExtractionStatus | null> {
+  if (ctx.backend === 'postgres') return getExtractionStatusPg(ctx, docId, userId);
+  void userId;
+  const row = ctx.sqlite
+    .prepare('SELECT extraction_status FROM documents WHERE id = ?')
+    .get(docId) as { extraction_status: string } | undefined;
+  return row ? (row.extraction_status as ExtractionStatus) : null;
 }
 
 // ---- Model B: decouple upload from parse -----------------------------------

@@ -10,6 +10,9 @@ import {
   // Model B (decouple upload from parse): stub + parse-lifecycle repo fns.
   getDocumentSourceUri, setDocumentParseStatus, getDocumentParseStatus, updateDocumentMeta,
   type ParseStatus,
+  // Lane A (2a): extraction-status reader + extraction-row probe for
+  // ensureDocumentExtracted's re-extraction decision.
+  getExtractionStatus, loadLatestExtractionByDocId,
 } from '../db/repositories.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
@@ -196,15 +199,20 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   // blocks ingest -- the document stays searchable via FTS5 + vectors.
   if (extraction) {
     try {
-      await runAutoExtraction({
+      const outcome = await runAutoExtraction({
         ctx,
         docId,
         blockModel,
         userId,
         deps: buildAutoExtractionDeps({ ctx, extraction, userId }),
       });
+      // Fault isolation is silent by design; surface non-ok outcomes (timeout /
+      // model error) so a silently-missing extraction is never mistaken for success.
+      if (outcome.status !== 'ok') {
+        console.error(`[ingestFile] auto-extraction ${outcome.status}:`, outcome.reason ?? 'no reason');
+      }
     } catch (e) {
-      console.error('[ingest] auto-extraction failed:', (e as Error).message);
+      console.error('[ingestFile] auto-extraction failed:', (e as Error).message);
     }
   }
 
@@ -432,13 +440,19 @@ export async function processDocument(
     // 11. Lane A (2a): auto-extraction (fault-isolated; same as ingestFile).
     if (opts.extraction) {
       try {
-        await runAutoExtraction({
+        const outcome = await runAutoExtraction({
           ctx,
           docId,
           blockModel,
           userId: opts.userId,
           deps: buildAutoExtractionDeps({ ctx, extraction: opts.extraction, userId: opts.userId }),
         });
+        // Surface non-ok outcomes (timeout / model error) so a silently-missing
+        // extraction is never mistaken for success (processDocument discards the
+        // outcome otherwise).
+        if (outcome.status !== 'ok') {
+          console.error(`[processDocument] auto-extraction ${outcome.status}:`, outcome.reason ?? 'no reason');
+        }
       } catch (e) {
         console.error('[processDocument] auto-extraction failed:', (e as Error).message);
       }
@@ -503,6 +517,109 @@ export async function ensureDocumentParsed(
     parseFlights.delete(docId);
   });
   parseFlights.set(docId, run);
+  return run;
+}
+
+// ---- Model B: on-demand re-extraction --------------------------------------
+//
+// ensureDocumentExtracted ensures a doc is BOTH parsed and field-extracted. It
+// reuses ensureDocumentParsed (single-flighted parse), then re-runs
+// auto-extraction ONLY when extraction_status is 'skipped'/'failed' (e.g. the
+// 60s timeout that killed DOC-msslpnju-vhm9's extraction) or when the doc has
+// no extraction_status AND no extraction row. Otherwise it returns fast — the
+// common case (already extracted) costs one status read + one extraction-row
+// probe, no model call.
+
+/** Result of ensureDocumentExtracted (additive extractionStatus for the API). */
+export interface EnsureDocumentExtractedResult {
+  docId: string;
+  parseStatus: ParseStatus | 'needs_ocr';
+  extractionStatus?: string;
+}
+
+/** In-memory single-flight registry for re-extraction runs (mirror parseFlights). */
+const extractionFlights = new Map<string, Promise<EnsureDocumentExtractedResult>>();
+
+/**
+ * Ensure a document is parsed AND auto-extracted.
+ *  - Step 1: ensureDocumentParsed (reuses the parse single-flight; propagates
+ *    'document_not_found' for unknown docs).
+ *  - Step 2: re-extract when extraction_status ∈ {'skipped','failed'} OR
+ *    (extraction_status NULL AND no extraction row exists). Otherwise return fast.
+ *  - Re-extraction is single-flighted (extractionFlights) and fault-isolated
+ *    (runAutoExtraction never throws; wrapped for defense-in-depth).
+ *  - `opts.extraction` is required to actually re-extract (both callers supply
+ *    it via buildIngestDeps); when absent we return early with the status as-is.
+ */
+export async function ensureDocumentExtracted(
+  ctx: DbContext,
+  docId: string,
+  opts: ProcessDocumentOptions = {},
+  userId?: string,
+): Promise<EnsureDocumentExtractedResult> {
+  // 1. Ensure parsed (parse single-flight; document_not_found propagates).
+  const parsed = await ensureDocumentParsed(ctx, docId, opts, userId);
+
+  // In-flight re-extraction for this doc? Share it (single-flight).
+  const inFlight = extractionFlights.get(docId);
+  if (inFlight) return inFlight;
+
+  // 2. Decide whether re-extraction is needed.
+  const extractionStatus = await getExtractionStatus(ctx, docId, userId);
+  const hasExtractionRow = (await loadLatestExtractionByDocId(ctx, docId, userId)) !== null;
+  const needsReExtract =
+    extractionStatus === 'skipped' ||
+    extractionStatus === 'failed' ||
+    (extractionStatus === null && !hasExtractionRow);
+
+  if (!needsReExtract) {
+    return {
+      docId,
+      parseStatus: parsed.parseStatus,
+      extractionStatus: extractionStatus ?? undefined,
+    };
+  }
+
+  // 3. Re-check the map AFTER the awaits: a concurrent caller may have started
+  //    a re-extraction while we were reading status/rows.
+  const started = extractionFlights.get(docId);
+  if (started) return started;
+
+  // 4. Re-extract (single-flighted; same body as processDocument step 11).
+  const run = (async () => {
+    const blockModel = await loadDocument(ctx, docId, userId);
+    if (!blockModel) {
+      // No block model -> nothing to extract; leave the status as-is.
+      return { docId, parseStatus: parsed.parseStatus, extractionStatus: extractionStatus ?? undefined };
+    }
+    if (!opts.extraction) {
+      return { docId, parseStatus: parsed.parseStatus, extractionStatus: extractionStatus ?? undefined };
+    }
+    try {
+      const outcome = await runAutoExtraction({
+        ctx,
+        docId,
+        blockModel,
+        userId,
+        deps: buildAutoExtractionDeps({ ctx, extraction: opts.extraction, userId }),
+      });
+      if (outcome.status !== 'ok') {
+        console.error(`[ensureDocumentExtracted] auto-extraction ${outcome.status}:`, outcome.reason ?? 'no reason');
+      }
+    } catch (e) {
+      console.error('[ensureDocumentExtracted] auto-extraction failed:', (e as Error).message);
+    }
+    // Read the final status (runAutoExtraction stamped ok/skipped/failed).
+    const finalStatus = await getExtractionStatus(ctx, docId, userId);
+    return {
+      docId,
+      parseStatus: parsed.parseStatus,
+      extractionStatus: finalStatus ?? undefined,
+    };
+  })().finally(() => {
+    extractionFlights.delete(docId);
+  });
+  extractionFlights.set(docId, run);
   return run;
 }
 
@@ -774,6 +891,8 @@ export function buildPresentDocumentReviewTool(deps: ToolDeps) {
         overallConfidence: snap.overallConfidence,
         proposedRelationships: snap.proposedRelationships,
         tags: snap.tags,
+        chunkTags: snap.chunkTags,
+        chunkTagDetails: snap.chunkTagDetails,
         vectorization: snap.vectorization,
         reviewStatus: snap.reviewStatus,
       };

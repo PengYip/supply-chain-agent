@@ -20,7 +20,7 @@ import {
   getReviewSnapshot,
   setReviewStatus,
 } from '../pipeline/db/repositories.js';
-import { ensureDocumentParsed } from '../pipeline/tools/documentEntry.js';
+import { ensureDocumentExtracted } from '../pipeline/tools/documentEntry.js';
 import { buildIngestDeps } from '../pipeline/ingestModel.js';
 import type { DocType, Modality } from '../pipeline/types.js';
 
@@ -146,8 +146,10 @@ reviewRoute.post('/:docId/review', async (c) => {
  * (e.g. prompt the user to retry as 'scanned'). requireAuth-gated in index.ts
  * (a user is always attached).
  *
- * Single-flighted via ensureDocumentParsed: concurrent calls for the same docId
- * share one run; terminal docs ('parsed' / 'needs_ocr') return immediately.
+ * Single-flighted via ensureDocumentExtracted: concurrent calls for the same
+ * docId share one run; terminal docs ('parsed' / 'needs_ocr') return
+ * immediately, and already-extracted docs (extraction_status='ok') skip the
+ * model call entirely.
  *
  * Request body (JSON, all optional):
  *   { docType?: string; modality?: string }
@@ -156,7 +158,7 @@ reviewRoute.post('/:docId/review', async (c) => {
  *
  * Responses:
  *   200 { ok: true, docId, parseStatus: 'parsed'|'needs_ocr'|'failed',
- *        blockCount?, classifiedDocType?, ... }
+ *        extractionStatus?: string, ... }
  *   404 { ok: false, error: 'document_not_found' }  (unknown docId)
  *   500 { ok: false, error: <message> }             (only for truly unexpected
  *        errors; parse failures are states, never 500s)
@@ -179,14 +181,14 @@ reviewRoute.post('/:docId/process', async (c) => {
   const modality = (modalityStr === 'scanned' ? 'scanned' : 'digital') as Modality;
 
   try {
-    const result = await ensureDocumentParsed(
+    const result = await ensureDocumentExtracted(
       ctx(),
       docId,
       { docType, modality, ...buildIngestDeps() },
       user.id,
     );
-    // result already carries docId + parseStatus (and blockCount/classifiedDocType
-    // when the run actually parsed), so spread it into the response.
+    // result already carries docId + parseStatus (and the additive
+    // extractionStatus), so spread it into the response.
     return c.json({ ok: true, ...result });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
