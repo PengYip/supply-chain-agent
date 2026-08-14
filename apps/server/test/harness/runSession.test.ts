@@ -3,7 +3,7 @@ import type { ModelMessage } from 'ai';
 import { runSession } from '../../src/harness/runSession.js';
 import { fakeStreamingModel } from '../fakeLanguageModel.js';
 import { subscribe } from '../../src/harness/sessionEvents.js';
-import { getSessionStatus, createSession, loadSession } from '../../src/harness/sessionStore.js';
+import { createSession, loadSession } from '../../src/harness/sessionStore.js';
 
 describe('runSession', () => {
   it('consumes fullStream, emits message.part, persists on finish (R1)', async () => {
@@ -30,7 +30,7 @@ describe('runSession', () => {
     const loaded = loadSession(s.id);
     const assistant = (loaded?.messages ?? []).find((m: any) => m.role === 'assistant');
     expect(assistant).toBeTruthy();
-    // status back to idle.
-    expect(getSessionStatus(s.id)?.status).toBe('idle');
+    // Note: status lifecycle is no longer runSession's responsibility (Task 7a
+    // delegates it to RunManager), so we do not assert on it here.
   });
 });

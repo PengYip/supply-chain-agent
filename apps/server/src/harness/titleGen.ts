@@ -1,4 +1,6 @@
 import { generateText, type LanguageModel } from 'ai';
+import { createDeepSeek } from '@ai-sdk/deepseek';
+import { env } from '../env.js';
 
 const MAX_TITLE_LEN = 20;
 
@@ -31,4 +33,22 @@ export async function generateSessionTitle(
   } catch {
     return fallbackTitle(firstUserText);
   }
+}
+
+// Phase 5 title-generation model handle. Lazy singleton reusing the SAME
+// factory as agent.ts (createDeepSeek(...).chat(env.OPENAI_MODEL)). Only used on
+// the first turn of a session (one-shot title), so construction amortizes.
+//
+// Migrated here from routes/chat.ts so the background run executor (runSession)
+// and chat.ts share one source of truth for the title model. chat.ts still has
+// its own local copy for now (Task 7b removes it when chat.ts goes background).
+let titleModel: LanguageModel | null = null;
+export function getTitleModel(): LanguageModel {
+  if (!titleModel) {
+    titleModel = createDeepSeek({
+      baseURL: env.OPENAI_BASE_URL,
+      apiKey: env.OPENAI_API_KEY,
+    }).chat(env.OPENAI_MODEL);
+  }
+  return titleModel;
 }
