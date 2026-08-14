@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react'
-import { useChat } from '@ai-sdk/react'
-import { DefaultChatTransport, generateId, lastAssistantMessageIsCompleteWithApprovalResponses, lastAssistantMessageIsCompleteWithToolCalls, parseJsonEventStream, readUIMessageStream, uiMessageChunkSchema } from 'ai'
+import { generateId, parseJsonEventStream, readUIMessageStream, uiMessageChunkSchema } from 'ai'
 import type { UIMessage, UIMessageChunk } from 'ai'
+import { useSessionMessages } from '../hooks/useSessionMessages'
 import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, LogOut, Paperclip } from 'lucide-react'
 import { RealMessageItem, ErrorMessage } from './RealMessageItem'
 import { HumanAgentStatusBar } from './HumanAgentStatusBar'
@@ -70,95 +70,41 @@ export const RealChatView: React.FC<{
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
   }, [])
-  // sessionIdRef is read synchronously by the transport headers callback
-  // (must be a ref, not state). We mirror it into `sessionId` state purely so
-  // HumanAgentStatusBar / useHumanAgentStatus can react to it once the chat response
-  // returns the id in the `x-session-id` header. The server reuses this id
-  // for every request on this session, so the polled status path matches.
-  const sessionIdRef = useRef<string | null>(null)
-  const [liveSessionId, setLiveSessionId] = useState<string | null>(null)
-
-  // Mirror the latest contextFiles into a ref so the transport's `body` callback
-  // (created once via useMemo) always reads the current value without recreating
-  // the transport (which would reset chat state).
+  // Mirror the latest contextFiles into a ref so the upload-triggered system
+  // prompt and sendMessage always read the current value.
   const contextFilesRef = useRef(contextFiles)
   useEffect(() => { contextFilesRef.current = contextFiles }, [contextFiles])
 
-  const fetchWrapper = useCallback<typeof fetch>(async (input, init) => {
-    const res = await fetch(input, init)
-    const sid = res.headers.get('x-session-id')
-    if (sid && sid !== sessionIdRef.current) {
-      sessionIdRef.current = sid
-      setLiveSessionId(sid)
-    }
-    return res
-  }, [])
+  const { messages, status, error, sendMessage, setMessages } = useSessionMessages(sessionId ?? null)
+  const liveSessionId = sessionId ?? null
+  const isBusy = status === 'busy'
+  const isStreaming = isBusy
+  sendMessageRef.current = (msg: { text: string }) => { void sendMessage(msg.text) }
 
-  const transport = useMemo(() => new DefaultChatTransport({
-    api: '/api/chat',
-    headers: () => (sessionIdRef.current ? { 'x-session-id': sessionIdRef.current } : {}) as Record<string, string>,
-    body: () => ({
-      role: 'trader',
-      contextFiles: contextFilesRef.current.map((f) => ({ docId: f.docId, filename: f.filename })),
-    }),
-    fetch: fetchWrapper,
-  }), [fetchWrapper])
-  const { messages, sendMessage, status, error, addToolApprovalResponse, setMessages } = useChat<UIMessage>({
-    transport,
-    sendAutomaticallyWhen: ({ messages }) =>
-      lastAssistantMessageIsCompleteWithApprovalResponses({ messages }) ||
-      lastAssistantMessageIsCompleteWithToolCalls({ messages }),
-  })
-  sendMessageRef.current = sendMessage
-
-  // Load session history when the externally-provided sessionId changes.
-  // Also seed sessionIdRef so the very first outbound chat request carries the
-  // correct x-session-id header (the backend then associates messages with it).
-  useEffect(() => {
-    if (!sessionId) return
-    sessionIdRef.current = sessionId
-    setLiveSessionId(sessionId)
-    let cancelled = false
-    fetch(`/api/sessions/${encodeURIComponent(sessionId)}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (cancelled || !data) return
-        const msgs = (data as { messages?: UIMessage[] }).messages
-        // Always replace (including empty): switching to a new/empty session
-        // must clear the previous session's messages, otherwise the old
-        // conversation stays on screen and looks like the switch never happened.
-        setMessages(Array.isArray(msgs) ? msgs : [])
-      })
-      .catch(() => { /* ignore */ })
-    return () => {
-      cancelled = true
-    }
-  }, [sessionId, setMessages])
-
-  // Phase 5: refresh the sidebar when a chat turn finishes (status transitions
-  // to 'ready') so a newly-generated session title appears. Uses a ref so it
-  // only fires on the transition, not on mount (status is already 'ready').
-  const prevStatusRef = useRef(status)
+  // Phase 5: refresh the sidebar when a run finishes (isBusy transitions to
+  // false). Uses a ref so it only fires on the transition, not on mount.
+  const prevBusyRef = useRef(false)
   const onSessionChangedRef = useRef(onSessionChanged)
   onSessionChangedRef.current = onSessionChanged
   useEffect(() => {
-    if (prevStatusRef.current !== 'ready' && status === 'ready') {
+    const wasBusy = prevBusyRef.current
+    prevBusyRef.current = isBusy
+    if (wasBusy && !isBusy) {
+      // Run just finished: refresh sidebar for new title, with a delayed
+      // second refresh because title-gen is a fire-and-forget second LLM call.
       onSessionChangedRef.current?.()
-      // Title generation is a fire-and-forget second LLM call that finishes
-      // ~1-3s AFTER the stream ends (server chat.ts). The immediate refresh
-      // above races ahead of the title being written, so schedule a delayed
-      // second refresh to pick up the freshly-generated session title.
       const t = window.setTimeout(() => onSessionChangedRef.current?.(), 4000)
       return () => window.clearTimeout(t)
     }
-    prevStatusRef.current = status
-  }, [status])
+  }, [isBusy])
 
-  const handleApprove = (id: string) =>
-    addToolApprovalResponse({ id, approved: true, reason: '用户确认执行' })
+  const handleApprove = (id: string) => {
+    void postApproval({ approvalId: id, approved: true })
+  }
 
-  const handleDeny = (id: string) =>
-    addToolApprovalResponse({ id, approved: false, reason: '用户拒绝执行' })
+  const handleDeny = (id: string) => {
+    void postApproval({ approvalId: id, approved: false })
+  }
 
   const pendingApproval = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -198,27 +144,16 @@ export const RealChatView: React.FC<{
   const [callbackState, setCallbackState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
   const [callbackError, setCallbackError] = useState<string | null>(null)
 
-  const handleApprovalCallback = async () => {
-    if (!pendingApproval || callbackState === 'loading') return
+  const postApproval = async (body: { approvalId?: string; ticketId?: string; approved: boolean }) => {
+    if (!sessionId) return
     setCallbackState('loading')
     setCallbackError(null)
-
     try {
-      const body =
-        pendingApproval.kind === 'L3'
-          ? { ticketId: pendingApproval.ticketId, approved: true, reason: '模拟审批通过' }
-          : { approvalId: pendingApproval.approvalId, approved: true, reason: '模拟审批通过' }
-
-      if (!sessionIdRef.current) {
-        throw new Error('尚未建立会话，请先发送一条消息')
-      }
-
       const res = await fetch('/api/approval/callback', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-session-id': sessionIdRef.current },
-        body: JSON.stringify(body),
+        headers: { 'Content-Type': 'application/json', 'x-session-id': sessionId },
+        body: JSON.stringify({ ...body, reason: body.approved ? '用户确认执行' : '用户拒绝执行' }),
       })
-
       if (!res.ok) {
         const text = await res.text()
         let detail = text
@@ -228,25 +163,11 @@ export const RealChatView: React.FC<{
         } catch {}
         throw new Error(`${res.status}: ${detail}`)
       }
-
       const contentType = res.headers.get('content-type') || ''
       if (!contentType.includes('text/event-stream') || !res.body) {
-        // 2xx non-stream = backend denial/status notice (L2/L3 denied returns
-        // c.json({ok:false,status:'denied'})). A denial intentionally does NOT
-        // resume the model loop. Surface the outcome and finish cleanly instead
-        // of throwing "后端未返回 UIMessageStream" (the pre-fix bug).
-        let outcome = 'done'
-        try {
-          const body = (await res.json()) as { status?: string; ok?: boolean }
-          outcome = body.status === 'denied' || body.ok === false ? 'denied' : 'done'
-        } catch {
-          /* non-JSON body: treat as a plain completion */
-        }
-        void outcome // reserved for a future distinct denial UI (toast)
         setCallbackState('success')
         return
       }
-
       const chunkStream = parseJsonEventStream({ stream: res.body, schema: uiMessageChunkSchema })
       const parsedStream = chunkStream.pipeThrough(
         new TransformStream({
@@ -257,12 +178,12 @@ export const RealChatView: React.FC<{
             }
             controller.enqueue(chunk.value as UIMessageChunk)
           },
-        })
+        }),
       ) as unknown as ReadableStream<UIMessageChunk>
 
       let streamingId: string | null = null
       for await (const raw of readUIMessageStream({ stream: parsedStream })) {
-        const msg = { ...raw, id: raw.id || generateId() }
+        const msg = { ...raw, id: raw.id || generateId() } as UIMessage
         if (streamingId) {
           setMessages((prev) => prev.map((m) => (m.id === streamingId ? msg : m)))
         } else {
@@ -270,18 +191,24 @@ export const RealChatView: React.FC<{
           setMessages((prev) => [...prev, msg])
         }
       }
-
       setCallbackState('success')
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
       console.error('[approval callback] failed:', err)
-      setCallbackError(msg)
+      setCallbackError(err instanceof Error ? err.message : String(err))
       setCallbackState('error')
     }
   }
 
+  const handleApprovalCallback = async () => {
+    if (!pendingApproval || callbackState === 'loading') return
+    if (pendingApproval.kind === 'L3') {
+      void postApproval({ ticketId: pendingApproval.ticketId, approved: true })
+    } else {
+      void postApproval({ approvalId: pendingApproval.approvalId, approved: true })
+    }
+  }
+
   const renderItems = useMemo(() => buildRenderItems(messages as unknown[]), [messages])
-  const isStreaming = status === 'submitted' || status === 'streaming'
   const bottomRef = useRef<HTMLDivElement>(null)
 
   // Poll agent status only while a real session exists (real mode only).
@@ -298,14 +225,12 @@ export const RealChatView: React.FC<{
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     const text = input.trim()
-    if (!text || isStreaming) return
+    if (!text || isBusy) return
     setInput('')
-    // The transport's body() callback runs synchronously during sendMessage
-    // (inside send(), before its first await fetch), so it already reads the
-    // current contextFilesRef with the files attached to this message. Clear
-    // immediately so the files are consumed by THIS turn only -- awaiting
-    // sendMessage would delay the clear until the whole response stream ends.
-    void sendMessage({ text })
+    // sendMessage reads contextFiles synchronously from the closure and
+    // consumes them for THIS turn only. Clear immediately so the files do not
+    // linger for the next message.
+    void sendMessage(text, { contextFiles })
     setContextFiles([])
   }
 
@@ -325,13 +250,14 @@ export const RealChatView: React.FC<{
         <div className="flex items-center gap-2 shrink-0">
           <span className={clsx(
             'text-xs px-2 py-1 rounded-full border',
-            status === 'ready' ? 'bg-success/10 text-success border-success/20'
-            : status === 'error' ? 'bg-danger/10 text-danger border-danger/20'
+            status === 'idle' ? 'bg-success/10 text-success border-success/20'
+            : status === 'interrupted' ? 'bg-amber/10 text-amber border-amber/20'
+            : error ? 'bg-danger/10 text-danger border-danger/20'
             : 'bg-amber/10 text-amber border-amber/20'
           )}>
-            {status === 'submitted' ? '发送中'
-            : status === 'streaming' ? '生成中'
-            : status === 'error' ? '出错'
+            {status === 'busy' ? '生成中'
+            : status === 'interrupted' ? '已中断'
+            : error ? '出错'
             : '就绪'}
           </span>
           <button
@@ -395,7 +321,7 @@ export const RealChatView: React.FC<{
               onDeny={handleDeny}
             />
           ))}
-          <ErrorMessage error={error} />
+          <ErrorMessage error={error ? new Error(error) : null} />
           <div ref={bottomRef} />
         </div>
       </div>
