@@ -109,7 +109,27 @@ export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, c
                   >
                     删除
                   </span>
-                  <div style={{ fontSize: 14 }}>{s.title ?? '新建会话'}</div>
+                  <div style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {s.title ?? '新建会话'}
+                    </span>
+                    {s.status === 'busy' && (
+                      <span
+                        style={{
+                          fontSize: 11,
+                          color: '#2563eb',
+                          background: '#eff6ff',
+                          border: '1px solid #bfdbfe',
+                          borderRadius: 999,
+                          padding: '1px 7px',
+                          whiteSpace: 'nowrap',
+                          flexShrink: 0,
+                        }}
+                      >
+                        运行中
+                      </span>
+                    )}
+                  </div>
                   <div style={{ fontSize: 12, color: '#888' }}>
                     {relativeTime(s.updatedAt || s.createdAt)}
                   </div>

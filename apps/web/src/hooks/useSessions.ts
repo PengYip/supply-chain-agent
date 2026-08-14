@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 
+export type SessionStatus = 'idle' | 'busy' | 'interrupted';
+
 export interface Session {
   id: string;
   role: string;
@@ -8,6 +10,8 @@ export interface Session {
   updatedAt: string;
   /** Auto-generated session title (Phase 5); undefined until the first exchange completes. */
   title?: string;
+  /** Background-run lifecycle state surfaced by GET /api/sessions (phase 1). */
+  status?: SessionStatus;
 }
 
 export function useSessions() {
