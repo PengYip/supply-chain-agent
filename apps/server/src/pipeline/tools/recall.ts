@@ -10,6 +10,7 @@ import {
 import { vectorKnn, isVecReady, type VecKnnHit } from '../db/vecStore.js';
 import { tagExternal } from '../../harness/injectionDefense.js';
 import type { Embedder } from '../embedder.js';
+import { filterChunksByTag, type TagFilterMode } from '../chunkTagFilter.js';
 
 // L4 document recall (Task 6 v2). Three strategies over the same chunk index:
 //   fts    -- FTS5 BM25 keyword recall (Task 6 v1), exact "no match -> []".
@@ -55,6 +56,8 @@ interface FusedMatch {
   bm25: number | null;
   vectorDistance: number | null;
   rrf: number;
+  /** doc_chunk.tags attached at fusion so the hybrid list can be tag-filtered. */
+  tags: string[] | null;
 }
 
 function snippetFromText(text: string): string {
@@ -89,6 +92,7 @@ function reciprocalRankFusion(
         bm25: null,
         vectorDistance: null,
         rrf: 0,
+        tags: m?.tags ?? null,
       };
       acc.set(rowid, e);
     }
@@ -112,6 +116,27 @@ function reciprocalRankFusion(
   });
 
   return [...acc.values()].sort((a, b) => b.rrf - a.rrf).slice(0, limit);
+}
+
+/**
+ * Narrow FTS hits (ChunkMatch carries no tags) by chunk tags. Loads doc_chunk
+ * tags in one batched call and applies filterChunksByTag. Only used on the
+ * fts-feeding return paths; the vector/hybrid paths already hold meta in scope.
+ */
+async function attachTagsAndFilter(
+  ctx: DbContext,
+  userId: string | undefined,
+  hits: ChunkMatch[],
+  wantTags: string[],
+  tagMode: TagFilterMode,
+): Promise<(ChunkMatch & { tags: string[] | null })[]> {
+  const meta = await getChunkMetaByRowids(
+    ctx,
+    hits.map((h) => h.chunkRowId),
+    userId,
+  );
+  const tagged = hits.map((h) => ({ ...h, tags: meta.get(h.chunkRowId)?.tags ?? null }));
+  return filterChunksByTag(tagged, wantTags, tagMode);
 }
 
 /** Downgrade vector/hybrid to fts when the vector backend is unavailable (sqlite). */
@@ -147,19 +172,40 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
         .enum(['fts', 'vector', 'hybrid'])
         .default('hybrid')
         .describe('检索策略, 默认 hybrid'),
+      wantTags: z
+        .array(z.string())
+        .optional()
+        .describe(
+          '可选: 按 chunk 标签过滤召回片段 (与 doc_chunk.tags 取交集, 标签来自入库时按文档类型打的语义标签)。配合 tagMode 使用',
+        ),
+      tagMode: z
+        .enum(['any', 'all'])
+        .default('any')
+        .describe('wantTags 匹配模式: any=命中任一标签即保留(默认); all=须命中全部标签'),
     }),
-    execute: async ({ query, limit, strategy }) => {
+    execute: async ({ query, limit, strategy, wantTags, tagMode }) => {
       const effective = await resolveStrategy(strategy, deps.ctx);
 
+      // Tag filter (chunk-level): when wantTags is set, over-fetch candidates so a
+      // selective tag filter still leaves enough survivors to fill `limit`, then
+      // narrow by doc_chunk.tags via filterChunksByTag before truncating. No-op
+      // (candidateLimit === limit) when wantTags is empty/absent.
+      const filtering = Array.isArray(wantTags) && wantTags.length > 0;
+      const candidateLimit = filtering ? Math.min(Math.max(limit * 4, 20), 200) : limit;
+
       // FTS path (always cheap; also feeds hybrid).
-      const ftsHits = await searchChunks(deps.ctx, query, limit, deps.userId);
+      const ftsHits = await searchChunks(deps.ctx, query, candidateLimit, deps.userId);
 
       if (effective === 'fts') {
+        const kept = filtering
+          ? await attachTagsAndFilter(deps.ctx, deps.userId, ftsHits, wantTags!, tagMode)
+          : ftsHits;
+        const matches = kept.slice(0, limit);
         return {
           query,
           strategy: 'fts' as const,
-          matchCount: ftsHits.length,
-          matches: ftsHits.map((h) => ({
+          matchCount: matches.length,
+          matches: matches.map((h) => ({
             document_id: h.documentId,
             chunk_index: h.chunkIndex,
             snippet: tagExternal(h.snippet),
@@ -180,7 +226,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
       }
       if (embedder) {
         const [queryVec] = await embedder.embed([query]);
-        const knn = await vectorKnn(deps.ctx, queryVec ?? [], limit);
+        const knn = await vectorKnn(deps.ctx, queryVec ?? [], candidateLimit);
 
         if (effective === 'vector') {
           const meta = await getChunkMetaByRowids(
@@ -188,11 +234,17 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
             knn.map((k) => k.chunkRowId),
             deps.userId,
           );
+          const knnTagged = knn.map((k) => ({
+            ...k,
+            tags: meta.get(k.chunkRowId)?.tags ?? null,
+          }));
+          const kept = filtering ? filterChunksByTag(knnTagged, wantTags!, tagMode) : knnTagged;
+          const matches = kept.slice(0, limit);
           return {
             query,
             strategy: 'vector' as const,
-            matchCount: knn.length,
-            matches: knn.map((k) => {
+            matchCount: matches.length,
+            matches: matches.map((k) => {
               const m = meta.get(k.chunkRowId);
               return {
                 document_id: m?.documentId ?? '',
@@ -207,18 +259,22 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
           };
         }
 
-        // hybrid: RRF over fts + vector.
-        const meta = await getChunkMetaByRowids(
-          deps.ctx,
-          knn.map((k) => k.chunkRowId),
-          deps.userId,
-        );
-        const fused = reciprocalRankFusion(ftsHits, knn, meta, limit);
+        // hybrid: RRF over fts + vector. When filtering, meta must cover FTS-only
+        // rowids too -- a chunk FTS found but KNN missed still has tags to filter on.
+        const metaRowids = filtering
+          ? Array.from(
+              new Set([...ftsHits.map((h) => h.chunkRowId), ...knn.map((k) => k.chunkRowId)]),
+            )
+          : knn.map((k) => k.chunkRowId);
+        const meta = await getChunkMetaByRowids(deps.ctx, metaRowids, deps.userId);
+        const fusedAll = reciprocalRankFusion(ftsHits, knn, meta, candidateLimit);
+        const fused = filtering ? filterChunksByTag(fusedAll, wantTags!, tagMode) : fusedAll;
+        const matches = fused.slice(0, limit);
         return {
           query,
           strategy: 'hybrid' as const,
-          matchCount: fused.length,
-          matches: fused.map((f) => ({
+          matchCount: matches.length,
+          matches: matches.map((f) => ({
             document_id: f.documentId,
             chunk_index: f.chunkIndex,
             snippet: tagExternal(f.snippet),
@@ -232,11 +288,15 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
 
       // Fallback (no embedder, or vec unavailable): emit fts results. Report
       // strategy as 'fts' since that is what actually produced these matches.
+      const kept = filtering
+        ? await attachTagsAndFilter(deps.ctx, deps.userId, ftsHits, wantTags!, tagMode)
+        : ftsHits;
+      const matches = kept.slice(0, limit);
       return {
         query,
         strategy: 'fts' as const,
-        matchCount: ftsHits.length,
-        matches: ftsHits.map((h) => ({
+        matchCount: matches.length,
+        matches: matches.map((h) => ({
           document_id: h.documentId,
           chunk_index: h.chunkIndex,
           snippet: tagExternal(h.snippet),

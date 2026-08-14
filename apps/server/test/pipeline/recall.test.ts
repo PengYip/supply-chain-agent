@@ -5,6 +5,7 @@ import { createDb, migrate, type SqliteDbContext } from '../../src/pipeline/db/c
 import { env } from '../../src/env.js';
 import { buildIngestDocumentTool } from '../../src/pipeline/tools/documentEntry.js';
 import { buildRecallDocumentsTool } from '../../src/pipeline/tools/recall.js';
+import type { ChunkTagger } from '../../src/pipeline/chunkTagging.js';
 
 let ctx: SqliteDbContext;
 let file: string;
@@ -133,5 +134,42 @@ describe('L4 document recall (FTS5 BM25)', () => {
       matchCount: number; matches: unknown[];
     };
     expect(res.matches).toHaveLength(1);
+  });
+});
+
+describe('recall_documents wantTags (chunk-tag filter)', () => {
+  it('keeps chunks whose tags intersect wantTags and drops non-matching tags', async () => {
+    // Deterministic tagger: stamp every chunk with a 合同-taxonomy tag so recall
+    // has real doc_chunk.tags to filter on (no LLM needed). tagChunks keeps the
+    // tag because it is a member of the 合同 taxonomy.
+    const tagger: ChunkTagger = async (chunks) => {
+      const out: Record<number, string[]> = {};
+      for (const c of chunks) out[c.index] = ['付款条款'];
+      return out;
+    };
+    const ingestTagged = buildIngestDocumentTool({ ctx, tagger });
+    const ingestRes = (await ingestTagged.execute(
+      { sourceUri: file, docType: '合同', modality: 'digital' },
+      execOpts,
+    )) as { docId: string };
+    const docId = ingestRes.docId;
+
+    const recall = buildRecallDocumentsTool({ ctx });
+
+    // Matching tag -> the chunk survives the filter.
+    const hit = (await recall.execute(
+      { query: 'diesel', strategy: 'fts', wantTags: ['付款条款'] },
+      execOpts,
+    )) as { matchCount: number; matches: Array<{ document_id: string }> };
+    expect(hit.matchCount).toBeGreaterThan(0);
+    expect(hit.matches.some((m) => m.document_id === docId)).toBe(true);
+
+    // Non-matching tag -> everything filtered out, no hallucinated results.
+    const miss = (await recall.execute(
+      { query: 'diesel', strategy: 'fts', wantTags: ['不存在的标签'] },
+      execOpts,
+    )) as { matchCount: number; matches: unknown[] };
+    expect(miss.matchCount).toBe(0);
+    expect(miss.matches).toEqual([]);
   });
 });
