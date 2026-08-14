@@ -14,9 +14,21 @@ export interface SendMessageOptions {
   contextFiles?: ContextFile[]
 }
 
-export function useSessionMessages(sessionId: string | null) {
+export interface UseSessionMessagesOptions {
+  /** Called when sendMessage had to create a new session (user typed on the
+   *  welcome screen with no session selected). Lets the owner lift the new
+   *  id into app state so the sidebar + SSE subscription follow. */
+  onSessionCreated?: (sessionId: string) => void
+}
+
+export function useSessionMessages(
+  sessionId: string | null,
+  opts?: UseSessionMessagesOptions,
+) {
   const [messages, setMessages] = useState<UIMessage[]>([])
   const pipelineRef = useRef<RunPipeline | null>(null)
+  const onSessionCreatedRef = useRef(opts?.onSessionCreated)
+  onSessionCreatedRef.current = opts?.onSessionCreated
 
   const closePipeline = useCallback(() => {
     const p = pipelineRef.current
@@ -152,8 +164,26 @@ export function useSessionMessages(sessionId: string | null) {
   }, [closePipeline, sessionId])
 
   const sendMessage = useCallback(
-    async (text: string, opts?: SendMessageOptions): Promise<{ ok?: true; runId?: string; error?: string }> => {
-      if (!sessionId) return { error: 'no session' }
+    async (text: string, sendOpts?: SendMessageOptions): Promise<{ ok?: true; runId?: string; error?: string }> => {
+      // No session selected (welcome screen): create one first so typing
+      // directly into the composer keeps working like the old useChat path.
+      let sid = sessionId
+      if (!sid) {
+        try {
+          const created = await fetch('/api/sessions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ role: 'trader' }),
+          })
+          if (!created.ok) return { error: 'failed to create session' }
+          const s = (await created.json()) as { id?: string }
+          if (!s.id) return { error: 'failed to create session' }
+          sid = s.id
+          onSessionCreatedRef.current?.(sid)
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) }
+        }
+      }
       const userMsg = {
         id: generateId(),
         role: 'user',
@@ -167,11 +197,11 @@ export function useSessionMessages(sessionId: string | null) {
       try {
         const res = await fetch('/api/chat', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-session-id': sessionId },
+          headers: { 'Content-Type': 'application/json', 'x-session-id': sid },
           body: JSON.stringify({
             messages: [userMsg],
             role: 'trader',
-            contextFiles: (opts?.contextFiles ?? []).map((f) => ({ docId: f.docId, filename: f.filename })),
+            contextFiles: (sendOpts?.contextFiles ?? []).map((f) => ({ docId: f.docId, filename: f.filename })),
           }),
         })
 

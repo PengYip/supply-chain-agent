@@ -78,6 +78,7 @@ function App() {
           contextFiles={contextFiles}
           setContextFiles={setContextFiles}
           onSessionChanged={() => { void refreshSessions(); }}
+          onSessionCreated={(id) => { setActiveSessionId(id); void refreshSessions(); }}
         />
         <button
           type="button"

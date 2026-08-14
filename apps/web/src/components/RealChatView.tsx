@@ -19,7 +19,10 @@ export const RealChatView: React.FC<{
   /** Phase 5: called when a chat turn finishes so the sidebar can refresh
    *  (a newly-generated session title appears). */
   onSessionChanged?: () => void;
-}> = ({ onSignOut, sessionId, contextFiles, setContextFiles, onSessionChanged }) => {
+  /** Called when the composer auto-created a session on the welcome screen
+   *  so the app can make it active (sidebar + SSE follow). */
+  onSessionCreated?: (id: string) => void;
+}> = ({ onSignOut, sessionId, contextFiles, setContextFiles, onSessionChanged, onSessionCreated }) => {
   const [input, setInput] = useState('')
 
   // Phase 3: file upload state. Uploads POST to /api/files (MinIO + ingest bridge).
@@ -75,7 +78,9 @@ export const RealChatView: React.FC<{
   const contextFilesRef = useRef(contextFiles)
   useEffect(() => { contextFilesRef.current = contextFiles }, [contextFiles])
 
-  const { messages, status, error, sendMessage, setMessages } = useSessionMessages(sessionId ?? null)
+  const { messages, status, error, sendMessage, setMessages } = useSessionMessages(sessionId ?? null, {
+    onSessionCreated: (id) => onSessionCreated?.(id),
+  })
   const liveSessionId = sessionId ?? null
   const isBusy = status === 'busy'
   const isStreaming = isBusy
@@ -89,10 +94,15 @@ export const RealChatView: React.FC<{
   useEffect(() => {
     const wasBusy = prevBusyRef.current
     prevBusyRef.current = isBusy
-    if (wasBusy && !isBusy) {
-      // Run just finished: refresh sidebar for new title, with a delayed
-      // second refresh because title-gen is a fire-and-forget second LLM call.
+    if (wasBusy !== isBusy) {
+      // Refresh the sidebar on BOTH edges: run start (busy badge appears via
+      // GET /api/sessions status) and run end (badge clears, title may appear).
       onSessionChangedRef.current?.()
+    }
+    if (wasBusy && !isBusy) {
+      // Title generation is a fire-and-forget second LLM call that finishes
+      // ~1-3s AFTER the run ends. The immediate refresh above races ahead of
+      // the title being written, so schedule a delayed second refresh.
       const t = window.setTimeout(() => onSessionChangedRef.current?.(), 4000)
       return () => window.clearTimeout(t)
     }
