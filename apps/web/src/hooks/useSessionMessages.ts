@@ -73,6 +73,24 @@ export function useSessionMessages(sessionId: string | null) {
     })()
   }, [closePipeline])
 
+  /** Fetch the authoritative message list and replace local state. Used on
+   *  sessionId change AND after a run reaches a terminal state (finish/
+   *  abort/error) — the persisted assistant message is the source of truth
+   *  and re-syncing clears any transient assembly artifacts. */
+  const refreshSnapshot = useCallback(() => {
+    if (!sessionId) return
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return
+        const msgs = (data as { messages?: UIMessage[] }).messages
+        setMessages(Array.isArray(msgs) ? msgs : [])
+      })
+      .catch(() => {
+        /* ignore — status hook will surface connection issues */
+      })
+  }, [sessionId])
+
   const { status, error } = useSessionEvents(sessionId, {
     onRunStart: () => startPipeline(),
     onChunk: (part) => {
@@ -85,9 +103,20 @@ export function useSessionMessages(sessionId: string | null) {
         /* controller closed/gone */
       }
     },
-    onRunFinish: () => closePipeline(),
-    onRunAborted: () => closePipeline(),
-    onRunError: () => closePipeline(),
+    onRunFinish: () => {
+      closePipeline()
+      // The persisted assistant message (server-generated id) replaces the
+      // locally-assembled one — authoritative dedupe.
+      refreshSnapshot()
+    },
+    onRunAborted: () => {
+      closePipeline()
+      refreshSnapshot()
+    },
+    onRunError: () => {
+      closePipeline()
+      refreshSnapshot()
+    },
   })
 
   // Load full snapshot when sessionId changes.
@@ -101,6 +130,11 @@ export function useSessionMessages(sessionId: string | null) {
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (cancelled || !data) return
+        // A run is streaming right now — the pipeline owns the trailing
+        // assistant message. Replacing here would orphan it (findIndex
+        // misses on the next snapshot, so the message would be APPENDED,
+        // rendering a duplicate). Skip; the run-terminal refresh re-syncs.
+        if (pipelineRef.current) return
         const msgs = (data as { messages?: UIMessage[] }).messages
         setMessages(Array.isArray(msgs) ? msgs : [])
       })

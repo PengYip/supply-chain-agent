@@ -34,6 +34,11 @@ export function startSessionRun(
   const controller = new AbortController();
   setSessionStatus(sessionId, 'busy', runId);
   emit({ type: 'run.started', sessionId, runId, at: new Date().toISOString() });
+  // Push an immediate busy status so connected SSE subscribers flip their
+  // local status without waiting for a reconnect snapshot. Without this the
+  // only session.status event is the final 'idle', and the frontend stays
+  // 'idle' for the whole run (badge/input/polling all wrong).
+  emit({ type: 'session.status', sessionId, status: 'busy', runId });
 
   const ctx = { sessionId, userId, runId, role };
   const done = runSessionContext(ctx, async () => {
