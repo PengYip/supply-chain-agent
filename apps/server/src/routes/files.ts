@@ -28,6 +28,7 @@ import { minioClient, MINIO_BUCKET } from '../lib/minio.js';
 import { env } from '../env.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
 import type { DbContext } from '../pipeline/db/client.js';
+import { ingestFile } from '../pipeline/tools/documentEntry.js';
 import {
   setDocumentMinioKey,
   findDocIdsByMinioKeys,
@@ -35,9 +36,8 @@ import {
   createFileFolder,
   deleteFileFolder,
   deleteDocument,
-  createDocumentStub,
 } from '../pipeline/db/repositories.js';
-import type { DocType } from '../pipeline/types.js';
+import type { DocType, Modality } from '../pipeline/types.js';
 import { DeterministicEmbedder, OllamaEmbedder, type Embedder } from '../pipeline/embedder.js';
 
 export const filesRoute = new Hono<AuthEnv>();
@@ -52,8 +52,7 @@ function ctx(): DbContext {
 }
 
 // Match the agent's embedder choice so uploads get the same vector treatment.
-// Exported for reuse by routes/review.ts (POST /api/documents/:docId/process).
-export function defaultEmbedder(): Embedder {
+function defaultEmbedder(): Embedder {
   return env.OLLAMA_BASE_URL
     ? new OllamaEmbedder({ baseUrl: env.OLLAMA_BASE_URL, model: env.OLLAMA_EMBED_MODEL })
     : new DeterministicEmbedder();
@@ -132,8 +131,8 @@ filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
 
   const docTypeStr = strField(body['docType'], '其他');
   const docType = (ALLOWED_DOCTYPES.has(docTypeStr) ? docTypeStr : '其他') as DocType;
-  // modality is no longer consumed at upload time (Model B): parsing runs on
-  // demand via POST /api/documents/:docId/process, which accepts modality then.
+  const modalityStr = strField(body['modality'], 'digital');
+  const modality = (modalityStr === 'scanned' ? 'scanned' : 'digital') as Modality;
   const directory = normalizeDirectory(strField(body['directory'], ''));
 
   // Key carries the optional folder path so the file manager can render the tree
@@ -154,35 +153,36 @@ filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
     });
     minioStored = true;
 
-    // 2. Download into INGEST_ROOT so the parse path allowlist accepts it.
+    // 2. Download into INGEST_ROOT so the ingest path allowlist accepts it.
     await minioClient.fGetObject(MINIO_BUCKET, key, localPath);
 
-    // 3. Model B: upload is STORAGE-ONLY. Create a lightweight documents stub
-    //    (parse_status='uploaded') and return immediately. Parsing (OCR / block
-    //    extraction) runs on demand via POST /api/documents/:docId/process, so an
-    //    OCR failure on a scanned PDF never fails the upload. Stamp minio_key so
-    //    the file list can attach this docId to the object without a LIKE scan.
-    const { docId } = await createDocumentStub(ctx(), {
-      sourceUri: localPath,
-      minioKey: key,
-      userId: user.id,
-      filename: file.name,
+    // 3. Ingest: parse -> persist BlockModel -> chunk -> index (FTS5 + vectors).
+    const result = await ingestFile({
+      ctx: ctx(),
+      sourcePath: localPath,
       docType,
+      modality,
+      embedder: defaultEmbedder(),
+      userId: user.id,
     });
-    await setDocumentMinioKey(ctx(), docId, key);
+
+    // 4. Stamp the minio_key onto the document row so the file list can attach
+    //    this docId to the object without a source_uri LIKE scan.
+    await setDocumentMinioKey(ctx(), result.docId, key);
 
     return c.json(
       {
-        docId,
+        docId: result.docId,
         filename: file.name,
         key,
         directory: directory ? '/' + directory : '/',
-        parseStatus: 'uploaded',
+        blockCount: result.blockCount,
+        modality: result.modality,
       },
       201,
     );
   } catch (e) {
-    // Rollback: a failed upload must NOT leave an orphaned MinIO object, which
+    // Rollback: a failed ingest must NOT leave an orphaned MinIO object, which
     // would appear in the file list with no docId and be un-addable to chat.
     // Best-effort cleanup -- never let cleanup errors mask the original failure.
     if (minioStored) {
@@ -190,8 +190,8 @@ filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
     }
     try { await fs.unlink(localPath); } catch { /* may not have been created */ }
     const msg = e instanceof Error ? e.message : String(e);
-    console.error('[files] upload failed:', msg);
-    return c.json({ error: 'upload failed', detail: msg }, 500);
+    console.error('[files] upload/ingest failed:', msg);
+    return c.json({ error: 'upload or ingest failed', detail: msg }, 500);
   }
 });
 

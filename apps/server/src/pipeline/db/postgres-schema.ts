@@ -89,9 +89,6 @@ export const documents = pgTable(
     reviewStatus: text('review_status').notNull().default('pending'),
     reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
     reviewedBy: text('reviewed_by'),
-    // Model B parse lifecycle: 'uploaded' stub -> 'parsing' -> 'parsed' |
-    // 'needs_ocr' | 'failed'. Decouples upload (storage-only) from parsing.
-    parseStatus: text('parse_status').notNull().default('uploaded'),
   },
   (t) => ({
     userIdx: index('idx_documents_user').on(t.userId),
