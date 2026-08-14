@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { ScenarioSchema, type Scenario } from './types.js';
 
@@ -23,4 +24,9 @@ export function loadDataset(path: string): Scenario[] {
     ids.add(s.id);
   }
   return scenarios;
+}
+
+/** Load a dataset from a file:// URL (works cross-platform, no pathname regex). */
+export function loadByFileUrl(u: string): Scenario[] {
+  return loadDataset(fileURLToPath(u));
 }
