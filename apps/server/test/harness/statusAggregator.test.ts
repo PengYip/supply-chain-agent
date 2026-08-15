@@ -1,17 +1,16 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { createAuditRecorder, type ToolCallRecord } from '../../src/harness/auditRecorder.js';
 import { getSessionStatus, getToolCallCounts } from '../../src/harness/statusAggregator.js';
-import {
-  setSessionContext,
-} from '../../src/harness/sessionContext.js';
+import { runSessionContext } from '../../src/harness/sessionContext.js';
 import { statusRoute } from '../../src/routes/status.js';
 
 /**
  * Status aggregator (P0 status bar backend).
  *
- * The audit recorder stamps each record with the ambient sessionId (set per
- * /api/chat turn). getSessionStatus filters by sessionId, tallies each call's
- * contract `signal` dimension, and reports the last call + pending approvals.
+ * The audit recorder stamps each record with the ambient sessionId (read from
+ * the ALS session context set per run via runSessionContext). getSessionStatus
+ * filters by sessionId, tallies each call's contract `signal` dimension, and
+ * reports the last call + pending approvals.
  *
  * Real tool names are used so getContract resolves real signals:
  *   query_contract -> counter, escalate_to_human -> todo,
@@ -19,38 +18,33 @@ import { statusRoute } from '../../src/routes/status.js';
  */
 
 describe('getSessionStatus', () => {
-  beforeEach(() => {
-    // Ensure no ambient session leaks between tests; each test sets its own.
-    setSessionContext(null);
-  });
-
   it('tallies by signal and strictly filters by sessionId', () => {
     const rec = createAuditRecorder();
 
-    setSessionContext('sessA');
-    rec.recordToolCall({
-      toolName: 'query_contract',
-      args: { contractNo: 'HT-2024-001' },
-      result: { contractNo: 'HT-2024-001' },
-      durationMs: 5,
-    });
-    rec.recordToolCall({
-      toolName: 'escalate_to_human',
-      args: { reason: 'x' },
-      result: { ticketId: 't1' },
-      durationMs: 8,
+    runSessionContext({ sessionId: 'sessA', role: 'trader' }, () => {
+      rec.recordToolCall({
+        toolName: 'query_contract',
+        args: { contractNo: 'HT-2024-001' },
+        result: { contractNo: 'HT-2024-001' },
+        durationMs: 5,
+      });
+      rec.recordToolCall({
+        toolName: 'escalate_to_human',
+        args: { reason: 'x' },
+        result: { ticketId: 't1' },
+        durationMs: 8,
+      });
     });
 
     // A different session's call must be EXCLUDED from sessA's status.
-    setSessionContext('sessB');
-    rec.recordToolCall({
-      toolName: 'create_payment',
-      args: {},
-      result: {},
-      durationMs: 12,
+    runSessionContext({ sessionId: 'sessB', role: 'trader' }, () => {
+      rec.recordToolCall({
+        toolName: 'create_payment',
+        args: {},
+        result: {},
+        durationMs: 12,
+      });
     });
-
-    setSessionContext(null);
 
     const status = getSessionStatus('sessA', rec);
     expect(status.sessionId).toBe('sessA');
@@ -67,20 +61,20 @@ describe('getSessionStatus', () => {
 
   it('counts the env bucket and reflects the actual last call', () => {
     const rec = createAuditRecorder();
-    setSessionContext('sessA');
-    rec.recordToolCall({
-      toolName: 'query_contract',
-      args: {},
-      result: {},
-      durationMs: 1,
+    runSessionContext({ sessionId: 'sessA', role: 'trader' }, () => {
+      rec.recordToolCall({
+        toolName: 'query_contract',
+        args: {},
+        result: {},
+        durationMs: 1,
+      });
+      rec.recordToolCall({
+        toolName: 'create_payment',
+        args: {},
+        result: {},
+        durationMs: 2,
+      });
     });
-    rec.recordToolCall({
-      toolName: 'create_payment',
-      args: {},
-      result: {},
-      durationMs: 2,
-    });
-    setSessionContext(null);
 
     const status = getSessionStatus('sessA', rec);
     expect(status.totalCalls).toBe(2);
@@ -90,14 +84,14 @@ describe('getSessionStatus', () => {
 
   it('routes unknown tool names (no contract) into the none bucket', () => {
     const rec = createAuditRecorder();
-    setSessionContext('sessA');
-    rec.recordToolCall({
-      toolName: 'totally_unknown_tool',
-      args: {},
-      result: {},
-      durationMs: 1,
+    runSessionContext({ sessionId: 'sessA', role: 'trader' }, () => {
+      rec.recordToolCall({
+        toolName: 'totally_unknown_tool',
+        args: {},
+        result: {},
+        durationMs: 1,
+      });
     });
-    setSessionContext(null);
 
     const status = getSessionStatus('sessA', rec);
     expect(status.totalCalls).toBe(1);
@@ -117,10 +111,6 @@ describe('getSessionStatus', () => {
 });
 
 describe('status route GET /sessions/:id/status', () => {
-  beforeEach(() => {
-    setSessionContext(null);
-  });
-
   it('returns the AgentStatus JSON for the given session id', async () => {
     const res = await statusRoute.request('/sessions/sess-route/status');
     expect(res.status).toBe(200);

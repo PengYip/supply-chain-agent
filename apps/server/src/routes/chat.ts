@@ -66,7 +66,7 @@ chatRoute.post('/chat', async (c) => {
   // Session: reuse x-session-id if it exists AND belongs to the authenticated
   // user (Phase 2 data isolation), else create a new one owned by the user.
   // Background runtime: session context is set via ALS inside RunManager's
-  // runSessionContext wrapper (not the legacy single-slot setSessionContext).
+  // runSessionContext wrapper for the run body.
   const user = c.get('user');
   const userId = user?.id ?? null;
   // Phase 4 RBAC: map the authenticated user's role to the agent role. For now

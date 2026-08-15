@@ -1,23 +1,20 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   runSessionContext,
   getSessionCtx,
   getSessionId,
-  setSessionContext,
-  getSessionContext,
 } from '../../src/harness/sessionContext.js';
 
-describe('sessionContext AsyncLocalStorage (transition)', () => {
-  beforeEach(() => {
-    // 清旧单槽,避免跨用例污染
-    setSessionContext(null);
-  });
-
+// ALS-only session context. Every run (chat POST and approval-callback
+// resume alike) is started through RunManager.startSessionRun, which wraps
+// the run body in runSessionContext, so tool executes always resolve their
+// session through the ALS store.
+describe('sessionContext AsyncLocalStorage', () => {
   it('getSessionCtx throws outside a run context', () => {
     expect(() => getSessionCtx()).toThrow(/not set/i);
   });
 
-  it('getSessionId returns null when neither ALS nor legacy slot is set', () => {
+  it('getSessionId returns null outside a run context', () => {
     expect(getSessionId()).toBeNull();
   });
 
@@ -25,20 +22,6 @@ describe('sessionContext AsyncLocalStorage (transition)', () => {
     runSessionContext({ sessionId: 's1', role: 'trader' }, () => {
       expect(getSessionCtx().sessionId).toBe('s1');
       expect(getSessionId()).toBe('s1');
-    });
-  });
-
-  it('getSessionId degrades to legacy slot when ALS unset', () => {
-    setSessionContext('legacy-id');
-    expect(getSessionId()).toBe('legacy-id');
-    // 旧 API 仍可用
-    expect(getSessionContext()).toBe('legacy-id');
-  });
-
-  it('ALS takes precedence over legacy slot', () => {
-    setSessionContext('legacy');
-    runSessionContext({ sessionId: 'als-id', role: 'trader' }, () => {
-      expect(getSessionId()).toBe('als-id');
     });
   });
 
