@@ -1,6 +1,4 @@
 import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react'
-import { generateId, parseJsonEventStream, readUIMessageStream, uiMessageChunkSchema } from 'ai'
-import type { UIMessage, UIMessageChunk } from 'ai'
 import { useSessionMessages } from '../hooks/useSessionMessages'
 import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, LogOut, Paperclip, Check } from 'lucide-react'
 import { RealMessageItem, ErrorMessage } from './RealMessageItem'
@@ -124,7 +122,7 @@ export const RealChatView: React.FC<{
   const contextFilesRef = useRef(contextFiles)
   useEffect(() => { contextFilesRef.current = contextFiles }, [contextFiles])
 
-  const { messages, status, error, sendMessage, setMessages } = useSessionMessages(sessionId ?? null, {
+  const { messages, status, error, sendMessage } = useSessionMessages(sessionId ?? null, {
     onSessionCreated: (id) => onSessionCreated?.(id),
   })
   const liveSessionId = sessionId ?? null
@@ -221,41 +219,25 @@ export const RealChatView: React.FC<{
       if (!res.ok) {
         const text = await res.text()
         let detail = text
+        let approvalResolved = false
         try {
           const json = JSON.parse(text)
           detail = json.error || JSON.stringify(json)
+          approvalResolved = json.approvalResolved === true
         } catch {}
+        if (res.status === 409) {
+          throw new Error(
+            approvalResolved
+              ? '审批已记录，但会话正忙，稍后重发消息即可恢复'
+              : '会话正忙，请稍后重试',
+          )
+        }
         throw new Error(`${res.status}: ${detail}`)
       }
-    const contentType = res.headers.get('content-type') || ''
-    if (!contentType.includes('text/event-stream') || !res.body) {
-      setLastApprovalApproved(body.approved)
-      setCallbackState('success')
-      return
-    }
-      const chunkStream = parseJsonEventStream({ stream: res.body, schema: uiMessageChunkSchema })
-      const parsedStream = chunkStream.pipeThrough(
-        new TransformStream({
-          transform(chunk, controller) {
-            if (!chunk.success) {
-              controller.error((chunk as { error: unknown }).error)
-              return
-            }
-            controller.enqueue(chunk.value as UIMessageChunk)
-          },
-        }),
-      ) as unknown as ReadableStream<UIMessageChunk>
-
-      let streamingId: string | null = null
-      for await (const raw of readUIMessageStream({ stream: parsedStream })) {
-        const msg = { ...raw, id: raw.id || generateId() } as UIMessage
-        if (streamingId) {
-          setMessages((prev) => prev.map((m) => (m.id === streamingId ? msg : m)))
-        } else {
-          streamingId = msg.id
-          setMessages((prev) => [...prev, msg])
-        }
-      }
+      // 200: fire-and-forget. The resume run streams over SSE (run.started ->
+      // message.part -> run.finished), which useSessionMessages already
+      // renders; the approval card clears when the tool part reaches
+      // output-available. No local stream merge is needed anymore.
       setLastApprovalApproved(body.approved)
       setCallbackState('success')
     } catch (err) {
