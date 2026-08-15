@@ -220,4 +220,35 @@ describe('POST /api/approval/callback (background runtime)', () => {
     expect(res403.status).toBe(403);
     expect(getPending(aid)?.status).toBe('pending');
   });
+
+  it('replay of an already-resolved approval returns 409 approval_already_resolved and does not re-run', async () => {
+    const s = createSession('trader', 'u-replay');
+    const tid = uid('T');
+    recordPendingApproval({
+      sessionId: s.id, level: 'L3', toolName: 'create_payment',
+      input: {}, ticketId: tid,
+    });
+
+    // First callback: approve -> 200, one run started, instruction appended once.
+    const res1 = await post(appAs('u-replay'), { ticketId: tid, approved: true });
+    expect(res1.status).toBe(200);
+    expect(getPending(tid)?.status).toBe('approved');
+    expect(runSession).toHaveBeenCalledTimes(1);
+    runResolve.current();
+    // Let the first run's cleanup (RunManager finally) settle so this replay
+    // truly exercises the resolved-approval guard, not the single-flight check.
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Replay the exact same POST: must be rejected without any state change.
+    const res2 = await post(appAs('u-replay'), { ticketId: tid, approved: true });
+    expect(res2.status).toBe(409);
+    const json2 = await res2.json();
+    expect(json2.error).toBe('approval_already_resolved');
+    expect(json2.approvalResolved).toBe(true);
+    // runSession was NOT called again (mock call count unchanged).
+    expect(runSession).toHaveBeenCalledTimes(1);
+    // The L3 instruction was not re-appended (history still has the single one).
+    const loaded = loadSession(s.id)!;
+    expect(loaded.messages.length).toBe(1);
+  });
 });

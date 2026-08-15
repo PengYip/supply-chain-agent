@@ -77,6 +77,15 @@ approvalCallback.post('/approval/callback', async (c) => {
     return c.json({ error: 'forbidden' }, 403);
   }
 
+  // Idempotency guard: a replay of an already-resolved approval (same POST sent
+  // again after the resume run completed) must not re-append the L3 instruction
+  // or start a fresh run. For create_payment that would re-execute the payment
+  // with the now-authorized ticket. Any subsequent callback for this id is a
+  // duplicate — reject before ANY state change.
+  if (pending.status !== 'pending') {
+    return c.json({ error: 'approval_already_resolved', approvalResolved: true }, 409);
+  }
+
   // Pre-check single-flight BEFORE touching any state: reject early with
   // approvalResolved=false (the pending row is untouched).
   if (isRunning(sessionId)) {
