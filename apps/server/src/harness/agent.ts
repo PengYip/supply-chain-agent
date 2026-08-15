@@ -222,6 +222,17 @@ export interface RunStreamOpts {
    * background run can be cancelled (RunManager.abortSessionRun).
    */
   abortSignal?: AbortSignal;
+  /**
+   * Opt-out of the <agent_status> injection. Approval-resume callers append a
+   * transient trailing role:'tool' tool-approval-response message that MUST
+   * remain the LAST message for the SDK's collectToolApprovals pairing (ai
+   * index.mjs:2810 requires messages.at(-1).role === 'tool'); appending a user
+   * status message after it would silently disable L2 approve/deny semantics.
+   * (Inserting it before the tool message is invalid too: a user message
+   * between assistant tool_calls and its tool_result violates provider message
+   * ordering.)
+   */
+  skipStatusMessage?: boolean;
 }
 
 // Scan a turn's response messages for v6 tool-approval-request parts (emitted
@@ -316,7 +327,7 @@ export async function buildAgentStatusSnapshot({
 // to pre-H1 behavior. When supplied (tests), no provider client is constructed and
 // no network/env is required, so the agent loop can be exercised offline against
 // a canned fake model + in-memory DbContext.
-export async function runStream({ messages, role, auditTraceId, model, deps, userId, sessionId, abortSignal }: RunStreamOpts) {
+export async function runStream({ messages, role, auditTraceId, model, deps, userId, sessionId, abortSignal, skipStatusMessage }: RunStreamOpts) {
   // Production default: real DeepSeek model. If a model was injected, skip
   // building the provider client so tests need no API key / network.
   //
@@ -364,7 +375,7 @@ export async function runStream({ messages, role, auditTraceId, model, deps, use
   // (audit recorder + sessionStore + DB counts). The appended message is NEVER
   // persisted (only appendMessages() is, which stores the real conversation),
   // so the status message is replaced fresh on every turn.
-  const snapshot = sessionId ? await buildAgentStatusSnapshot({ sessionId, userId, ctx }) : null;
+  const snapshot = sessionId && !skipStatusMessage ? await buildAgentStatusSnapshot({ sessionId, userId, ctx }) : null;
   const messagesForModel = appendStatusMessage(messages, snapshot);
   return streamText({
     // Chat Completions API (.chat) -- DeepSeek's Responses-API compatibility

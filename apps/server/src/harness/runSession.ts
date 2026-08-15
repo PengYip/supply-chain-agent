@@ -42,6 +42,13 @@ export interface RunSessionOpts {
   isFirstTurn?: boolean;
   /** title-gen: the first user message text (pre-extracted by the caller). */
   firstUserText?: string;
+  /**
+   * Opt-out of the <agent_status> injection inside runStream. Approval-resume
+   * callers (approvalCallback) set this so the transient trailing role:'tool'
+   * tool-approval-response stays the last message (SDK collectToolApprovals
+   * pairing), instead of being displaced by an appended user status message.
+   */
+  skipStatusMessage?: boolean;
 }
 
 /**
@@ -65,7 +72,7 @@ export function extractMessageText(msg: any): string {
 }
 
 export async function runSession(opts: RunSessionOpts): Promise<void> {
-  const { sessionId, role, messages, auditTraceId, abortSignal, userId, model, isFirstTurn, firstUserText } = opts;
+  const { sessionId, role, messages, auditTraceId, abortSignal, userId, model, isFirstTurn, firstUserText, skipStatusMessage } = opts;
 
   const result = await runStream({
     messages,
@@ -75,6 +82,7 @@ export async function runSession(opts: RunSessionOpts): Promise<void> {
     userId,
     model,
     abortSignal,
+    skipStatusMessage,
   });
 
   // After the stream completes, record any L2 soft-gate approvals requested this

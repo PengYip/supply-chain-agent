@@ -185,6 +185,11 @@ approvalCallback.post('/approval/callback', async (c) => {
       auditTraceId,
       abortSignal: signal,
       isFirstTurn: false,
+      // Resume runs skip <agent_status> injection: the transient trailing
+      // role:'tool' tool-approval-response (L2) must remain the LAST message
+      // for SDK collectToolApprovals pairing, and the approval was just
+      // resolved — a stale status block could mislead the model.
+      skipStatusMessage: true,
     }),
   );
 
