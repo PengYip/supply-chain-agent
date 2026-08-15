@@ -72,8 +72,10 @@ interface EvalScenarioRow {
 }
 ```
 
-tier 获取: 服务端 `loadByFileUrl(datasets/<dataset>.yaml)` 读 scenario 元数据;
-数据集文件缺失时 tier 为 null, 接口不报错 (评估结果与数据集版本可能已分离)。
+tier 获取: 路由模块内自包含读取 `apps/server/eval/agent/datasets/<dataset>.yaml` 并解析出
+`{scenarioId, tier}` 映射 (仅用 `yaml` 依赖做轻量解析, 不 import `eval/**` 模块 — tsconfig
+`rootDir: src` 约束下 src 不能依赖 eval); 数据集文件缺失/解析失败时 tier 为 null, 接口不报错
+(评估结果与数据集版本可能已分离)。
 
 ### 4.2 GET /api/eval/runs/:runId/episodes
 
