@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { EvalRunsList } from './EvalRunsList'
 import { EvalRunReport } from './EvalRunReport'
+import { EvalEpisodeDetail } from './EvalEpisodeDetail'
 import { useEvalRuns } from '../../hooks/useEvalRuns'
 
 type Page =
@@ -35,13 +36,18 @@ export function EvalWorkbenchView() {
           onOpenEpisode={(scenarioId, runIndex) => setNav({ page: 'episode', runId: nav.runId, scenarioId, runIndex })}
         />
       )}
-      {nav.page === 'report' && !summary && (
+      {nav.page === 'episode' && summary && (
+        <EvalEpisodeDetail
+          runId={nav.runId}
+          scenarioId={nav.scenarioId}
+          runIndex={nav.runIndex}
+          onBack={() => setNav({ page: 'report', runId: nav.runId })}
+        />
+      )}
+      {(nav.page === 'episode' || nav.page === 'report') && !summary && (
         <div className="p-8 text-sm text-textGray">运行数据不在列表中, 可能已被清理。
           <button type="button" className="ml-2 text-deepSea underline" onClick={() => setNav({ page: 'runs' })}>返回</button>
         </div>
-      )}
-      {nav.page === 'episode' && (
-        <div className="p-8 text-sm text-textGray">episode 页 (Task 6)</div>
       )}
     </div>
   )
