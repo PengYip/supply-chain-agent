@@ -92,30 +92,30 @@ interface EvalEpisodeView {
   judgeDimensions: { name: string; score: number; rationale: string }[];
   verifierFailures: { check: string; detail: string }[];
   simError: string | null;
-  approvals: { toolName: string; decision: string; matchedRule: string | null; reason: string }[];
-  toolCalls: { toolName: string; durationMs: number | null }[];
+  approvals: { toolName: string; level: string; decision: string; matchedRule: string | null; reason: string }[];
+  toolCalls: { toolName: string; args: unknown; result: unknown; durationMs: number | null }[];
   totalUsage: { inputTokens: number; outputTokens: number; totalTokens: number } | null;
   wallMs: number;
   turnsUsed: number;
   transcript: TranscriptSegment[];
 }
-type TranscriptSegment =
-  | { kind: 'text'; role: 'user' | 'assistant' | 'system'; content: string }
-  | { kind: 'tool-group'; toolName: string; input: unknown; result: unknown; durationMs: number | null }
-  | { kind: 'approval'; toolName: string; decision: string; reason: string };
+type TranscriptSegment = { kind: 'text'; role: 'user' | 'assistant' | 'system'; content: string };
 ```
 
-transcript 分段语义对齐前端 `realChatUtils.buildRenderItems` (text / tool-group / approval),
-但在服务端从 `artifact.transcript` + `toolCalls` + `approvals` 重建, 前端直接渲染。
+transcript 只含文本分段: `artifact.transcript` 是 `{role, text}` 数组, 无工具/审批的交错锚点,
+无法忠实地内联插卡 (不虚构顺序); 工具调用与审批以独立数组返回, 前端在聊天列下方以卡片区呈现
+(见 §5.2)。system-note 映射为 role=system。
 
 错误信封遵循仓库惯例: 成功 `{ok:true, data}`, 失败 `{ok:false, error}` (404: runId 不存在;
 500: JSONL 行损坏 — 单行损坏跳过该行并在 data.droppedLines 计数, 不整体失败)。
 
 ### 4.3 挂载与守卫
 
-`apps/server/src/index.ts` 现有 requireAuth 保护块旁新增:
-`app.route('/api/eval/runs', evalResultsRoutes)` — 路由内部每 handler 显式 `requireAuth`
-(遵循 "新增受保护路由显式接线" 约定, AGENTS.md)。
+对齐 sibling 路由模式 (sessions/files/review): `index.ts` 中
+`app.use('/api/eval/*', requireAuth)` 统一门控 + `app.route('/api/eval', evalResultsRoute)`
+挂载; 路由文件内不重复门控。401 响应体为现有 `{error: 'unauthorized'}` (auth-middleware.ts)。
+results 根目录定位: 路由模块内 `resolve(__dirname, '../../eval/agent/results')`
+(dev: src/routes → apps/server; prod: dist/routes → apps/server), 测试经工厂函数注入 tmp 根。
 
 ### 4.4 测试 (vitest, hermetic)
 
@@ -139,10 +139,10 @@ transcript 分段语义对齐前端 `realChatUtils.buildRenderItems` (text / too
 2. **EvalRunReport** — 顶部汇总卡 (verdict 分布、总 token、总耗时) + 场景矩阵表
    (scenarioId, tier 徽章, verdict 芯片序列, Pass@1, Pass^k, 均分, tokens);
    点击场景行 → 该场景 episode 列表 (简化行: runIndex, verdict 芯片, 均分)。
-3. **EvalEpisodeDetail** — 左: 同构聊天轨迹 (user/assistant 气泡 + MarkdownContent,
-   tool-group 卡片复用 RealToolStep 视觉, approval 卡片复用 SoftGateCard/BlockedCard 视觉);
-   右: 信息栏 (verdict 大徽章, judge 维度列表 name+score+rationale, verifier 失败红卡,
-   审批记录, usage/turns/耗时)。
+3. **EvalEpisodeDetail** — 左: 聊天列 (user/assistant 气泡 + MarkdownContent; system-note
+   以居中灰字小条呈现; 下方追加「工具调用」卡片区与「审批记录」卡片区, 复用 RealToolStep /
+   SoftGateCard / BlockedCard 的视觉语言); 右: 信息栏 (verdict 大徽章, judge 维度列表
+   name+score+rationale, verifier 失败红卡, usage/turns/耗时)。
 
 ### 5.3 API 层与 hooks
 
