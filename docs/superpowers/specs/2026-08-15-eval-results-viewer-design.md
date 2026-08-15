@@ -52,7 +52,7 @@ CLI (不变) ──写──> results/<stamp>-<dataset>/{episodes.jsonl, report.
 ```ts
 interface EvalRunSummary {
   runId: string;            // 目录名, 如 2026-08-15T03-21-07-123Z-core
-  startedAt: string;        // ISO, 从目录名解析
+  startedAt: string | null; // ISO, 从目录名解析; 目录名不合 stamp 格式时为 null
   dataset: string;          // core
   episodeCount: number;
   verdictDist: Record<string, number>;   // verdict -> count
@@ -94,7 +94,7 @@ interface EvalEpisodeView {
   simError: string | null;
   approvals: { toolName: string; level: string; decision: string; matchedRule: string | null; reason: string }[];
   toolCalls: { toolName: string; args: unknown; result: unknown; durationMs: number | null }[];
-  totalUsage: { inputTokens: number; outputTokens: number; totalTokens: number } | null;
+  totalUsage: { inputTokens: number; outputTokens: number; totalTokens: number }; // 恒合成零值对象, 不为 null (toEpisodeView 保证)
   wallMs: number;
   turnsUsed: number;
   transcript: TranscriptSegment[];
