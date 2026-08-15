@@ -62,6 +62,15 @@ describe('evalResults routes', () => {
     expect((await res.json()).ok).toBe(false);
   });
 
+  it('拒绝含 .. 的 runId (目录穿越形状) 即使目录真实存在', async () => {
+    const traversalDir = join(root, '2026-08-15T03-00-00-000Z-co..re');
+    mkdirSync(traversalDir);
+    writeFileSync(join(traversalDir, 'episodes.jsonl'), pairLine('t1-order-status', 1, 'pass') + '\n', 'utf-8');
+    const res = await appWith(root).request('/api/eval/runs/2026-08-15T03-00-00-000Z-co..re/episodes');
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ ok: false, error: 'run 不存在' });
+  });
+
   it('空 results 根返回空列表而非报错', async () => {
     const emptyRoot = mkdtempSync(join(tmpdir(), 'evalempty-'));
     try {
