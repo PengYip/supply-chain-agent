@@ -66,7 +66,7 @@ export function EvalRunReport({ runId, summary, onOpenEpisode, onBack }: {
               <th className="px-4 py-2 font-medium">场景</th>
               <th className="px-3 py-2 font-medium">Tier</th>
               <th className="px-3 py-2 font-medium">判定 (按轮)</th>
-              <th className="px-3 py-2 font-medium">Pass@{k}</th>
+              <th className="px-3 py-2 font-medium">Pass@1</th>
               <th className="px-3 py-2 font-medium">Pass^{k}</th>
               <th className="px-3 py-2 font-medium">均分</th>
               <th className="px-3 py-2 font-medium text-right">Tokens</th>
