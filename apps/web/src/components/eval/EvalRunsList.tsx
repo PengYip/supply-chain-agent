@@ -1,7 +1,7 @@
 // apps/web/src/components/eval/EvalRunsList.tsx
 import clsx from 'clsx'
 import { ChevronRight, RefreshCw, FlaskConical } from 'lucide-react'
-import { useEvalRuns } from '../../hooks/useEvalRuns'
+import type { EvalRunSummary } from '../../api/eval'
 
 const VERDICT_ORDER = ['pass', 'fail', 'needs_human_review', 'sim_error', 'judge_error'] as const
 const VERDICT_BAR: Record<string, string> = {
@@ -23,9 +23,14 @@ function formatTime(iso: string | null, runId: string): string {
   }
 }
 
-export function EvalRunsList({ onOpenRun }: { onOpenRun: (runId: string) => void }) {
-  const { runs, loading, error, refresh } = useEvalRuns()
-
+export function EvalRunsList({ runs, loading, error, onRefresh, onOpenRun, activeRunId }: {
+  runs: EvalRunSummary[]
+  loading: boolean
+  error: string | null
+  onRefresh: () => void
+  onOpenRun: (runId: string) => void
+  activeRunId?: string | null
+}) {
   if (loading) {
     return <div className="p-8 text-sm text-textGray">加载中...</div>
   }
@@ -33,7 +38,7 @@ export function EvalRunsList({ onOpenRun }: { onOpenRun: (runId: string) => void
     return (
       <div className="p-8">
         <p className="text-sm text-danger mb-3">{error}</p>
-        <button type="button" onClick={() => void refresh()}
+        <button type="button" onClick={() => onRefresh()}
           className="inline-flex items-center gap-1.5 rounded border border-borderGray bg-white px-3 py-1.5 text-sm text-deepSea hover:bg-bgGray">
           <RefreshCw className="h-3.5 w-3.5" aria-hidden /> 重试
         </button>
@@ -58,7 +63,7 @@ export function EvalRunsList({ onOpenRun }: { onOpenRun: (runId: string) => void
     <div className="p-6">
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-base font-medium text-textDark">评估运行</h2>
-        <button type="button" onClick={() => void refresh()}
+        <button type="button" onClick={() => onRefresh()}
           className="inline-flex items-center gap-1.5 rounded border border-borderGray bg-white px-2.5 py-1 text-xs text-textGray hover:text-deepSea">
           <RefreshCw className="h-3 w-3" aria-hidden /> 刷新
         </button>
@@ -79,7 +84,7 @@ export function EvalRunsList({ onOpenRun }: { onOpenRun: (runId: string) => void
             {runs.map((r) => {
               const total = Math.max(1, r.episodeCount)
               return (
-                <tr key={r.runId} className="border-t border-borderGray hover:bg-bgGray/60 cursor-pointer" onClick={() => onOpenRun(r.runId)}>
+                <tr key={r.runId} className={clsx('border-t border-borderGray hover:bg-bgGray/60 cursor-pointer', activeRunId === r.runId && 'bg-bgGray/60')} onClick={() => onOpenRun(r.runId)}>
                   <td className="px-4 py-2.5 text-textDark">{formatTime(r.startedAt, r.runId)}</td>
                   <td className="px-4 py-2.5 text-textGray">{r.dataset}</td>
                   <td className="px-4 py-2.5 tabular-nums text-textGray">{r.episodeCount}</td>
