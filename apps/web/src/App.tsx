@@ -7,12 +7,16 @@ import { FilePanel } from './components/FilePanel';
 import { type FileEntry, type ContextFile, useFiles } from './hooks/useFiles';
 import { processDocument, type DocParseState } from './api/process';
 import { useSessions } from './hooks/useSessions';
+import { EvalWorkbenchView } from './components/eval/EvalWorkbenchView';
+import { FlaskConical, MessageSquare } from 'lucide-react';
+import clsx from 'clsx';
 
 function App() {
   const [session, setSession] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [filePanelVisible, setFilePanelVisible] = useState(false);
+  const [view, setView] = useState<'chat' | 'eval'>('chat');
   const [contextFiles, setContextFiles] = useState<ContextFile[]>([]);
   // Phase 5: sessions live at App so the sidebar (data) and RealChatView
   // (refresh trigger) can share one useSessions instance.
@@ -92,7 +96,22 @@ function App() {
         createSession={createSession}
         deleteSession={deleteSession}
       />
-      <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
+      <div className="w-12 shrink-0 border-r border-borderGray bg-white flex flex-col items-center py-3 gap-2">
+        <button type="button" title="对话" aria-label="对话" onClick={() => setView('chat')}
+          className={clsx('w-9 h-9 rounded-lg flex items-center justify-center', view === 'chat' ? 'bg-deepSea text-white' : 'text-textGray hover:bg-bgGray')}>
+          <MessageSquare className="h-5 w-5" aria-hidden />
+        </button>
+        <button type="button" title="评估" aria-label="评估" onClick={() => setView('eval')}
+          className={clsx('w-9 h-9 rounded-lg flex items-center justify-center', view === 'eval' ? 'bg-deepSea text-white' : 'text-textGray hover:bg-bgGray')}>
+          <FlaskConical className="h-5 w-5" aria-hidden />
+        </button>
+      </div>
+      {view === 'eval' ? (
+        <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
+          <EvalWorkbenchView />
+        </div>
+      ) : (
+        <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
         <RealChatView
           sessionId={activeSessionId}
           onSignOut={refetchSession}
@@ -123,6 +142,7 @@ function App() {
           文件
         </button>
       </div>
+      )}
       <FilePanel
         visible={filePanelVisible}
         onClose={() => setFilePanelVisible(false)}
