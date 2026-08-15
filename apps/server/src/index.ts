@@ -15,6 +15,7 @@ import { statusRoute } from './routes/status.js';
 import { sessionsRoute } from './routes/sessions.js';
 import { filesRoute } from './routes/files.js';
 import { reviewRoute } from './routes/review.js';
+import { createEvalResultsRoute } from './routes/evalResults.js';
 import { ensureBucket } from './lib/minio.js';
 import { migrateOnStartup, getDbContext } from './pipeline/db/dbBackend.js';
 import { runExtractionBackfill } from './pipeline/extractionBackfill.js';
@@ -92,6 +93,7 @@ app.use('/api/chat/*', requireAuth);
 app.use('/api/sessions/*', requireAuth);
 app.use('/api/approval/*', requireAuth);
 app.use('/api/documents/*', requireAuth);
+app.use('/api/eval/*', requireAuth);
 
 app.route('/api', chatRoute);
 app.route('/api', approvalCallback);
@@ -106,6 +108,9 @@ app.route('/api/files', filesRoute);
 // Feature: in-card correction HITL. Mounted at /api/documents so the route's
 // POST /:docId/review resolves to the final path /api/documents/:docId/review.
 app.route('/api/documents', reviewRoute);
+
+// Eval results viewer (read-only): scan/aggregate CLI-written results dirs.
+app.route('/api/eval', createEvalResultsRoute());
 
 // Production: serve frontend static files from apps/web/dist on the same port.
 // Same-origin => no CORS needed; dev mode uses Vite on :5173 with /api proxy.
