@@ -61,3 +61,6 @@ apps/server/eval/contracts/*-mineru-out/
 # Agent eval CLI output (JSONL episodes + markdown reports)
 apps/server/eval/agent/results/
 
+# User-authored eval datasets (edited in-app; survive CD git-reset)
+apps/server/eval/agent/datasets/user/
+
