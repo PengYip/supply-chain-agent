@@ -52,6 +52,8 @@ export function EvalDatasetEditor({ onRunFromDataset }: { onRunFromDataset: (nam
   }, [dirty])
 
   const openDataset = useCallback(async (name: string) => {
+    // dirty 时切换数据集会丢弃未保存修改, 先确认 (beforeunload 只管离开页面)。
+    if (dirty && selected !== name && !window.confirm('当前有未保存的修改, 切换将丢弃。确定切换?')) return
     setLoadingYaml(true)
     setSaveError(null)
     setScenarioCount(null)
@@ -66,7 +68,8 @@ export function EvalDatasetEditor({ onRunFromDataset }: { onRunFromDataset: (nam
     } finally {
       setLoadingYaml(false)
     }
-  }, [])
+    // dirty/selected 进 deps: 切换守卫需要当前值 (见函数首行)。
+  }, [dirty, selected])
 
   const handleSave = async () => {
     if (!selected || builtin) return
@@ -105,6 +108,11 @@ export function EvalDatasetEditor({ onRunFromDataset }: { onRunFromDataset: (nam
   const handleCreate = async () => {
     const name = createName.trim()
     if (!name) return
+    // PUT 是 upsert, 撞名会静默覆盖已有数据集, 先预检。
+    if (datasets.some((d) => d.name === name)) {
+      setSaveError(`数据集 ${name} 已存在, 新建会覆盖其内容。请换一个名字。`)
+      return
+    }
     setBusy(true)
     setSaveError(null)
     try {
