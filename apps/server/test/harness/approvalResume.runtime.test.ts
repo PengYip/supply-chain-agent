@@ -268,7 +268,11 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
     expect(promptJson).toContain('call_tag2');
   });
 
-  it('runSession resume persists the reply as a NEW message id (no originalMessages continuation)', async () => {
+  it('runSession resume WITHOUT originalMessages appends a NEW assistant message (L3/instruction shape)', async () => {
+    // Covers the no-continuation path, which is the production L3 resume shape
+    // (the just-persisted user instruction is the last original message, so the
+    // SDK creates a NEW message). Production L2 resume uses the
+    // originalMessages continuation — that path is covered by the test below.
     const s = createSession('trader', 'u-rt3');
     appendMessages(s.id, [
       userUIMsg('第一轮'),

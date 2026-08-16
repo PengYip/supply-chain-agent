@@ -93,42 +93,76 @@ parse + validate → getPending(ticketId|approvalId) → ownership 校验
 → addAuthorizedTicket(仅 L3 approve)
 → startSessionRun(sessionId, user.id, role, (signal) =>
     runSession({ sessionId, messages: [...base, ...extra], role, auditTraceId,
-                 abortSignal: signal, isFirstTurn: false }))
+                 abortSignal: signal, isFirstTurn: false,
+                 skipStatusMessage: true,   // 见 5.2
+                 originalMessages: ticketId ? [...uiMessages, instructionUIMsg]   // L3: 末条为 user 指令
+                                           : uiMessages }))                        // L2: 末条为 approval-requested assistant → continuation(见 5.3)
 → 成功: 200 { ok:true, status, sessionId, runId }
   conflict: 409 { error:'session_busy', activeRunId, approvalResolved:true }
 ```
 
 审计日志事件(`approval_authorized` / `approval_l2_resolved`)保留。
 
-### 5.2 runSession 零改动
+### 5.2 runSession 签名扩展(向后兼容)
 
 runSession 已接受调用方组装好的 `messages: ModelMessage[]`,其内部
 L2 pending 记录、onFinish 持久化、message.part emit、title-gen 门控
-(isFirstTurn=false 跳过)对 resume run 自动生效。**不改其签名**。
+(isFirstTurn=false 跳过)对 resume run 自动生效。
+
+实现期因两个 E2E 缺陷(见 5.3/§9 快跟进)给 `RunSessionOpts` 增加了两个**可选**
+字段,未设置时行为不变(正常 chat 路径不受影响):
+
+- `skipStatusMessage?: boolean`:resume run 必须跳过 `<agent_status>` 注入 —
+  SDK `collectToolApprovals`(ai index.mjs:2810)要求 transient
+  `tool-approval-response` 消息是**最后一条**;在它之后追加 user 状态消息会
+  使配对静默失效(L2 approve 不重执行、deny 不送达 execution-denied)。
+  注意:L3 resume 同样置位,因此 L3 续写不再携带解耦前会注入的状态块 —
+  行为差异良性(状态块本就不是用户消息)。
+- `originalMessages?: UIMessage[]`:L2 resume 传入持久化历史启用 SDK
+  continuation 模式(见 5.3)。
 
 userId 线程化(顺带清偿旧 TODO):`startSessionRun(sessionId, user.id, ...)`
 直接传 handler 里的认证 user.id,取代旧 resumeSession 不带 userId 的
 unscoped 状态统计。
 
-### 5.3 持久化语义:新 messageId 干净追加
+### 5.3 持久化语义:continuation 原地更新(L2)/新 id 追加(L3)
 
-resume run **不传 originalMessages 续写**。onFinish 落地的 assistant 消息
-用新 id 追加;历史保留旧 approval-requested 消息(它是前端审批卡片的渲染
-依据)。理由:
+**L2 resume 传 `originalMessages`(持久化历史)→ `toUIMessageStream` continuation
+模式**:SDK 从最后一条 assistant 消息(即 approval-requested 那条)seed 组装状态,
+复用其消息 id;重执行的 `tool-result` / `tool-output-denied` chunk 找到该
+approval-requested part 并**原地更新**(state → output-available / output-denied);
+`onFinish` 报 `isContinuation=true`,runSession 用新增的 `sessionStore.replaceMessage`
+原地替换(保留 seq,不产生同 id 双条记录)。历史中那条 assistant 消息正是前端
+审批卡片的渲染依据,续写后它在同一消息内完成闭环。
 
-- 旧同步路径复用旧消息 id → appendMessages 产生同 id 双条记录,前端
-  pipeline(按 msgId replace)与快照(按条返回)都会重复/闪烁;
-- 模型上下文重建不依赖消息 id,依赖 Q4 验证的 part 级配对闭环;
-- 前端新 runId → run.started → startPipeline → 按 msgId append,天然支持。
+**L3 resume 不传 continuation(末条是刚持久化的 user 指令)**:onFinish 用新 id
+追加 assistant 回复,行为与解耦前一致。
+
+实现背景:最初按"一律不传 originalMessages、新 id 追加"实现时,L2 approve
+重执行后的 `tool-result` chunk 在 UI 组装层找不到其 tool-call part(它在前一条
+persisted assistant 消息里),`toUIMessageStream` 抛
+`UIMessageStreamError: No tool invocation found for tool call ID "..."`,run 死、
+空 assistant 消息落库(cf049af 修复)。
 
 ### 5.4 busy 竞态处理(accepted risk)
 
 预检 `isRunning()` 与 `startSessionRun` 之间存在 `await
 convertToModelMessages` 让出的窄窗口,另一 chat POST 可能在此抢到槽位。
 此时 DB 已翻转(resolveApproval 已执行)但 resume 未启动,返回
-`409 approvalResolved:true`。后果有界:审批状态已保存,下次用户消息自然
-恢复对话(L2 approve 的工具执行丢失,模型会重新发起 approval request)。
-服务端排队机制明确不做(deferred,见 9)。
+`409 approvalResolved:true`。服务端排队机制明确不做(deferred,见 9)。
+
+**恢复声明(实现期修正)**:对 L2,一旦 resolveApproval 已翻转但 resume run 从未
+完成(窄竞态冲突、run 失败/abort、或部署期 pm2 reload 将 session 标记为
+interrupted),persisted assistant 消息仍带 approval-requested part。此时:
+
+- 下一次 chat 能通过 pending 守卫(行已非 pending)放行;
+- 但 SDK 在 **prompt 组装阶段**(任何 provider 调用之前)因 assistant tool-call
+  无 tool-result 抛 `MissingToolResultsError`;
+- replay 守卫(9d4fc67)又挡住了唯一能送达未卡死 tool-approval-response 的机制。
+
+即 L2 在该状态下不可自动恢复。**已知限制,fast-follow 跟踪**(方案:状态感知的
+replay 守卫,或 continuation 失败时把 pending 行回退为 pending)。L3 的恢复声明
+成立(instruction 已持久化 + ticket 已授权,下一条用户消息自然驱动续跑)。
 
 ### 5.5 删除 legacy 单槽
 

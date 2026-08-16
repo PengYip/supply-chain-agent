@@ -87,11 +87,12 @@ chatRoute.post('/chat', async (c) => {
   const isFirstTurn = priorMessages.length === 0;
 
   // Guard: reject chat while an L2 approval is pending. Sending a turn with the
-  // approval-requested tool_call still hanging would reach the provider without
-  // a tool-result -> 400 "insufficient tool messages following tool_calls" and
-  // brick the session (every subsequent turn 400s). The user must resolve the
-  // approval card first. L3 tickets do NOT block: their blocked tool-result is
-  // already in history, protocol-valid.
+  // approval-requested tool_call still hanging makes the SDK reject during
+  // prompt assembly — MissingToolResultsError (assistant tool-call without a
+  // tool-result, before any provider call) — which bricks the session (every
+  // subsequent turn fails the same way). The user must resolve the approval
+  // card first. L3 tickets do NOT block: their blocked tool-result is already
+  // in history, protocol-valid.
   const pendingL2 = listPending(sessionId).filter((p) => p.level === 'L2' && p.status === 'pending');
   if (pendingL2.length > 0) {
     return c.json({ error: 'approval_pending' }, 409);
