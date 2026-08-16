@@ -82,3 +82,19 @@ describe('evalResults routes', () => {
     }
   });
 });
+
+describe('GET /runs activeRunId', () => {
+  it('exposes activeRunId (null when registry idle) alongside runs', async () => {
+    const emptyRoot = mkdtempSync(join(tmpdir(), 'evalactive-'));
+    try {
+      const res = await appWith(emptyRoot).request('/api/eval/runs');
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: boolean; data: { runs: unknown[]; activeRunId: string | null } };
+      expect(body.ok).toBe(true);
+      expect(body.data.runs).toEqual([]);
+      expect(body.data.activeRunId).toBeNull();
+    } finally {
+      rmSync(emptyRoot, { recursive: true, force: true });
+    }
+  });
+});

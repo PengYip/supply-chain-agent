@@ -6,12 +6,13 @@ import type { AuthEnv } from '../lib/auth-middleware.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { listRuns, parseEpisodesFile, toEpisodeView, defaultResultsRoot } from './evalResultsCore.js';
+import { evalRunRegistry } from './evalRunCore.js';
 
 export function createEvalResultsRoute(resultsRoot: string = defaultResultsRoot()) {
   const evalResultsRoute = new Hono<AuthEnv>();
 
   evalResultsRoute.get('/runs', (c) => {
-    return c.json({ ok: true, data: { runs: listRuns(resultsRoot) } });
+    return c.json({ ok: true, data: { runs: listRuns(resultsRoot), activeRunId: evalRunRegistry.activeRunId() } });
   });
 
   evalResultsRoute.get('/runs/:runId/episodes', (c) => {

@@ -16,6 +16,7 @@ import { sessionsRoute } from './routes/sessions.js';
 import { filesRoute } from './routes/files.js';
 import { reviewRoute } from './routes/review.js';
 import { createEvalResultsRoute } from './routes/evalResults.js';
+import { evalRunRoute } from './routes/evalRun.js';
 import { ensureBucket } from './lib/minio.js';
 import { migrateOnStartup, getDbContext } from './pipeline/db/dbBackend.js';
 import { runExtractionBackfill } from './pipeline/extractionBackfill.js';
@@ -111,6 +112,9 @@ app.route('/api/documents', reviewRoute);
 
 // Eval results viewer (read-only): scan/aggregate CLI-written results dirs.
 app.route('/api/eval', createEvalResultsRoute());
+
+// Eval run orchestration: trigger/kill/live/SSE on the in-memory registry.
+app.route('/api/eval', evalRunRoute);
 
 // Production: serve frontend static files from apps/web/dist on the same port.
 // Same-origin => no CORS needed; dev mode uses Vite on :5173 with /api proxy.
