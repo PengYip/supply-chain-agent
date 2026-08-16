@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import type { AuthEnv } from '../../src/lib/auth-middleware.js';
 
@@ -21,7 +22,8 @@ vi.mock('../../src/harness/runSession.js', () => ({
 }));
 
 const { chatRoute } = await import('../../src/routes/chat.js');
-const { createSession } = await import('../../src/harness/sessionStore.js');
+const { createSession, recordPendingApproval, resolveApproval, loadSession } = await import('../../src/harness/sessionStore.js');
+const { runSession } = await import('../../src/harness/runSession.js');
 
 // chatRoute reads the auth user via c.get('user') (attached by attachSession in
 // production). Wrap chatRoute in a fresh outer Hono app per test with an
@@ -56,6 +58,7 @@ const headers = (sessionId: string) => ({
 describe('POST /api/chat (background runtime)', () => {
   beforeEach(() => {
     runResolve.current = () => {};
+    (runSession as ReturnType<typeof vi.fn>).mockClear();
   });
 
   it('starts a background run and returns {sessionId, runId, status:busy}', async () => {
@@ -93,6 +96,65 @@ describe('POST /api/chat (background runtime)', () => {
     expect(res2.status).toBe(409);
     const json2 = await res2.json();
     expect(json2.error).toBe('session_busy');
+    runResolve.current();
+  });
+
+  it('returns 409 approval_pending when an L2 approval is pending (user msg not persisted, run not started)', async () => {
+    const s = createSession('trader', 'u-chat3');
+    recordPendingApproval({
+      sessionId: s.id, level: 'L2', toolName: 'tag_document',
+      input: {}, approvalId: 'ap-' + s.id,
+    });
+
+    const res = await appAs('u-chat3').request('http://test/api/chat', {
+      method: 'POST',
+      headers: headers(s.id),
+      body: body(),
+    });
+    expect(res.status).toBe(409);
+    const json = await res.json();
+    expect(json.error).toBe('approval_pending');
+    // The user message must NOT have been persisted on the 409.
+    expect(loadSession(s.id)!.messages.length).toBe(0);
+    // No background run was started.
+    expect(runSession).not.toHaveBeenCalled();
+  });
+
+  it('L3 pending ticket does NOT block chat (blocked tool-result already in history)', async () => {
+    const s = createSession('trader', 'u-chat4');
+    recordPendingApproval({
+      sessionId: s.id, level: 'L3', toolName: 'create_payment',
+      input: {}, ticketId: 'T-' + randomUUID().slice(0, 8),
+    });
+
+    const res = await appAs('u-chat4').request('http://test/api/chat', {
+      method: 'POST',
+      headers: headers(s.id),
+      body: body(),
+    });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.runId).toBeTruthy();
+    runResolve.current();
+  });
+
+  it('a resolved L2 approval does NOT block chat', async () => {
+    const s = createSession('trader', 'u-chat5');
+    const aid = 'resolved-' + s.id;
+    recordPendingApproval({
+      sessionId: s.id, level: 'L2', toolName: 'tag_document',
+      input: {}, approvalId: aid,
+    });
+    resolveApproval(aid, 'approved');
+
+    const res = await appAs('u-chat5').request('http://test/api/chat', {
+      method: 'POST',
+      headers: headers(s.id),
+      body: body(),
+    });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.runId).toBeTruthy();
     runResolve.current();
   });
 });

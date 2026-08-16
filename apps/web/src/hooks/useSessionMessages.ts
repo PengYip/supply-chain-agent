@@ -206,8 +206,16 @@ export function useSessionMessages(
         })
 
         if (res.status === 409) {
-          // Busy: roll back the optimistic message.
+          // Busy / L2-approval-pending: roll back the optimistic message.
           setMessages((prev) => prev.filter((m) => m.id !== userMsg.id))
+          const j = (await res.json().catch(() => ({}))) as { error?: string }
+          if (j.error === 'approval_pending') {
+            // An L2 approval card is pending: the server rejects chat until it
+            // is resolved (approving stale cards / chatting past a hanging
+            // tool_call would otherwise reach the provider without a
+            // tool-result and brick the session).
+            return { error: '存在未确认的 L2 写操作，请先处理上方的操作确认卡片' }
+          }
           return { error: 'session_busy' }
         }
         if (!res.ok) {

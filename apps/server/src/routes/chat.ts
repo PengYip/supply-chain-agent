@@ -9,6 +9,7 @@ import {
   appendMessages,
   sessionBelongsTo,
   getSessionStatus,
+  listPending,
 } from '../harness/sessionStore.js';
 import { startSessionRun } from '../harness/runManager.js';
 import { runSession, extractMessageText } from '../harness/runSession.js';
@@ -84,6 +85,17 @@ chatRoute.post('/chat', async (c) => {
   // first message carries that x-session-id, loadSession returns the empty
   // session (loaded != null) but with zero messages — title-gen must still fire.
   const isFirstTurn = priorMessages.length === 0;
+
+  // Guard: reject chat while an L2 approval is pending. Sending a turn with the
+  // approval-requested tool_call still hanging would reach the provider without
+  // a tool-result -> 400 "insufficient tool messages following tool_calls" and
+  // brick the session (every subsequent turn 400s). The user must resolve the
+  // approval card first. L3 tickets do NOT block: their blocked tool-result is
+  // already in history, protocol-valid.
+  const pendingL2 = listPending(sessionId).filter((p) => p.level === 'L2' && p.status === 'pending');
+  if (pendingL2.length > 0) {
+    return c.json({ error: 'approval_pending' }, 409);
+  }
 
   const auditTraceId = randomUUID();
   console.log(
