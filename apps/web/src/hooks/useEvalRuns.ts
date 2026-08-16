@@ -11,7 +11,8 @@ export function useEvalRuns() {
     setLoading(true)
     setError(null)
     try {
-      setRuns(await listEvalRuns())
+      const { runs } = await listEvalRuns()
+      setRuns(runs)
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载失败')
     } finally {

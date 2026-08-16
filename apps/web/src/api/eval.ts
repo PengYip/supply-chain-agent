@@ -70,9 +70,13 @@ async function getJson<T>(url: string): Promise<T> {
   return envelope.data
 }
 
-export async function listEvalRuns(): Promise<EvalRunSummary[]> {
-  const data = await getJson<{ runs: EvalRunSummary[] }>('/api/eval/runs')
-  return data.runs
+export interface EvalRunsResponse {
+  runs: EvalRunSummary[]
+  activeRunId: string | null
+}
+
+export async function listEvalRuns(): Promise<EvalRunsResponse> {
+  return getJson<EvalRunsResponse>('/api/eval/runs')
 }
 
 export async function getEvalRunEpisodes(runId: string): Promise<{ episodes: EvalEpisodeView[]; droppedLines: number }> {
