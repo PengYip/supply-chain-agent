@@ -294,4 +294,81 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
     expect(appended.role).toBe('assistant');
     expect(before.some((m) => m.id === appended.id)).toBe(false);
   });
+
+  it('approve resume via runSession continues the persisted assistant message (UI assembly)', async () => {
+    const { docId } = await seedDoc();
+    const s = createSession('trader', 'u-rt4');
+    appendMessages(s.id, [userUIMsg('给文档打标签')]);
+
+    // --- Turn 1 gate: same seeding as test 1 ---
+    const gateFake = scriptedModel([
+      { toolCall: { toolCallId: 'call_tag4', toolName: 'tag_document', input: { docId, tags: ['重要'] } } },
+      { text: '已打标' },
+    ]);
+    await runSession({
+      sessionId: s.id,
+      userId: 'u-rt4',
+      role: 'trader',
+      messages: await convertToModelMessages(loadSession(s.id)!.messages as UIMessage[]),
+      auditTraceId: 'rt-gate4',
+      abortSignal: new AbortController().signal,
+      model: gateFake as any,
+    });
+
+    const before = loadSession(s.id)!;
+    const origAssistant = before.messages.find((m) => m.role === 'assistant')!;
+    const gatePart = (origAssistant.parts as any[]).find(
+      (p) => typeof p?.type === 'string' && p.type.startsWith('tool-') && p.state === 'approval-requested',
+    )!;
+    const approvalId = gatePart.approval?.id as string;
+    expect(approvalId).toBeTruthy();
+    const origAssistantId = origAssistant.id;
+
+    // --- Approve resume THROUGH runSession (production shape) ---
+    const resumeMsg = {
+      role: 'tool',
+      content: [
+        {
+          type: 'tool-approval-response',
+          approvalId,
+          toolCallId: 'call_tag4',
+          approved: true,
+          reason: '用户已确认',
+        },
+      ],
+    } as unknown as ModelMessage;
+    const history = await convertToModelMessages(before.messages as UIMessage[]);
+    const resumeFake = scriptedModel([{ text: '已完成打标' }]);
+    await runSession({
+      sessionId: s.id,
+      userId: 'u-rt4',
+      role: 'trader',
+      messages: [...history, resumeMsg],
+      auditTraceId: 'rt-resume4',
+      abortSignal: new AbortController().signal,
+      model: resumeFake as any,
+      skipStatusMessage: true,
+      // Production shape: approvalCallback passes the persisted history as
+      // originalMessages so the SDK continues the approval-requested assistant
+      // message instead of assembling a fresh one (which throws
+      // UIMessageStreamError "No tool invocation found for tool call ID").
+      originalMessages: before.messages as UIMessage[],
+    });
+
+    // runSession resolved without throwing (regression: pre-fix it rejects
+    // with the UIMessageStreamError above).
+
+    // The ORIGINAL assistant message was updated IN PLACE: the tag part is now
+    // output-available (tool re-executed), not approval-requested.
+    const after = loadSession(s.id)!;
+    const continued = after.messages.find((m) => m.id === origAssistantId);
+    expect(continued).toBeTruthy();
+    const tagPart = (continued!.parts as any[]).find(
+      (p) => typeof p?.type === 'string' && p.type.startsWith('tool-') && p.toolCallId === 'call_tag4',
+    );
+    expect(tagPart).toBeTruthy();
+    expect(tagPart.state).toBe('output-available');
+    // No NEW assistant message appended beyond the continued one.
+    expect(after.messages.length).toBe(before.messages.length);
+  });
 });

@@ -162,6 +162,9 @@ const stmtMaxSeq = db.prepare(
 const stmtInsertMessage = db.prepare(
   'INSERT INTO session_messages (session_id, seq, model_message_json) VALUES (?, ?, ?)',
 );
+const stmtReplaceMessage = db.prepare(
+  'UPDATE session_messages SET model_message_json = ? WHERE session_id = ? AND seq = ?',
+);
 const stmtListMessages = db.prepare(
   'SELECT seq, model_message_json FROM session_messages WHERE session_id = ? ORDER BY seq ASC',
 );
@@ -376,6 +379,31 @@ export function appendMessages(sessionId: string, msgs: UIMessage[]): void {
     stmtTouchSession.run(now, sessionId);
   });
   tx(msgs);
+}
+
+/**
+ * Replace a persisted message IN PLACE (same row, same seq) — used by
+ * continuation-mode runs (L2 approval resume) to update the continued
+ * assistant message (the approval-requested part flips to output-available /
+ * output-denied) instead of appending a duplicate with the same id. Linear
+ * scan over the session's rows parsing the stored .id is fine (sessions are
+ * small; better-sqlite3 is sync). Returns true if a row with that message id
+ * was replaced, false if no such message exists.
+ */
+export function replaceMessage(sessionId: string, message: UIMessage): boolean {
+  const rows = stmtListMessages.all(sessionId) as MessageRow[];
+  const target = rows.find((r) => {
+    try {
+      return (JSON.parse(r.model_message_json) as { id?: string }).id === message.id;
+    } catch {
+      return false;
+    }
+  });
+  if (!target) return false;
+  const now = new Date().toISOString();
+  stmtReplaceMessage.run(JSON.stringify(message), sessionId, target.seq);
+  stmtTouchSession.run(now, sessionId);
+  return true;
 }
 
 export interface RecordPendingInput {

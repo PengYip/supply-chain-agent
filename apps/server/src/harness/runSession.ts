@@ -22,10 +22,10 @@
 // it drives generation exactly the same, and chunks are already in the wire
 // format a reconnecting SSE client (Task 6) can forward.
 
-import type { ModelMessage, LanguageModel } from 'ai';
+import type { ModelMessage, LanguageModel, UIMessage } from 'ai';
 import { randomUUID } from 'node:crypto';
 import { runStream, recordL2PendingFromResponse } from './agent.js';
-import { appendMessages, setSessionTitle } from './sessionStore.js';
+import { appendMessages, replaceMessage, setSessionTitle } from './sessionStore.js';
 import { emit } from './sessionEvents.js';
 import { generateSessionTitle, getTitleModel } from './titleGen.js';
 import type { Role } from './roleToolRegistry.js';
@@ -49,6 +49,17 @@ export interface RunSessionOpts {
    * pairing), instead of being displaced by an appended user status message.
    */
   skipStatusMessage?: boolean;
+  /**
+   * Continuation mode for approval-resume runs: the persisted UI history whose
+   * LAST message is the assistant message to continue (the L2
+   * approval-requested message). The SDK seeds UI assembly from it, so
+   * re-executed tool-result / tool-output-denied chunks find the
+   * approval-requested part and update it in place, instead of throwing
+   * "No tool invocation found for tool call ID" against a freshly assembled
+   * message. onFinish then reports isContinuation=true and runSession replaces
+   * that message in place rather than appending.
+   */
+  originalMessages?: UIMessage[];
 }
 
 /**
@@ -72,7 +83,7 @@ export function extractMessageText(msg: any): string {
 }
 
 export async function runSession(opts: RunSessionOpts): Promise<void> {
-  const { sessionId, role, messages, auditTraceId, abortSignal, userId, model, isFirstTurn, firstUserText, skipStatusMessage } = opts;
+  const { sessionId, role, messages, auditTraceId, abortSignal, userId, model, isFirstTurn, firstUserText, skipStatusMessage, originalMessages } = opts;
 
   const result = await runStream({
     messages,
@@ -117,9 +128,19 @@ export async function runSession(opts: RunSessionOpts): Promise<void> {
   // stream closes), so the assistant UIMessage is persisted by the time the
   // for-await below exits.
   const uiStream = result.toUIMessageStream({
+    originalMessages,
     generateMessageId: randomUUID,
-    onFinish: ({ responseMessage }) => {
-      appendMessages(sessionId, [responseMessage]);
+    onFinish: ({ responseMessage, isContinuation }) => {
+      if (isContinuation) {
+        // Continuation run (L2 resume seeded from the approval-requested
+        // assistant message): update that message IN PLACE — its tool part
+        // flipped approval-requested -> output-available / output-denied and
+        // the follow-up text was appended — instead of appending a duplicate
+        // with the same id.
+        replaceMessage(sessionId, responseMessage);
+      } else {
+        appendMessages(sessionId, [responseMessage]);
+      }
     },
   });
 

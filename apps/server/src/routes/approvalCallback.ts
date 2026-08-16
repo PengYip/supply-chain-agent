@@ -110,7 +110,13 @@ approvalCallback.post('/approval/callback', async (c) => {
   // appended AFTER the persisted history:
   //  - L3: the just-persisted user instruction (also appended to the store).
   //  - L2: the transient tool-approval-response (never persisted).
+  // `originalMessages` is the persisted UI history passed to the SDK's
+  // continuation mode: for L2 its LAST message is the approval-requested
+  // assistant message, so toUIMessageStream seeds assembly from it and the
+  // re-executed tool result updates that message in place; for L3 its last
+  // message is the just-appended user instruction (new-message behavior).
   const extraModelMessages: ModelMessage[] = [];
+  let originalMessages: UIMessage[] = uiMessages;
 
   if (ticketId) {
     let instruction: string;
@@ -127,10 +133,14 @@ approvalCallback.post('/approval/callback', async (c) => {
         `外部审批已通过（票据 ${ticketId}，理由：${reason ?? '财务已审批'}）。` +
         `请立即调用 create_payment 并传入 authorizedTicketId=${ticketId} 续跑付款以真正执行。`;
     }
-    appendMessages(sessionId, [
-      { id: randomUUID(), role: 'user', parts: [{ type: 'text', text: instruction }] } as UIMessage,
-    ]);
+    const instructionUIMsg = {
+      id: randomUUID(),
+      role: 'user',
+      parts: [{ type: 'text', text: instruction }],
+    } as UIMessage;
+    appendMessages(sessionId, [instructionUIMsg]);
     extraModelMessages.push({ role: 'user', content: instruction });
+    originalMessages = [...uiMessages, instructionUIMsg];
   } else {
     // L2 resume message: role:'tool' has NO valid UIMessage form, so this is
     // TRANSIENT — passed into this resume turn only, never persisted. The TS
@@ -190,6 +200,10 @@ approvalCallback.post('/approval/callback', async (c) => {
       // for SDK collectToolApprovals pairing, and the approval was just
       // resolved — a stale status block could mislead the model.
       skipStatusMessage: true,
+      // Continuation mode: the persisted UI history (L2: ends with the
+      // approval-requested assistant message -> SDK continues it in place;
+      // L3: ends with the appended user instruction -> new message).
+      originalMessages,
     }),
   );
 
