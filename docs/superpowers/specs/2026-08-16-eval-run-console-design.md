@@ -59,7 +59,7 @@ run 完成 → 子进程 writeResults 落盘 → Phase 1 查看器照常读
 
 ### 4.2 数据集管理
 
-- `GET /api/eval/datasets` → `{datasets:[{name, builtin, scenarioCount}]}` (core + user/*)。
+- `GET /api/eval/datasets` → `{datasets:[{name, builtin, scenarioCount}]}` (core + user/*)。scenarioCount 当前恒 null (列表接口不解析 YAML; 编辑器保存成功后单独显示场景数)。
 - `GET /api/eval/datasets/:name` → `{name, yaml, builtin}`。
 - `PUT /api/eval/datasets/:name` body `{yaml}` → builtin → 400; 子进程校验失败 → **422** `{error}` (含 loadDataset 的 `scenario #N invalid` 定位); 通过则原子写 (tmp+rename)。
 - `POST /api/eval/datasets/:name/copy` → 源存在 + 目标名规则 `^[a-z0-9][a-z0-9-]{0,63}$` + 不覆盖 → `{name}`。
@@ -90,7 +90,7 @@ run 完成 → 子进程 writeResults 落盘 → Phase 1 查看器照常读
 - 头部: 总进度 (N/M episodes + 当前场景名) + 状态徽章 (running/done/error) + 操作 (中止 / 完成后「查看报告」→ Phase 1 报告页)。
 - verdict 网格: 每场景一行 × 每轮一格, episode_done 点亮 (复用 VerdictBadge 视觉)。
 - 轨迹直播区: 当前 episode 逐 turn 气泡/工具卡/审批卡 — **复用 EvalEpisodeDetail 的渲染件** (MarkdownContent 副本与卡片组件提取为共享或同构复制, 以计划裁决为准); scenario_started 切换清屏。
-- SSE 断线: 自动重连 (EventSource 原生) + GET live 重放兜底; 404 → 「运行中断」态。
+- SSE 断线: EventSource onerror 后关流并进入可重连态 (UI 手动「重连」按钮触发重放快照), GET live 为兜底; 404 → 「运行中断」态。
 
 ### 5.3 数据集编辑器页 EvalDatasetEditor
 

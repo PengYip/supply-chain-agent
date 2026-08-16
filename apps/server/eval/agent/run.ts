@@ -70,6 +70,7 @@ async function main() {
         agentModel,
         simModel,
         deps: { ctx, extraction: { model: agentModel } },
+        onEvent: emit,
       });
       const verifier = runVerifiers(scenario.verifiers, artifact);
       const judge = await judgeEpisode(judgeModel, scenario.rubric, artifact);
