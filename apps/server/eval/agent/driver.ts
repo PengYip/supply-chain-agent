@@ -18,6 +18,7 @@ import type { HarnessDeps } from '../../src/harness/roleToolRegistry.js';
 import { simulateUserTurn, SimError } from './userSim.js';
 import { decideApproval } from './approver.js';
 import { resetSeedForEval, snapshotEnv } from './seedEnv.js';
+import type { EvalRunEvent } from './events.js';
 import type {
   EpisodeArtifact, Scenario, TranscriptEntry, ToolCallObservation, UsageSummary,
 } from './types.js';
@@ -30,6 +31,8 @@ export interface DriverOpts {
   simModel?: LanguageModel;
   /** Test seam / extension point: replaces simulateUserTurn. */
   simFn?: (conversation: TranscriptEntry[]) => Promise<{ message: string; done: boolean }>;
+  /** Optional live-event sink (turn/tool_call/approval). Eval run console only. */
+  onEvent?: (e: EvalRunEvent) => void;
   /** Extra harness deps; ctx defaults to a fresh in-memory SQLite per episode. */
   deps?: Partial<HarnessDeps>;
 }
@@ -138,6 +141,8 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
   // into the next loop iteration's runAgentTurn only.
   const l2ResumeQueue: ModelMessage[] = [];
 
+  const emit = (e: EvalRunEvent) => { opts.onEvent?.(e); };
+
   try {
     let conversationOver = false;
     while (!conversationOver && turnsUsed < scenario.maxTurns) {
@@ -152,6 +157,7 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
         break;
       }
       transcript.push({ role: 'user', text: userTurn.message });
+      emit({ type: 'turn', scenarioId: scenario.id, runIndex: opts.runIndex, role: 'user', text: userTurn.message });
       if (userTurn.done) {
         conversationOver = true;
       }
@@ -170,11 +176,13 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
       l2ResumeQueue.length = 0;
       turnsUsed++;
       toolCalls.push(...turn.toolResults);
+      for (const t of turn.toolResults) emit({ type: 'tool_call', scenarioId: scenario.id, runIndex: opts.runIndex, toolName: t.toolName });
       totalUsage.inputTokens += turn.usage.inputTokens;
       totalUsage.outputTokens += turn.usage.outputTokens;
       totalUsage.totalTokens += turn.usage.totalTokens;
       finalAssistantText = turn.finalText;
       transcript.push({ role: 'assistant', text: turn.finalText });
+      emit({ type: 'turn', scenarioId: scenario.id, runIndex: opts.runIndex, role: 'assistant', text: turn.finalText });
 
       // 4. Persist the assistant message (UIMessage form built from response).
       const assistantUIMessage: UIMessage = {
@@ -198,6 +206,7 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
           reason: decision.reason, matchedRule: decision.matchedRule,
         };
         approvals.push(approvalObs);
+        emit({ type: 'approval', scenarioId: scenario.id, runIndex: opts.runIndex, toolName: p.tool_name, decision: decision.approved ? 'approved' : 'denied' });
         resolveApproval(p.id, decision.approved ? 'approved' : 'denied');
 
         if (!decision.approved) {
@@ -207,6 +216,7 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
             parts: [{ type: 'text', text: `外部审批未通过（${p.level} ${p.tool_name}，理由：${decision.reason}）。请如实向用户转达该操作未执行及原因，不要重试。` }],
           } as UIMessage]);
           transcript.push({ role: 'system-note', text: `approval denied: ${p.tool_name} (${decision.reason})` });
+          emit({ type: 'turn', scenarioId: scenario.id, runIndex: opts.runIndex, role: 'system-note', text: `approval denied: ${p.tool_name} (${decision.reason})` });
           const reload = loadSession(sessionId);
           const denyTurn = await runAgentTurn(
             opts, sessionId,
@@ -214,11 +224,13 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
           );
           turnsUsed++;
           toolCalls.push(...denyTurn.toolResults);
+          for (const t of denyTurn.toolResults) emit({ type: 'tool_call', scenarioId: scenario.id, runIndex: opts.runIndex, toolName: t.toolName });
           totalUsage.inputTokens += denyTurn.usage.inputTokens;
           totalUsage.outputTokens += denyTurn.usage.outputTokens;
           totalUsage.totalTokens += denyTurn.usage.totalTokens;
           finalAssistantText = denyTurn.finalText;
           transcript.push({ role: 'assistant', text: denyTurn.finalText });
+          emit({ type: 'turn', scenarioId: scenario.id, runIndex: opts.runIndex, role: 'assistant', text: denyTurn.finalText });
           appendMessages(sessionId, [{
             id: randomUUID(), role: 'assistant', parts: [{ type: 'text', text: denyTurn.finalText }],
           } as UIMessage]);
@@ -233,6 +245,7 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
             parts: [{ type: 'text', text: l3Instruction(p.tool_name, p.id, decision.reason) }],
           } as UIMessage]);
           transcript.push({ role: 'system-note', text: `approval approved: ${p.tool_name} (${p.id})` });
+          emit({ type: 'turn', scenarioId: scenario.id, runIndex: opts.runIndex, role: 'system-note', text: `approval approved: ${p.tool_name} (${p.id})` });
           const reload = loadSession(sessionId);
           const resumeTurn = await runAgentTurn(
             opts, sessionId,
@@ -240,11 +253,13 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
           );
           turnsUsed++;
           toolCalls.push(...resumeTurn.toolResults);
+          for (const t of resumeTurn.toolResults) emit({ type: 'tool_call', scenarioId: scenario.id, runIndex: opts.runIndex, toolName: t.toolName });
           totalUsage.inputTokens += resumeTurn.usage.inputTokens;
           totalUsage.outputTokens += resumeTurn.usage.outputTokens;
           totalUsage.totalTokens += resumeTurn.usage.totalTokens;
           finalAssistantText = resumeTurn.finalText;
           transcript.push({ role: 'assistant', text: resumeTurn.finalText });
+          emit({ type: 'turn', scenarioId: scenario.id, runIndex: opts.runIndex, role: 'assistant', text: resumeTurn.finalText });
           appendMessages(sessionId, [{
             id: randomUUID(), role: 'assistant', parts: [{ type: 'text', text: resumeTurn.finalText }],
           } as UIMessage]);
