@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import {
   EvalRunRegistry,
   parseServerEventLine,
+  datasetArgFor,
   type RunnerFactory,
   type RunnerHandle,
 } from '../../src/routes/evalRunCore.js';
@@ -88,18 +89,55 @@ describe('EvalRunRegistry', () => {
     expect(reg.kill('nope')).toBe(false);
   });
 
-  it('runId shape: stamp-dataset, EVAL_RUN_ID passed through factory args/env', () => {
+  it('runId shape: stamp-basename, normalized dataset arg, EVAL_RUN_ID passed through', () => {
     let seen: { args: string[]; env: NodeJS.ProcessEnv } | null = null;
     const factory: RunnerFactory = (args, env) => {
       seen = { args, env };
       return fakeFactory(() => {}).factory('', undefined as never) as never;
     };
     const reg = new EvalRunRegistry(factory);
-    const res = reg.start({ dataset: 'user-mine', runs: 3, filter: 't1' });
+    const res = reg.start({ dataset: 'user/mine', runs: 3, filter: 't1' });
     expect(res.ok).toBe(true);
     const runId = (res as { runId: string }).runId;
-    expect(runId).toMatch(/^20\d{2}-\d{2}-\d{2}T[\d-]+Z-user-mine$/);
-    expect(seen!.args).toEqual(['--dataset=user-mine', '--runs=3', '--filter=t1']);
+    expect(runId).toMatch(/^20\d{2}-\d{2}-\d{2}T[\d-]+Z-mine$/);
+    expect(seen!.args).toEqual(['--dataset=datasets/user/mine.yaml', '--runs=3', '--filter=t1']);
     expect(seen!.env.EVAL_RUN_ID).toBe(runId);
+  });
+
+  it('kill wires the runner handle (process actually signaled), unknown -> false', () => {
+    const { factory, handles } = fakeFactory(() => {});
+    const reg = new EvalRunRegistry(factory);
+    const res = reg.start({ dataset: 'core', runs: 1, filter: undefined });
+    const runId = (res as { runId: string }).runId;
+    expect(reg.kill(runId)).toBe(true);
+    expect(handles[0].killed).toBe(true); // FakeHandle.kill was invoked by the registry
+    expect((reg as unknown as { handles: Map<string, unknown> }).handles.size).toBe(0);
+    expect(reg.kill('nope')).toBe(false);
+  });
+
+  it('terminal state clears the handle (no leak)', async () => {
+    const { factory, handles } = fakeFactory((h) => {
+      h.send('@@EVT@@{"type":"run_started","runId":"r","total":1}');
+      h.send('@@EVT@@{"type":"run_done","outDir":"/tmp/r"}');
+      h.end(0);
+    });
+    const reg = new EvalRunRegistry(factory);
+    const res = reg.start({ dataset: 'core', runs: 1, filter: undefined });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reg.get((res as { runId: string }).runId)?.state).toBe('done');
+    expect((reg as unknown as { handles: Map<string, unknown> }).handles.size).toBe(0);
+    expect(handles[0].killed).toBe(false); // natural cleanup must not call kill
+  });
+
+  it('datasetArgFor: core/user normalization, rejects traversal and absolute paths', () => {
+    expect(datasetArgFor('core')).toBe('datasets/core.yaml');
+    expect(datasetArgFor('user/mine')).toBe('datasets/user/mine.yaml');
+    expect(() => datasetArgFor('../x')).toThrow(/无效数据集/);
+    expect(() => datasetArgFor('C:\\evil\\core')).toThrow(/无效数据集/);
+    expect(() => datasetArgFor('/abs/core')).toThrow(/无效数据集/);
+    expect(() => datasetArgFor('user/../core')).toThrow(/无效数据集/);
+    expect(() => datasetArgFor('user-mine')).toThrow(/无效数据集/);
   });
 });

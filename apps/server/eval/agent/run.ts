@@ -85,9 +85,13 @@ async function main() {
     }
   }
 
-  const stamp = runId ?? new Date().toISOString().replace(/[:.]/g, '-');
   const dsName = datasetArg.split('/').pop()!.replace(/\.yaml$/, '');
-  const outDir = resolve(here, 'results', `${stamp}-${dsName}`);
+  // EVAL_RUN_ID mode: the server-assigned runId already embeds the stamp +
+  // dataset tag, so outDir uses it verbatim (no re-appended dsName). Plain CLI
+  // (no EVAL_RUN_ID) keeps the legacy stamp-dsName directory.
+  const outDir = runId
+    ? resolve(here, 'results', runId)
+    : resolve(here, 'results', `${new Date().toISOString().replace(/[:.]/g, '-')}-${dsName}`);
   const { episodesPath, reportPath } = writeResults(outDir, artifacts, scores);
   emit({ type: 'run_done', outDir });
   console.error(`\n[eval] episodes: ${episodesPath}`);

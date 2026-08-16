@@ -5,10 +5,23 @@
 
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { createRequire } from 'node:module';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const EVT_PREFIX = '@@EVT@@';
+
+// Spawn tsx via node directly (no npx wrapper) so the registry's child.kill()
+// signals the actual runner process, not an orphaned npx wrapper. The package
+// bin entry is the exported path (probe-verified: 'tsx/cli' -> dist/cli.mjs;
+// 'tsx/dist/cli.mjs' is NOT exported).
+const require_ = createRequire(import.meta.url);
+let tsxCliPath: string | null = null;
+try {
+  tsxCliPath = require_.resolve('tsx/cli');
+} catch {
+  tsxCliPath = null;
+}
 
 /** Mirror of eval/agent/events.ts EvalRunEvent (protocol SSOT lives there). */
 export type ServerRunEvent =
@@ -46,9 +59,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 /** Default: spawn the real runner via tsx (cwd = apps/server, devDeps present). */
 export const defaultRunnerFactory: RunnerFactory = (args, env) => {
+  // node <tsx-cli> keeps child.kill() on the real runner process. Fall back to
+  // the npx wrapper only when the tsx bin path could not be resolved.
+  const command = tsxCliPath ? process.execPath : process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const spawnArgs = tsxCliPath
+    ? [tsxCliPath, 'eval/agent/run.ts', ...args]
+    : ['tsx', 'eval/agent/run.ts', ...args];
   const child = spawn(
-    process.platform === 'win32' ? 'npx.cmd' : 'npx',
-    ['tsx', 'eval/agent/run.ts', ...args],
+    command,
+    spawnArgs,
     { cwd: resolve(here, '../..'), env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'inherit'] },
   );
   const bus = new EventEmitter();
@@ -78,26 +97,45 @@ export interface LiveRunState {
   error?: string;
 }
 
+/**
+ * Dataset identifier contract: 'core' or 'user/<name>' (single segment).
+ * Returns the runner CLI arg value. Rejects traversal ('..'), absolute paths,
+ * and any other form by throwing (T4 maps this to 422).
+ */
+export function datasetArgFor(dataset: string): string {
+  if (dataset.includes('..')) throw new Error(`无效数据集: ${dataset}`);
+  if (dataset === 'core') return 'datasets/core.yaml';
+  const m = /^user\/([^/]+)$/.exec(dataset);
+  if (m && m[1]) return `datasets/user/${m[1]}.yaml`;
+  throw new Error(`无效数据集: ${dataset}`);
+}
+
 export class EvalRunRegistry {
   private readonly factory: RunnerFactory;
   private readonly runs = new Map<string, LiveRunState>();
   private readonly subs = new Map<string, Set<(e: ServerRunEvent) => void>>();
+  private readonly handles = new Map<string, RunnerHandle>();
 
   constructor(factory: RunnerFactory = defaultRunnerFactory) {
     this.factory = factory;
   }
 
   start(opts: { dataset: string; runs: number; filter?: string }): { ok: true; runId: string } | { ok: false; error: 'busy' } {
+    const datasetArg = datasetArgFor(opts.dataset); // throws 无效数据集 for bad identifiers
     for (const st of this.runs.values()) {
       if (st.state === 'running') return { ok: false, error: 'busy' };
     }
-    const runId = `${new Date().toISOString().replace(/[:.]/g, '-')}-${opts.dataset}`;
+    const tag = opts.dataset.split('/').pop()!;
+    const runId = `${new Date().toISOString().replace(/[:.]/g, '-')}-${tag}`;
     const state: LiveRunState = { runId, state: 'running', events: [], startedAt: new Date().toISOString() };
     this.runs.set(runId, state);
 
-    const args = [`--dataset=${opts.dataset}`, `--runs=${opts.runs}`];
+    const args = [`--dataset=${datasetArg}`, `--runs=${opts.runs}`];
     if (opts.filter) args.push(`--filter=${opts.filter}`);
     const handle = this.factory(args, { EVAL_RUN_ID: runId });
+    this.handles.set(runId, handle);
+
+    const dropHandle = () => { this.handles.delete(runId); };
 
     handle.onStdoutLine((line) => {
       // Stop-parsing semantic: once a terminal error state is reached (e.g.
@@ -107,16 +145,17 @@ export class EvalRunRegistry {
       const evt = parseServerEventLine(line);
       if (!evt) return;
       state.events.push(evt);
-      if (evt.type === 'run_done') state.state = 'done';
-      if (evt.type === 'run_error') { state.state = 'error'; state.error = evt.message; }
+      if (evt.type === 'run_done') { state.state = 'done'; dropHandle(); }
+      if (evt.type === 'run_error') { state.state = 'error'; state.error = evt.message; dropHandle(); }
       for (const cb of this.subs.get(runId) ?? []) cb(evt);
     });
     handle.onExit((code) => {
-      if (state.state !== 'running') return;
+      if (state.state !== 'running') { dropHandle(); return; }
       state.state = 'error';
       const synth: ServerRunEvent = { type: 'run_error', message: `runner 异常退出 (code=${code ?? 'null'})` };
       state.events.push(synth);
       state.error = synth.message;
+      dropHandle();
       for (const cb of this.subs.get(runId) ?? []) cb(synth);
     });
     return { ok: true, runId };
@@ -141,6 +180,9 @@ export class EvalRunRegistry {
     st.error = synth.message;
     st.events.push(synth);
     for (const cb of this.subs.get(runId) ?? []) cb(synth);
+    const handle = this.handles.get(runId);
+    try { handle?.kill(); } catch { /* best-effort process termination */ }
+    this.handles.delete(runId);
     return true;
   }
 
