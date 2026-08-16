@@ -1,54 +1,9 @@
 // apps/web/src/components/eval/EvalEpisodeDetail.tsx
 import clsx from 'clsx'
 import { ArrowLeft, Wrench, ShieldCheck } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { useEvalRunEpisodes } from '../../hooks/useEvalRunEpisodes'
 import { VerdictBadge } from './verdictBadge'
-
-// Markdown 渲染与 RealMessageItem.MarkdownContent 同构 (该组件未导出, 类名对齐)。
-const MarkdownContent: React.FC<{ children: string }> = ({ children }) => {
-  return (
-    <div className="text-sm leading-relaxed text-textDark">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-          strong: ({ children }) => <strong className="font-bold text-textDark">{children}</strong>,
-          ul: ({ children }) => <ul className="list-disc pl-5 mb-2">{children}</ul>,
-          ol: ({ children }) => <ol className="list-decimal pl-5 mb-2">{children}</ol>,
-          li: ({ children }) => <li className="mb-0.5">{children}</li>,
-          code: ({ children, className }) => {
-            const isBlock = className?.includes('language-')
-            if (isBlock) {
-              return (
-                <pre className="bg-bgGray rounded p-2 overflow-auto mb-2">
-                  <code className="font-mono text-xs text-textDark bg-transparent">{children}</code>
-                </pre>
-              )
-            }
-            return <code className="font-mono text-xs bg-bgGray px-1 py-0.5 rounded text-textDark">{children}</code>
-          },
-          table: ({ children }) => <table className="w-full text-xs border-collapse border border-borderGray mb-2">{children}</table>,
-          thead: ({ children }) => <thead className="bg-bgGray">{children}</thead>,
-          th: ({ children }) => <th className="border border-borderGray px-2 py-1 text-left font-medium">{children}</th>,
-          td: ({ children }) => <td className="border border-borderGray px-2 py-1">{children}</td>,
-        }}
-      >
-        {children}
-      </ReactMarkdown>
-    </div>
-  )
-}
-
-function summarize(v: unknown): string {
-  try {
-    const s = JSON.stringify(v)
-    return s && s.length > 200 ? `${s.slice(0, 200)}...` : (s ?? 'null')
-  } catch {
-    return String(v)
-  }
-}
+import { TranscriptBubble, ToolCallCard, ApprovalCard } from './shared'
 
 function formatMs(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`
@@ -84,24 +39,9 @@ export function EvalEpisodeDetail({ runId, scenarioId, runIndex, onBack }: {
           {/* 左: 聊天列 + 工具/审批卡片区 */}
           <div className="flex-1 min-w-0 space-y-4">
             <div className="rounded-lg border border-borderGray bg-white p-4 space-y-3">
-              {ep.transcript.map((seg, i) => {
-                if (seg.role === 'system') {
-                  return (
-                    <div key={i} className="text-center text-xs text-textGray bg-bgGray rounded px-3 py-1.5">{seg.content}</div>
-                  )
-                }
-                const isUser = seg.role === 'user'
-                return (
-                  <div key={i} className={clsx('flex', isUser ? 'justify-end' : 'justify-start')}>
-                    <div className={clsx(
-                      'max-w-[85%] rounded-lg px-3.5 py-2',
-                      isUser ? 'bg-deepSea text-white' : 'bg-bgGray text-textDark',
-                    )}>
-                      {isUser ? <div className="text-sm whitespace-pre-wrap">{seg.content}</div> : <MarkdownContent>{seg.content}</MarkdownContent>}
-                    </div>
-                  </div>
-                )
-              })}
+              {ep.transcript.map((seg, i) => (
+                <TranscriptBubble key={i} role={seg.role} text={seg.content} />
+              ))}
             </div>
 
             {ep.toolCalls.length > 0 && (
@@ -111,16 +51,7 @@ export function EvalEpisodeDetail({ runId, scenarioId, runIndex, onBack }: {
                 </div>
                 <div className="divide-y divide-borderGray">
                   {ep.toolCalls.map((t, i) => (
-                    <details key={i} className="px-4 py-2">
-                      <summary className="cursor-pointer text-sm text-textDark flex items-center gap-2">
-                        <span className="font-mono text-xs">{t.toolName}</span>
-                        {t.durationMs != null && <span className="text-xs text-textGray tabular-nums">{formatMs(t.durationMs)}</span>}
-                      </summary>
-                      <div className="mt-2 space-y-1 text-xs">
-                        <div><span className="text-textGray">输入: </span><code className="font-mono bg-bgGray rounded px-1">{summarize(t.args)}</code></div>
-                        <div><span className="text-textGray">结果: </span><code className="font-mono bg-bgGray rounded px-1">{summarize(t.result)}</code></div>
-                      </div>
-                    </details>
+                    <ToolCallCard key={i} toolName={t.toolName} durationMs={t.durationMs} input={t.args} result={t.result} />
                   ))}
                 </div>
               </div>
@@ -133,16 +64,7 @@ export function EvalEpisodeDetail({ runId, scenarioId, runIndex, onBack }: {
                 </div>
                 <div className="divide-y divide-borderGray">
                   {ep.approvals.map((ap, i) => (
-                    <div key={i} className="px-4 py-2.5 text-sm">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="rounded bg-amber/10 text-amber border border-amber/25 px-1.5 py-0.5 text-xs">{ap.level}</span>
-                        <span className="font-mono text-xs text-textDark">{ap.toolName}</span>
-                        <span className={clsx('text-xs', ap.decision === 'approved' ? 'text-success' : 'text-danger')}>
-                          {ap.decision === 'approved' ? '已批准' : '已拒绝'}
-                        </span>
-                      </div>
-                      <div className="mt-1 text-xs text-textGray">{ap.reason}{ap.matchedRule ? ` (规则: ${ap.matchedRule})` : ''}</div>
-                    </div>
+                    <ApprovalCard key={i} toolName={ap.toolName} level={ap.level} decision={ap.decision} matchedRule={ap.matchedRule} reason={ap.reason} />
                   ))}
                 </div>
               </div>

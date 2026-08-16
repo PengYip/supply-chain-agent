@@ -3,18 +3,19 @@ import { useState } from 'react'
 import { EvalRunsList } from './EvalRunsList'
 import { EvalRunReport } from './EvalRunReport'
 import { EvalEpisodeDetail } from './EvalEpisodeDetail'
+import { EvalRunLive } from './EvalRunLive'
 import { useEvalRuns } from '../../hooks/useEvalRuns'
 
 type Page =
   | { page: 'runs' }
   | { page: 'report'; runId: string }
   | { page: 'episode'; runId: string; scenarioId: string; runIndex: number }
+  | { page: 'live'; runId: string }
 
 export function EvalWorkbenchView() {
   const [nav, setNav] = useState<Page>({ page: 'runs' })
-  const [activeRunId, setActiveRunId] = useState<string | null>(null)
-  const { runs, loading, error, refresh } = useEvalRuns()
-  const summary = nav.page !== 'runs' ? runs.find((r) => r.runId === nav.runId) : undefined
+  const { runs, activeRunId, loading, error, refresh } = useEvalRuns()
+  const summary = nav.page === 'report' || nav.page === 'episode' ? runs.find((r) => r.runId === nav.runId) : undefined
 
   return (
     <div className="h-full overflow-auto bg-bgGray">
@@ -25,7 +26,8 @@ export function EvalWorkbenchView() {
           error={error}
           onRefresh={refresh}
           activeRunId={activeRunId}
-          onOpenRun={(runId) => { setActiveRunId(runId); setNav({ page: 'report', runId }) }}
+          onOpenRun={(runId) => setNav({ page: 'report', runId })}
+          onOpenLive={(runId) => setNav({ page: 'live', runId })}
         />
       )}
       {nav.page === 'report' && summary && (
@@ -42,6 +44,13 @@ export function EvalWorkbenchView() {
           scenarioId={nav.scenarioId}
           runIndex={nav.runIndex}
           onBack={() => setNav({ page: 'report', runId: nav.runId })}
+        />
+      )}
+      {nav.page === 'live' && (
+        <EvalRunLive
+          runId={nav.runId}
+          onOpenReport={(runId) => setNav({ page: 'report', runId })}
+          onBack={() => setNav({ page: 'runs' })}
         />
       )}
       {(nav.page === 'episode' || nav.page === 'report') && !summary && (

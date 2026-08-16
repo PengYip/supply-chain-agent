@@ -4,6 +4,7 @@ import { listEvalRuns, type EvalRunSummary } from '../api/eval'
 
 export function useEvalRuns() {
   const [runs, setRuns] = useState<EvalRunSummary[]>([])
+  const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -11,8 +12,9 @@ export function useEvalRuns() {
     setLoading(true)
     setError(null)
     try {
-      const { runs } = await listEvalRuns()
-      setRuns(runs)
+      const data = await listEvalRuns()
+      setRuns(data.runs)
+      setActiveRunId(data.activeRunId)
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载失败')
     } finally {
@@ -21,5 +23,5 @@ export function useEvalRuns() {
   }, [])
 
   useEffect(() => { void refresh() }, [refresh])
-  return { runs, loading, error, refresh }
+  return { runs, activeRunId, loading, error, refresh }
 }
