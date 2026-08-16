@@ -1,5 +1,5 @@
 // apps/web/src/components/eval/EvalRunsList.tsx
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import clsx from 'clsx'
 import { ChevronRight, RefreshCw, FlaskConical, Play, ExternalLink } from 'lucide-react'
 import type { EvalRunSummary } from '../../api/eval'
@@ -26,7 +26,7 @@ function formatTime(iso: string | null, runId: string): string {
   }
 }
 
-export function EvalRunsList({ runs, loading, error, onRefresh, onOpenRun, onOpenLive, activeRunId }: {
+export function EvalRunsList({ runs, loading, error, onRefresh, onOpenRun, onOpenLive, activeRunId, pendingDataset }: {
   runs: EvalRunSummary[]
   loading: boolean
   error: string | null
@@ -34,14 +34,20 @@ export function EvalRunsList({ runs, loading, error, onRefresh, onOpenRun, onOpe
   onOpenRun: (runId: string) => void
   onOpenLive: (runId: string) => void
   activeRunId: string | null
+  pendingDataset?: string | null
 }) {
   const { datasets } = useEvalDatasets()
-  const [dataset, setDataset] = useState('core')
+  const [dataset, setDataset] = useState(pendingDataset ?? 'core')
   const [runsInput, setRunsInput] = useState(1)
   const [filter, setFilter] = useState('')
   const [starting, setStarting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [conflictRunId, setConflictRunId] = useState<string | null>(null)
+
+  // 「从此数据集运行」预选: 编辑器触发后切到 runs 页, 下拉选中目标数据集。
+  useEffect(() => {
+    if (pendingDataset) setDataset(pendingDataset)
+  }, [pendingDataset])
 
   const handleStart = async () => {
     const n = Math.min(10, Math.max(1, Math.floor(runsInput) || 1))
