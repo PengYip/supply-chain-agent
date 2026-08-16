@@ -11,7 +11,7 @@ import {
   createSession, loadSession, appendMessages, deleteSession,
   listPending, getPending, resolveApproval, addAuthorizedTicket,
 } from '../../src/harness/sessionStore.js';
-import { setSessionContext } from '../../src/harness/sessionContext.js';
+import { runSessionContext } from '../../src/harness/sessionContext.js';
 import { auditRecorder } from '../../src/harness/auditRecorder.js';
 import { createDb, migrate } from '../../src/pipeline/db/client.js';
 import type { HarnessDeps } from '../../src/harness/roleToolRegistry.js';
@@ -51,7 +51,18 @@ async function runAgentTurn(
   sessionId: string,
   messages: ModelMessage[],
 ): Promise<AgentTurnResult> {
-  setSessionContext(sessionId);
+  // Tools resolve their session via AsyncLocalStorage (sessionContext.ts);
+  // wrap the turn so audit-stamped executes find the right sessionId.
+  return runSessionContext({ sessionId, role: 'trader' }, () =>
+    runAgentTurnInner(opts, sessionId, messages),
+  );
+}
+
+async function runAgentTurnInner(
+  opts: DriverOpts,
+  sessionId: string,
+  messages: ModelMessage[],
+): Promise<AgentTurnResult> {
   const result = await runStream({
     messages,
     role: 'trader',
