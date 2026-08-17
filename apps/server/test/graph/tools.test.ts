@@ -3,6 +3,7 @@ import {
   buildCreateEntityTool,
   buildLinkEntitiesTool,
   buildGraphQueryTool,
+  buildGraphFindEntityTool,
 } from '../../src/graph/tools.js';
 import { assertAllToolsContracted } from '../../src/harness/contextContract.js';
 
@@ -27,11 +28,18 @@ describe('graph tool schemas', () => {
     const bad = (t.inputSchema as any).safeParse({});
     expect(bad.success).toBe(false);
   });
+  it('graph_find_entity requires name; kind enum optional', () => {
+    const t = buildGraphFindEntityTool();
+    expect((t.inputSchema as any).safeParse({ name: '中石化' }).success).toBe(true);
+    expect((t.inputSchema as any).safeParse({ kind: 'Party', name: '中石化', exact: true }).success).toBe(true);
+    expect((t.inputSchema as any).safeParse({ kind: 'Bogus', name: 'x' }).success).toBe(false);
+    expect((t.inputSchema as any).safeParse({}).success).toBe(false);
+  });
 });
 
 describe('graph tool contracts are registered', () => {
   it('create_entity / link_entities / graph_query all have context contracts', () => {
-    const names = ['create_entity', 'link_entities', 'graph_query'];
+    const names = ['create_entity', 'link_entities', 'graph_query', 'graph_find_entity'];
     // assertAllToolsContracted throws if any name in the list lacks a contract
     expect(() => assertAllToolsContracted(names)).not.toThrow();
   });

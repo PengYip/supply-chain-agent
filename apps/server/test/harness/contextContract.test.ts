@@ -30,6 +30,7 @@ const EXPECTED_TOOLS = [
   'create_entity',
   'link_entities',
   'graph_query',
+  'graph_find_entity',
   'present_document_review',
   'update_document_fields',
 ] as const;

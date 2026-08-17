@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { createEntity, linkEntities, graphQuery } from './repo.js';
+import { createEntity, linkEntities, graphQuery, findEntities } from './repo.js';
 
 export function buildCreateEntityTool() {
   return tool({
@@ -66,6 +66,26 @@ export function buildGraphQueryTool() {
         subject: { elementId: res.subject.elementId, kind: res.subject.kind, name: res.subject.name },
         nodes: res.nodes.map((n) => ({ elementId: n.elementId, kind: n.kind, name: n.name })),
         edges: res.edges.map((e) => ({ type: e.type, srcId: e.srcId, dstId: e.dstId, confidence: e.confidence })),
+      };
+    },
+  });
+}
+
+export function buildGraphFindEntityTool() {
+  return tool({
+    description:
+      '按名称查找图实体 (Party/Commodity/Contract/Document), 返回 elementId 列表, 供 graph_query 起步或 link_entities 引用. 默认包含匹配 (CONTAINS), exact=true 精确匹配. 图不可用时返回错误.',
+    inputSchema: z.object({
+      kind: z.enum(['Party', 'Commodity', 'Contract', 'Document']).optional().describe('实体类型, 省略则查所有类型'),
+      name: z.string().min(1).describe('实体名称或名称片段, 如 "中石化" / 合同号'),
+      exact: z.boolean().optional().describe('true=精确匹配; 默认包含匹配'),
+    }),
+    execute: async ({ kind, name, exact }) => {
+      const found = await findEntities({ kind, name, exact });
+      return {
+        status: 'ok' as const,
+        matched: found.length,
+        entities: found.map((e) => ({ elementId: e.elementId, kind: e.kind, name: e.name })),
       };
     },
   });

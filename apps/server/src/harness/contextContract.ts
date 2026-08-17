@@ -134,6 +134,14 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'graph', risk: { level: 'L2', injection: 'safe' },
   },
+  graph_find_entity: {
+    // Read-only kind+name lookup. Returns graph-stored names/ids (trusted
+    // agent graph data, no document text) -> output 'raw' / injection 'safe'.
+    // Short bounded lists -> budget 'summary'. signal 'counter' (a read).
+    // persist 'graph' marks the store it reads.
+    output: 'raw', budget: 'summary', signal: 'counter',
+    persist: 'graph', risk: { level: 'L1', injection: 'safe' },
+  },
   recall_documents: {
     // Returns BM25 snippets of ingested document text -> external content, so
     // output is 'tagged' (injectionDefense wraps each snippet, like extract_fields).

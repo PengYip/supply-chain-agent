@@ -57,6 +57,7 @@ registerPermission('inspect_extraction', 'L1'); // on-demand field-evidence dril
 registerPermission('recall_documents', 'L1'); // T6: FTS5 keyword recall over chunks
 registerPermission('execute_code', 'L1'); // CubeSandbox: isolated Python execution
 registerPermission('present_document_review', 'L1'); // post-ingest review card (read-only present)
+registerPermission('graph_find_entity', 'L1'); // 2026-08-17: 按名查图实体（只读入口）
 // L2 write confirm
 registerPermission('advance_contract_stage', 'L2');
 registerPermission('bind_document', 'L2'); // T9: bind document to contract
