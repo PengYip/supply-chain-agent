@@ -32,7 +32,67 @@ import { buildRecallDocumentsTool } from '../../src/pipeline/tools/recall.js';
 import { DeterministicEmbedder } from '../../src/pipeline/embedder.js';
 import type { BlockModel } from '../../src/pipeline/types.js';
 
-const RUN_PG = DB_BACKEND === 'postgres' || !!process.env.DATABASE_URL;
+// ---------------------------------------------------------------------------
+// TRUNCATE 安全门禁：本文件 beforeEach 会对 doc_chunk / extractions / bindings /
+// documents 执行 TRUNCATE，会清空目标库的全部业务数据。2026-08-17 曾有人把
+// DATABASE_URL 指向共享开发库（10.10.0.2:5433/sca）直接跑本测试，导致真实业务
+// 数据被清空。门禁规则：仅当连接串解析出的库名包含 "test"（推荐独立库 sca_test），
+// 或显式设置 PG_TRUNCATE_OK=1 声明"目标库允许被清空"时，才允许执行。
+// 连接串解析：优先 PG_TEST_URL，否则 DATABASE_URL（与 RUN_PG 判定保持一致）。
+// ---------------------------------------------------------------------------
+
+/** 解析本测试实际使用的连接串（PG_TEST_URL 优先，其次 DATABASE_URL）。 */
+function resolvePgTestUrl(): string | undefined {
+  return process.env.PG_TEST_URL ?? process.env.DATABASE_URL ?? undefined;
+}
+
+/** 从连接串 pathname 提取库名；无连接串或解析失败时返回 null。 */
+function resolvePgDbName(): string | null {
+  const url = resolvePgTestUrl();
+  if (!url) return null;
+  try {
+    const dbName = decodeURIComponent(new URL(url).pathname.replace(/^\//, ''));
+    return dbName || null;
+  } catch {
+    return null;
+  }
+}
+
+/** 库名包含 "test"，或显式设置了 PG_TRUNCATE_OK=1。 */
+function pgTruncateAllowed(): boolean {
+  const dbName = resolvePgDbName();
+  return (
+    (dbName !== null && dbName.includes('test')) || process.env.PG_TRUNCATE_OK === '1'
+  );
+}
+
+/** 门禁总判定：请求了 PG 连接 且 目标库允许 TRUNCATE。 */
+function pgGatePassed(): boolean {
+  const pgRequested =
+    DB_BACKEND === 'postgres' || !!process.env.PG_TEST_URL || !!process.env.DATABASE_URL;
+  return pgRequested && pgTruncateAllowed();
+}
+
+const RUN_PG = pgGatePassed();
+
+if (!RUN_PG) {
+  const targetUrl = resolvePgTestUrl();
+  const dbName = resolvePgDbName();
+  console.warn(
+    [
+      '====================================================================',
+      '[PG 集成测试已跳过] postgres.integration.test.ts 的 beforeEach 会对',
+      'doc_chunk / extractions / bindings / documents 执行 TRUNCATE，会清空',
+      '目标库的全部业务数据。',
+      `当前连接串：${targetUrl ?? '未设置（PG_TEST_URL / DATABASE_URL 均缺失）'}`,
+      `解析出的库名：${dbName ?? '（无连接串或解析失败）'}`,
+      '门禁要求：库名必须包含 "test"（请使用独立测试库 sca_test，创建与迁移',
+      '步骤见 docs/postgres-migration-runbook.md「PG 集成测试使用独立 sca_test 库」），',
+      '或显式设置 PG_TRUNCATE_OK=1 声明目标库允许被清空（慎用，仅限一次性废弃库）。',
+      '====================================================================',
+    ].join('\n'),
+  );
+}
 
 function mkModel(docId: string): BlockModel {
   return {
@@ -52,7 +112,16 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
   let embedder: DeterministicEmbedder;
 
   beforeAll(() => {
-    ctx = createPostgresContext(process.env.DATABASE_URL);
+    // 双重门禁：skipIf 判定与实际连接必须一致（防环境变量在文件加载与
+    // beforeAll 执行之间变化、导致连到非测试库），不满足直接 throw，
+    // 绝不让 TRUNCATE 落到业务库。
+    if (!pgGatePassed()) {
+      throw new Error(
+        `PG 集成测试门禁未通过：目标库名 ${resolvePgDbName() ?? '（未解析）'} ` +
+          '不含 "test" 且未设置 PG_TRUNCATE_OK=1，拒绝执行 TRUNCATE。',
+      );
+    }
+    ctx = createPostgresContext(resolvePgTestUrl());
     embedder = new DeterministicEmbedder();
   });
 

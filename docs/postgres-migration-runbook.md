@@ -81,6 +81,38 @@ export DATABASE_URL=postgresql://sca:sca_dev_password@localhost:5432/sca
 
 ---
 
+## PG 集成测试使用独立 sca_test 库
+
+`apps/server/test/pipeline/postgres.integration.test.ts` 的 `beforeEach` 会对
+`doc_chunk` / `extractions` / `bindings` / `documents` 执行
+`TRUNCATE ... RESTART IDENTITY CASCADE`，运行该测试**必须指向独立的测试库**。
+
+**警告：绝对不要把 `DATABASE_URL` 指向共享开发库 `sca`（如 `10.10.0.2:5433/sca`）——
+该测试的 beforeEach 会 TRUNCATE 业务表，2026-08-17 曾因此清空真实开发数据。**
+
+创建独立测试库（在 Postgres 容器内执行一次）：
+
+```bash
+docker exec sca-postgres psql -U sca -d postgres -c "CREATE DATABASE sca_test;"
+docker exec sca-postgres psql -U sca -d sca_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
+```
+
+然后在 `sca_test` 上按 Step 3 的 drizzle 迁移流程应用 schema（`generate` + `migrate`，
+以及 HNSW/GIN 原始 SQL；执行时把 `DATABASE_URL` 指向 `sca_test`）。
+
+跑法（推荐显式指定 `PG_TEST_URL`，该测试优先使用它做门禁判定与连接，其次才回退 `DATABASE_URL`）：
+
+```bash
+PG_TEST_URL=postgresql://sca:sca_dev_password@localhost:5433/sca_test npm test --workspace apps/server
+# 等价写法（不设 PG_TEST_URL，直接让 DATABASE_URL 指向 sca_test）：
+DATABASE_URL=postgresql://sca:sca_dev_password@localhost:5433/sca_test npm test --workspace apps/server
+```
+
+测试自带 TRUNCATE 安全门禁：连接串库名包含 `test` 才放行；确需清空其他库时，
+可显式设置 `PG_TRUNCATE_OK=1` 声明目标库允许被清空（慎用，仅限一次性废弃库）。
+
+---
+
 ## Step 3 - Generate + apply the schema migration
 
 ```bash

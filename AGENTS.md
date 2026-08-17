@@ -88,6 +88,10 @@ host. Consequences:
   MinIO buckets on 10.10.0.2, not local files.
 - A server responding on `localhost:3001` is a local instance; verify which
   deployment you are actually hitting before concluding anything from its data.
+- PG 集成测试（`apps/server/test/pipeline/postgres.integration.test.ts`）的
+  beforeEach 会 TRUNCATE `documents` 等业务表；在 10.10.0.2 上跑测试必须用
+  独立的 `sca_test` 库，绝不可将 `DATABASE_URL` 指向共享开发库 `sca`
+  （2026-08-17 曾因此清空开发数据）。
 
 ## Backend notes that bite if missed
 
