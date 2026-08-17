@@ -12,6 +12,9 @@ interface SessionEvent {
 export interface SessionEventHandlers {
   /** A UIMessageChunk arrived (event type 'message.part', field 'part'). */
   onChunk?: (part: UIMessageChunk) => void
+  /** Session status changed (event 'session.status', including the
+   * point-in-time snapshot sent on every (re)connect). */
+  onStatus?: (status: SessionStatus) => void
   /** A background run started (event type 'run.started'). */
   onRunStart?: (runId: string) => void
   /** A background run finished normally (event type 'run.finished'). */
@@ -62,6 +65,7 @@ export function useSessionEvents(
       switch (event.type) {
         case 'session.status':
           setStatus((event.status as SessionStatus) ?? 'idle')
+          handlersRef.current.onStatus?.((event.status as SessionStatus) ?? 'idle')
           break
         case 'run.started':
           handlersRef.current.onRunStart?.(event.runId as string)

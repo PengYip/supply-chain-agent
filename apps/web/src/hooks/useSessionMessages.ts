@@ -104,6 +104,16 @@ export function useSessionMessages(
   }, [sessionId])
 
   const { status, error } = useSessionEvents(sessionId, {
+    onStatus: (st) => {
+      // Reconnect reconciliation: if a run finished while we were
+      // disconnected, its events were pruned and no run.finished will ever
+      // arrive on this connection — the idle snapshot is the only signal.
+      // Close the stale pipeline and re-sync from the snapshot.
+      if (st === 'idle' && pipelineRef.current) {
+        closePipeline()
+        refreshSnapshot()
+      }
+    },
     onRunStart: () => startPipeline(),
     onChunk: (part) => {
       // If a run is already busy but we missed run.started (rejoin), lazily
