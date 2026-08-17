@@ -56,6 +56,15 @@ CREATE TABLE IF NOT EXISTS authorized_tickets (
   session_id TEXT NOT NULL,
   authorized_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS session_events (
+  session_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (session_id, seq)
+);
 `);
 
 // Phase 2: add user_id to pre-existing dev databases (CREATE TABLE IF NOT EXISTS
@@ -404,6 +413,39 @@ export function replaceMessage(sessionId: string, message: UIMessage): boolean {
   stmtReplaceMessage.run(JSON.stringify(message), sessionId, target.seq);
   stmtTouchSession.run(now, sessionId);
   return true;
+}
+
+// --- session event replay buffer (phase 2) ---
+// Events are a reconnect replay buffer, not SSOT (session_messages is).
+// No FK on session_id: buffer writes must not fail for sessions without a
+// backing row (tests, degraded modes).
+
+export interface SessionEventRow {
+  seq: number;
+  type: string;
+  payload: Record<string, unknown>;
+}
+
+export function appendSessionEvent(sessionId: string, type: string, payload: Record<string, unknown>): number {
+  const row = db
+    .prepare('SELECT COALESCE(MAX(seq), 0) AS max_seq FROM session_events WHERE session_id = ?')
+    .get(sessionId) as { max_seq: number };
+  const seq = row.max_seq + 1;
+  db.prepare(
+    'INSERT INTO session_events (session_id, seq, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?)',
+  ).run(sessionId, seq, type, JSON.stringify(payload), new Date().toISOString());
+  return seq;
+}
+
+export function listSessionEventsSince(sessionId: string, sinceSeq: number): SessionEventRow[] {
+  const rows = db
+    .prepare('SELECT seq, type, payload_json FROM session_events WHERE session_id = ? AND seq > ? ORDER BY seq ASC')
+    .all(sessionId, sinceSeq) as Array<{ seq: number; type: string; payload_json: string }>;
+  return rows.map((r) => ({ seq: r.seq, type: r.type, payload: JSON.parse(r.payload_json) as Record<string, unknown> }));
+}
+
+export function pruneSessionEvents(sessionId: string): void {
+  db.prepare('DELETE FROM session_events WHERE session_id = ?').run(sessionId);
 }
 
 export interface RecordPendingInput {
