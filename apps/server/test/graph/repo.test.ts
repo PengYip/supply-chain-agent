@@ -136,4 +136,7 @@ describe('findEntities / mergeEdge (offline guards)', () => {
       mergeEdge({ srcId: '4:a:0', dstId: '4:b:0', kind: 'party' }),
     ).rejects.toThrow(/NEO4J_PASSWORD|not found/i);
   });
+  it('mergeEdge 对非法 kind 先经 assertToken 校验（不触驱动）', async () => {
+    await expect(mergeEdge({ srcId: '4:a:0', dstId: '4:b:0', kind: 'a b' })).rejects.toThrow(/Invalid label/);
+  });
 });

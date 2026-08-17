@@ -170,6 +170,7 @@ export interface MergeEdgeInput {
  * 这是确认写入器（graphWriter）专用的确定性入口。
  */
 export async function mergeEdge(input: MergeEdgeInput): Promise<GraphEdge> {
+  assertToken(input.kind, 'label'); // followup P3: 与 findEntities 对齐的预检（不触驱动）
   const cypher = `
     MATCH (a) WHERE elementId(a) = $srcId
     MATCH (b) WHERE elementId(b) = $dstId
