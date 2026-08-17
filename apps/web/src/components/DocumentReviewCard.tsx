@@ -15,6 +15,7 @@ import {
   Loader2,
   Check,
   Save,
+  Share2,
 } from 'lucide-react'
 import { submitReview, type ReviewCorrection } from '../api/review'
 
@@ -54,6 +55,21 @@ export type DocumentReviewPayload = {
     name: string
     confidence: number
   }>
+  proposedEdges?: Array<{
+    type: 'party' | 'commodity' | 'references' | 'executes'
+    dstKind: 'Party' | 'Commodity' | 'Contract'
+    dstName: string
+    role?: string
+    confidence: number
+  }>
+  graphStatus?: {
+    status: 'ok' | 'partial' | 'failed' | 'skipped'
+    nodeCount: number
+    edgeCount: number
+    reason?: string
+    failures?: string[]
+    writtenAt: string
+  } | null
   tags: string[]
   /** Chunk-level semantic tag groupings. null/undefined = the doc has no
    *  chunk tags (old docs, tagging failed, or docType 其他). Part of the
@@ -79,6 +95,13 @@ const RELATIONSHIP_KIND_LABEL: Record<'Party' | 'Commodity' | 'Contract', string
   Party: '主体',
   Commodity: '标的物',
   Contract: '合同',
+}
+
+const EDGE_TYPE_LABEL: Record<string, string> = {
+  party: '当事方',
+  commodity: '标的物',
+  references: '引用合同',
+  executes: '执行合同',
 }
 
 /** Preserve a field's original type when coercing an edited string back to a
@@ -180,6 +203,41 @@ const VectorizationStatus: React.FC<{ v: DocumentReviewPayload['vectorization'] 
       </div>
       {v?.reason && (
         <div className="text-[11px] text-textGray italic mt-1 line-clamp-2">{v.reason}</div>
+      )}
+    </div>
+  )
+}
+
+const GraphStatusView: React.FC<{ g: NonNullable<DocumentReviewPayload['graphStatus']> }> = ({ g }) => {
+  const map = {
+    ok: { label: '已入库', cls: 'bg-success/10 text-success border-success/30', Icon: CheckCircle2 },
+    partial: { label: '部分入库', cls: 'bg-amber/10 text-amber border-amber/30', Icon: AlertTriangle },
+    failed: { label: '失败', cls: 'bg-danger/10 text-danger border-danger/30', Icon: AlertCircle },
+    skipped: { label: '未配置', cls: 'bg-bgGray text-textGray border-borderGray', Icon: MinusCircle },
+  } as const
+  const entry = map[g?.status] || map.skipped
+  const { Icon } = entry
+  return (
+    <div className="text-xs">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span
+          className={clsx(
+            'inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded border',
+            entry.cls,
+          )}
+        >
+          <Icon className="w-3 h-3" />
+          {entry.label}
+        </span>
+        <span className="text-textGray">
+          节点 <span className="font-mono text-steelBlue">{g?.nodeCount ?? 0}</span>
+        </span>
+        <span className="text-textGray">
+          边 <span className="font-mono text-steelBlue">{g?.edgeCount ?? 0}</span>
+        </span>
+      </div>
+      {g?.reason && (
+        <div className="text-[11px] text-textGray italic mt-1 line-clamp-2">{g.reason}</div>
       )}
     </div>
   )
@@ -289,6 +347,8 @@ export const DocumentReviewCard: React.FC<{
     tags = [],
     chunkTagDetails,
     vectorization,
+    proposedEdges,
+    graphStatus,
     reviewStatus,
   } = snapshot || {}
 
@@ -483,6 +543,23 @@ export const DocumentReviewCard: React.FC<{
               })}
             </div>
           )}
+          {(proposedEdges ?? []).length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-1.5">
+              {(proposedEdges ?? []).map((e, i) => (
+                <span
+                  key={`${e.type}-${e.dstName}-${i}`}
+                  className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border bg-bgGray/50 text-textDark border-borderGray/50"
+                >
+                  <span className="text-textGray">
+                    {EDGE_TYPE_LABEL[e.type] || e.type}
+                    {e.role ? `(${e.role})` : ''}
+                  </span>
+                  <span className="font-medium">{e.dstName}</span>
+                  <span className="font-mono text-steelBlue">{pct(e.confidence)}</span>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* 4. 文本TAG */}
@@ -513,6 +590,15 @@ export const DocumentReviewCard: React.FC<{
           <SectionLabel icon={<Database className="w-3 h-3" />}>向量化入库状态</SectionLabel>
           <VectorizationStatus v={vectorization} />
         </div>
+
+        {/* 7. 图入库状态 — 确认时 Neo4j 写入结果（2026-08-17）；未确认（graphStatus 为
+            null/undefined）时不渲染。 */}
+        {graphStatus && (
+          <div>
+            <SectionLabel icon={<Share2 className="w-3 h-3" />}>图入库状态</SectionLabel>
+            <GraphStatusView g={graphStatus} />
+          </div>
+        )}
       </div>
 
       {/* Action bar — only while pending. Once the user has acted (corrected /
