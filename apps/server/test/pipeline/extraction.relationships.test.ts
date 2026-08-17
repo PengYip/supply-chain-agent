@@ -35,4 +35,11 @@ describe('deriveProposedRelationships', () => {
     const rels = deriveProposedRelationships([f('甲方', 'ACME', 0.55)]);
     expect(rels[0].confidence).toBe(0.55);
   });
+
+  it('发货人/收货人/承运人 提升为 Party 提议（design 2026-08-17）', () => {
+    const rels = deriveProposedRelationships([f('发货人', 'S公司'), f('收货人', 'R公司'), f('承运人', 'C航运')]);
+    expect(rels).toContainEqual(expect.objectContaining({ kind: 'Party', role: '发货人', name: 'S公司' }));
+    expect(rels).toContainEqual(expect.objectContaining({ kind: 'Party', role: '收货人', name: 'R公司' }));
+    expect(rels).toContainEqual(expect.objectContaining({ kind: 'Party', role: '承运人', name: 'C航运' }));
+  });
 });

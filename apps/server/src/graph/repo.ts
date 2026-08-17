@@ -156,6 +156,83 @@ export async function linkEntities(input: LinkEntitiesInput): Promise<GraphEdge>
   }
 }
 
+export interface MergeEdgeInput {
+  srcId: string;
+  dstId: string;
+  kind: string;
+  props?: Record<string, unknown>;
+  confidence?: number;
+  sourceSpan?: unknown;
+}
+/**
+ * Idempotent link: MERGE on (src)-[kind]->(dst) —— 重复确认同一文档不会产生
+ * 重复边（design 2026-08-17 §4）。与 agent 面向的 linkEntities（CREATE）不同，
+ * 这是确认写入器（graphWriter）专用的确定性入口。
+ */
+export async function mergeEdge(input: MergeEdgeInput): Promise<GraphEdge> {
+  const cypher = `
+    MATCH (a) WHERE elementId(a) = $srcId
+    MATCH (b) WHERE elementId(b) = $dstId
+    MERGE (a)-[r:$($kind)]->(b)
+    ON CREATE SET r.createdAt = datetime()
+    SET r += $props, r.confidence = $confidence
+    RETURN r AS rel
+  `;
+  const props = { ...(input.props ?? {}) };
+  if (input.sourceSpan !== undefined) props.sourceSpan = input.sourceSpan;
+  const session = getDriver().session();
+  try {
+    const { records } = await session.executeWrite(async (txc) => {
+      const result = await txc.run(cypher, {
+        srcId: input.srcId,
+        dstId: input.dstId,
+        kind: input.kind,
+        props,
+        confidence: input.confidence ?? 0,
+      });
+      return result;
+    });
+    if (records.length === 0) {
+      throw new Error(`mergeEdge: src or dst node not found (src=${input.srcId} dst=${input.dstId})`);
+    }
+    const rec = records[0];
+    if (!rec) throw new Error('mergeEdge: unexpected empty record');
+    return relToEdge(rec.get('rel') as Relationship);
+  } finally {
+    await session.close();
+  }
+}
+
+export interface FindEntitiesInput {
+  kind?: string;
+  name: string;
+  /** true = 精确相等；默认（false）= CONTAINS 包含匹配。 */
+  exact?: boolean;
+  limit?: number;
+}
+/**
+ * 按 kind+name 查实体（design 2026-08-17 §6.1）—— graph_query 缺的"按名称找
+ * 实体"入口：用户说的是 "中石化"/合同号，不是 elementId。上限 10。
+ */
+export async function findEntities(input: FindEntitiesInput): Promise<GraphEntity[]> {
+  if (input.kind) assertToken(input.kind, 'label');
+  const name = (input.name ?? '').trim();
+  if (!name) return [];
+  const limit = Math.min(Math.max(Math.trunc(input.limit ?? 10) || 10, 1), 10);
+  const session = getDriver().session({ defaultAccessMode: neo4j.session.READ });
+  try {
+    const nodePattern = input.kind ? 'MATCH (n:$($kind))' : 'MATCH (n)';
+    const whereClause = input.exact ? 'WHERE n.name = $name' : 'WHERE toString(n.name) CONTAINS $name';
+    const cypher = `${nodePattern} ${whereClause} RETURN n AS node ORDER BY n.name LIMIT $limit`;
+    const params: Record<string, unknown> = { name, limit };
+    if (input.kind) params.kind = input.kind;
+    const result = await session.executeRead((txc) => txc.run(cypher, params));
+    return result.records.map((rec) => nodeToEntity(rec.get('node') as Node));
+  } finally {
+    await session.close();
+  }
+}
+
 const DIR_TEMPLATES: Record<Direction, string> = {
   out: '-[:$($edgeKinds)]->',
   in: '<-[:$($edgeKinds)]-',

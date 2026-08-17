@@ -6,6 +6,8 @@ import {
   createEntity,
   linkEntities,
   graphQuery,
+  findEntities,
+  mergeEdge,
 } from '../../src/graph/repo.js';
 
 const NEO4J_PASSWORD = process.env.NEO4J_PASSWORD ?? '';
@@ -100,5 +102,38 @@ describe.skipIf(skip)('graph repo (live Neo4j)', () => {
     expect(out.nodes.map((n) => n.elementId)).toContain(b.elementId);
     const inward = await graphQuery({ subjectId: a.elementId, depth: 1, edgeKinds: ['related_party'], direction: 'in' });
     expect(inward.nodes.map((n) => n.elementId)).not.toContain(b.elementId); // a is the source, not target
+  });
+
+  it('mergeEdge 幂等：同 (src,type,dst) 重复写不产生重复边', async () => {
+    const a = await createEntity({ kind: 'Party', name: `MEA-${RUN_ID}`, props: { scaRunId: RUN_ID } });
+    const b = await createEntity({ kind: 'Contract', name: `MEB-${RUN_ID}`, props: { scaRunId: RUN_ID } });
+    await mergeEdge({ srcId: a.elementId, dstId: b.elementId, kind: 'party', confidence: 0.9, props: { scaRunId: RUN_ID, role: '买方' } });
+    await mergeEdge({ srcId: a.elementId, dstId: b.elementId, kind: 'party', confidence: 0.9, props: { scaRunId: RUN_ID, role: '买方' } });
+    const res = await graphQuery({ subjectId: a.elementId, depth: 1, edgeKinds: ['party'], direction: 'out' });
+    expect(res.edges.filter((e) => e.dstId === b.elementId)).toHaveLength(1);
+  });
+
+  it('findEntities 按 kind+contains 模糊与 exact 精确匹配', async () => {
+    await createEntity({ kind: 'Party', name: `中石化-${RUN_ID}`, props: { scaRunId: RUN_ID } });
+    await createEntity({ kind: 'Party', name: `中石化贸易-${RUN_ID}`, props: { scaRunId: RUN_ID } });
+    const fuzzy = await findEntities({ kind: 'Party', name: `-${RUN_ID}` });
+    expect(fuzzy.length).toBeGreaterThanOrEqual(2); // 其他 live 用例的 Party 也带 -RUN_ID
+    const exact = await findEntities({ kind: 'Party', name: `中石化贸易-${RUN_ID}`, exact: true });
+    expect(exact).toHaveLength(1);
+    expect(exact[0].name).toBe(`中石化贸易-${RUN_ID}`);
+  });
+});
+
+describe('findEntities / mergeEdge (offline guards)', () => {
+  it('findEntities 空白名称直接返回 []（不触驱动）', async () => {
+    await expect(findEntities({ name: '   ' })).resolves.toEqual([]);
+  });
+  it('findEntities 对非法 kind 先经 assertToken 校验', async () => {
+    await expect(findEntities({ kind: 'a b', name: 'x' })).rejects.toThrow(/Invalid label/);
+  });
+  it('mergeEdge 在未配置 NEO4J_PASSWORD 时抛驱动错误（CI 无密码路径）', async () => {
+    await expect(
+      mergeEdge({ srcId: '4:a:0', dstId: '4:b:0', kind: 'party' }),
+    ).rejects.toThrow(/NEO4J_PASSWORD|not found/i);
   });
 });
