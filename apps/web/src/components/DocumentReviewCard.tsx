@@ -239,6 +239,16 @@ const GraphStatusView: React.FC<{ g: NonNullable<DocumentReviewPayload['graphSta
       {g?.reason && (
         <div className="text-[11px] text-textGray italic mt-1 line-clamp-2">{g.reason}</div>
       )}
+      {/* partial/failed 时 writeDocumentGraph 只填 failures 不设 reason：列表展示前 3 条。 */}
+      {(g?.failures?.length ?? 0) > 0 && (
+        <ul className="mt-1 space-y-0.5">
+          {(g.failures ?? []).slice(0, 3).map((f, i) => (
+            <li key={i} className="text-[11px] text-textGray italic line-clamp-1">
+              {typeof f === 'string' ? f : ''}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }
