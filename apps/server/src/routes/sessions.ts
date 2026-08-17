@@ -15,10 +15,11 @@ import {
   deleteSession,
   getSessionStatus,
   listSessionsForUser,
+  listSessionEventsSince,
   loadSession,
   sessionBelongsTo,
 } from '../harness/sessionStore.js';
-import { subscribe } from '../harness/sessionEvents.js';
+import { subscribe, type SessionEvent } from '../harness/sessionEvents.js';
 import { abortSessionRun } from '../harness/runManager.js';
 import type { Role } from '../harness/roleToolRegistry.js';
 
@@ -109,6 +110,9 @@ sessionsRoute.post('/:id/abort', requireRole('admin', 'trader'), (c) => {
 // SSE event stream for a session. Subscribes to the in-memory event bus and
 // fans out events. Client disconnect (req.signal abort) unsubscribes; the
 // background run is unaffected (runs live in RunManager, not this request).
+// Every forwarded bus event carries an `id: <seq>` line (standard SSE reconnect
+// protocol); on reconnect the browser resends Last-Event-ID and the server
+// replays persisted events `seq > lastEventId` before continuing live.
 sessionsRoute.get('/:id/events', (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
@@ -121,19 +125,56 @@ sessionsRoute.get('/:id/events', (c) => {
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
   // Catch on every write: after cleanup closes the writer, a late write (or a
-  // write racing the client disconnect) must reject silently, never surface as
-  // an unhandled rejection.
-  const send = (obj: unknown) =>
-    writer.write(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`)).catch(() => {});
+  // write racing the client disconnect) must reject silently.
+  const sendRaw = (text: string) => writer.write(encoder.encode(text)).catch(() => {});
+  const send = (obj: unknown, seq?: number) =>
+    sendRaw(`${seq === undefined ? '' : `id: ${seq}\n`}data: ${JSON.stringify(obj)}\n\n`);
 
-  // First event: current status snapshot. runId is always present (null when
-  // idle) so JSON.stringify never drops the field — stable SSE event contract.
+  // First event: current status snapshot. No id line — a snapshot is not a
+  // log entry and must not advance the browser's lastEventId.
   const st = getSessionStatus(id);
   void send({ type: 'session.status', sessionId: id, status: st?.status ?? 'idle', runId: st?.runId ?? null });
 
+  // Reconnect replay: the browser resends the last seen id as Last-Event-ID.
+  const rawId = c.req.header('Last-Event-ID');
+  const sinceSeq = rawId !== undefined && /^\d+$/.test(rawId) ? Number(rawId) : null;
+
+  // Buffer-mode subscribe before replaying from the DB, then drain with a
+  // seq filter — closes the replay-vs-live race. (better-sqlite3 replay is
+  // synchronous so the buffer is empty in practice today; the pattern stays
+  // correct if the store ever becomes async.)
+  const buffer: SessionEvent[] = [];
+  let buffering = sinceSeq !== null;
   const unsub = subscribe(id, (e) => {
-    void send(e);
+    if (buffering) {
+      buffer.push(e);
+      return;
+    }
+    void send(e, e.seq);
   });
+
+  if (sinceSeq !== null) {
+    try {
+      const missed = listSessionEventsSince(id, sinceSeq);
+      let maxSent = sinceSeq;
+      for (const row of missed) {
+        // Prefer the DB columns (type/session_id) over payload-embedded
+        // duplicates when reconstructing the event JSON — avoids divergence
+        // if a row was ever written with a stale payload copy.
+        void send({ ...row.payload, type: row.type, sessionId: id, seq: row.seq }, row.seq);
+        maxSent = Math.max(maxSent, row.seq);
+      }
+      buffering = false;
+      for (const e of buffer) {
+        if ((e.seq ?? Number.POSITIVE_INFINITY) > maxSent) void send(e, e.seq);
+      }
+    } catch {
+      // Replay unavailable (degraded persistence) — fall through to live.
+      buffering = false;
+      for (const e of buffer) void send(e, e.seq);
+    }
+    buffer.length = 0;
+  }
 
   const heartbeat = setInterval(() => {
     void writer.write(encoder.encode(`: heartbeat\n\n`)).catch(() => {});
