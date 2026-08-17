@@ -21,6 +21,7 @@ import {
   setReviewStatus,
 } from '../pipeline/db/repositories.js';
 import { ensureDocumentExtracted } from '../pipeline/tools/documentEntry.js';
+import { commitDocumentGraph } from '../pipeline/graphCommit.js';
 import { buildIngestDeps } from '../pipeline/ingestModel.js';
 import type { DocType, Modality } from '../pipeline/types.js';
 
@@ -117,8 +118,12 @@ reviewRoute.post('/:docId/review', async (c) => {
       }
     } else if (confirm) {
       // Confirm-as-is: flip reviewStatus to 'confirmed' (previously a dead
-      // state — this makes it reachable) and return the unchanged snapshot.
+      // state — this makes it reachable), then commit the derived entities/
+      // edges to Neo4j (design 2026-08-17 §4). Graph commit is
+      // fault-isolated: it NEVER blocks/fails the confirmation — the outcome
+      // is persisted as documents.graph_status and surfaced on the snapshot.
       await setReviewStatus(ctx(), docId, 'confirmed', user.id);
+      await commitDocumentGraph(ctx(), docId, user.id);
       snapshot = await getReviewSnapshot(ctx(), docId, user.id);
       if (!snapshot) {
         return c.json({ ok: false, error: 'document_or_extraction_not_found' }, 404);
