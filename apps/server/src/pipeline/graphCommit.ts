@@ -5,12 +5,50 @@ import {
   setDocumentGraphStatus,
   type DocumentGraphStatus,
 } from './db/repositories.js';
-import { writeDocumentGraph, type GraphWriteResult, type GraphWriterIo } from '../graph/graphWriter.js';
+import { deriveProposedRelationships } from './extraction.js';
+import { normalizeName } from '../graph/normalize.js';
+import { writeDocumentGraph, type GraphWriteResult, type GraphWriterIo, type GraphEdgeInput } from '../graph/graphWriter.js';
+
+/** 边的最小投影（喂 writer 前先去重）。 */
+interface EdgeLike {
+  type: GraphEdgeInput['type'];
+  dstKind: GraphEdgeInput['dstKind'];
+  dstName: string;
+  role?: string;
+  confidence: number;
+}
+
+/**
+ * 按 (type, dstKind, 归一化 dstName) 去重：同一 Party 的甲方+乙方同值会派生两条
+ * party 边，写库时 MERGE 折叠后 role 会被后写覆盖、edgeCount 虚高（followup P1）。
+ * role 冲突时合并为 '买方/卖方' 斜杠形式（Set 去重）。
+ */
+function dedupeEdges(edges: EdgeLike[]): EdgeLike[] {
+  const seen = new Map<string, { edge: EdgeLike; roles: Set<string>; confidence: number }>();
+  for (const e of edges) {
+    const key = `${e.type}:${e.dstKind}:${normalizeName(e.dstName)}`;
+    const existing = seen.get(key);
+    if (existing) {
+      if (e.role) existing.roles.add(e.role);
+      existing.confidence = Math.max(existing.confidence, e.confidence);
+    } else {
+      seen.set(key, { edge: e, roles: new Set(e.role ? [e.role] : []), confidence: e.confidence });
+    }
+  }
+  return [...seen.values()].map(({ edge, roles, confidence }) => ({
+    ...edge,
+    ...(roles.size > 0 ? { role: [...roles].join('/') } : {}),
+    confidence,
+  }));
+}
 
 /**
  * 确认时图提交编排（design 2026-08-17 §4）：读持久化快照（字段 + 实体提议 +
  * docType）-> 派生实体/边 -> writeDocumentGraph -> 结果落 documents.graph_status。
  * 永不抛出：确认流程不被图层阻塞（图不可达 => status 'failed'/'skipped' 记录）。
+ *
+ * Followup P0 (2026-08-17)：实体从 snapshot.fields 现场重派生（与边同源），
+ * 不复用持久化 proposed_relationships 列——复核卡更正字段后该列已陈旧。
  */
 export async function commitDocumentGraph(
   ctx: DbContext,
@@ -31,12 +69,14 @@ export async function commitDocumentGraph(
         docId,
         docType: snapshot.docType,
         sourceUri,
-        entities: snapshot.proposedRelationships.map((r) => ({
+        entities: deriveProposedRelationships(snapshot.fields).map((r) => ({
           kind: r.kind, name: r.name, role: r.role, confidence: r.confidence,
         })),
-        edges: snapshot.proposedEdges.map((e) => ({
-          type: e.type, dstKind: e.dstKind, dstName: e.dstName, role: e.role, confidence: e.confidence,
-        })),
+        edges: dedupeEdges(
+          snapshot.proposedEdges.map((e) => ({
+            type: e.type, dstKind: e.dstKind, dstName: e.dstName, role: e.role, confidence: e.confidence,
+          })),
+        ),
       },
       io,
     );

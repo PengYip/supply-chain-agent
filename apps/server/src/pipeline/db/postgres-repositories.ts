@@ -20,7 +20,7 @@ import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
 import type { SpanMatchStrength } from '../spanValidator.js';
 import { normalizeContractNo } from '../contractLedger.js';
 import type { ContractLedgerEntry } from '../contractLedger.js';
-import { deriveProposedEdges } from '../extraction.js';
+import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.js';
 import type {
   ExtractionInput,
   BindingInput,
@@ -891,7 +891,9 @@ export async function getReviewSnapshotPg(
     reviewStatus: (doc.review_status ?? 'pending') as ReviewStatus,
     fields,
     overallConfidence: ex ? Number(ex.overall_confidence) : 0,
-    proposedRelationships: ex?.proposed_relationships ?? [],
+    // Followup P0 (2026-08-17): derived from the current fields (mirrors the
+    // SQLite branch) so corrections never drift from the graph writer.
+    proposedRelationships: deriveProposedRelationships(fields),
     vectorization,
     proposedEdges: deriveProposedEdges(doc.doc_type, fields),
     graphStatus,

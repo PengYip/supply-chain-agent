@@ -35,7 +35,7 @@ describe('present_document_review', () => {
     expect(res.docType).toBe('合同');
     expect(res.tags).toEqual(['动力煤']);
     expect(res.fields[0]).toMatchObject({ name: '合同号', value: 'HT001' });
-    expect(res.proposedRelationships[0]).toMatchObject({ kind: 'Party', role: '买方' });
+    expect(res.proposedRelationships[0]).toMatchObject({ kind: 'Contract' });
     expect(res.reviewStatus).toBe('pending');
     // no ingest populated the cache in this test -> unknown
     expect(res.vectorization.status).toBe('unknown');

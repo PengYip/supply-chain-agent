@@ -5,7 +5,7 @@ import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
 import type { SpanMatchStrength } from '../spanValidator.js';
 import { normalizeContractNo } from '../contractLedger.js';
 import type { ContractLedgerEntry } from '../contractLedger.js';
-import { deriveProposedEdges } from '../extraction.js';
+import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.js';
 // Postgres impls. Static import: pg is a declared dep on both backends now; the
 // functions are only CALLED on the postgres branch (lazy Pool connect), so the
 // import cost is one module load. Type-only for the input/output types below.
@@ -1139,9 +1139,12 @@ export async function getReviewSnapshot(
     }
   }
 
-  const proposedRelationships: ProposedRelationship[] = ex?.proposed_relationships
-    ? (JSON.parse(ex.proposed_relationships) as ProposedRelationship[])
-    : [];
+  // Followup P0 (2026-08-17): proposedRelationships is DERIVED from the current
+  // fields (same rule as the graph writer + proposedEdges), NOT the persisted
+  // proposed_relationships column — the column goes stale after a correction
+  // (updateExtractionFields only rewrites fields/field_meta). Zero drift between
+  // the review card and what commitDocumentGraph writes to Neo4j.
+  const proposedRelationships: ProposedRelationship[] = deriveProposedRelationships(fields);
 
   return {
     docId,

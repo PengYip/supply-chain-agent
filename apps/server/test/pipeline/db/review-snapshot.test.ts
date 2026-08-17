@@ -34,7 +34,10 @@ describe('getReviewSnapshot', () => {
     expect(snap?.tags).toEqual(['动力煤', '上游']);
     expect(snap?.reviewStatus).toBe('pending');
     expect(snap?.fields[0]).toMatchObject({ name: '合同号', value: 'HT001', confidence: 0.95, needsReview: false });
-    expect(snap?.proposedRelationships[0]).toMatchObject({ kind: 'Party', role: '买方', name: 'ACME' });
+    // proposedRelationships is DERIVED from the current fields (same rule as the
+    // graph writer), not the persisted proposed_relationships column — the column
+    // can go stale after a correction (2026-08-17 followup P0).
+    expect(snap?.proposedRelationships[0]).toMatchObject({ kind: 'Contract', name: 'HT001' });
   });
 
   it('returns null when doc not found', async () => {
