@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { startSessionRun, abortSessionRun, isRunning } from '../../src/harness/runManager.js';
+import { emit } from '../../src/harness/sessionEvents.js';
+import { listSessionEventsSince } from '../../src/harness/sessionStore.js';
 
 describe('runManager', () => {
   it('startSessionRun returns a runId and marks running', async () => {
@@ -61,5 +63,22 @@ describe('runManager', () => {
     startSessionRun('rm-4', undefined, 'trader', async () => { throw new Error('boom'); });
     await new Promise((r) => setTimeout(r, 10));
     expect(isRunning('rm-4')).toBe(false);
+  });
+
+  it('prunes the session_events replay buffer when the run finalizes', async () => {
+    const sid = `rm-prune-${crypto.randomUUID().slice(0, 8)}`;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const start = startSessionRun(sid, 'u1', 'trader', async () => {
+      await gate;
+    });
+    expect(start).not.toHaveProperty('conflict');
+    // events emitted while the run is in flight are buffered
+    emit({ type: 'message.part', sessionId: sid, part: { type: 'text-start', id: 't' } });
+    expect(listSessionEventsSince(sid, 0).length).toBeGreaterThan(0);
+    release();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(isRunning(sid)).toBe(false);
+    expect(listSessionEventsSince(sid, 0)).toEqual([]);
   });
 });

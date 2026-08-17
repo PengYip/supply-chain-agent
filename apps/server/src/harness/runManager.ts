@@ -5,7 +5,7 @@
 // Single-flight per session (busy => conflict); different sessions run concurrently.
 
 import { randomUUID } from 'node:crypto';
-import { setSessionStatus } from './sessionStore.js';
+import { setSessionStatus, pruneSessionEvents } from './sessionStore.js';
 import { runSessionContext } from './sessionContext.js';
 import { emit } from './sessionEvents.js';
 
@@ -55,6 +55,12 @@ export function startSessionRun(
     } finally {
       setSessionStatus(sessionId, 'idle');
       emit({ type: 'session.status', sessionId, status: 'idle' });
+      // Replay buffer only needs to outlive in-flight runs. The idle event
+      // above has been emitted (and persisted) before this prune, so a
+      // client reconnecting after finalization gets the idle snapshot from
+      // the route and (correctly) no replay; its missed tail is covered by
+      // the snapshot-refresh path.
+      pruneSessionEvents(sessionId);
       runs.delete(sessionId);
     }
   });
