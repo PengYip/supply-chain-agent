@@ -56,6 +56,11 @@ describe('writeDocumentGraph (fake io)', () => {
     expect(res.edgeCount).toBe(3);
     expect(io.calls).toContain('create:Party:中石化'); // 后缀已剥
     expect(res.failures).toEqual([]);
+    // writtenEntities 为归一化后的实际写入清单（与 createEntity 同名）。
+    expect(res.writtenEntities).toEqual([
+      { kind: 'Party', name: '中石化', role: '卖方' },
+      { kind: 'Contract', name: 'HT-1' },
+    ]);
   });
 
   it('NEO4J_PASSWORD 未设时整体 skipped，零 io 调用', async () => {
@@ -67,6 +72,7 @@ describe('writeDocumentGraph (fake io)', () => {
       expect(res.status).toBe('skipped');
       expect(res.reason).toContain('NEO4J_PASSWORD');
       expect(io.calls).toHaveLength(0);
+      expect(res.writtenEntities).toEqual([]);
     } finally {
       if (prev !== undefined) process.env.NEO4J_PASSWORD = prev;
     }
@@ -79,6 +85,8 @@ describe('writeDocumentGraph (fake io)', () => {
     expect(res.edgeCount).toBe(2); // references + executes 仍落地
     expect(res.failures.some((f) => f.includes('Party'))).toBe(true);
     expect(res.failures.some((f) => f.startsWith('edge party->'))).toBe(true);
+    // 只收集成功创建的实体。
+    expect(res.writtenEntities).toEqual([{ kind: 'Contract', name: 'HT-1' }]);
   });
 
   it('Document 节点本身创建失败时 status failed 并带 reason', async () => {
@@ -86,5 +94,27 @@ describe('writeDocumentGraph (fake io)', () => {
     const res = await writeDocumentGraph(input, io);
     expect(res.status).toBe('failed');
     expect(res.reason).toBe('boom');
+    expect(res.writtenEntities).toEqual([]);
+  });
+
+  it('归一化后同名的重复实体去重：只收集一次', async () => {
+    const io = mkIo();
+    const res = await writeDocumentGraph(
+      {
+        ...input,
+        entities: [
+          { kind: 'Party' as const, name: '中石化集团有限公司', role: '卖方', confidence: 0.9 },
+          { kind: 'Party' as const, name: '中石化', role: '买方', confidence: 0.8 },
+          { kind: 'Contract' as const, name: 'HT-1', confidence: 0.95 },
+        ],
+      },
+      io,
+    );
+    expect(res.status).toBe('ok');
+    expect(res.writtenEntities).toEqual([
+      { kind: 'Party', name: '中石化', role: '卖方' },
+      { kind: 'Contract', name: 'HT-1' },
+    ]);
+    expect(io.calls.filter((c) => c.startsWith('create:Party:中石化'))).toHaveLength(1);
   });
 });

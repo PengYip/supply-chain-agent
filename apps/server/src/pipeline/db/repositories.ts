@@ -203,6 +203,8 @@ export type DocumentGraphStatus = {
   status: 'ok' | 'partial' | 'failed' | 'skipped';
   nodeCount: number;
   edgeCount: number;
+  /** 确认时实际写入 Neo4j 的实体清单（归一化名）；skipped/failed 或旧数据无此字段。 */
+  entities?: Array<{ kind: string; name: string; role?: string }>;
   reason?: string;
   failures?: string[];
   writtenAt: string;

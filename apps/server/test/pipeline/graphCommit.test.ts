@@ -59,14 +59,21 @@ describe('commitDocumentGraph', () => {
     expect(status.status).toBe('ok');
     expect(status.nodeCount).toBe(3); // Document + Contract + Party
     expect(status.edgeCount).toBe(3); // party + references + executes
+    // entities 透传 writer 的 writtenEntities（归一化名）。
+    expect(status.entities).toEqual([
+      { kind: 'Contract', name: 'HT-1' },
+      { kind: 'Party', name: '中石化', role: '卖方' },
+    ]);
     const snap = await getReviewSnapshot(ctx, id);
     expect(snap?.graphStatus).toEqual(status);
+    expect(snap?.graphStatus?.entities).toEqual(status.entities);
   });
 
   it('未知文档返回 failed(document_or_extraction_not_found)', async () => {
     const status = await commitDocumentGraph(ctx, 'DOC-missing', 'user-1', okIo);
     expect(status.status).toBe('failed');
     expect(status.reason).toBe('document_or_extraction_not_found');
+    expect(status.entities).toBeUndefined();
   });
 
   it('图 io 出错不抛异常，failed 状态仍持久化', async () => {
@@ -79,6 +86,7 @@ describe('commitDocumentGraph', () => {
     const status = await commitDocumentGraph(ctx, id, undefined, badIo);
     expect(status.status).toBe('failed');
     expect(status.reason).toBe('neo4j down');
+    expect(status.entities).toBeUndefined();
     const snap = await getReviewSnapshot(ctx, id);
     expect(snap?.graphStatus?.status).toBe('failed');
   });

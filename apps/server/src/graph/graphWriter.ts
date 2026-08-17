@@ -26,6 +26,8 @@ export interface GraphWriteResult {
   status: 'ok' | 'partial' | 'failed' | 'skipped';
   nodeCount: number;
   edgeCount: number;
+  /** 确认时实际写入 Neo4j 的实体清单（归一化名）；skipped/failed 为空数组。 */
+  writtenEntities: Array<{ kind: string; name: string; role?: string }>;
   reason?: string;
   failures: string[];
 }
@@ -64,7 +66,7 @@ export async function writeDocumentGraph(
 
   // 0. 图未配置（NEO4J_PASSWORD 未设）-> skipped，非错误。
   if (!process.env.NEO4J_PASSWORD) {
-    return { status: 'skipped', nodeCount: 0, edgeCount: 0, reason: 'NEO4J_PASSWORD not set', failures: [] };
+    return { status: 'skipped', nodeCount: 0, edgeCount: 0, writtenEntities: [], reason: 'NEO4J_PASSWORD not set', failures: [] };
   }
 
   // 1. Document 节点（失败即整体 failed：没有锚点无法连边）。
@@ -83,11 +85,12 @@ export async function writeDocumentGraph(
     nodeCount += 1;
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
-    return { status: 'failed', nodeCount, edgeCount, reason, failures: [`Document:${reason}`] };
+    return { status: 'failed', nodeCount, edgeCount, writtenEntities: [], reason, failures: [`Document:${reason}`] };
   }
 
   // 2. 实体节点（归一化名；归一化后为空则跳过并记录）。
   const entityIds = new Map<string, string>(); // `${kind}:${norm}` -> elementId
+  const writtenEntities: GraphWriteResult['writtenEntities'] = [];
   for (const ent of input.entities) {
     const norm = normalizeName(ent.name);
     if (!norm) {
@@ -104,6 +107,7 @@ export async function writeDocumentGraph(
       });
       entityIds.set(key, node.elementId);
       nodeCount += 1;
+      writtenEntities.push({ kind: ent.kind, name: norm, ...(ent.role ? { role: ent.role } : {}) });
     } catch (e) {
       failures.push(`entity ${ent.kind}/${norm}: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -139,6 +143,7 @@ export async function writeDocumentGraph(
     status: failures.length === 0 ? 'ok' : 'partial',
     nodeCount,
     edgeCount,
+    writtenEntities,
     failures,
   };
 }

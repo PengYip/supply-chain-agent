@@ -66,6 +66,8 @@ export type DocumentReviewPayload = {
     status: 'ok' | 'partial' | 'failed' | 'skipped'
     nodeCount: number
     edgeCount: number
+    /** 确认时实际写入 Neo4j 的实体清单（归一化名）；skipped/failed 或旧数据无此字段。 */
+    entities?: Array<{ kind: string; name: string; role?: string }>
     reason?: string
     failures?: string[]
     writtenAt: string
@@ -236,6 +238,23 @@ const GraphStatusView: React.FC<{ g: NonNullable<DocumentReviewPayload['graphSta
           边 <span className="font-mono text-steelBlue">{g?.edgeCount ?? 0}</span>
         </span>
       </div>
+      {/* 确认时实际写入 Neo4j 的实体清单 chips；旧数据无 entities 时不渲染。 */}
+      {(g?.entities?.length ?? 0) > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-1">
+          {(g.entities ?? []).map((e, i) => (
+            <span
+              key={`${e.kind}-${e.name}-${i}`}
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border bg-bgGray/50 text-textDark border-borderGray/50"
+            >
+              <span className="font-mono text-steelBlue">{e.kind}</span>
+              <span className="font-medium">{e.name}</span>
+              {typeof e.role === 'string' && e.role.length > 0 && (
+                <span className="text-textGray">({e.role})</span>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
       {g?.reason && (
         <div className="text-[11px] text-textGray italic mt-1 line-clamp-2">{g.reason}</div>
       )}

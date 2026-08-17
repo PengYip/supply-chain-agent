@@ -84,6 +84,7 @@ export async function commitDocumentGraph(
       status: result.status,
       nodeCount: result.nodeCount,
       edgeCount: result.edgeCount,
+      ...(result.writtenEntities.length ? { entities: result.writtenEntities } : {}),
       ...(result.reason ? { reason: result.reason } : {}),
       ...(result.failures.length ? { failures: result.failures } : {}),
       writtenAt: new Date().toISOString(),
