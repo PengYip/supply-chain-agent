@@ -55,6 +55,14 @@ export function removeListItem(doc: Document, listPath: (string | number)[], ind
   doc.setIn(listPath, arr);
 }
 
+// 锚点键 (scoring 的 '4'..'1') 在 YAML 中可能为未加引号的 int (如 `4:`) 或 quoted string (`"4":`);
+// 返回能命中现有键的路径段 (int 键用 number, string 键用 string), 供 getIn/setIn 寻址,
+// 避免 string 寻址到 int 键时创建重复键。
+export function getAnchorKeyPath(doc: Document, basePath: (string | number)[], key: string): (string | number)[] {
+  if (getIn(doc, [...basePath, Number(key)]) !== undefined) return [...basePath, Number(key)];
+  return [...basePath, key];
+}
+
 export function docToText(doc: Document): string {
   // lineWidth 0: 长中文行不折行。
   return doc.toString({ lineWidth: 0 });

@@ -6,7 +6,7 @@ import clsx from 'clsx'
 import { ChevronDown, ChevronRight, Plus, X } from 'lucide-react'
 import type { Document } from 'yaml'
 import {
-  parseDatasetYaml, getIn, setIn, appendListItem, removeListItem, docToText,
+  parseDatasetYaml, getIn, setIn, appendListItem, removeListItem, docToText, getAnchorKeyPath,
 } from './yamlFormBridge'
 
 const inputCls = 'rounded border border-borderGray bg-white px-2 py-1 text-sm text-textDark disabled:opacity-50 disabled:bg-bgGray'
@@ -378,14 +378,18 @@ function RubricSection({ doc, index, readOnly, onChange }: { doc: Document; inde
                 </select>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                {ANCHORS.map(([key, label]) => (
-                  <div key={key}>
-                    <div className="text-xs text-textGray mb-1">{label}</div>
-                    <textarea rows={3} value={readStr(doc, [...scoring, key])} disabled={readOnly}
-                      onChange={(e) => { setIn(doc, [...scoring, key], e.target.value); onChange() }}
-                      className={textareaCls} />
-                  </div>
-                ))}
+                {ANCHORS.map(([key, label]) => {
+                  // 锚点键可能为 int (4:) 或 quoted string ("4:"), 经 bridge 探测键型寻址。
+                  const anchorPath = getAnchorKeyPath(doc, scoring, key)
+                  return (
+                    <div key={key}>
+                      <div className="text-xs text-textGray mb-1">{label}</div>
+                      <textarea rows={3} value={readStr(doc, anchorPath)} disabled={readOnly}
+                        onChange={(e) => { setIn(doc, anchorPath, e.target.value); onChange() }}
+                        className={textareaCls} />
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )
