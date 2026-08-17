@@ -77,6 +77,18 @@ boot). Required and notable vars:
 
 Switching DeepSeek → Qwen is env-only; do not change code.
 
+### Dev environment lives on 10.10.0.2
+
+The dev deployment runs on a LAN host: **`10.10.0.2:3001`**. Both the
+database (`pipeline.db`, `agent.db` SQLite files) and **MinIO** live on that
+host. Consequences:
+
+- The `pipeline.db` / `agent.db` copies under the local repo are **not** the
+  dev data — when debugging against real uploads/documents, inspect the DB and
+  MinIO buckets on 10.10.0.2, not local files.
+- A server responding on `localhost:3001` is a local instance; verify which
+  deployment you are actually hitting before concluding anything from its data.
+
 ## Backend notes that bite if missed
 
 - **Instrumentation first.** `apps/server/src/index.ts` imports
