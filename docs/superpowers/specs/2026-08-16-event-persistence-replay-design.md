@@ -23,8 +23,8 @@ Non-goals (explicitly out of scope):
 - Full event sourcing (deriving message snapshots from the event stream).
   `session_messages` remains the history SSOT; events are a replay buffer.
 - Postgres schema for `session_events` — deferred to the Postgres migration
-  project (same decision as phase 4). On `DB_BACKEND=postgres` the
-  persistence layer degrades to no-op (see §4.6).
+  project (same decision as phase 4). The harness sessionStore is
+  SQLite-only today; SQLite failure modes are handled by the guards in §4.6.
 - Cross-process replay (multi-instance deployment). Single Node process, same
   as the in-memory bus and RunManager today.
 
@@ -159,7 +159,14 @@ pruneSessionEvents(sessionId);
 ### 4.5 Frontend (minimal)
 
 - Native EventSource already stores the last received `id:` and resends it
-  as `Last-Event-ID` on automatic reconnect. No URL/param changes.
+  as `Last-Event-ID` on **automatic reconnect**. No URL/param changes.
+- **Mechanism split (shipped behavior)**: `Last-Event-ID` gap replay engages
+  only on an automatic reconnect of the SAME EventSource (transient network
+  drop). A **page refresh creates a fresh EventSource with no lastEventId**
+  (browsers do not persist it across page loads), so the server replay path
+  does NOT engage on refresh — completeness on refresh rides on the live
+  tail (the run is usually still streaming) plus the idle-snapshot reconcile
+  below.
 - `useSessionEvents`/`useSessionMessages` need no protocol change: replayed
   `message.part` events arrive in order with the same shape; the existing
   per-run chunk pipeline (lazy-start on first part for a known runId) merges
@@ -168,14 +175,21 @@ pruneSessionEvents(sessionId);
   (re)connect snapshot says `idle` while local state is `busy` (run finished
   while disconnected, events pruned), trigger the existing
   `refreshSnapshot()` so the final assistant message appears. This mirrors
-  the phase-1 "terminal status refresh" fix and closes the prune-race hole.
+  the phase-1 "terminal status refresh" fix, closes the prune-race hole, and
+  is also what makes the page-refresh path complete (refresh → run finishes
+  → idle snapshot → refreshSnapshot pulls the persisted final message).
 
-### 4.6 Postgres degradation
+### 4.6 Persistence-failure degradation (SQLite failure modes)
 
-`DB_BACKEND=postgres`: `appendSessionEvent` throws (table absent) → emit's
-try/catch logs and continues without seq → SSE omits id lines → replay
-unavailable, live streaming unaffected. Documented limitation until the
-Postgres migration project adds the table. (SQLite remains the default
+Note: the "Postgres backend" trigger named in the original draft cannot occur
+today — the harness `sessionStore` is unconditionally synchronous
+better-sqlite3 (`sessionStore.ts:5,19`); `DB_BACKEND` routes the pipeline db
+(`pipeline/db/dbBackend.ts`), not this store. The guards below are therefore
+not about Postgres but remain worthwhile hardening for real SQLite failure
+modes (disk full, corrupted DB file, locked WAL): if `appendSessionEvent`
+throws, emit's try/catch logs and continues without seq → SSE omits id lines
+→ replay unavailable, live streaming unaffected. Documented limitation until
+the Postgres migration project adds the table. (SQLite remains the default
 runtime today.)
 
 ## 5. Acceptance Criteria
@@ -191,9 +205,13 @@ runtime today.)
 4. Emit persists every event type (run.*, session.status, message.part) with
    monotonically increasing per-session seq.
 5. build → lint → test green (CI-equivalent: `DATABASE_URL= npm test`).
-6. Manual E2E: refresh the tab mid-run → reconnect replays missed parts →
-   final message complete, no duplicated bubbles; DB ground truth shows one
-   assistant row.
+6. Manual E2E: refresh the tab mid-run → final message complete, no
+   duplicated bubbles; DB ground truth shows one assistant row. Note the
+   refresh outcome is delivered via the §4.5 split's second mechanism
+   (live-tail + idle-snapshot reconcile), not the `Last-Event-ID` replay —
+   a fresh EventSource has no lastEventId. The replay path is exercised by
+   auto-reconnect (network drop) and covered by the integration test
+   (criterion 1).
 
 ## 6. Risks & Edges
 
@@ -206,10 +224,17 @@ runtime today.)
 - Browser tab closed during replay burst: `writer.write` rejections are
   already swallowed by the existing `.catch(() => {})`; cleanup on signal
   abort unchanged.
-- seq exhaustion/reset: per-session seq starts at 1 after prune; a client
-  holding a stale larger Last-Event-ID simply gets an empty replay (missed
-  nothing it could still use — snapshot covers). No wrap-around concern at
-  INTEGER scale.
+- seq exhaustion/reset: per-session seq starts at 1 after prune. **Cross-
+  generation caveat (shipped behavior)**: a client holding a stale larger
+  `Last-Event-ID` from run N does NOT "simply get an empty replay" — if it
+  reconnects during run N+1 (e.g. a network blip that outlives run N's
+  finalization and a new run's start), the server serves new-generation rows
+  with `seq > staleId` while skipping run N+1's head (seqs 1..staleId): a
+  non-empty replay of the wrong generation. Damage is bounded: the frontend
+  lazy pipeline joins mid-stream (missed head is transient) and the terminal
+  `refreshSnapshot()` heals the message list from `session_messages` SSOT.
+  Accepted; phase 3 may add a generation epoch or never-reset seq to make
+  stale ids unambiguous.
 
 ## 7. Testing Strategy
 
