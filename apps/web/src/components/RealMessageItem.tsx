@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -228,6 +228,58 @@ const SoftGateCard: React.FC<{
   )
 }
 
+/** Generic tool-result box, collapsed to a 2-line preview by default. The
+ *  展开/收起 toggle is only rendered when the clamped text actually overflows
+ *  (detected by measuring scrollHeight vs clientHeight while line-clamped, so
+ *  short one-line results stay clean). Expanded view preserves whitespace,
+ *  breaks long unbroken JSON strings, and scrolls past ~16rem instead of
+ *  stretching the chat bubble. */
+const ToolResultBox: React.FC<{ result: unknown }> = ({ result }) => {
+  const [expanded, setExpanded] = useState(false)
+  const [overflowing, setOverflowing] = useState(false)
+  const textRef = useRef<HTMLSpanElement | null>(null)
+  const text = formatResult(result)
+
+  // Measure while collapsed: line-clamp caps clientHeight at 2 lines, so
+  // scrollHeight beyond it means the full content is taller than the preview.
+  // ResizeObserver re-checks when the bubble width changes (max-w-[85%]).
+  useEffect(() => {
+    const el = textRef.current
+    if (!el || expanded) return
+    const measure = () => setOverflowing(el.scrollHeight > el.clientHeight + 1)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [expanded, text])
+
+  return (
+    <div className="mt-1.5 text-xs text-textDark bg-bgGray rounded px-2 py-1.5 border border-borderGray/50 flex items-start gap-1.5">
+      <Database className="w-3 h-3 text-steelBlue shrink-0 mt-0.5" />
+      <div className="min-w-0 flex-1">
+        <span
+          ref={textRef}
+          className={clsx(
+            'leading-relaxed whitespace-pre-wrap break-all',
+            expanded ? 'block max-h-64 overflow-auto' : 'line-clamp-2',
+          )}
+        >
+          {text}
+        </span>
+        {overflowing && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="mt-1 text-[11px] text-steelBlue hover:text-deepSea transition-colors"
+          >
+            {expanded ? '收起' : '展开'}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 const RealToolStep: React.FC<{ step: ToolCallStep }> = ({ step }) => {
   const isCompleted = step.status === 'completed'
   // `present_document_review` produces a rich 5-dimension review payload. When
@@ -262,10 +314,7 @@ const RealToolStep: React.FC<{ step: ToolCallStep }> = ({ step }) => {
               reviewPayload ? (
                 <DocumentReviewCard payload={reviewPayload} />
               ) : (
-                <div className="mt-1.5 text-xs text-textDark bg-bgGray rounded px-2 py-1.5 border border-borderGray/50 flex items-start gap-1.5">
-                  <Database className="w-3 h-3 text-steelBlue shrink-0 mt-0.5" />
-                  <span className="leading-relaxed">{formatResult(step.result)}</span>
-                </div>
+                <ToolResultBox result={step.result} />
               )
             )}
             {!isCompleted && (
