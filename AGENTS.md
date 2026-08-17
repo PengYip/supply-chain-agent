@@ -79,10 +79,30 @@ Switching DeepSeek → Qwen is env-only; do not change code.
 
 ### Dev environment lives on 10.10.0.2
 
-The dev deployment runs on a LAN host: **`10.10.0.2:3001`**. Both the
-database (`pipeline.db`, `agent.db` SQLite files) and **MinIO** live on that
-host. Consequences:
+The dev deployment runs on a LAN host: **`10.10.0.2:3001`** (`ssh ubuntu-server`,
+hostname `ubuntu`). Deployment dir `~/supply-chain-agent`, PM2 process
+`sca-server` (reload via `pm2 reload sca-server`; pushes to `main` trigger CI+CD
+which reloads it).
 
+Access cheat-sheet (verify before trusting local files):
+
+- **Pipeline DB = Postgres** in docker container `sca-pgvector` (port 5433,
+  user `sca`, db `sca`, creds in the remote `.env`). Query via
+  `ssh ubuntu-server "docker exec sca-pgvector psql -U sca -d sca -c '...'"`
+  (Chinese output works fine). Harness session DB is still SQLite:
+  `~/supply-chain-agent/apps/server/data/agent.db`.
+  Remote `.env`: `DB_BACKEND=postgres`, `MINIO_ENDPOINT=localhost:9000`.
+- **MinIO** in container `minio_docker`, bucket `sca-files`, objects keyed
+  `users/<user_id>/<uuid>-<filename>` (folder uploads insert a path segment,
+  e.g. `users/<user_id>/合同/...`). The container image lacks `find` and a full
+  shell — use `sh -c 'ls ...'`.
+- **Uploaded files** are flattened to `INGEST_ROOT` =
+  `/home/ubuntu/supply-chain-agent/ingest-root` as
+  `<key with / replaced by _>.<ext>`; `documents.source_uri` points there and
+  parsing reads from that path.
+- **Node version trap:** remote `better-sqlite3` is compiled against nvm node
+  v20 while the system node is 18 — run remote node scripts with
+  `~/.nvm/versions/node/v20.20.2/bin/node`.
 - The `pipeline.db` / `agent.db` copies under the local repo are **not** the
   dev data — when debugging against real uploads/documents, inspect the DB and
   MinIO buckets on 10.10.0.2, not local files.
