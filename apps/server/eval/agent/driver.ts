@@ -46,15 +46,19 @@ interface AgentTurnResult {
 
 // One runStream invocation: consume fullStream for tool results + usage,
 // await response for final messages. Mirrors e2e-loop.test.ts consumption.
+// skipStatusMessage must be true for L2 approval-resume turns: the trailing
+// role:'tool' tool-approval-response has to stay the LAST message for the SDK's
+// approval pairing (same option approvalCallback.ts sets on its resume runs).
 async function runAgentTurn(
   opts: DriverOpts,
   sessionId: string,
   messages: ModelMessage[],
+  skipStatusMessage = false,
 ): Promise<AgentTurnResult> {
   // Tools resolve their session via AsyncLocalStorage (sessionContext.ts);
   // wrap the turn so audit-stamped executes find the right sessionId.
   return runSessionContext({ sessionId, role: 'trader' }, () =>
-    runAgentTurnInner(opts, sessionId, messages),
+    runAgentTurnInner(opts, sessionId, messages, skipStatusMessage),
   );
 }
 
@@ -62,6 +66,7 @@ async function runAgentTurnInner(
   opts: DriverOpts,
   sessionId: string,
   messages: ModelMessage[],
+  skipStatusMessage: boolean,
 ): Promise<AgentTurnResult> {
   const result = await runStream({
     messages,
@@ -70,6 +75,7 @@ async function runAgentTurnInner(
     sessionId,
     model: opts.agentModel,
     deps: opts.deps as HarnessDeps,
+    skipStatusMessage,
   });
   const toolResults: ToolCallObservation[] = [];
   const usage: UsageSummary = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
@@ -148,11 +154,29 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
   let finalAssistantText = '';
   let simError: string | undefined;
 
-  // Transient L2 tool-approval-response messages: NEVER persisted, carried
-  // into the next loop iteration's runAgentTurn only.
-  const l2ResumeQueue: ModelMessage[] = [];
-
   const emit = (e: EvalRunEvent) => { opts.onEvent?.(e); };
+
+  // Shared bookkeeping for every agent turn (main / deny-resume / approve-resume).
+  // Also tracks the exact prompt/response of the most recent turn: the L2
+  // approval-resume must be built from them (see the L2 branch below).
+  let lastPrompt: ModelMessage[] = [];
+  let lastResponse: ModelMessage[] = [];
+  const bookkeepTurn = (turn: AgentTurnResult, promptMessages: ModelMessage[]) => {
+    lastPrompt = promptMessages;
+    lastResponse = turn.responseMessages;
+    turnsUsed++;
+    toolCalls.push(...turn.toolResults);
+    for (const t of turn.toolResults) emit({ type: 'tool_call', scenarioId: scenario.id, runIndex, toolName: t.toolName });
+    totalUsage.inputTokens += turn.usage.inputTokens;
+    totalUsage.outputTokens += turn.usage.outputTokens;
+    totalUsage.totalTokens += turn.usage.totalTokens;
+    finalAssistantText = turn.finalText;
+    transcript.push({ role: 'assistant', text: turn.finalText });
+    emit({ type: 'turn', scenarioId: scenario.id, runIndex, role: 'assistant', text: turn.finalText });
+    appendMessages(sessionId, [{
+      id: randomUUID(), role: 'assistant', parts: [{ type: 'text', text: turn.finalText }],
+    } as UIMessage]);
+  };
 
   try {
     let conversationOver = false;
@@ -182,26 +206,9 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
         ? await convertToModelMessages(loaded.messages)
         : [];
 
-      // 3. Run one agent turn (with any queued transient L2 resume messages).
-      const turn = await runAgentTurn(opts, sessionId, [...baseMessages, ...l2ResumeQueue]);
-      l2ResumeQueue.length = 0;
-      turnsUsed++;
-      toolCalls.push(...turn.toolResults);
-      for (const t of turn.toolResults) emit({ type: 'tool_call', scenarioId: scenario.id, runIndex: opts.runIndex, toolName: t.toolName });
-      totalUsage.inputTokens += turn.usage.inputTokens;
-      totalUsage.outputTokens += turn.usage.outputTokens;
-      totalUsage.totalTokens += turn.usage.totalTokens;
-      finalAssistantText = turn.finalText;
-      transcript.push({ role: 'assistant', text: turn.finalText });
-      emit({ type: 'turn', scenarioId: scenario.id, runIndex: opts.runIndex, role: 'assistant', text: turn.finalText });
-
-      // 4. Persist the assistant message (UIMessage form built from response).
-      const assistantUIMessage: UIMessage = {
-        id: randomUUID(),
-        role: 'assistant',
-        parts: [{ type: 'text', text: turn.finalText }],
-      } as UIMessage;
-      appendMessages(sessionId, [assistantUIMessage]);
+      // 3. Run one agent turn.
+      const turn = await runAgentTurn(opts, sessionId, baseMessages);
+      bookkeepTurn(turn, baseMessages);
 
       // 5. Simulate the human approver on pending items (L2 + L3), then resume.
       const pending = listPending(sessionId);
@@ -229,22 +236,11 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
           transcript.push({ role: 'system-note', text: `approval denied: ${p.tool_name} (${decision.reason})` });
           emit({ type: 'turn', scenarioId: scenario.id, runIndex: opts.runIndex, role: 'system-note', text: `approval denied: ${p.tool_name} (${decision.reason})` });
           const reload = loadSession(sessionId);
-          const denyTurn = await runAgentTurn(
-            opts, sessionId,
-            reload && reload.messages.length > 0 ? await convertToModelMessages(reload.messages) : [],
-          );
-          turnsUsed++;
-          toolCalls.push(...denyTurn.toolResults);
-          for (const t of denyTurn.toolResults) emit({ type: 'tool_call', scenarioId: scenario.id, runIndex: opts.runIndex, toolName: t.toolName });
-          totalUsage.inputTokens += denyTurn.usage.inputTokens;
-          totalUsage.outputTokens += denyTurn.usage.outputTokens;
-          totalUsage.totalTokens += denyTurn.usage.totalTokens;
-          finalAssistantText = denyTurn.finalText;
-          transcript.push({ role: 'assistant', text: denyTurn.finalText });
-          emit({ type: 'turn', scenarioId: scenario.id, runIndex: opts.runIndex, role: 'assistant', text: denyTurn.finalText });
-          appendMessages(sessionId, [{
-            id: randomUUID(), role: 'assistant', parts: [{ type: 'text', text: denyTurn.finalText }],
-          } as UIMessage]);
+          const denyPrompt = reload && reload.messages.length > 0
+            ? await convertToModelMessages(reload.messages)
+            : [];
+          const denyTurn = await runAgentTurn(opts, sessionId, denyPrompt);
+          bookkeepTurn(denyTurn, denyPrompt);
           continue;
         }
 
@@ -258,36 +254,42 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
           transcript.push({ role: 'system-note', text: `approval approved: ${p.tool_name} (${p.id})` });
           emit({ type: 'turn', scenarioId: scenario.id, runIndex: opts.runIndex, role: 'system-note', text: `approval approved: ${p.tool_name} (${p.id})` });
           const reload = loadSession(sessionId);
-          const resumeTurn = await runAgentTurn(
-            opts, sessionId,
-            reload && reload.messages.length > 0 ? await convertToModelMessages(reload.messages) : [],
-          );
-          turnsUsed++;
-          toolCalls.push(...resumeTurn.toolResults);
-          for (const t of resumeTurn.toolResults) emit({ type: 'tool_call', scenarioId: scenario.id, runIndex: opts.runIndex, toolName: t.toolName });
-          totalUsage.inputTokens += resumeTurn.usage.inputTokens;
-          totalUsage.outputTokens += resumeTurn.usage.outputTokens;
-          totalUsage.totalTokens += resumeTurn.usage.totalTokens;
-          finalAssistantText = resumeTurn.finalText;
-          transcript.push({ role: 'assistant', text: resumeTurn.finalText });
-          emit({ type: 'turn', scenarioId: scenario.id, runIndex: opts.runIndex, role: 'assistant', text: resumeTurn.finalText });
-          appendMessages(sessionId, [{
-            id: randomUUID(), role: 'assistant', parts: [{ type: 'text', text: resumeTurn.finalText }],
-          } as UIMessage]);
+          const l3Prompt = reload && reload.messages.length > 0
+            ? await convertToModelMessages(reload.messages)
+            : [];
+          const resumeTurn = await runAgentTurn(opts, sessionId, l3Prompt);
+          bookkeepTurn(resumeTurn, l3Prompt);
         } else {
-          // L2 approve: transient tool-approval-response on the NEXT turn's
-          // messages (approvalCallback.ts:212-223). Prepend it as an extra
-          // message carried into the next loop iteration's runAgentTurn.
-          l2ResumeQueue.push({
-            role: 'tool',
-            content: [{
-              type: 'tool-approval-response',
-              approvalId: p.id,
-              toolCallId: p.tool_call_id ?? p.id,
-              approved: true,
-              reason: decision.reason,
-            }],
-          } as unknown as ModelMessage);
+          // L2 approve: resume IMMEDIATELY (mirrors approvalCallback.ts, whose
+          // startSessionRun runs the resume turn right after the callback) with
+          // the transient tool-approval-response as the LAST message.
+          //
+          // The resume prompt is rebuilt from the requesting turn's EXACT
+          // prompt + response, NOT the session history: the SDK pairs the
+          // tool-approval-response with the assistant tool-call part, which the
+          // session's text-only assistant persistence drops. Rebuilding from
+          // the reloaded text-only history (or deferring to the next user
+          // turn) breaks the pairing, so the approved tool never executes and
+          // the model re-issues it --looping approve/re-issue forever.
+          // Sequential L2 approvals stay consistent: each resume's
+          // prompt/response become lastPrompt/lastResponse, so a later
+          // approval from the same turn still pairs against its tool-call.
+          const l2ResumeMessages: ModelMessage[] = [
+            ...lastPrompt,
+            ...lastResponse,
+            {
+              role: 'tool',
+              content: [{
+                type: 'tool-approval-response',
+                approvalId: p.id,
+                toolCallId: p.tool_call_id ?? p.id,
+                approved: true,
+                reason: decision.reason,
+              }],
+            } as unknown as ModelMessage,
+          ];
+          const resumeTurn = await runAgentTurn(opts, sessionId, l2ResumeMessages, true);
+          bookkeepTurn(resumeTurn, l2ResumeMessages);
         }
       }
     }

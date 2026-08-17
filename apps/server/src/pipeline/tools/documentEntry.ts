@@ -694,9 +694,14 @@ export function buildIngestDocumentTool(deps: ToolDeps) {
     description:
       '录入一份原始单据(合同/发票/提单/装箱单)。解析文件为结构化 BlockModel 并持久化, ' +
       '内置分类器自动判定单据类型(docType 为可选提示, 分类器会确认或纠正)并打自动标签, ' +
-      '返回 docId、分类结果(classifiedDocType / confidence / source)与标签。不抽取业务字段(用 extract_fields)。',
+      '返回 docId、分类结果(classifiedDocType / confidence / source)、标签与向量化状态。' +
+      '抽取模型可用时, 录入后自动做字段抽取(含合同台账回写), 无需再调 extract_fields; ' +
+      '仅在需要重抽或抽取失败时才用 extract_fields。' +
+      '调用示例: 1) 最小调用 {sourceUri: "<INGEST_ROOT>/合同.txt", modality: "digital"}; ' +
+      '2) 带类型提示 {sourceUri: "<INGEST_ROOT>/提单.txt", modality: "scanned", docType: "提单"} ' +
+      '(scanned 需在同目录有 <文件名>.mineru.json)。仅接受位于服务端 INGEST_ROOT 目录内的路径, 目录外路径会被拒绝。',
     inputSchema: z.object({
-      sourceUri: z.string().min(1).describe('本地文件路径 (PDF/TXT/DOCX); scanned 还需配套 <sourceUri>.mineru.json'),
+      sourceUri: z.string().min(1).describe('本地文件路径 (PDF/TXT/DOCX), 必须位于服务端 INGEST_ROOT 目录内; scanned 还需配套 <sourceUri>.mineru.json'),
       docType: z.enum(['合同', '发票', '提单', '装箱单', '其他']).optional()
         .describe('可选的单据类型提示; 分类器会确认或纠正。省略时由分类器决定'),
       modality: z.enum(['digital', 'scanned']),

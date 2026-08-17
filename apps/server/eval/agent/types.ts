@@ -53,6 +53,10 @@ export const VerifierChecksSchema = z.object({
   forbidden: z.array(z.string()).default([]),
   /** Substrings that must appear in the final assistant reply (content check). */
   keywordInReply: z.array(z.string()).default([]),
+  /** Substrings that must appear in ANY assistant turn across the episode.
+   * Use for multi-turn flows where the fact-of-record is stated mid-conversation
+   * and the final turn may be a wrap-up/farewell. */
+  keywordInTranscript: z.array(z.string()).default([]),
 });
 export type VerifierChecks = z.infer<typeof VerifierChecksSchema>;
 
@@ -71,7 +75,7 @@ export const ScenarioSchema = z.object({
   maxTurns: z.number().int().min(1).max(20).default(8),
   verifiers: VerifierChecksSchema.default({
     payments: [], paymentsAbsent: [], contractLinked: [],
-    mustAppear: [], forbidden: [], keywordInReply: [],
+    mustAppear: [], forbidden: [], keywordInReply: [], keywordInTranscript: [],
   }),
   rubric: RubricSchema,
 });

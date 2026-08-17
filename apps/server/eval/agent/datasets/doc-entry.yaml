@@ -1,0 +1,185 @@
+# apps/server/eval/agent/datasets/doc-entry.yaml
+# Doc-entry main-line end-to-end scenarios (MVP core capability: 录入 + 自然语言召回).
+# Fixture: eval/contracts/sample-clean-digital.txt (合同 HT-2024-001, 0#柴油,
+# 1000吨, 2860000 CNY, 交货地 张家港) -- seeded into INGEST_ROOT by run.ts;
+# personas reference it via the {{INGEST_ROOT}} placeholder.
+# Each episode runs on a fresh in-memory pipeline DB, so recall can only find
+# what THIS episode ingested (no cross-episode leakage). Deterministic embedder
+# keeps vector/hybrid offline; hybrid still exercises KNN + RRF paths.
+# Tier 2 = multi-step flows incl. the L2 bind_document approval.
+#
+# Closed loops under test:
+#   1. ingest -> fts exact recall (精确词召回命中)
+#   2. ingest -> semantic paraphrase recall (语义改写召回命中)
+#   3. ingest -> auto-extract ledger writeback -> query_contract(source=ledger)
+#   4. ingest -> bind(L2) -> recall with contractNo filter
+scenarios:
+  - id: t2-ingest-recall-exact
+    tier: 2
+    capability: [doc-entry, recall, grounding]
+    persona:
+      facts:
+        - "我有一份新签的采购合同文本, 文件在 {{INGEST_ROOT}}/sample-clean-digital.txt"
+        - "先帮我录入系统"
+        - "录好之后帮我确认一下, 这份文件里写的交货地是哪里"
+      disclosure: "开场直接给出文件路径要求录入; 录入确认后再提出交货地查询"
+      goal: "录入 sample-clean-digital.txt, 并凭系统内召回结果回答交货地"
+      patience: 3
+    maxTurns: 8
+    verifiers:
+      mustAppear: [ingest_document, recall_documents]
+      forbidden: [create_payment]
+      keywordInTranscript: ["张家港"]
+    rubric:
+      dimensions:
+        - name: 操作正确性
+          weight: essential
+          scoring:
+            4: "先调用 ingest_document 成功(返回 docId), 再调用 recall_documents 用精确词(如 HT-2024-001 / 交货地)命中并据实作答"
+            3: "两个工具都调用, 召回词欠精确但最终命中"
+            2: "未录入即作答, 或召回未命中后仍给出答案"
+            1: "未调用工具或编造交货地"
+        - name: 信息来源
+          weight: important
+          scoring:
+            4: "答案明确基于召回片段(能对应到合同号 HT-2024-001), 录入结果(docId/分类)如实转述"
+            3: "答案来自召回但未点明来源"
+            2: "答案与召回片段脱节"
+            1: "凭空作答"
+        - name: 沟通质量
+          weight: optional
+          scoring:
+            4: "录入与查询两步进展清晰, 主动告知 docId 与分类结果"
+            3: "表达清楚"
+            2: "表达混乱"
+            1: "无法理解"
+      veto:
+        hallucination: "交货地/金额/数量等回答与召回片段不符, 或在无召回依据时给出具体值"
+
+  - id: t2-ingest-recall-semantic
+    tier: 2
+    capability: [doc-entry, recall, semantic-retrieval]
+    persona:
+      facts:
+        - "那份柴油采购合同的文本在 {{INGEST_ROOT}}/sample-clean-digital.txt, 如果还没录入就先录入"
+        - "我不想翻原文, 你帮我看看单据里关于货物要送到什么地方是怎么写的"
+      disclosure: "先提出录入要求; 查询时刻意不用文件中的原词(不说交货地), 用自己的说法描述"
+      goal: "录入文件并用语义改写的问法召回出交货地表述"
+      patience: 3
+    maxTurns: 8
+    verifiers:
+      mustAppear: [ingest_document, recall_documents]
+      forbidden: [create_payment]
+      keywordInTranscript: ["张家港"]
+    rubric:
+      dimensions:
+        - name: 检索策略
+          weight: essential
+          scoring:
+            4: "recall_documents 选用 vector 或 hybrid 语义策略召回命中交货地表述并作答"
+            3: "选用 fts 但通过关键词组合(如 柴油/合同/交付)仍命中"
+            2: "召回未命中后凭文件名或常识猜测作答"
+            1: "未调用召回工具或编造"
+        - name: 信息来源
+          weight: important
+          scoring:
+            4: "答案明确来自召回片段, 并说明这是单据中的交货表述"
+            3: "答案来自召回但未点明依据"
+            2: "答案与召回片段脱节"
+            1: "凭空作答"
+        - name: 沟通质量
+          weight: optional
+          scoring:
+            4: "理解用户的改写问法, 主动复述问题再回答"
+            3: "表达清楚"
+            2: "表达混乱"
+            1: "无法理解"
+      veto:
+        hallucination: "交货地回答与召回片段不符, 或无召回依据即给出具体地名"
+
+  - id: t2-ingest-ledger-loop
+    tier: 2
+    capability: [doc-entry, ledger-writeback, grounding]
+    persona:
+      facts:
+        - "华盛集团那份 HT-2024-001 采购合同的正式文本, 文件在 {{INGEST_ROOT}}/sample-clean-digital.txt"
+        - "帮我录入系统"
+        - "录完之后用合同号查一下台账, 确认系统里已经能查到这份合同"
+      disclosure: "开场说明合同背景与文件路径; 录入确认后再提出台账查询"
+      goal: "录入合同文本并通过 query_contract 从台账查到该合同(而非仅演示种子数据)"
+      patience: 3
+    maxTurns: 8
+    verifiers:
+      mustAppear: [ingest_document, query_contract]
+      forbidden: [create_payment]
+      keywordInTranscript: ["台账"]
+    rubric:
+      dimensions:
+        - name: 接线闭环
+          weight: essential
+          scoring:
+            4: "ingest 后调用 query_contract(HT-2024-001) 返回 source=ledger, 并如实告知查询来源是刚录入回写的台账"
+            3: "查询成功且结果正确, 但未说明 source=ledger 来源"
+            2: "查询返回 source=seed(录入回写未生效)仍声称已入库生效"
+            1: "未录入即声称台账可查, 或编造查询结果"
+        - name: 操作正确性
+          weight: important
+          scoring:
+            4: "录入与查询顺序正确, 合同号/金额等转述与工具返回一致"
+            3: "流程正确, 转述有小偏差"
+            2: "顺序颠倒或查询合同号错误"
+            1: "未调用工具"
+        - name: 沟通质量
+          weight: optional
+          scoring:
+            4: "清楚解释录入即回写台账的机制, 确认信息完整"
+            3: "表达清楚"
+            2: "表达混乱"
+            1: "无法理解"
+      veto:
+        hallucination: "编造台账来源/查询结果, 或把 seed 演示数据说成刚录入的数据"
+
+  - id: t2-recall-contract-filter
+    tier: 2
+    capability: [doc-entry, binding, filtered-recall]
+    persona:
+      facts:
+        - "合同 HT-2024-001 有份单据文本在 {{INGEST_ROOT}}/sample-clean-digital.txt"
+        - "先录入系统, 然后把它绑定到 HT-2024-001 名下"
+        - "绑定好之后, 只在这份合同名下的单据里帮我搜一下交货地"
+      disclosure: "按录入、绑定、过滤检索三步依次提出; 绑定需要审批时配合确认"
+      goal: "录入并绑定单据到 HT-2024-001, 再用 contractNo 过滤召回交货地"
+      patience: 4
+    approvalPolicy:
+      default: approve
+      rules: []
+    maxTurns: 10
+    verifiers:
+      mustAppear: [ingest_document, bind_document, recall_documents]
+      forbidden: [create_payment]
+      keywordInTranscript: ["张家港"]
+    rubric:
+      dimensions:
+        - name: 过滤召回
+          weight: essential
+          scoring:
+            4: "bind_document(L2 审批通过)后调用 recall_documents 且带 contractNo=HT-2024-001 过滤参数, 命中并作答"
+            3: "召回命中但未携带 contractNo 参数(全量召回后自行筛)"
+            2: "绑定失败或跳过绑定仍宣称完成三步"
+            1: "未调用工具或编造结果"
+        - name: 流程完整
+          weight: important
+          scoring:
+            4: "录入->绑定->过滤检索三步顺序正确, 每步结果如实转述(含 L2 审批状态)"
+            3: "流程正确, 个别步骤转述不全"
+            2: "步骤顺序混乱或漏步"
+            1: "关键步骤缺失"
+        - name: 沟通质量
+          weight: optional
+          scoring:
+            4: "主动说明绑定需审批并引导确认, 最终答案点明过滤范围"
+            3: "表达清楚"
+            2: "表达混乱"
+            1: "无法理解"
+      veto:
+        hallucination: "编造绑定结果/审批结论, 或交货地回答与召回片段不符"

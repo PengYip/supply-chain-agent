@@ -158,7 +158,16 @@ async function resolveStrategy(
 export function buildRecallDocumentsTool(deps: RecallToolDeps) {
   return tool({
     description:
-      '召回已录入单据的文本片段(L4 检索层)。strategy: fts=FTS5 BM25 关键词; vector=sqlite-vec 余弦 KNN 语义; hybrid=两者 RRF 融合(默认)。返回片段 + document_id + score + source。未命中时 fts 返回空(不编造); vector/hybrid 在 sqlite-vec 不可用时自动降级为 fts。contractNo 可按合同号过滤, 只返回绑定到该合同的文档片段。wantTags 标签过滤无命中时已自动放宽(响应带 tagFilterFallback=true, 如实说明即可)。',
+      '召回已录入单据的文本片段(L4 检索层), 用于任何"找单据原文/查文档内容"类问题。' +
+      'strategy 何时选哪个: 用户给出精确词(合同号/单据号/物料编码/专有名词)选 fts; ' +
+      '用户换说法或语义描述(如"关于烧碱采购的那批文件")选 vector; 不确定时用默认 hybrid。' +
+      '(fts=FTS5 BM25 关键词, 多词空格分隔按 AND; vector=sqlite-vec 余弦 KNN 语义; hybrid=两者 RRF 融合。) ' +
+      '返回片段 + document_id + score + source。未命中时 fts 返回空(不编造); ' +
+      'vector/hybrid 在 sqlite-vec 不可用时自动降级为 fts。' +
+      'contractNo 可按合同号过滤, 只返回绑定到该合同的文档片段。' +
+      'wantTags 标签过滤无命中时已自动放宽(响应带 tagFilterFallback=true, 如实说明即可)。' +
+      '调用示例: 1) 按单据号精确找原文 {query: "BL-2024-0920-002", strategy: "fts"}; ' +
+      '2) 语义召回并按合同过滤 {query: "烧碱采购付款条款", strategy: "hybrid", contractNo: "HT-2024-001", limit: 5}。',
     inputSchema: z.object({
       query: z
         .string()

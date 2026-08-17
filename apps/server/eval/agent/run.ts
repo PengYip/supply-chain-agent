@@ -4,7 +4,9 @@
 // model (EVAL_JUDGE_*, falling back to the main model config). Intentionally
 // NOT part of npm test (online); unit tests cover the offline pieces.
 import { createOpenAI } from '@ai-sdk/openai';
+import { copyFileSync, mkdirSync } from 'node:fs';
 import { env } from '../../src/env.js';
+import { defaultEmbedder } from '../../src/pipeline/ingestModel.js';
 import { loadDataset } from './datasets.js';
 import { runEpisode } from './driver.js';
 import { runVerifiers } from './verifiers.js';
@@ -12,8 +14,9 @@ import { judgeEpisode } from './judge.js';
 import { aggregateScore } from './scoring.js';
 import { writeResults } from './reporter.js';
 import { formatEventLine, type EvalRunEvent } from './events.js';
-import type { EpisodeArtifact, EpisodeScore } from './types.js';
+import type { EpisodeArtifact, EpisodeScore, Scenario } from './types.js';
 import { createDb, migrate } from '../../src/pipeline/db/client.js';
+import { enableVec } from '../../src/pipeline/db/vecStore.js';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,6 +24,29 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 function arg(name: string): string | undefined {
   return process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=')[1];
+}
+
+/**
+ * Replace {{INGEST_ROOT}} placeholders in scenario text with the resolved
+ * ingest root. Doc-entry personas reference fixture paths through this
+ * placeholder so the same dataset works on any checkout / INGEST_ROOT config.
+ * JSON-level replace: backslashes in Windows paths must be escaped to keep the
+ * intermediate JSON string valid.
+ */
+function hydrateIngestRoot(s: Scenario, root: string): Scenario {
+  const jsonSafeRoot = root.replaceAll('\\', '\\\\');
+  return JSON.parse(JSON.stringify(s).replaceAll('{{INGEST_ROOT}}', jsonSafeRoot)) as Scenario;
+}
+
+/** Copy the doc-entry fixtures into INGEST_ROOT (assertWithinRoot allowlist). */
+function seedFixturesIntoIngestRoot(): string {
+  const root = resolve(env.INGEST_ROOT);
+  mkdirSync(root, { recursive: true });
+  copyFileSync(
+    resolve(here, '..', 'contracts', 'sample-clean-digital.txt'),
+    resolve(root, 'sample-clean-digital.txt'),
+  );
+  return root;
 }
 
 async function main() {
@@ -32,7 +58,13 @@ async function main() {
     ? datasetArg
     : resolve(here, datasetArg);
 
-  const scenarios = loadDataset(datasetPath).filter((s) => !filter || s.id === filter);
+  // Doc-entry datasets reference fixtures via {{INGEST_ROOT}}; seed them before
+  // episodes run. Harmless for datasets without the placeholder.
+  const ingestRoot = seedFixturesIntoIngestRoot();
+
+  const scenarios = loadDataset(datasetPath)
+    .filter((s) => !filter || s.id === filter)
+    .map((s) => hydrateIngestRoot(s, ingestRoot));
   if (scenarios.length === 0) {
     console.error(`no scenarios matched (dataset=${datasetPath}, filter=${filter ?? '-'})`);
     process.exit(1);
@@ -62,14 +94,20 @@ async function main() {
       console.error(`[eval] scenario=${scenario.id} run=${run}/${runs} ...`);
       emit({ type: 'scenario_started', scenarioId: scenario.id, runIndex: run });
       // Fresh in-memory pipeline DB per episode; extraction shares the agent model.
+      // Deterministic embedder (Ollama unset) keeps vector/hybrid recall offline
+      // and reproducible -- enough to exercise the KNN + RRF paths deterministically.
+      // enableVec mirrors dbBackend.ts / pipeline tests: migrate() alone does not
+      // load sqlite-vec or create doc_chunk_vec, so vector recall would silently
+      // degrade to fts without it.
       const ctx = createDb(':memory:');
       migrate(ctx.sqlite);
+      enableVec(ctx.sqlite);
       const artifact = await runEpisode({
         scenario,
         runIndex: run,
         agentModel,
         simModel,
-        deps: { ctx, extraction: { model: agentModel } },
+        deps: { ctx, extraction: { model: agentModel }, embedder: defaultEmbedder() },
         onEvent: emit,
       });
       const verifier = runVerifiers(scenario.verifiers, artifact);

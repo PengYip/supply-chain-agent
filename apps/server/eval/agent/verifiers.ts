@@ -62,5 +62,16 @@ export function runVerifiers(checks: VerifierChecks, artifact: EpisodeArtifact):
       failures.push({ check: 'keywordInReply', detail: `最终回复缺少关键词 "${kw}"` });
     }
   }
+  // Any-assistant-turn variant: the fact-of-record may be stated mid-conversation
+  // with a farewell/wrap-up as the final turn (multi-turn disclosure scenarios).
+  const assistantText = artifact.transcript
+    .filter((t) => t.role === 'assistant')
+    .map((t) => t.text)
+    .join('\n');
+  for (const kw of checks.keywordInTranscript) {
+    if (!assistantText.includes(kw)) {
+      failures.push({ check: 'keywordInTranscript', detail: `全部 assistant 轮次中均未出现关键词 "${kw}"` });
+    }
+  }
   return { passed: failures.length === 0, failures };
 }

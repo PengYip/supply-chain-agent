@@ -13,7 +13,7 @@ function artifact(partial: Partial<EpisodeArtifact>): EpisodeArtifact {
   };
 }
 
-const noChecks = { payments: [], paymentsAbsent: [], contractLinked: [], mustAppear: [], forbidden: [], keywordInReply: [] };
+const noChecks = { payments: [], paymentsAbsent: [], contractLinked: [], mustAppear: [], forbidden: [], keywordInReply: [], keywordInTranscript: [] };
 
 describe('runVerifiers', () => {
   it('passes when all checks hold', () => {
@@ -65,6 +65,44 @@ describe('runVerifiers', () => {
       artifact({ finalAssistantText: '一切正常' }),
     );
     expect(r.failures[0]!.check).toBe('keywordInReply');
+  });
+  it('keywordInTranscript passes when the fact appears in a mid-conversation assistant turn', () => {
+    const r = runVerifiers(
+      { ...noChecks, keywordInTranscript: ['张家港'] },
+      artifact({
+        finalAssistantText: '不客气, 有需要随时找我。',
+        transcript: [
+          { role: 'user', text: '交货地是哪里' },
+          { role: 'assistant', text: '交货地点: 张家港 (引用自单据原文)' },
+          { role: 'user', text: '好的谢谢' },
+          { role: 'assistant', text: '不客气, 有需要随时找我。' },
+        ],
+      }),
+    );
+    expect(r.passed).toBe(true);
+  });
+  it('keywordInTranscript fails when no assistant turn contains the keyword', () => {
+    const r = runVerifiers(
+      { ...noChecks, keywordInTranscript: ['张家港'] },
+      artifact({
+        finalAssistantText: '没查到相关内容',
+        transcript: [{ role: 'user', text: '交货地' }, { role: 'assistant', text: '没查到相关内容' }],
+      }),
+    );
+    expect(r.failures[0]!.check).toBe('keywordInTranscript');
+  });
+  it('keywordInTranscript ignores user/system-note turns', () => {
+    const r = runVerifiers(
+      { ...noChecks, keywordInTranscript: ['张家港'] },
+      artifact({
+        finalAssistantText: '未找到',
+        transcript: [
+          { role: 'user', text: '合同上写的是张家港吧' },
+          { role: 'assistant', text: '系统内未找到相关单据' },
+        ],
+      }),
+    );
+    expect(r.failures[0]!.check).toBe('keywordInTranscript');
   });
   it('fails a missing contract link', () => {
     const r = runVerifiers(
