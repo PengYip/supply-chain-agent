@@ -1,11 +1,13 @@
 // apps/web/src/components/eval/EvalDatasetEditor.tsx
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import clsx from 'clsx'
 import { Save, Play, Trash2, Copy, Plus } from 'lucide-react'
 import {
   getEvalDataset, putEvalDataset, copyEvalDataset, deleteEvalDataset,
 } from '../../api/evalDatasets'
 import { useEvalDatasets } from '../../hooks/useEvalDatasets'
+import { parseDatasetYaml } from './yamlFormBridge'
+import { DatasetFormView } from './DatasetFormView'
 
 // 最小合法单场景模板 (zod: scoring 锚点键需加引号)。
 const NEW_DATASET_TEMPLATE = `scenarios:
@@ -39,6 +41,13 @@ export function EvalDatasetEditor({ onRunFromDataset }: { onRunFromDataset: (nam
   const [copySource, setCopySource] = useState('core')
   const [copyName, setCopyName] = useState('')
   const [createName, setCreateName] = useState('')
+  const [mode, setMode] = useState<'form' | 'yaml'>('form')
+
+  // 双模式解析探测: form tab 禁用 + 已处 form 时非法文本自动回退 yaml。
+  const parsed = useMemo(() => parseDatasetYaml(yaml), [yaml])
+  useEffect(() => {
+    if (mode === 'form' && !parsed.ok) setMode('yaml')
+  }, [mode, parsed.ok])
 
   // 未保存内容离开页面时守卫。
   useEffect(() => {
@@ -63,6 +72,8 @@ export function EvalDatasetEditor({ onRunFromDataset }: { onRunFromDataset: (nam
       setBuiltin(detail.builtin)
       setYaml(detail.yaml)
       setDirty(false)
+      // 打开数据集时表单态重置 (若新文本非法, 上面的回退 effect 会落回 yaml)。
+      setMode('form')
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -229,8 +240,31 @@ export function EvalDatasetEditor({ onRunFromDataset }: { onRunFromDataset: (nam
           {saveError && (
             <div className="px-4 py-2 text-xs text-danger border-b border-borderGray whitespace-pre-wrap">{saveError}</div>
           )}
+          <div className="flex items-center gap-1 px-4 pt-2 border-b border-borderGray">
+            <button type="button" onClick={() => setMode('form')} disabled={!parsed.ok}
+              title={!parsed.ok ? 'YAML 解析失败, 无法切换到表单' : undefined}
+              className={clsx('px-3 py-1.5 text-sm rounded-t-lg border-b-2 -mb-px',
+                mode === 'form' ? 'text-deepSea border-deepSea font-medium' : 'text-textGray border-transparent hover:text-deepSea',
+                !parsed.ok && 'disabled:opacity-50 disabled:hover:text-textGray disabled:cursor-not-allowed')}>
+              表单
+            </button>
+            <button type="button" onClick={() => setMode('yaml')}
+              className={clsx('px-3 py-1.5 text-sm rounded-t-lg border-b-2 -mb-px',
+                mode === 'yaml' ? 'text-deepSea border-deepSea font-medium' : 'text-textGray border-transparent hover:text-deepSea')}>
+              源码
+            </button>
+            {!parsed.ok && <span className="ml-2 text-xs text-danger">{parsed.error}</span>}
+          </div>
           {loadingYaml ? (
             <div className="p-6 text-sm text-textGray">加载中...</div>
+          ) : mode === 'form' && parsed.ok ? (
+            <div className="p-4">
+              <DatasetFormView
+                text={yaml}
+                onChangeText={(next) => { setYaml(next); setDirty(true) }}
+                readOnly={builtin}
+              />
+            </div>
           ) : (
             <textarea
               value={yaml}
