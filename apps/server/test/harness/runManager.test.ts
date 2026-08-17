@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { startSessionRun, abortSessionRun, isRunning } from '../../src/harness/runManager.js';
 import { emit } from '../../src/harness/sessionEvents.js';
 import { listSessionEventsSince } from '../../src/harness/sessionStore.js';
@@ -80,5 +80,34 @@ describe('runManager', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(isRunning(sid)).toBe(false);
     expect(listSessionEventsSince(sid, 0)).toEqual([]);
+  });
+
+  it('prune failure does not block slot release (single-flight stays un-bricked)', async () => {
+    // Patch the SAME module instance runManager is bound to (proven pattern
+    // from sessionEvents.persist.test.ts). spy.toHaveBeenCalled() self-validates
+    // that interception actually happened.
+    const store = await import('../../src/harness/sessionStore.js');
+    const spy = vi.spyOn(store, 'pruneSessionEvents').mockImplementation(() => {
+      throw new Error('db degraded');
+    });
+    try {
+      const sid = `rm-prune-fail-${crypto.randomUUID().slice(0, 8)}`;
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const start = startSessionRun(sid, 'u1', 'trader', async () => {
+        await gate;
+      });
+      expect(start).not.toHaveProperty('conflict');
+      release();
+      await new Promise((r) => setTimeout(r, 10));
+      // The prune threw on finalize, but the guard swallowed it: the slot
+      // must still be released (not bricked into permanent conflict).
+      expect(spy).toHaveBeenCalled();
+      expect(isRunning(sid)).toBe(false);
+      const again = startSessionRun(sid, 'u1', 'trader', async () => {});
+      expect(again).not.toHaveProperty('conflict');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

@@ -60,7 +60,15 @@ export function startSessionRun(
       // client reconnecting after finalization gets the idle snapshot from
       // the route and (correctly) no replay; its missed tail is covered by
       // the snapshot-refresh path.
-      pruneSessionEvents(sessionId);
+      try {
+        pruneSessionEvents(sessionId);
+      } catch (err) {
+        // Fail-open (same policy as emit's persist guard): a prune failure in
+        // degraded DB mode must NOT prevent the single-flight slot release
+        // below — otherwise the session stays conflict forever while the
+        // store already says idle.
+        console.error('[runManager] prune failed:', err instanceof Error ? err.message : err);
+      }
       runs.delete(sessionId);
     }
   });
