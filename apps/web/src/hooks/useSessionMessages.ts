@@ -65,12 +65,27 @@ export function useSessionMessages(
       createdAt: new Date().toISOString(),
     } as unknown as UIMessage
 
+    // The server assigns its own message id (runSession passes
+    // generateMessageId) and the 'start' chunk overrides the seeded client id
+    // inside readUIMessageStream — so dedupe must key on the id the stream
+    // actually delivers, not the seed. Otherwise findIndex misses on every
+    // snapshot and each one is APPENDED (duplicate React keys -> flicker, no
+    // incremental text until the terminal snapshot refresh collapses it).
+    let activeId = msgId
     void (async () => {
       try {
         const uiStream = readUIMessageStream({ stream, message: initialMessage })
         for await (const msg of uiStream) {
+          const id = msg.id || activeId
+          const prevActiveId = activeId
+          activeId = id
           setMessages((prev) => {
-            const idx = prev.findIndex((m) => m.id === msgId)
+            let idx = prev.findIndex((m) => m.id === id)
+            // First snapshot after the server id replaces the seed: replace
+            // the seed-keyed placeholder if one was appended (rejoin path).
+            if (idx < 0 && prevActiveId !== id) {
+              idx = prev.findIndex((m) => m.id === prevActiveId)
+            }
             if (idx >= 0) {
               const copy = prev.slice()
               copy[idx] = msg
