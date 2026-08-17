@@ -4,7 +4,7 @@ import type { BlockModel, DocType, SourceSpan } from './types.js';
 import { validateSpan, type SpanMatchStrength } from './spanValidator.js';
 import { computeFieldConfidence, decisionForField } from './confidence.js';
 import { REQUIRED_CONTRACT_FIELDS } from './schemas/contract.js';
-import type { ProposedRelationship } from './db/repositories.js';
+import type { ProposedRelationship, ProposedEdge } from './db/repositories.js';
 
 export interface GroundedField {
   name: string;
@@ -105,6 +105,7 @@ export function attachConfidence(
 
 const REL_ROLE_BY_FIELD: Record<string, string> = {
   甲方: '买方', 乙方: '卖方', 买方: '买方', 卖方: '卖方',
+  发货人: '发货人', 收货人: '收货人', 承运人: '承运人',
 };
 const COMMODITY_FIELDS = new Set(['标的物', '商品']);
 // Lane A (2a): contract-number fields also lift a Contract proposal so the
@@ -123,6 +124,47 @@ export function deriveProposedRelationships(fields: ExtractedField[]): ProposedR
       out.push({ kind: 'Commodity', name: val, confidence: f.confidence });
     } else if (CONTRACT_FIELDS.has(f.name)) {
       out.push({ kind: 'Contract', name: val, confidence: f.confidence });
+    }
+  }
+  return out;
+}
+
+/** 构成合同"执行凭证"的单据类型（design 2026-08-17 §2.2）。 */
+const EXECUTES_DOCTYPES = new Set(['发票', '提单', '装箱单']);
+
+/** deriveProposedEdges 的最小字段投影（ReviewSnapshot.fields 与 ExtractedField 均满足）。 */
+export interface EdgeFieldInput {
+  name: string;
+  value: string | number;
+  confidence: number;
+}
+
+/**
+ * 纯函数：从扁平字段确定性派生 Document->实体边，无 LLM 参与。抽取时与确认时
+ * （graphCommit）跑同一规则，复核卡展示与图写入不会漂移。
+ */
+export function deriveProposedEdges(docType: string, fields: EdgeFieldInput[]): ProposedEdge[] {
+  const out: ProposedEdge[] = [];
+  const contractConf = new Map<string, number>();
+  const contractOrder: string[] = [];
+  for (const f of fields) {
+    const val = typeof f.value === 'string' ? f.value.trim() : '';
+    if (!val) continue;
+    const role = REL_ROLE_BY_FIELD[f.name];
+    if (role) {
+      out.push({ type: 'party', dstKind: 'Party', dstName: val, role, confidence: f.confidence });
+    } else if (COMMODITY_FIELDS.has(f.name)) {
+      out.push({ type: 'commodity', dstKind: 'Commodity', dstName: val, confidence: f.confidence });
+    } else if (CONTRACT_FIELDS.has(f.name)) {
+      if (!contractConf.has(val)) contractOrder.push(val);
+      contractConf.set(val, Math.max(contractConf.get(val) ?? 0, f.confidence));
+    }
+  }
+  for (const name of contractOrder) {
+    const confidence = contractConf.get(name) ?? 0;
+    out.push({ type: 'references', dstKind: 'Contract', dstName: name, confidence });
+    if (EXECUTES_DOCTYPES.has(docType)) {
+      out.push({ type: 'executes', dstKind: 'Contract', dstName: name, confidence });
     }
   }
   return out;

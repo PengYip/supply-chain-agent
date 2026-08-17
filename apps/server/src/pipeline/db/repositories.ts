@@ -156,6 +156,20 @@ export interface ProposedRelationship {
 }
 
 /**
+ * 确定性边提议（design 2026-08-17 §3.2）。恒为 Document -> 实体；dstKind/dstName
+ * 定位目标节点（写入时按 kind+归一化名 MERGE）。'executes' 是文件间"该单据是
+ * 合同执行的结果"边（doc -> Contract 枢纽）。
+ */
+export interface ProposedEdge {
+  type: 'party' | 'commodity' | 'references' | 'executes';
+  dstKind: 'Party' | 'Commodity' | 'Contract';
+  dstName: string;
+  /** party 边专用：买方|卖方|发货人|收货人|承运人 */
+  role?: string;
+  confidence: number;
+}
+
+/**
  * Persisted vectorization outcome for a document. Defined here (NOT imported
  * from documentEntry.ts) to avoid a circular dependency: documentEntry imports
  * from repositories, so the type must live on this side. The 'unknown' status
