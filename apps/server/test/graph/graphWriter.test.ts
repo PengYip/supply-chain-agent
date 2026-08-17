@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { writeDocumentGraph, type GraphWriterIo } from '../../src/graph/graphWriter.js';
 
 function mkIo(opts: { failEntity?: string; failEdge?: string } = {}): GraphWriterIo & { calls: string[] } {
@@ -34,6 +34,20 @@ const input = {
 };
 
 describe('writeDocumentGraph (fake io)', () => {
+  // 3 fake-io cases run the gate-OPEN path of writeDocumentGraph, which checks
+  // process.env.NEO4J_PASSWORD. Self-manage a sentinel so the suite passes in CI
+  // (no NEO4J_PASSWORD) too; the "skipped" case below still exercises the
+  // gate-CLOSED path by deleting and restoring the var.
+  let prevPassword: string | undefined;
+  beforeAll(() => {
+    prevPassword = process.env.NEO4J_PASSWORD;
+    process.env.NEO4J_PASSWORD = 'graphwriter-test-dummy';
+  });
+  afterAll(() => {
+    if (prevPassword !== undefined) process.env.NEO4J_PASSWORD = prevPassword;
+    else delete process.env.NEO4J_PASSWORD;
+  });
+
   it('写 Document + 归一化实体 + 全部边，status ok', async () => {
     const io = mkIo();
     const res = await writeDocumentGraph(input, io);
