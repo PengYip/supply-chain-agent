@@ -49,7 +49,17 @@ export interface RecallToolDeps {
 /** RRF constant (standard 60 from the original TREC paper). */
 const RRF_K = 60;
 /** Max snippet length for vector-only hits (no FTS highlight available). */
-const VECTOR_SNIPPET_MAX = 200;
+const VECTOR_SNIPPET_MAX = 400;
+
+/**
+ * 合同号过滤无命中时的如实说明: 区分"该合同号根本没有绑定文档"与"有绑定但本次
+ * 检索未命中其内容片段"两种情形, 避免把检索失败误报成"未找到绑定"。
+ */
+function contractNoMissNote(docIdSet: Set<string>): string {
+  return docIdSet.size === 0
+    ? '未找到与该合同号绑定的文档'
+    : `该合同号绑定了 ${docIdSet.size} 个文档，但本次检索未命中其中的相关内容片段`;
+}
 
 interface FusedMatch {
   chunkRowId: number;
@@ -239,7 +249,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
             matchCount: 0,
             matches: [],
             ...contractNoField,
-            note: '未找到与该合同号绑定的文档',
+            note: contractNoMissNote(docIdSet),
           };
         }
         const kept = filtering
@@ -303,7 +313,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
               matchCount: 0,
               matches: [],
               ...contractNoField,
-              note: '未找到与该合同号绑定的文档',
+              note: contractNoMissNote(docIdSet),
             };
           }
           const kept = filtering ? filterChunksByTag(inScope, wantTags!, tagMode) : inScope;
@@ -353,7 +363,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
             matchCount: 0,
             matches: [],
             ...contractNoField,
-            note: '未找到与该合同号绑定的文档',
+            note: contractNoMissNote(docIdSet),
           };
         }
         const fused = filtering ? filterChunksByTag(inScope, wantTags!, tagMode) : inScope;
@@ -392,7 +402,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
           matchCount: 0,
           matches: [],
           ...contractNoField,
-          note: '未找到与该合同号绑定的文档',
+          note: contractNoMissNote(docIdSet),
         };
       }
       const kept = filtering

@@ -218,11 +218,28 @@ export async function saveChunksPg(
 }
 
 /**
+ * Preprocess a user search query for CJK unigram FTS: insert a space after every
+ * char that is not [0-9A-Za-z ], so a contiguous Chinese run becomes
+ * space-separated unigrams ('违约责任' -> '违 约 责 任 '). Without this,
+ * to_tsvector('simple', ...) treats the whole run as ONE lexeme and multi-char
+ * Chinese queries never match. MUST stay in sync with the fts_vector GENERATED
+ * expression in migratePostgres() (client.ts) -- the column and the query must
+ * apply the identical transformation or searches silently miss.
+ */
+export function toPgFtsQuery(q: string): string {
+  return q.replace(/([^0-9A-Za-z ])/g, '$1 ');
+}
+
+/**
  * FTS keyword recall over doc_chunk via the GENERATED fts_vector column +
  * plainto_tsquery (safe against arbitrary input -- no operator injection). Ranks
  * with ts_rank (higher=better); we negate to keep the SQLite bm25 convention
  * (more negative=better, ascending ORDER = best first). ts_headline produces a
  * highlighted snippet. Returns [] for an empty/all-stopword query.
+ *
+ * The query is preprocessed with toPgFtsQuery (CJK unigram) before being fed to
+ * plainto_tsquery -- the SAME transformation the fts_vector GENERATED column
+ * applies on write, so Chinese multi-char queries match their unigrams.
  */
 export async function searchChunksPg(
   ctx: PostgresDbContext,
@@ -232,6 +249,7 @@ export async function searchChunksPg(
 ): Promise<ChunkMatch[]> {
   const trimmed = query.trim();
   if (!trimmed) return [];
+  const ftsQuery = toPgFtsQuery(trimmed);
   const safeLimit = limit > 0 ? Math.floor(limit) : 5;
   const uid = effectiveUserId(userId);
   // Phase 2: when userId is in scope, JOIN documents and filter on user_id so
@@ -243,7 +261,7 @@ export async function searchChunksPg(
   const userFilter = uid
     ? "AND (d.user_id = $3 OR d.user_id = '' OR d.user_id IS NULL)"
     : '';
-  const params = uid ? [trimmed, safeLimit, uid] : [trimmed, safeLimit];
+  const params = uid ? [ftsQuery, safeLimit, uid] : [ftsQuery, safeLimit];
   let res;
   try {
     res = await ctx.pool.query(
@@ -261,8 +279,9 @@ export async function searchChunksPg(
        LIMIT $2`,
       params,
     );
-  } catch {
+  } catch (e) {
     // Missing fts_vector/GIN (un-migrated) -> surface as no matches, never throw.
+    console.warn('[searchChunksPg] FTS query failed:', e instanceof Error ? e.message : e);
     return [];
   }
   return res.rows.map((r) => ({

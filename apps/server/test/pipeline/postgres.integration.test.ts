@@ -14,6 +14,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createPostgresContext } from '../../src/pipeline/db/postgres-client.js';
 import type { PostgresDbContext } from '../../src/pipeline/db/client.js';
+import { migratePostgres } from '../../src/pipeline/db/client.js';
 import { DB_BACKEND } from '../../src/pipeline/db/dbBackend.js';
 import { env } from '../../src/env.js';
 import {
@@ -111,7 +112,7 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
   let ctx: PostgresDbContext;
   let embedder: DeterministicEmbedder;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     // 双重门禁：skipIf 判定与实际连接必须一致（防环境变量在文件加载与
     // beforeAll 执行之间变化、导致连到非测试库），不满足直接 throw，
     // 绝不让 TRUNCATE 落到业务库。
@@ -123,6 +124,11 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
     }
     ctx = createPostgresContext(resolvePgTestUrl());
     embedder = new DeterministicEmbedder();
+    // Ensure the startup migration has run: it recreates doc_chunk.fts_vector as
+    // a GENERATED column with CJK unigram preprocessing (drizzle 0000 created a
+    // plain NULL column, so FTS silently returned 0 hits). Idempotent -- safe to
+    // run on every boot and here.
+    await migratePostgres(ctx.pool);
   });
 
   // Isolation: wipe pipeline tables between tests (dev container only).
@@ -211,6 +217,27 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
     await saveChunks(ctx, 'DOC-PG-1', [{ text: 'diesel fuel', index: 0 }]);
     const hits = await searchChunks(ctx, 'zzznomatchxyz12345', 5);
     expect(hits).toEqual([]);
+  });
+
+  it('searchChunks CJK unigram: Chinese multi-char query hits (fts_vector GENERATED + toPgFtsQuery)', async () => {
+    // migratePostgres ran in beforeAll: fts_vector is a GENERATED column with
+    // CJK unigram preprocessing, and searchChunksPg preprocesses the query the
+    // same way -- so '违约责任' matches the unigrams of '第七条 违约责任'.
+    await saveDocument(ctx, mkModel('DOC-PG-1'));
+    await saveChunks(ctx, 'DOC-PG-1', [
+      { text: 'CJXC-CTCL-JY-2024-131-01 第七条 违约责任：乙方逾期交货的，应向甲方支付违约金。', index: 0 },
+      { text: '交货标准：产品质量应符合国标。', index: 1 },
+    ]);
+
+    const hits = await searchChunks(ctx, '违约责任', 10);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits[0]!.documentId).toBe('DOC-PG-1');
+    expect(hits[0]!.snippet).toContain('违约');
+
+    // Mixed CJK + ASCII query (AND semantics: cjxc & 交 & 货).
+    const mixed = await searchChunks(ctx, 'CJXC 交货', 10);
+    expect(mixed.length).toBeGreaterThan(0);
+    expect(mixed.some((h) => h.documentId === 'DOC-PG-1')).toBe(true);
   });
 
   it('getChunkMetaByRowids maps rowid -> meta', async () => {

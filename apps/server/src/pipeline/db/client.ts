@@ -391,6 +391,32 @@ export async function migratePostgres(pool: Pool): Promise<void> {
        updated_at timestamptz NOT NULL DEFAULT NOW()
      )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_ledger_no_user ON contract_ledger(contract_no, user_id)`,
+    // L4 FTS fix (2026-08-17): drizzle migration 0000 created doc_chunk.fts_vector
+    // as a PLAIN tsvector column (no GENERATED), so it stays NULL forever and
+    // every FTS query silently returns 0 hits. Recreate it as a GENERATED column
+    // with CJK unigram preprocessing: a space is inserted after every char that
+    // is not [0-9A-Za-z ], because to_tsvector('simple', ...) treats a contiguous
+    // CJK run as ONE lexeme (multi-char Chinese queries never match otherwise).
+    // The DO block drops the column UNLESS it is already a generated column with
+    // the regexp_replace preprocessing (no-op on correctly-migrated DBs). ADD
+    // COLUMN ... STORED rewrites the table once on the first boot -- fine at this
+    // scale. Must stay in sync with toPgFtsQuery() in postgres-repositories.ts.
+    `DO $$
+    BEGIN
+      IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = current_schema() AND table_name = 'doc_chunk' AND column_name = 'fts_vector'
+        )
+         AND NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = current_schema() AND table_name = 'doc_chunk' AND column_name = 'fts_vector'
+            AND is_generated = 'ALWAYS' AND generation_expression LIKE '%regexp_replace%'
+        ) THEN
+        ALTER TABLE doc_chunk DROP COLUMN fts_vector;
+      END IF;
+    END $$;`,
+    `ALTER TABLE doc_chunk ADD COLUMN IF NOT EXISTS fts_vector tsvector GENERATED ALWAYS AS (to_tsvector('simple', regexp_replace(chunk_text, '([^0-9A-Za-z ])', '\\1 ', 'g'))) STORED`,
+    `CREATE INDEX IF NOT EXISTS idx_doc_chunk_fts ON doc_chunk USING GIN (fts_vector)`,
   ];
   try {
     for (const sql of statements) {

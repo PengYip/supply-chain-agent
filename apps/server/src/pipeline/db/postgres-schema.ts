@@ -32,6 +32,7 @@ import {
   index,
   customType,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 
 // ---- pgvector + tsvector column types (no new deps) ------------------------
 
@@ -171,9 +172,17 @@ export const docChunk = pgTable(
     chunkIndex: integer('chunk_index'),
     // 1024-dim to match bge-m3 / the sqlite-vec table (Task 6 v2).
     embedding: vector('embedding', { dim: 1024 }),
-    // Populated via a GENERATED column (raw SQL) + GIN index; declared here so
-    // the Drizzle table object is column-complete for typed repository work.
-    ftsVector: tsvector('fts_vector'),
+    // Populated via a GENERATED column + GIN index; declared here so the Drizzle
+    // table object is column-complete for typed repository work. The expression
+    // applies CJK unigram preprocessing (space after every char not in
+    // [0-9A-Za-z ]) so to_tsvector('simple', ...) lexes Chinese runs as separate
+    // unigrams instead of one opaque lexeme -- must stay in sync with
+    // toPgFtsQuery() in postgres-repositories.ts and the migratePostgres() DDL
+    // in client.ts (the startup migration is the DDL truth for live DBs; this
+    // declaration only drives fresh drizzle-kit migrations).
+    ftsVector: tsvector('fts_vector').generatedAlwaysAs(
+      sql`to_tsvector('simple', regexp_replace(chunk_text, '([^0-9A-Za-z ])', '\\1 ', 'g'))`,
+    ),
     // Lane B: per-chunk semantic tags (JSON string[] | NULL).
     tags: jsonb('tags'),
     createdAt: nowTs(),

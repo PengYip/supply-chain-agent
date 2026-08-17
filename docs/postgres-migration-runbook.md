@@ -127,13 +127,41 @@ drizzle-kit cannot express three things; **layer them as raw SQL** in a new file
 CREATE INDEX IF NOT EXISTS doc_chunk_embedding_hnsw_idx
   ON doc_chunk USING hnsw (embedding vector_cosine_ops);
 
+-- Fix plain/NULL fts_vector: drizzle 0000 created it WITHOUT GENERATED, so FTS
+-- queries silently return 0 hits. Drop it unless it is already a generated
+-- column carrying the CJK unigram preprocessing (regexp_replace).
+DO $$
+BEGIN
+  IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = 'doc_chunk' AND column_name = 'fts_vector'
+    )
+     AND NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = 'doc_chunk' AND column_name = 'fts_vector'
+        AND is_generated = 'ALWAYS' AND generation_expression LIKE '%regexp_replace%'
+    ) THEN
+    ALTER TABLE doc_chunk DROP COLUMN fts_vector;
+  END IF;
+END $$;
+
 -- Generated tsvector + GIN index for Postgres FTS (replaces SQLite FTS5).
+-- CJK unigram preprocessing: a space is inserted after every char that is not
+-- [0-9A-Za-z ], so multi-char Chinese terms become separate lexemes
+-- (to_tsvector('simple', ...) would otherwise treat a contiguous CJK run as ONE
+-- lexeme and never match). Must stay in sync with toPgFtsQuery() in
+-- postgres-repositories.ts.
 ALTER TABLE doc_chunk
-  ADD COLUMN fts_vector_gen tsvector
-  GENERATED ALWAYS AS (to_tsvector('simple', chunk_text)) STORED;
-CREATE INDEX IF NOT EXISTS doc_chunk_fts_gin_idx
-  ON doc_chunk USING gin (fts_vector_gen);
+  ADD COLUMN IF NOT EXISTS fts_vector tsvector
+  GENERATED ALWAYS AS (to_tsvector('simple', regexp_replace(chunk_text, '([^0-9A-Za-z ])', '\1 ', 'g'))) STORED;
+CREATE INDEX IF NOT EXISTS idx_doc_chunk_fts
+  ON doc_chunk USING gin (fts_vector);
 ```
+
+> **Note:** `migrateOnStartup()` / `migratePostgres()` (in `src/pipeline/db/client.ts`)
+> now applies the fts_vector fix (DROP-if-plain + GENERATED ADD COLUMN + GIN index)
+> automatically on every server boot, so this hand-SQL is only needed for DBs the
+> server never boots against (e.g. a freshly `drizzle-kit migrate`d `sca_test`).
 
 Then apply everything:
 

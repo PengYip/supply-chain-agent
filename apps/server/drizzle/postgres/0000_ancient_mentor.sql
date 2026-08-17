@@ -15,7 +15,7 @@ CREATE TABLE "doc_chunk" (
 	"chunk_text" text NOT NULL,
 	"chunk_index" integer,
 	"embedding" vector(1024),
-	"fts_vector" "tsvector",
+	"fts_vector" "tsvector" GENERATED ALWAYS AS (to_tsvector('simple', regexp_replace("chunk_text", '([^0-9A-Za-z ])', '\1 ', 'g'))) STORED,
 	"createdAt" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
