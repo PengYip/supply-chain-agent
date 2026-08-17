@@ -22,7 +22,7 @@
 export type ContractOutput = 'raw' | 'tagged';
 
 /** budget: how much of the result is allowed to enter the context. */
-export type ContractBudget = 'full' | 'summary' | 'verdict';
+export type ContractBudget = 'full' | 'summary' | 'snippets' | 'verdict';
 
 /** signal: how the status bar aggregates this tool's calls. */
 export type ContractSignal = 'counter' | 'todo' | 'env' | 'none';
@@ -145,11 +145,15 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
   recall_documents: {
     // Returns BM25 snippets of ingested document text -> external content, so
     // output is 'tagged' (injectionDefense wraps each snippet, like extract_fields).
-    // budget 'summary': match lists compress well under the deterministic summary
-    // tier when long. signal 'counter' (a read). persist 'vector' is CONCEPTUAL
-    // here: v1 stores the index in FTS5 (not pgvector/sqlite-vec); the field
-    // marks the recall layer's logical target for when the vector path lands.
-    output: 'tagged', budget: 'summary', signal: 'counter',
+    // budget 'snippets': recall output is a matches array with NO key fields, so
+    // the 'summary' tier would drop the entire matches array (model saw only
+    // {contractNo, _summarized: true} and could not answer). 'snippets' keeps the
+    // first 10 matches' document_id/chunk_index/snippet(<=500)/source so the model
+    // can actually read the retrieved content. signal 'counter' (a read).
+    // persist 'vector' is CONCEPTUAL here: v1 stores the index in FTS5 (not
+    // pgvector/sqlite-vec); the field marks the recall layer's logical target for
+    // when the vector path lands.
+    output: 'tagged', budget: 'snippets', signal: 'counter',
     persist: 'vector', risk: { level: 'L1', injection: 'external' },
   },
   execute_code: {

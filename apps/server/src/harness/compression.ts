@@ -8,6 +8,13 @@
 //                  few key fields + a truncation marker; long text is truncated.
 //                  No LLM call (latency + nondeterminism); a pluggable
 //                  Summarizer interface is exposed for a future LLM hook (L4).
+//   - 'snippets' -> deterministic preserve-object for recall-shaped outputs
+//                  (object with an array-valued `matches` field): keeps the
+//                  query/strategy/count + the first 10 matches' identifying
+//                  fields with snippets capped at 500 chars, plus a
+//                  matches_truncated counter. Unlike 'summary' (which drops the
+//                  whole matches array because recall has no KEY_FIELDS), the
+//                  model keeps the actual retrieved content to answer from.
 //   - 'verdict' -> one-line status string.
 //
 // It also runs a conservative drop tier: old tool-call/result PAIRS for
@@ -52,6 +59,10 @@ const DEFAULT_SUMMARY_MAX_CHARS = 800;
 const DEFAULT_KEEP_LAST_N = 8;
 /** Max length of a 'verdict' one-liner. */
 const VERDICT_MAX_CHARS = 160;
+/** Max matches preserved by the 'snippets' tier (recall-shaped outputs). */
+const SNIPPETS_MAX_MATCHES = 10;
+/** Max snippet char length preserved by the 'snippets' tier. */
+const SNIPPETS_MAX_SNIPPET_CHARS = 500;
 
 /**
  * Top-level fields worth retaining when a 'summary'-budget JSON output is too
@@ -221,6 +232,52 @@ function safeStringify(value: unknown): string {
   }
 }
 
+/**
+ * Pure 'snippets'-budget compressor (deterministic, no LLM). When the output is
+ * a JSON object carrying an array-valued `matches` field (the recall_documents
+ * shape), return a bounded preserve-object:
+ *
+ *   { query, strategy, matchCount, contractNo?, note?,
+ *     matches: first 10 x { document_id, chunk_index, snippet(<=500), source },
+ *     matches_truncated? }
+ *
+ * The model keeps the actual retrieved content (snippets) instead of losing the
+ * whole matches array to the 'summary' key-fields tier (recall output has none
+ * of KEY_FIELDS, so 'summary' reduced it to {contractNo, _summarized: true}).
+ * Objects WITHOUT a matches array pass through unchanged (same reference) --
+ * byte-identical to today's behavior for non-recall outputs.
+ */
+export function compressSnippetsOutput(output: unknown): unknown {
+  const { type, value } = asOutput(output);
+  if (type !== 'json' || value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return output;
+  }
+  const src = value as Record<string, unknown>;
+  if (!Array.isArray(src.matches)) return output;
+  const matches = src.matches as unknown[];
+  const kept = matches.slice(0, SNIPPETS_MAX_MATCHES).map((m) => {
+    const mm = (m ?? {}) as Record<string, unknown>;
+    return {
+      document_id: mm.document_id,
+      chunk_index: mm.chunk_index,
+      snippet: String(mm.snippet ?? '').slice(0, SNIPPETS_MAX_SNIPPET_CHARS),
+      source: mm.source,
+    };
+  });
+  const out: Record<string, unknown> = {
+    query: src.query,
+    strategy: src.strategy,
+    matchCount: src.matchCount,
+    matches: kept,
+  };
+  if ('contractNo' in src) out.contractNo = src.contractNo;
+  if ('note' in src) out.note = src.note;
+  if (matches.length > SNIPPETS_MAX_MATCHES) {
+    out.matches_truncated = matches.length - SNIPPETS_MAX_MATCHES;
+  }
+  return { type: 'json', value: out };
+}
+
 // ---- compressByBudget -------------------------------------------------------
 
 /**
@@ -256,12 +313,16 @@ export function compressByBudget(
     let partChanged = false;
     const newContent = msg.content.map((part) => {
       const budget = lookup(part.toolName) ?? 'full';
-      if (budget === 'summary' || budget === 'verdict') prunableTools.add(part.toolName);
+      if (budget === 'summary' || budget === 'verdict' || budget === 'snippets') {
+        prunableTools.add(part.toolName);
+      }
       if (budget === 'full') return part;
       const next =
         budget === 'summary'
           ? summarizer.summarize(part.toolName, part.output)
-          : summarizer.verdict(part.toolName, part.output);
+          : budget === 'verdict'
+            ? summarizer.verdict(part.toolName, part.output)
+            : compressSnippetsOutput(part.output);
       if (next === part.output) return part;
       partChanged = true;
       return { ...part, output: next };

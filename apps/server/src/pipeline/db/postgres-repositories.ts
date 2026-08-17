@@ -231,15 +231,68 @@ export function toPgFtsQuery(q: string): string {
 }
 
 /**
+ * Derive search terms from a RAW user query for snippet windowing: unique CJK
+ * chars (each char is its own unigram term, matching the fts_vector column) +
+ * lowercased ASCII tokens. Splitting on /[^0-9A-Za-z\u4e00-\u9fff]+/ keeps CJK
+ * runs intact per char and ASCII words whole.
+ */
+function snippetTerms(query: string): string[] {
+  const terms = new Set<string>();
+  for (const token of query.split(/[^0-9A-Za-z\u4e00-\u9fff]+/)) {
+    if (token.length === 0) continue;
+    if (/[\u4e00-\u9fff]/.test(token)) {
+      for (const ch of token) terms.add(ch);
+    } else {
+      terms.add(token.toLowerCase());
+    }
+  }
+  return [...terms];
+}
+
+/**
+ * TS-side snippet windowing for Postgres FTS results. ts_headline is NOT usable
+ * here: its default parser lexes a contiguous CJK run as ONE lexeme, while the
+ * query is unigram-preprocessed ('违 约 责 任 '), so headline finds zero term
+ * matches and returns a leading ~15-word fragment with no highlights (wrong
+ * region of the chunk). Unigram-spacing the text inside ts_headline would inject
+ * spaces between every CJK char into the snippet, making it unquotable.
+ *
+ * Instead: find the EARLIEST index in `text` where any term from the RAW query
+ * occurs (ASCII case-insensitive), and return an 800-char window starting 50
+ * chars before it. No <b> markers, no injected spaces -- the snippet is a plain
+ * quotable substring. Falls back to the text head when no term is found.
+ */
+export function windowSnippet(text: string, query: string, max = 800): string {
+  const terms = snippetTerms(query);
+  let firstIdx = -1;
+  for (const term of terms) {
+    const idx = text.toLowerCase().indexOf(term);
+    if (idx >= 0 && (firstIdx < 0 || idx < firstIdx)) firstIdx = idx;
+  }
+  const start = firstIdx < 0 ? 0 : Math.max(0, firstIdx - 50);
+  const end = Math.min(text.length, start + max);
+  const window = text.slice(start, end);
+  const prefix = start > 0 ? '...' : '';
+  const suffix = end < text.length ? '...' : '';
+  return prefix + window + suffix;
+}
+
+/**
  * FTS keyword recall over doc_chunk via the GENERATED fts_vector column +
  * plainto_tsquery (safe against arbitrary input -- no operator injection). Ranks
  * with ts_rank (higher=better); we negate to keep the SQLite bm25 convention
- * (more negative=better, ascending ORDER = best first). ts_headline produces a
- * highlighted snippet. Returns [] for an empty/all-stopword query.
+ * (more negative=better, ascending ORDER = best first). Returns [] for an
+ * empty/all-stopword query.
  *
  * The query is preprocessed with toPgFtsQuery (CJK unigram) before being fed to
  * plainto_tsquery -- the SAME transformation the fts_vector GENERATED column
  * applies on write, so Chinese multi-char queries match their unigrams.
+ *
+ * Snippets are produced TS-side via windowSnippet (NOT ts_headline): the default
+ * headline parser lexes a contiguous CJK run as ONE lexeme while the query is
+ * unigram-preprocessed, so headline finds zero term matches and returns a
+ * leading fragment with no highlights. windowSnippet windows around the earliest
+ * raw-query term occurrence instead -- see its doc comment.
  */
 export async function searchChunksPg(
   ctx: PostgresDbContext,
@@ -269,7 +322,7 @@ export async function searchChunksPg(
          c.id            AS "chunkRowId",
          c.document_id   AS "documentId",
          c.chunk_index   AS "chunkIndex",
-         ts_headline('simple', c.chunk_text, plainto_tsquery('simple', $1)) AS snippet,
+         c.chunk_text    AS "rawText",
          ts_rank(c.fts_vector, plainto_tsquery('simple', $1)) AS rank
        FROM doc_chunk AS c
        ${join}
@@ -288,7 +341,8 @@ export async function searchChunksPg(
     chunkRowId: Number(r.chunkRowId),
     documentId: r.documentId,
     chunkIndex: r.chunkIndex,
-    snippet: r.snippet,
+    // TS-side windowing around the earliest raw-query term (see windowSnippet).
+    snippet: windowSnippet(r.rawText, trimmed),
     // Negate so the SQLite "more negative = better" contract holds.
     bm25Score: -Number(r.rank),
   }));

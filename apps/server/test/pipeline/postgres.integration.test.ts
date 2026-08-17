@@ -232,7 +232,13 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
     const hits = await searchChunks(ctx, '违约责任', 10);
     expect(hits.length).toBeGreaterThan(0);
     expect(hits[0]!.documentId).toBe('DOC-PG-1');
+    // windowSnippet windows around the earliest term occurrence -> the snippet
+    // carries the matched clause body (第七条), not a chunk-start fragment.
+    expect(hits[0]!.snippet).toContain('第七条');
     expect(hits[0]!.snippet).toContain('违约');
+    // ts_headline is gone: no <b> markers, no injected spaces between CJK chars.
+    expect(hits[0]!.snippet).not.toContain('<b>');
+    expect(hits[0]!.snippet).not.toContain('违 约');
 
     // Mixed CJK + ASCII query (AND semantics: cjxc & 交 & 货).
     const mixed = await searchChunks(ctx, 'CJXC 交货', 10);
