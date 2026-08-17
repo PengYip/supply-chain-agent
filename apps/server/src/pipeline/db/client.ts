@@ -218,6 +218,11 @@ export function migrate(sqlite: Database.Database): void {
     if (!have.has('vectorization_meta')) {
       try { sqlite.exec('ALTER TABLE documents ADD COLUMN vectorization_meta TEXT'); } catch { /* concurrent */ }
     }
+    // Graph-relations design (2026-08-17 §4): 确认时 Neo4j 写入结果持久化
+    // （ok/partial/failed/skipped + 计数）。与 vectorization_meta 同一 guarded ALTER 模式。
+    if (!have.has('graph_status')) {
+      try { sqlite.exec('ALTER TABLE documents ADD COLUMN graph_status TEXT'); } catch { /* concurrent */ }
+    }
     // Lane A (2a): auto-extraction lifecycle status (pending/running/ok/skipped/
     // failed). NULL on legacy rows is treated as 'pending' (opt-in; no backfill).
     if (!have.has('extraction_status')) {
@@ -359,6 +364,7 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     // Persisted vectorization outcome (Bug fix: previously an in-memory Map, lost
     // on restart and never written by the /api/files upload path).
     `ALTER TABLE documents ADD COLUMN IF NOT EXISTS vectorization_meta jsonb`,
+    `ALTER TABLE documents ADD COLUMN IF NOT EXISTS graph_status jsonb`,
     `ALTER TABLE extractions ADD COLUMN IF NOT EXISTS proposed_relationships jsonb`,
     // Lane A (2a): auto-extraction lifecycle status. NULL = 'pending' (opt-in).
     `ALTER TABLE documents ADD COLUMN IF NOT EXISTS extraction_status TEXT`,

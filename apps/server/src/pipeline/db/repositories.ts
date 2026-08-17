@@ -5,6 +5,7 @@ import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
 import type { SpanMatchStrength } from '../spanValidator.js';
 import { normalizeContractNo } from '../contractLedger.js';
 import type { ContractLedgerEntry } from '../contractLedger.js';
+import { deriveProposedEdges } from '../extraction.js';
 // Postgres impls. Static import: pg is a declared dep on both backends now; the
 // functions are only CALLED on the postgres branch (lazy Pool connect), so the
 // import cost is one module load. Type-only for the input/output types below.
@@ -37,6 +38,8 @@ import {
   updateExtractionFieldsPg,
   // persisted vectorization outcome (Bug fix): pg twin for setDocumentVectorization.
   setDocumentVectorizationPg,
+  // Graph-relations design (2026-08-17 §4): pg twin for setDocumentGraphStatus.
+  setDocumentGraphStatusPg,
   // Lane A (2a): pg twin for setExtractionStatus (auto-extraction lifecycle).
   setExtractionStatusPg,
   getExtractionStatusPg,
@@ -191,6 +194,20 @@ export const UNKNOWN_VECTORIZATION: DocumentVectorization = {
   chunkCount: 0,
 };
 
+/**
+ * 确认时 Neo4j 写入结果（design 2026-08-17 §4）。'skipped' = 图未配置
+ * （NEO4J_PASSWORD 未设）；'partial' = 部分实体/边失败（见 failures[]）；
+ * 'failed' = 写入整体失败（图不可达等）。
+ */
+export type DocumentGraphStatus = {
+  status: 'ok' | 'partial' | 'failed' | 'skipped';
+  nodeCount: number;
+  edgeCount: number;
+  reason?: string;
+  failures?: string[];
+  writtenAt: string;
+};
+
 export interface ReviewSnapshot {
   docId: string;
   docType: string;
@@ -210,6 +227,10 @@ export interface ReviewSnapshot {
   proposedRelationships: ProposedRelationship[];
   /** Persisted L4 vector-embedding outcome (Bug fix: was a lost in-memory Map). */
   vectorization: DocumentVectorization;
+  /** 确定性 Document->实体边提议（design 2026-08-17 §3.2），快照读取时同规则派生。 */
+  proposedEdges: ProposedEdge[];
+  /** 确认时 Neo4j 写入结果；未确认或从未写入时为 null。 */
+  graphStatus: DocumentGraphStatus | null;
 }
 
 const rid = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -1027,8 +1048,8 @@ export async function getReviewSnapshot(
   if (ctx.backend === 'postgres') return getReviewSnapshotPg(ctx, docId, userId);
   const sqlite = ctx.sqlite;
   const doc = sqlite
-    .prepare('SELECT doc_type, review_status, vectorization_meta FROM documents WHERE id = ?')
-    .get(docId) as { doc_type: string; review_status: string | null; vectorization_meta: string | null } | undefined;
+    .prepare('SELECT doc_type, review_status, vectorization_meta, graph_status FROM documents WHERE id = ?')
+    .get(docId) as { doc_type: string; review_status: string | null; vectorization_meta: string | null; graph_status: string | null } | undefined;
   if (!doc) return null;
 
   // Parse the persisted vectorization outcome. Null/invalid (legacy rows, or a
@@ -1040,6 +1061,15 @@ export async function getReviewSnapshot(
       vectorization = JSON.parse(doc.vectorization_meta) as DocumentVectorization;
     } catch {
       vectorization = UNKNOWN_VECTORIZATION;
+    }
+  }
+
+  let graphStatus: DocumentGraphStatus | null = null;
+  if (doc.graph_status) {
+    try {
+      graphStatus = JSON.parse(doc.graph_status) as DocumentGraphStatus;
+    } catch {
+      graphStatus = null;
     }
   }
 
@@ -1125,6 +1155,8 @@ export async function getReviewSnapshot(
     overallConfidence: ex ? ex.overall_confidence : 0,
     proposedRelationships,
     vectorization,
+    proposedEdges: deriveProposedEdges(doc.doc_type, fields),
+    graphStatus,
   };
 }
 
@@ -1164,6 +1196,23 @@ export async function setDocumentVectorization(
   ctx.sqlite
     .prepare('UPDATE documents SET vectorization_meta = ? WHERE id = ?')
     .run(JSON.stringify(vectorization), docId);
+}
+
+/**
+ * 持久化确认时图写入结果到 documents 行。镜像 setDocumentVectorization 的裸
+ * UPDATE 形态。userId 仅为签名对称（void）。
+ */
+export async function setDocumentGraphStatus(
+  ctx: DbContext,
+  docId: string,
+  status: DocumentGraphStatus,
+  userId?: string,
+): Promise<void> {
+  if (ctx.backend === 'postgres') return setDocumentGraphStatusPg(ctx, docId, status, userId);
+  void userId;
+  ctx.sqlite
+    .prepare('UPDATE documents SET graph_status = ? WHERE id = ?')
+    .run(JSON.stringify(status), docId);
 }
 
 /**

@@ -20,6 +20,7 @@ import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
 import type { SpanMatchStrength } from '../spanValidator.js';
 import { normalizeContractNo } from '../contractLedger.js';
 import type { ContractLedgerEntry } from '../contractLedger.js';
+import { deriveProposedEdges } from '../extraction.js';
 import type {
   ExtractionInput,
   BindingInput,
@@ -36,6 +37,7 @@ import type {
   ProposedRelationship,
   ReviewSnapshot,
   DocumentVectorization,
+  DocumentGraphStatus,
   ChunkTagDetail,
   ExtractionStatus,
   ParseStatus,
@@ -801,7 +803,7 @@ export async function getReviewSnapshotPg(
   userId?: string,
 ): Promise<ReviewSnapshot | null> {
   const docRes = await ctx.pool.query(
-    'SELECT doc_type, review_status, vectorization_meta FROM documents WHERE id = $1',
+    'SELECT doc_type, review_status, vectorization_meta, graph_status FROM documents WHERE id = $1',
     [docId],
   );
   if (!docRes.rows[0]) return null;
@@ -809,6 +811,7 @@ export async function getReviewSnapshotPg(
     doc_type: string;
     review_status: string | null;
     vectorization_meta: DocumentVectorization | null;
+    graph_status: DocumentGraphStatus | null;
   };
 
   // jsonb auto-parses to an object on read; a NULL/legacy row falls back to the
@@ -818,6 +821,7 @@ export async function getReviewSnapshotPg(
     mode: 'unknown',
     chunkCount: 0,
   };
+  const graphStatus: DocumentGraphStatus | null = doc.graph_status ?? null;
 
   const exRes = await ctx.pool.query(
     `SELECT fields, field_meta, overall_confidence, proposed_relationships
@@ -889,6 +893,8 @@ export async function getReviewSnapshotPg(
     overallConfidence: ex ? Number(ex.overall_confidence) : 0,
     proposedRelationships: ex?.proposed_relationships ?? [],
     vectorization,
+    proposedEdges: deriveProposedEdges(doc.doc_type, fields),
+    graphStatus,
   };
 }
 
@@ -922,6 +928,23 @@ export async function setDocumentVectorizationPg(
   await ctx.pool.query(
     'UPDATE documents SET vectorization_meta = $1::jsonb WHERE id = $2',
     [JSON.stringify(vectorization), docId],
+  );
+}
+
+/**
+ * 持久化确认时图写入结果（pg twin of setDocumentGraphStatus）。graph_status
+ * 为 jsonb；node-postgres 写入时以 JSON 字符串 cast。
+ */
+export async function setDocumentGraphStatusPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  status: DocumentGraphStatus,
+  userId?: string,
+): Promise<void> {
+  void userId;
+  await ctx.pool.query(
+    'UPDATE documents SET graph_status = $1::jsonb WHERE id = $2',
+    [JSON.stringify(status), docId],
   );
 }
 
