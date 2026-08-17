@@ -225,7 +225,9 @@ export async function findEntities(input: FindEntitiesInput): Promise<GraphEntit
     const nodePattern = input.kind ? 'MATCH (n:$($kind))' : 'MATCH (n)';
     const whereClause = input.exact ? 'WHERE n.name = $name' : 'WHERE toString(n.name) CONTAINS $name';
     const cypher = `${nodePattern} ${whereClause} RETURN n AS node ORDER BY n.name LIMIT $limit`;
-    const params: Record<string, unknown> = { name, limit };
+    // neo4j-driver 会把普通 number 序列化为 float64，服务器要求 LIMIT 为
+    // INTEGER（live 冒烟发现 10.0 被拒），必须经 neo4j.int() 转换。
+    const params: Record<string, unknown> = { name, limit: neo4j.int(limit) };
     if (input.kind) params.kind = input.kind;
     const result = await session.executeRead((txc) => txc.run(cypher, params));
     return result.records.map((rec) => nodeToEntity(rec.get('node') as Node));
