@@ -1,3 +1,5 @@
+import type { ContextFile } from '../hooks/useFiles'
+
 export interface ToolCallStep {
   toolCallId: string
   toolName: string
@@ -10,6 +12,42 @@ export interface ToolCallStep {
     message?: string
   }
 }
+
+/** Display-only attachment metadata embedded in user messages as a custom
+ *  `data-attachment` UI part. convertToModelMessages (AI SDK 6) silently
+ *  drops `data-*` parts, so this never reaches the model — it exists purely
+ *  for rendering and history persistence. docId/key are reserved hooks for
+ *  the future online-preview feature. */
+export interface AttachmentData {
+  filename: string
+  docId: string
+  key: string
+  fileType: string // uppercased extension, e.g. "PDF"; "FILE" when unknown
+}
+
+export interface AttachmentUIPart {
+  type: 'data-attachment'
+  id: string // = docId, unique within the message
+  data: AttachmentData
+}
+
+/** Derive the display type label from the filename extension. */
+const deriveFileType = (filename: string): string => {
+  const m = /\.([a-zA-Z0-9]+)$/.exec(filename.trim())
+  return m ? m[1].toUpperCase() : 'FILE'
+}
+
+/** Build the `data-attachment` part for a context file at send time. */
+export const toAttachmentPart = (file: ContextFile): AttachmentUIPart => ({
+  type: 'data-attachment',
+  id: file.docId,
+  data: {
+    filename: file.filename,
+    docId: file.docId,
+    key: file.key,
+    fileType: deriveFileType(file.filename),
+  },
+})
 
 /** L3 escalate_to_human 工具参数中可读展示的字段（context 不在此展开）。 */
 export type EscalateCategory = 'data_conflict' | 'data_missing' | 'low_confidence' | 'rule_boundary' | 'other'
@@ -60,6 +98,7 @@ export const severityBadgeClass = (severity: EscalateSeverity): string =>
 // 按 parts 原始顺序交错的渲染段。文本段与工具段保持模型产出的时间顺序，
 // 避免把工具调用统一挤到末尾（agent loop 通常是：先调工具→后总结文本）。
 export type Segment =
+  | { kind: 'attachment'; attachment: AttachmentData }
   | { kind: 'text'; text: string }
   | { kind: 'tool-group'; steps: ToolCallStep[] }
   | {
@@ -98,6 +137,7 @@ export const buildRenderItems = (messages: unknown[]): RenderItem[] => {
       output?: unknown
       state?: string
       approval?: { id: string }
+      data?: unknown
     }>
 
     const segments: Segment[] = []
@@ -112,6 +152,28 @@ export const buildRenderItems = (messages: unknown[]): RenderItem[] => {
     for (const p of parts) {
       if (p.type === 'text' && typeof p.text === 'string') {
         textBuf += p.text
+        continue
+      }
+
+      // 用户消息内嵌的文件卡片：data-attachment part（convertToModelMessages
+      // 会静默丢弃 data-* parts，纯展示用途）。畸形数据跳过，不崩消息列表。
+      if (p.type === 'data-attachment') {
+        const d = p.data
+        if (d !== null && typeof d === 'object') {
+          const a = d as Record<string, unknown>
+          if (typeof a.filename === 'string' && a.filename.length > 0) {
+            flushText()
+            segments.push({
+              kind: 'attachment',
+              attachment: {
+                filename: a.filename,
+                docId: typeof a.docId === 'string' ? a.docId : '',
+                key: typeof a.key === 'string' ? a.key : '',
+                fileType: typeof a.fileType === 'string' && a.fileType.length > 0 ? a.fileType : 'FILE',
+              },
+            })
+          }
+        }
         continue
       }
 
@@ -164,8 +226,8 @@ export const buildRenderItems = (messages: unknown[]): RenderItem[] => {
     if (role === 'assistant') {
       items.push({ id, role, segments })
     } else if (segments.length > 0) {
-      // 用户消息只保留文本段（v6 下用户输入为 text part）
-      items.push({ id, role, segments: segments.filter((s) => s.kind === 'text') })
+      // 用户消息保留文本段与附件卡片段（data-attachment parts）
+      items.push({ id, role, segments: segments.filter((s) => s.kind === 'text' || s.kind === 'attachment') })
     }
   }
   return items
