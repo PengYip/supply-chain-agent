@@ -433,7 +433,12 @@ export const RealMessageItem: React.FC<{
         return <FileAttachmentCard key={`att-${seg.attachment.docId}-${idx}`} attachment={seg.attachment} />
       }
 
-      // tool-group：连续工具调用归一组，保持时间顺序（夹在前后文本段之间）
+            // attachment：用户消息内嵌的文件卡片（data-attachment part 的展示形态）
+            if (seg.kind === 'attachment') {
+              return <FileAttachmentCard key={`f-${idx}`} attachment={seg.attachment} />
+            }
+
+            // tool-group：连续工具调用归一组，保持时间顺序（夹在前后文本段之间）
       return (
         <div key={`g-${idx}`} className="rounded-lg border border-borderGray bg-bgGray/50 overflow-hidden mt-2">
           <div className="px-3 py-2 border-b border-borderGray bg-deepSea/5 flex items-center gap-2">
