@@ -328,3 +328,27 @@ export async function graphQuery(input: GraphQueryInput): Promise<GraphQueryResu
     await session.close();
   }
 }
+
+export interface RemoveEdgeInput {
+  srcId: string;
+  kind: string;
+  dstId: string;
+}
+/** 按 (src, type, dst) 删边, 返回删除条数(0 = 无匹配)。幂等。 */
+export async function removeEdge(input: RemoveEdgeInput): Promise<number> {
+  const session = getDriver().session({ defaultAccessMode: neo4j.session.WRITE });
+  try {
+    const cypher = `
+      MATCH (a)-[r:$($kind)]->(b)
+      WHERE elementId(a) = $srcId AND elementId(b) = $dstId
+      DELETE r RETURN count(r) AS removed
+    `;
+    const result = await session.executeWrite((txc) =>
+      txc.run(cypher, { srcId: input.srcId, dstId: input.dstId, kind: input.kind }),
+    );
+    const rec = result.records[0];
+    return Number(rec?.get('removed') ?? 0);
+  } finally {
+    await session.close();
+  }
+}
