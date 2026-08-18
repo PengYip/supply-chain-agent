@@ -11,6 +11,10 @@
   },
   "dependencies": {
     "@ai-sdk/react": "^4.0.53",
+    "@file-viewer/preset-lite": "^2.2.9",
+    "@file-viewer/preset-office": "^2.2.9",
+    "@file-viewer/react": "^2.2.9",
+    "@xyflow/react": "^12.11.3",
     "ai": "^6.0.241",
     "autoprefixer": "^10.5.4",
     "better-auth": "^1.6.26",
@@ -25,6 +29,7 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@file-viewer/vite-plugin": "^2.2.9",
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

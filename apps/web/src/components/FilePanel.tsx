@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { type FileEntry, type FileFolder, type FilesApi } from '../hooks/useFiles'
+import { FilePreviewModal } from './FilePreviewModal'
 
 interface FilePanelProps {
   visible: boolean
@@ -287,6 +288,7 @@ function FileRow(props: {
   isSelected: boolean
   onSelect: (key: string) => void
   downloadFile: (key: string) => void
+  onPreview: (file: FileEntry) => void
   onAddToConversation: (file: FileEntry) => void
   onStartMove: (key: string) => void
   moving: boolean
@@ -304,6 +306,7 @@ function FileRow(props: {
     isSelected,
     onSelect,
     downloadFile,
+    onPreview,
     onAddToConversation,
     onStartMove,
     moving,
@@ -388,6 +391,14 @@ function FileRow(props: {
         >
           下载
         </span>
+        <span
+          onClick={(e) => { e.stopPropagation(); onPreview(file) }}
+          style={{ fontSize: 11, color: '#2563eb', cursor: 'pointer', padding: '2px 4px', borderRadius: 3 }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = '#eff6ff' }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = '' }}
+        >
+          预览
+        </span>
         {added ? (
           <span style={{ fontSize: 11, color: '#16a34a', padding: '2px 4px' }}>已添加</span>
         ) : (
@@ -440,6 +451,7 @@ interface TreeFolderProps {
   toggle: (path: string) => void
   downloadFile: (key: string) => void
   removeFolder: (path: string) => void
+  onPreview: (file: FileEntry) => void
   onAddToConversation: (file: FileEntry) => void
   onStartMove: (key: string) => void
   movingFileKey: string | null
@@ -464,6 +476,7 @@ function TreeFolder(props: TreeFolderProps) {
     toggle,
     downloadFile,
     removeFolder,
+    onPreview,
     onAddToConversation,
     onStartMove,
     movingFileKey,
@@ -564,6 +577,7 @@ function TreeFolder(props: TreeFolderProps) {
               isSelected={false}
               onSelect={() => {}}
               downloadFile={downloadFile}
+              onPreview={onPreview}
               onAddToConversation={onAddToConversation}
               onStartMove={onStartMove}
               moving={movingFileKey === f.key}
@@ -587,6 +601,7 @@ function TreeFolder(props: TreeFolderProps) {
               toggle={toggle}
               downloadFile={downloadFile}
               removeFolder={removeFolder}
+              onPreview={onPreview}
               onAddToConversation={onAddToConversation}
               onStartMove={onStartMove}
               movingFileKey={movingFileKey}
@@ -617,6 +632,7 @@ export function FilePanel(props: FilePanelProps) {
   const [newFolderName, setNewFolderName] = useState('')
   const [deletingFolderPath, setDeletingFolderPath] = useState<string | null>(null)
   const [deletingFilePath, setDeletingFilePath] = useState<string | null>(null)
+  const [previewingFile, setPreviewingFile] = useState<FileEntry | null>(null)
 
   const tree = useMemo(() => buildTree(files, folders), [files, folders])
 
@@ -627,6 +643,7 @@ export function FilePanel(props: FilePanelProps) {
       setDeletingFilePath(null)
       setCreatingFolder(false)
       setSelectedKey(null)
+      setPreviewingFile(null)
     }
   }, [visible])
 
@@ -817,6 +834,7 @@ export function FilePanel(props: FilePanelProps) {
                 isSelected={selectedKey === f.key}
                 onSelect={(key) => setSelectedKey(key)}
                 downloadFile={downloadFile}
+                onPreview={setPreviewingFile}
                 onAddToConversation={onAddToConversation}
                 onStartMove={setMovingFileKey}
                 moving={movingFileKey === f.key}
@@ -840,6 +858,7 @@ export function FilePanel(props: FilePanelProps) {
                 toggle={toggle}
                 downloadFile={downloadFile}
                 removeFolder={removeFolder}
+                onPreview={setPreviewingFile}
                 onAddToConversation={onAddToConversation}
                 onStartMove={setMovingFileKey}
                 movingFileKey={movingFileKey}
@@ -853,10 +872,14 @@ export function FilePanel(props: FilePanelProps) {
                 deletingFilePath={deletingFilePath}
                 setDeletingFilePath={setDeletingFilePath}
               />
-            ))}
+            )            )}
           </>
         )}
       </div>
+
+      {previewingFile && (
+        <FilePreviewModal file={previewingFile} onClose={() => setPreviewingFile(null)} />
+      )}
     </div>
   )
 }

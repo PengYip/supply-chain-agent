@@ -92,6 +92,16 @@ function normalizeFolder(raw: RawFolder): FileFolder {
   };
 }
 
+/** Fetch the raw bytes of a stored file as a Blob (session-cookie
+ *  authenticated). Throws on non-2xx so callers can surface a retry state. */
+export async function fetchFileBlob(key: string): Promise<Blob> {
+  const res = await fetch(`/api/files/stream?key=${encodeURIComponent(key)}`, {
+    credentials: 'include',
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.blob();
+}
+
 export function useFiles() {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [folders, setFolders] = useState<FileFolder[]>([]);

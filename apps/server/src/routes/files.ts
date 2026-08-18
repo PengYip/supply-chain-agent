@@ -22,6 +22,7 @@ import { Hono } from 'hono';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
+import { Readable } from 'node:stream';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 import { requireAuth } from '../lib/auth-middleware.js';
 import { requireRole } from '../lib/auth-middleware.js';
@@ -88,6 +89,44 @@ function parseFileKey(key: string, userId: string): { name: string; directory: s
   const name = lastSeg.length > 37 ? lastSeg.slice(37) : lastSeg;
   const directory = segments.length > 0 ? '/' + segments.join('/') : '/';
   return { name, directory };
+}
+
+// MIME map for in-app streaming downloads. Extensions are derived from the final
+// key segment, lowercased and matched without a leading dot. Anything unknown
+// falls back to application/octet-stream (a safe default for blob URLs).
+const EXTENSION_CONTENT_TYPES: Readonly<Record<string, string>> = {
+  pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  doc: 'application/msword',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls: 'application/vnd.ms-excel',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  ppt: 'application/vnd.ms-powerpoint',
+  csv: 'text/csv',
+  txt: 'text/plain',
+  md: 'text/markdown',
+  json: 'application/json',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+  html: 'text/html',
+  zip: 'application/zip',
+};
+
+/** Map a MinIO object key to a MIME type from its filename extension (the last
+ *  dot in the final path segment, lowercase). Falls back to
+ *  application/octet-stream when the key has no extension or it is unmapped. */
+export function contentTypeForKey(key: string): string {
+  const lastSeg = key.split('/').pop() ?? '';
+  const dot = lastSeg.lastIndexOf('.');
+  if (dot <= 0) return 'application/octet-stream';
+  return (
+    EXTENSION_CONTENT_TYPES[lastSeg.slice(dot + 1).toLowerCase()] ??
+    'application/octet-stream'
+  );
 }
 
 /** Pure predicate so the upload-size guard is unit-testable without allocating
@@ -361,6 +400,49 @@ filesRoute.delete('/:key', requireRole('admin', 'trader'), async (c) => {
     console.warn('[files] minio removeObject failed for', key, (e as Error).message);
   }
   return c.json({ ok: true, key, docId: docId ?? null });
+});
+
+/** Stream one of the current user's files through the app (in-app preview).
+ *  Unlike GET /presign — which returns a 1h MinIO presigned URL that bypasses
+ *  app authz (any holder of the bearer URL can read the object) — this route
+ *  streams the object server-side under the session cookie, so an in-browser
+ *  preview never depends on MinIO-presigned URLs. Same ownership model as
+ *  /presign: key comes via query (?key=...) and must live under this user's
+ *  prefix; any authenticated role may read (router-level requireAuth). */
+filesRoute.get('/stream', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const key = c.req.query('key');
+  if (!key) return c.json({ error: 'missing key' }, 400);
+  // Ownership: key must live under this user's prefix.
+  if (!key.startsWith(`users/${user.id}/`)) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+
+  let obj;
+  try {
+    obj = await minioClient.getObject(MINIO_BUCKET, key);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[files] stream failed:', msg);
+    return c.json({ error: 'stream failed', detail: msg }, 500);
+  }
+
+  // Derive the download filename from the key (strips the <uuid>- upload prefix
+  // and any folder segments); fall back to the raw last segment if unparseable.
+  const parsed = parseFileKey(key, user.id);
+  const name = parsed?.name ?? key.split('/').pop() ?? key;
+
+  // minio's getObject returns a Node Readable; bridge it to a WHATWG stream so
+  // it can back a Response body directly (chunked, no full buffering).
+  const webStream = Readable.toWeb(obj) as unknown as ReadableStream;
+  return new Response(webStream, {
+    headers: {
+      'Content-Type': contentTypeForKey(key),
+      'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(name)}`,
+      'Cache-Control': 'no-store',
+    },
+  });
 });
 
 /** Presign a download URL for one of the current user's files. Key comes via
