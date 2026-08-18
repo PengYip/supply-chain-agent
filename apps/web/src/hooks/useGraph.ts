@@ -189,6 +189,11 @@ export function useGraph() {
         data?.subject != null && typeof data.subject === 'object'
           ? normalizeNode(data.subject as Record<string, unknown>)
           : null;
+      // 服务端契约: subject 单独返回, nodes 只含邻居。画布只渲染 nodes,
+      // 因此把中心节点并入 nodes(按 elementId 去重), 否则画布缺中心卡片。
+      if (subjectNode?.elementId && !nodes.some((n) => n.elementId === subjectNode.elementId)) {
+        nodes.unshift(subjectNode);
+      }
       setSubgraph({ subject: subjectNode?.elementId ? subjectNode : null, nodes, edges });
     } catch (e) {
       setSubgraph(null);
