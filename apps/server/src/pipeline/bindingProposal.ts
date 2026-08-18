@@ -297,6 +297,51 @@ function scoreQty(
 
 // ---- (c) 生成器 --------------------------------------------------------------
 
+/** 首个非空字段值(转 string)。 */
+function firstStr(fields: Record<string, { value: string | number }>, keys: string[]): string | undefined {
+  for (const k of keys) {
+    const v = fields[k]?.value;
+    if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+  }
+  return undefined;
+}
+
+/** 首个可解析为有限数的字段。 */
+function firstNum(fields: Record<string, { value: string | number }>, keys: string[]): number | undefined {
+  for (const k of keys) {
+    const v = fields[k]?.value;
+    if (v === undefined || v === null || String(v).trim() === '') continue;
+    const n = Number(String(v).replace(/[,\s]/g, ''));
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
+/**
+ * 通用文档(发票/提单/装箱单等, 无专用 voucher schema)的抽取字段 -> 绑定锚点。
+ * 字段名取自抽取器约定(extraction.ts REL_ROLE_BY_FIELD / KEY_FIELDS):
+ * 三类图片凭证走 extractAnchors, 不要用本函数替代。
+ */
+export function buildAnchorsFromFields(
+  _docType: string,
+  fields: Record<string, { value: string | number }>,
+): VoucherAnchors {
+  const anchors: VoucherAnchors = {};
+  const contractNo = firstStr(fields, ['合同号', '合同编号']);
+  if (contractNo) anchors.contractNo = contractNo;
+  const buyer = firstStr(fields, ['买方', '甲方', '收货人']);
+  if (buyer) anchors.buyer = buyer;
+  const seller = firstStr(fields, ['卖方', '乙方', '发货人']);
+  if (seller) anchors.seller = seller;
+  const date = firstStr(fields, ['日期', '开票日期', '签发日期', '签订日期']);
+  if (date) anchors.date = date;
+  const amount = firstNum(fields, ['金额', '价税合计', '合计金额']);
+  if (amount !== undefined) anchors.amount = amount;
+  const qty = firstNum(fields, ['数量', '重量_吨', '交货总量_吨']);
+  if (qty !== undefined) anchors.quantityTon = qty;
+  return anchors;
+}
+
 const WEIGHTS = { party: 0.5, time: 0.25, amount: 0.15, qty: 0.1 } as const;
 
 /** 评分阈值: >= 0.75 且与次高差 >= 0.05 -> human。 */
