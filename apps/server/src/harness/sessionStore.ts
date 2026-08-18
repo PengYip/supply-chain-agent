@@ -20,7 +20,21 @@ export const db = new Database(DB_PATH);
 // busy_timeout 必须先于 WAL 设置: 并发测试 worker 同时 import 本模块时,
 // 第二个进程的 journal_mode 切换会撞 SQLITE_BUSY 直接抛错(CI 上已复现)。
 db.pragma('busy_timeout = 5000');
-db.pragma('journal_mode = WAL');
+// SQLite 的 journal_mode 切换需要短暂排他锁, 且该操作不走 busy handler——
+// busy_timeout 覆盖不了它(CI 2026-08-18 复现)。先读当前模式: 已是 WAL(其他
+// worker 已切好, 并发导入的常态)则跳过; 确需切换时对 SQLITE_BUSY 小步重试。
+if (db.pragma('journal_mode', { simple: true }) !== 'wal') {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      db.pragma('journal_mode = WAL');
+      break;
+    } catch (e) {
+      const busy = e instanceof Error && /database is locked|SQLITE_BUSY/i.test(e.message);
+      if (!busy || attempt >= 40) throw e;
+      await new Promise((r) => setTimeout(r, 25 * (attempt + 1)));
+    }
+  }
+}
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS sessions (
