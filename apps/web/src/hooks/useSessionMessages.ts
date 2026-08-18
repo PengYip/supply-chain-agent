@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { generateId, readUIMessageStream, type UIMessage, type UIMessageChunk } from 'ai'
 import type { ContextFile } from './useFiles'
+import { toAttachmentPart } from '../utils/realChatUtils'
 import { useSessionEvents } from './useSessionEvents'
 import type { SessionStatus } from './useSessions'
 
@@ -209,10 +210,13 @@ export function useSessionMessages(
           return { error: err instanceof Error ? err.message : String(err) }
         }
       }
+      // 附件以 data-attachment parts 内嵌：服务端原样持久化 UIMessage，
+      // convertToModelMessages 静默丢弃 data-*，历史刷新后卡片可复现。
+      const attachmentParts = (sendOpts?.contextFiles ?? []).map(toAttachmentPart)
       const userMsg = {
         id: generateId(),
         role: 'user',
-        parts: [{ type: 'text', text }],
+        parts: [...attachmentParts, { type: 'text', text }],
         createdAt: new Date().toISOString(),
       } as unknown as UIMessage
 
