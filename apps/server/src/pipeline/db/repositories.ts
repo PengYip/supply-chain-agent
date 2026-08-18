@@ -104,16 +104,19 @@ export async function countExtractionsNeedingReview(ctx: DbContext, userId?: str
   return row?.n ?? 0;
 }
 
-/** Minimal doc row shape the graph route needs: id + created_at for sorting. */
+/** Doc row shape for doc list surfaces: id + created_at (graph route) + docType/sourceUri (bindings workbench overview). */
 export interface UserDocumentRow {
   id: string;
+  docType: string;
+  sourceUri: string | null;
   createdAt: string;
 }
 
 /**
  * List the caller's document rows (own rows + legacy user_id='' / NULL, same
- * visibility convention as countDocuments). Returns id + created_at only — the
- * graph route joins these against graph Document nodes by id.
+ * visibility convention as countDocuments). Returns id + created_at + doc_type +
+ * source_uri — the graph route uses id/createdAt only; the bindings workbench
+ * overview uses docType/sourceUri too.
  */
 export async function listUserDocuments(
   ctx: DbContext,
@@ -123,10 +126,15 @@ export async function listUserDocuments(
   const uid = effectiveUserId(userId);
   const rows = ctx.sqlite
     .prepare(
-      "SELECT id, created_at FROM documents WHERE (user_id = ? OR user_id = '' OR user_id IS NULL) ORDER BY created_at DESC",
+      "SELECT id, doc_type, source_uri, created_at FROM documents WHERE (user_id = ? OR user_id = '' OR user_id IS NULL) ORDER BY created_at DESC",
     )
-    .all(uid) as Array<{ id: string; created_at: string }>;
-  return rows.map((r) => ({ id: r.id, createdAt: r.created_at }));
+    .all(uid) as Array<{ id: string; doc_type: string; source_uri: string | null; created_at: string }>;
+  return rows.map((r) => ({
+    id: r.id,
+    docType: r.doc_type,
+    sourceUri: r.source_uri,
+    createdAt: r.created_at,
+  }));
 }
 
 export interface ExtractionInput {
