@@ -115,7 +115,7 @@ ToolLoopAgent (loop + prepareStep activeTools + toolApproval)
 |---|---|---|---|
 | **L1 只读自动** | 无副作用查询 | 自动执行，不询问 | query_contract / query_orders / query_inventory / query_exposure |
 | **L2 写需确认** | 内部写操作 | 软门：想一想 Plan 确认 | link_document / record_fund_flow / create_reconciliation_draft / advance_contract_stage |
-| **L3 双人审批** | 资金/合同不可逆 | 硬门：外部审批流回灌 | create_payment / refund_payment / modify_contract |
+| **L3 双人审批** | 资金/合同不可逆 | 硬门：系统内不提供资金类工具，经 escalate_to_human 工单转人工复核后续跑 | （无系统内工具；外部审批模拟已移除） |
 
 **硬约束**：
 - L3 必须职责分离（发起人 ≠ 审批人）
@@ -173,7 +173,7 @@ ToolLoopAgent (loop + prepareStep activeTools + toolApproval)
 
 **读工具（L1）**：query_contract / query_orders / query_inventory / query_settlement / query_invoice / query_counterparty / query_market_price / query_exposure / cross_check
 
-**写工具（L2/L3）**：create_payment(L3) / refund_payment(L3) / modify_contract(L3) / link_document(L2) / record_fund_flow(L2) / create_reconciliation_draft(L2) / advance_contract_stage(L2)
+**写工具（L2/L3）**：link_document(L2) / record_fund_flow(L2) / create_reconciliation_draft(L2) / advance_contract_stage(L2)
 
 ### 工作量分解（6 桶）
 

@@ -502,7 +502,7 @@ export const RealChatView: React.FC<{
             </button>
           </form>
           <div className="mt-2 text-[11px] text-textGray">
-            L2 写操作（link_document / advance_contract_stage）需确认后执行；L3 资金操作（create_payment / refund_payment / modify_contract）需外部审批，不能在对话内直接完成。
+            L2 写操作（如 bind_document 绑定单据）需你确认后执行；付款/退款等资金操作不在系统内执行，需要人工处理时会生成人工工单转人工复核。
           </div>
           {uploadMsg && (
             <div

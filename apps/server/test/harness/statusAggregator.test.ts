@@ -14,7 +14,7 @@ import { statusRoute } from '../../src/routes/status.js';
  *
  * Real tool names are used so getContract resolves real signals:
  *   query_contract -> counter, escalate_to_human -> todo,
- *   create_payment -> env, (unknown name) -> none (contract throws).
+ *   bind_document -> env, (unknown name) -> none (contract throws).
  */
 
 describe('getSessionStatus', () => {
@@ -39,7 +39,7 @@ describe('getSessionStatus', () => {
     // A different session's call must be EXCLUDED from sessA's status.
     runSessionContext({ sessionId: 'sessB', role: 'trader' }, () => {
       rec.recordToolCall({
-        toolName: 'create_payment',
+        toolName: 'bind_document',
         args: {},
         result: {},
         durationMs: 12,
@@ -69,7 +69,7 @@ describe('getSessionStatus', () => {
         durationMs: 1,
       });
       rec.recordToolCall({
-        toolName: 'create_payment',
+        toolName: 'bind_document',
         args: {},
         result: {},
         durationMs: 2,
@@ -79,7 +79,7 @@ describe('getSessionStatus', () => {
     const status = getSessionStatus('sessA', rec);
     expect(status.totalCalls).toBe(2);
     expect(status.bySignal).toEqual({ counter: 1, todo: 0, env: 1, none: 0 });
-    expect(status.lastToolName).toBe('create_payment');
+    expect(status.lastToolName).toBe('bind_document');
   });
 
   it('routes unknown tool names (no contract) into the none bucket', () => {

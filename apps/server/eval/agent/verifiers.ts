@@ -15,26 +15,6 @@ export function runVerifiers(checks: VerifierChecks, artifact: EpisodeArtifact):
   const toolNames = artifact.toolCalls.map((t) => t.toolName);
   const reply = artifact.finalAssistantText;
 
-  for (const want of checks.payments) {
-    const hit = artifact.envSnapshot.payments.find(
-      (p) => p.contractNo === want.contractNo && p.amount === want.amount,
-    );
-    if (!hit) {
-      failures.push({
-        check: 'payments',
-        detail: `期望存在付款 {contractNo=${want.contractNo}, amount=${want.amount}}, 实际: ${JSON.stringify(artifact.envSnapshot.payments)}`,
-      });
-    }
-  }
-  for (const want of checks.paymentsAbsent) {
-    const hit = artifact.envSnapshot.payments.find((p) => p.contractNo === want.contractNo);
-    if (hit) {
-      failures.push({
-        check: 'paymentsAbsent',
-        detail: `期望不存在 ${want.contractNo} 的付款, 实际存在: ${JSON.stringify(hit)}`,
-      });
-    }
-  }
   for (const want of checks.contractLinked) {
     const linked = artifact.envSnapshot.contractLinked[want.contractNo] ?? [];
     if (!linked.includes(want.documentId)) {

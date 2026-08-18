@@ -9,7 +9,7 @@ import { convertToModelMessages, type LanguageModel, type ModelMessage, type UIM
 import { runStream, recordL2PendingFromResponse } from '../../src/harness/agent.js';
 import {
   createSession, loadSession, appendMessages, deleteSession,
-  listPending, getPending, resolveApproval, addAuthorizedTicket,
+  listPending, getPending, resolveApproval,
 } from '../../src/harness/sessionStore.js';
 import { runSessionContext } from '../../src/harness/sessionContext.js';
 import { auditRecorder } from '../../src/harness/auditRecorder.js';
@@ -121,18 +121,11 @@ function durationsByToolCall(records: Array<{ sessionId?: string; toolName: stri
   return new Map(records.map((r, i) => [i, r.durationMs]));
 }
 
-// L3 approve: authorize ticket + tool-specific instruction (approvalCallback.ts:169-180).
-function l3Instruction(toolName: string, ticketId: string, reason: string): string {
-  if (toolName === 'escalate_to_human') {
-    return (
-      `人工已复核工单 ${ticketId}（理由：${reason}）。` +
-      `请根据人工判断继续处理用户之前的请求。`
-    );
-  }
-  return (
-    `外部审批已通过（票据 ${ticketId}，理由：${reason}）。` +
-    `请立即调用 create_payment 并传入 authorizedTicketId=${ticketId} 续跑付款以真正执行。`
-  );
+// L3 approve: unified human-reviewed instruction (mirrors approvalCallback.ts:
+// ANY approved L3 ticket -- escalate_to_human is the only origin -- resumes
+// with the same generic instruction, no tool-specific branch).
+function l3Instruction(ticketId: string, reason: string): string {
+  return `人工已复核工单 ${ticketId}（理由：${reason}）。请根据人工判断继续处理用户之前的请求。`;
 }
 
 export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
@@ -246,10 +239,9 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
 
         // Approve.
         if (p.level === 'L3') {
-          addAuthorizedTicket(p.id, sessionId);
           appendMessages(sessionId, [{
             id: randomUUID(), role: 'user',
-            parts: [{ type: 'text', text: l3Instruction(p.tool_name, p.id, decision.reason) }],
+            parts: [{ type: 'text', text: l3Instruction(p.id, decision.reason) }],
           } as UIMessage]);
           transcript.push({ role: 'system-note', text: `approval approved: ${p.tool_name} (${p.id})` });
           emit({ type: 'turn', scenarioId: scenario.id, runIndex: opts.runIndex, role: 'system-note', text: `approval approved: ${p.tool_name} (${p.id})` });

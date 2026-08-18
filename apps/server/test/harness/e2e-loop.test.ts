@@ -116,13 +116,14 @@ describe('agent e2e loop (stub model)', () => {
     // (d) stream + telemetry path completes without throwing.
     expect(threw).toBe(false);
 
-    // (a) the live streamText call received the full trader toolset. base 6
-    // (link_document retired in Phase 4) + 3 doc-entry + recall_documents +
-    // execute_code + inspect_extraction + tag_document + create_entity +
-    // link_entities + graph_query + graph_find_entity + present_document_review + update_document_fields
-    // + list_binding_proposals = 20 live trader tools.
-    expect(capturedNames).toHaveLength(20);
-    for (const n of ['ingest_document', 'extract_fields', 'bind_document', 'query_contract', 'create_payment', 'recall_documents']) {
+    // (a) the live streamText call received the full trader toolset. base 4
+    // (create_payment removed: no in-system money tools) + 3 doc-entry +
+    // recall_documents + execute_code + inspect_extraction + tag_document +
+    // create_entity + link_entities + graph_query + graph_find_entity +
+    // present_document_review + update_document_fields + list_binding_proposals
+    // = 19 live trader tools.
+    expect(capturedNames).toHaveLength(19);
+    for (const n of ['ingest_document', 'extract_fields', 'bind_document', 'query_contract', 'escalate_to_human', 'recall_documents']) {
       expect(capturedNames).toContain(n);
     }
 

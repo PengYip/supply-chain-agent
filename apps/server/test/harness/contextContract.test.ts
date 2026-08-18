@@ -17,7 +17,6 @@ const EXPECTED_TOOLS = [
   'query_contract',
   'query_orders',
   'cross_check',
-  'create_payment',
   'escalate_to_human',
   'verify_document_fields',
   'ingest_document',
@@ -62,8 +61,9 @@ describe('tool-context contract registry', () => {
   });
 
   it('getContract returns the registered contract', () => {
-    const c = getContract('create_payment');
-    expect(c.risk.level).toBe('L3');
+    const c = getContract('bind_document');
+    expect(c.signal).toBe('env');
+    expect(c.risk.level).toBe('L2');
     expect(c.persist).toBe('business');
   });
 

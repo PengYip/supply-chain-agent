@@ -315,7 +315,7 @@ function ApprovalSection({ doc, index, readOnly, onChange }: { doc: Document; in
             { key: 'value', label: 'value', number: true },
             { key: 'action', label: 'action', options: ['approve', 'reject'] },
           ]}
-          newRow={{ tool: 'create_payment', ifField: 'amount', op: '>', value: 0, action: 'approve' }}
+          newRow={{ tool: 'bind_document', ifField: 'contractNo', op: '==', value: 'HT-2024-001', action: 'approve' }}
         />
       </div>
     </section>

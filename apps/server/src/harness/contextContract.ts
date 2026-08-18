@@ -62,7 +62,7 @@ export interface ToolContextContract {
 //    carry prompt injection -> must be wrapped in <external_content>).
 //  - escalate_to_human: signal 'todo' (it opens a pending human ticket).
 //  - Reads (query_*, cross_check): signal 'counter'; writes that mutate
-//    business state (link/bind/create_payment): signal 'env'.
+//    business state (link/bind, e.g. bind_document): signal 'env'.
 export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract>> = {
   query_contract: {
     output: 'raw', budget: 'full', signal: 'counter',
@@ -75,10 +75,6 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
   cross_check: {
     output: 'raw', budget: 'full', signal: 'counter',
     persist: 'business', risk: { level: 'L1', injection: 'safe' },
-  },
-  create_payment: {
-    output: 'raw', budget: 'full', signal: 'env',
-    persist: 'business', risk: { level: 'L3', injection: 'safe' },
   },
   escalate_to_human: {
     output: 'raw', budget: 'full', signal: 'todo',
@@ -132,7 +128,7 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
   },
   graph_query: {
     output: 'raw', budget: 'full', signal: 'env',
-    persist: 'graph', risk: { level: 'L2', injection: 'safe' },
+    persist: 'graph', risk: { level: 'L1', injection: 'safe' },
   },
   graph_find_entity: {
     // Read-only kind+name lookup. Returns graph-stored names/ids (trusted

@@ -51,12 +51,6 @@ CREATE TABLE IF NOT EXISTS pending_approvals (
   FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 
-CREATE TABLE IF NOT EXISTS authorized_tickets (
-  ticket_id TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL,
-  authorized_at TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS session_events (
   session_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
@@ -196,16 +190,9 @@ const stmtListPending = db.prepare(
 const stmtCountPending = db.prepare(
   "SELECT COUNT(*) AS n FROM pending_approvals WHERE session_id = ? AND status = 'pending'",
 );
-const stmtInsertTicket = db.prepare(
-  'INSERT OR IGNORE INTO authorized_tickets (ticket_id, session_id, authorized_at) VALUES (?, ?, ?)',
-);
-const stmtHasTicket = db.prepare(
-  'SELECT ticket_id FROM authorized_tickets WHERE ticket_id = ? AND session_id = ?',
-);
 const stmtDeleteSession = db.prepare('DELETE FROM sessions WHERE id = ?');
 const stmtDeleteSessionMessages = db.prepare('DELETE FROM session_messages WHERE session_id = ?');
 const stmtDeleteSessionPending = db.prepare('DELETE FROM pending_approvals WHERE session_id = ?');
-const stmtDeleteSessionTickets = db.prepare('DELETE FROM authorized_tickets WHERE session_id = ?');
 
 // ---- API ----
 
@@ -360,8 +347,8 @@ export function loadSession(id: string): LoadedSession | null {
 
 /**
  * Delete a chat session and all of its dependent rows (messages, pending
- * approvals, authorized tickets). Returns true if the session existed (and was
- * deleted), false if it was already gone. Callers MUST verify ownership first
+ * approvals). Returns true if the session existed (and was deleted), false if
+ * it was already gone. Callers MUST verify ownership first
  * (sessionBelongsTo) -- this fn does not re-check.
  */
 export function deleteSession(id: string): boolean {
@@ -370,7 +357,6 @@ export function deleteSession(id: string): boolean {
   const tx = db.transaction(() => {
     stmtDeleteSessionMessages.run(id);
     stmtDeleteSessionPending.run(id);
-    stmtDeleteSessionTickets.run(id);
     stmtDeleteSession.run(id);
   });
   tx();
@@ -499,18 +485,4 @@ export function listPending(sessionId: string): PendingApprovalRow[] {
 export function countPendingApprovals(sessionId: string): number {
   const row = stmtCountPending.get(sessionId) as { n: number };
   return row.n;
-}
-
-export function addAuthorizedTicket(
-  ticketId: string,
-  sessionId: string,
-): void {
-  stmtInsertTicket.run(ticketId, sessionId, new Date().toISOString());
-}
-
-export function isAuthorized(
-  ticketId: string,
-  sessionId: string,
-): boolean {
-  return stmtHasTicket.get(ticketId, sessionId) !== undefined;
 }

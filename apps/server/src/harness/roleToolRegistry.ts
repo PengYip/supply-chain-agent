@@ -1,6 +1,5 @@
 import type { Tool } from 'ai';
 import { buildQueryContractTool, queryOrders, crossCheck } from '../tools/queries.js';
-import { createPayment } from '../tools/writes.js';
 import { escalateToHuman, verifyDocumentFields } from '../tools/hitl.js';
 import {
   buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool, buildInspectExtractionTool,
@@ -45,12 +44,10 @@ export type GatedTool = Tool<any, any> & { name: string };
 
 // role -> tool subset.
 //
-// Phase 3a: trader gets all 5 tools (3 L1 reads + 1 L2 write + 1 L3 write) so
-// the permission gates can be exercised end-to-end. Real RBAC / role isolation
-// is a later phase.
-//
-// T3/T4 add two more L1 tools (escalate_to_human, verify_document_fields) so
-// the full HITL T1-T6 flow is backend-testable.
+// Trader's static BASE set is 4 tools (2 L1 reads: query_orders / cross_check +
+// 2 L1 HITL/doc tools: escalate_to_human / verify_document_fields). All L2
+// writes (bind_document / tag_document / create_entity / ...) are the
+// DbContext-dependent builders appended in getToolsForRole(deps) below.
 //
 // T9: trader gains three doc-entry tools (ingest_document L1, extract_fields L1,
 // bind_document L2). Their INSTANCES need a DbContext, so they are appended in
@@ -68,7 +65,6 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
   trader: [
     { ...queryOrders, name: 'query_orders' },
     { ...crossCheck, name: 'cross_check' },
-    { ...createPayment, name: 'create_payment' },
     { ...escalateToHuman, name: 'escalate_to_human' },
     { ...verifyDocumentFields, name: 'verify_document_fields' },
   ],
@@ -105,11 +101,12 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
         // tag_document is L2: explicit user/agent labels, post-ingest, any time.
         // needsApproval = soft gate (v6): the agent must have user consent to label.
         { ...buildTagDocumentTool({ ctx, userId }), name: 'tag_document', needsApproval: true },
-        // Graph layer (§7): create/link/query entities in Neo4j. All L2 (mutate
+        // Graph layer (§7): create/link entities in Neo4j are L2 (mutate
         // graph state / soft gate). Builders take no deps (use getDriver() directly).
         { ...buildCreateEntityTool(), name: 'create_entity', needsApproval: true },
         { ...buildLinkEntitiesTool(), name: 'link_entities', needsApproval: true },
-        { ...buildGraphQueryTool(), name: 'graph_query', needsApproval: true },
+        // graph_query is L1: read-only graph traversal (READ session, no writes).
+        { ...buildGraphQueryTool(), name: 'graph_query' },
         // graph_find_entity is L1: read-only name lookup —— graph_query 缺的
         // "按名称找实体"入口（用户说名称，不说 elementId）。
         { ...buildGraphFindEntityTool(), name: 'graph_find_entity' },

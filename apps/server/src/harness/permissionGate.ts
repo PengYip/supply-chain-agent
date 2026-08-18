@@ -3,13 +3,17 @@
 //
 //   L1 readonly auto    -> query_* : runs automatically, no prompt
 //   L2 write confirm    -> internal writes: soft gate, needs user confirmation
-//   L3 external approval-> money/irreversible: hard gate, external approval flow
+//   L3 external approval-> money/irreversible: NO registered tools today
 //
 // In AI SDK 6 the soft gate is implemented via the per-tool `needsApproval`
-// property (v6). The L3 hard gate is enforced inside the tool's execute
-// (returns a `blocked` result) because v6's approval mechanism only emits an
-// approval-request and stops the loop without letting the agent narrate; the
-// execute-blocked path is what produces a clear verbal response for L3.
+// property (v6). The L3 tier currently has NO registered tools: money /
+// irreversible operations are not executable in-system. Human-in-the-loop for
+// such cases is handled by the `escalate_to_human` tool (an L1 tool) which
+// registers a pending L3 ticket in sessionStore and returns a `blocked` result
+// so the frontend renders an in-app human-review card; approval resumes via
+// /api/approval/callback -- not through permissionGate. The 'L3' member stays
+// in ToolPermission because sessionStore approval rows still use the level
+// string.
 
 export type ToolPermission = 'L1' | 'L2' | 'L3';
 
@@ -58,6 +62,7 @@ registerPermission('recall_documents', 'L1'); // T6: FTS5 keyword recall over ch
 registerPermission('execute_code', 'L1'); // CubeSandbox: isolated Python execution
 registerPermission('present_document_review', 'L1'); // post-ingest review card (read-only present)
 registerPermission('graph_find_entity', 'L1'); // 2026-08-17: 按名查图实体（只读入口）
+registerPermission('graph_query', 'L1'); // 2026-08-18: 图遍历是只读查询（READ session），与 graph_find_entity 同级
 registerPermission('list_binding_proposals', 'L1'); // Phase B: 待确认的凭证-合同绑定建议（只读）
 // L2 write confirm
 registerPermission('advance_contract_stage', 'L2');
@@ -65,9 +70,7 @@ registerPermission('bind_document', 'L2'); // T9: bind document to contract
 registerPermission('tag_document', 'L2'); // Phase 2: explicit document labeling
 registerPermission('create_entity', 'L2'); // Phase 4 §7: graph entity create
 registerPermission('link_entities', 'L2'); // Phase 4 §7: graph edge create
-registerPermission('graph_query', 'L2'); // Phase 4 §7: graph traversal (L2: soft gate)
 registerPermission('update_document_fields', 'L2'); // post-ingest field correction (write)
-// L3 external approval
-registerPermission('create_payment', 'L3');
-registerPermission('refund_payment', 'L3');
-registerPermission('modify_contract', 'L3');
+// L3: no registered tools -- money/irreversible operations are not executable
+// in-system. Human-in-the-loop goes through escalate_to_human tickets
+// (sessionStore pending approvals + /api/approval/callback resume).

@@ -250,33 +250,3 @@ export function linkDocumentToContract(
   contract.linkedDocuments.push(documentId);
   return { ok: true, contractNo: contract.contractNo, changeId, linkedAt };
 }
-
-// ---- payments (L3 true-execution ledger, in-memory) -------------------------
-
-export interface PaymentRecord {
-  paymentId: string;
-  contractNo: string;
-  amount: number;
-  authorizedTicketId: string;
-  paidAt: string;
-}
-
-export const payments: PaymentRecord[] = [];
-
-export function recordPayment(input: {
-  contractNo: string;
-  amount: number;
-  authorizedTicketId: string;
-}): PaymentRecord {
-  const record: PaymentRecord = {
-    paymentId: `PAY-${Date.now().toString(36)}-${Math.random()
-      .toString(36)
-      .slice(2, 6)}`,
-    contractNo: input.contractNo,
-    amount: input.amount,
-    authorizedTicketId: input.authorizedTicketId,
-    paidAt: new Date().toISOString(),
-  };
-  payments.push(record);
-  return record;
-}

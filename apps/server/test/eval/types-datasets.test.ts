@@ -58,7 +58,7 @@ describe('loadDataset', () => {
     expect(s.approvalPolicy.default).toBe('approve');
     expect(s.approvalPolicy.rules).toEqual([]);
     expect(s.capability).toEqual([]);
-    expect(s.verifiers.payments).toEqual([]);
+    expect(s.verifiers.forbidden).toEqual([]);
   });
   it('rejects a scenario missing required fields', () => {
     expect(() => loadDataset(join(dir, 'bad-missing-id.yaml'))).toThrow(/scenario #0 invalid/);

@@ -5,7 +5,6 @@ import { z } from 'zod';
 import {
   getPending,
   resolveApproval,
-  addAuthorizedTicket,
   loadSession,
   appendMessages,
   sessionBelongsTo,
@@ -16,7 +15,7 @@ import { runSession } from '../harness/runSession.js';
 import type { Role } from '../harness/roleToolRegistry.js';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 
-// Approval callbacks (L2 soft-gate / L3 external ticket) are fire-and-forget,
+// Approval callbacks (L2 soft-gate / L3 human-review ticket) are fire-and-forget,
 // symmetric with POST /api/chat: resolve the approval in the DB, then start a
 // background resume run through RunManager. The resume output streams on the
 // per-session SSE bus (GET /api/sessions/:id/events); this route never
@@ -28,7 +27,9 @@ import type { AuthEnv } from '../lib/auth-middleware.js';
 // streamText re-pairs them at startup and re-executes the gated tool
 // (approved) or feeds the model an execution-denied tool-result (denied).
 // The L3 path has no SDK approval semantics: it persists a user instruction
-// and reruns the full history.
+// and reruns the full history. L3 tickets originate from escalate_to_human
+// only (no system-internal money tools exist); an approved ticket resumes
+// with a generic human-reviewed instruction.
 
 export const approvalCallback = new Hono<AuthEnv>();
 
@@ -79,9 +80,8 @@ approvalCallback.post('/approval/callback', async (c) => {
 
   // Idempotency guard: a replay of an already-resolved approval (same POST sent
   // again after the resume run completed) must not re-append the L3 instruction
-  // or start a fresh run. For create_payment that would re-execute the payment
-  // with the now-authorized ticket. Any subsequent callback for this id is a
-  // duplicate — reject before ANY state change.
+  // or start a fresh run. Any subsequent callback for this id is a duplicate —
+  // reject before ANY state change.
   if (pending.status !== 'pending') {
     return c.json({ error: 'approval_already_resolved', approvalResolved: true }, 409);
   }
@@ -124,14 +124,10 @@ approvalCallback.post('/approval/callback', async (c) => {
       instruction =
         `外部审批已拒绝（票据 ${ticketId}，理由：${reason ?? '用户拒绝'}）。` +
         `请告知用户该操作未执行，并停止该操作的后续尝试。`;
-    } else if (pending.tool_name === 'escalate_to_human') {
+    } else {
       instruction =
         `人工已复核工单 ${ticketId}（理由：${reason ?? '已处理'}）。` +
         `请根据人工判断继续处理用户之前的请求。如果人工反馈解决了不确定性，请直接回答用户；如果需要执行后续操作，请继续。`;
-    } else {
-      instruction =
-        `外部审批已通过（票据 ${ticketId}，理由：${reason ?? '财务已审批'}）。` +
-        `请立即调用 create_payment 并传入 authorizedTicketId=${ticketId} 续跑付款以真正执行。`;
     }
     const instructionUIMsg = {
       id: randomUUID(),
@@ -163,7 +159,6 @@ approvalCallback.post('/approval/callback', async (c) => {
   // DB state first: the decision is durable even if the run fails to start
   // or errors later.
   resolveApproval(pending.id, approved ? 'approved' : 'denied');
-  if (ticketId && approved) addAuthorizedTicket(ticketId, sessionId);
 
   console.log(
     JSON.stringify({

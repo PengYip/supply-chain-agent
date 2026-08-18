@@ -63,7 +63,6 @@ export function buildJudgePrompt(rubric: Rubric, artifact: EpisodeArtifact): { s
     '== 审批事件 ==',
     approvalLines || '  (无)',
     `== 环境最终状态 ==`,
-    `  payments: ${JSON.stringify(artifact.envSnapshot.payments)}`,
     `  contractLinked: ${JSON.stringify(artifact.envSnapshot.contractLinked)}`,
     artifact.simError ? `== 模拟用户异常 ==\n  ${artifact.simError}` : '',
     '',

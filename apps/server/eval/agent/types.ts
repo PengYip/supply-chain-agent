@@ -41,10 +41,6 @@ export const PersonaSchema = z.object({
 export type Persona = z.infer<typeof PersonaSchema>;
 
 export const VerifierChecksSchema = z.object({
-  /** In-memory payment ledger must contain these entries (tau-bench DB-state check). */
-  payments: z.array(z.object({ contractNo: z.string(), amount: z.number() })).default([]),
-  /** Payment ledger must NOT contain payments for these contracts. */
-  paymentsAbsent: z.array(z.object({ contractNo: z.string() })).default([]),
   /** Contract.linkedDocuments must contain the documentId. */
   contractLinked: z.array(z.object({ contractNo: z.string(), documentId: z.string() })).default([]),
   /** Tool names that MUST appear in the episode (flow-compliance check). */
@@ -74,7 +70,7 @@ export const ScenarioSchema = z.object({
   approvalPolicy: ApprovalPolicySchema.default({ default: 'approve', rules: [] }),
   maxTurns: z.number().int().min(1).max(20).default(8),
   verifiers: VerifierChecksSchema.default({
-    payments: [], paymentsAbsent: [], contractLinked: [],
+    contractLinked: [],
     mustAppear: [], forbidden: [], keywordInReply: [], keywordInTranscript: [],
   }),
   rubric: RubricSchema,
@@ -101,7 +97,6 @@ export interface ApprovalObservation {
 }
 
 export interface EnvSnapshot {
-  payments: Array<{ paymentId: string; contractNo: string; amount: number; authorizedTicketId: string }>;
   contractLinked: Record<string, string[]>;
 }
 

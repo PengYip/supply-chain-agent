@@ -14,9 +14,10 @@ import { getSessionId } from '../harness/sessionContext.js';
 
 // ---- T3: escalate_to_human (uncertainty fallback, L1 in tool registry but
 // uses the L3 approval pattern so the frontend renders an approval card with a
-// resume path. Mirrors create_payment: register a pending ticket in
-// sessionStore, then return `blocked` + `requires_external_approval` so the
-// mock 飞书 callback can resume the conversation after human review.)
+// resume path. escalate_to_human is the dedicated HITL tool: it registers a
+// pending L3 ticket in sessionStore and returns `blocked` so the frontend
+// renders an in-app human-review card; approval via /api/approval/callback
+// appends a human-reviewed instruction and resumes.)
 //
 // Zero-hallucination backstop: when the model hits a data conflict / missing
 // data / low confidence / rule boundary, it calls this instead of guessing.

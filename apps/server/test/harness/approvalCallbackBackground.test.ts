@@ -22,7 +22,6 @@ const {
   appendMessages,
   loadSession,
   getPending,
-  isAuthorized,
   recordPendingApproval,
 } = await import('../../src/harness/sessionStore.js');
 const { runSession } = await import('../../src/harness/runSession.js');
@@ -119,31 +118,33 @@ describe('POST /api/approval/callback (background runtime)', () => {
     runResolve.current();
   });
 
-  it('L3 approve (create_payment): appends instruction with authorizedTicketId, authorizes ticket, starts run', async () => {
+  it('L3 approve (escalate_to_human): appends the unified human-reviewed instruction and starts the run', async () => {
     const s = createSession('trader', 'u-a3');
     const tid = uid('T');
     recordPendingApproval({
-      sessionId: s.id, level: 'L3', toolName: 'create_payment',
+      sessionId: s.id, level: 'L3', toolName: 'escalate_to_human',
       input: {}, ticketId: tid,
     });
 
     const res = await post(appAs('u-a3'), { ticketId: tid, approved: true });
     expect(res.status).toBe(200);
     expect(getPending(tid)?.status).toBe('approved');
-    expect(isAuthorized(tid, s.id)).toBe(true);
 
+    // The unified approved instruction is appended to the persisted history.
     const loaded = loadSession(s.id)!;
     const lastMsg = loaded.messages[loaded.messages.length - 1];
     expect(lastMsg.role).toBe('user');
     const text = JSON.stringify(lastMsg);
-    expect(text).toContain('create_payment');
-    expect(text).toContain(`authorizedTicketId=${tid}`);
+    expect(text).toContain(`人工已复核工单 ${tid}`);
+    expect(text).not.toContain('authorizedTicketId');
+    expect(text).not.toContain('create_payment');
 
     // The instruction is ALSO in the model messages handed to runSession.
     const opts = (runSession as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const lastModel = opts.messages[opts.messages.length - 1];
     expect(lastModel.role).toBe('user');
-    expect(JSON.stringify(lastModel)).toContain(`authorizedTicketId=${tid}`);
+    expect(JSON.stringify(lastModel)).toContain(`人工已复核工单 ${tid}`);
+    expect(JSON.stringify(lastModel)).not.toContain('authorizedTicketId');
     runResolve.current();
   });
 
@@ -164,11 +165,11 @@ describe('POST /api/approval/callback (background runtime)', () => {
     runResolve.current();
   });
 
-  it('L3 deny: appends deny instruction, does NOT authorize the ticket, still resumes', async () => {
+  it('L3 deny: appends deny instruction and still resumes', async () => {
     const s = createSession('trader', 'u-a5');
     const tid = uid('T');
     recordPendingApproval({
-      sessionId: s.id, level: 'L3', toolName: 'create_payment',
+      sessionId: s.id, level: 'L3', toolName: 'escalate_to_human',
       input: {}, ticketId: tid,
     });
 
@@ -176,7 +177,6 @@ describe('POST /api/approval/callback (background runtime)', () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.status).toBe('denied');
-    expect(isAuthorized(tid, s.id)).toBe(false);
     const loaded = loadSession(s.id)!;
     const text = JSON.stringify(loaded.messages[loaded.messages.length - 1]);
     expect(text).toContain('已拒绝');
@@ -225,7 +225,7 @@ describe('POST /api/approval/callback (background runtime)', () => {
     const s = createSession('trader', 'u-replay');
     const tid = uid('T');
     recordPendingApproval({
-      sessionId: s.id, level: 'L3', toolName: 'create_payment',
+      sessionId: s.id, level: 'L3', toolName: 'escalate_to_human',
       input: {}, ticketId: tid,
     });
 

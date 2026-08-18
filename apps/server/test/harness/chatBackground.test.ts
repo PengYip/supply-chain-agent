@@ -123,7 +123,7 @@ describe('POST /api/chat (background runtime)', () => {
   it('L3 pending ticket does NOT block chat (blocked tool-result already in history)', async () => {
     const s = createSession('trader', 'u-chat4');
     recordPendingApproval({
-      sessionId: s.id, level: 'L3', toolName: 'create_payment',
+      sessionId: s.id, level: 'L3', toolName: 'escalate_to_human',
       input: {}, ticketId: 'T-' + randomUUID().slice(0, 8),
     });
 

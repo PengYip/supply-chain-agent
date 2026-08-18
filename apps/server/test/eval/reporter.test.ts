@@ -12,7 +12,7 @@ function artifact(i: number): EpisodeArtifact {
   return {
     scenarioId: 't1-order-status', runIndex: i, sessionId: `s-${i}`, startedAt: '', wallMs: 100,
     turnsUsed: 2, transcript: [{ role: 'user', text: 'q' }, { role: 'assistant', text: 'a' }],
-    toolCalls: [], approvals: [], envSnapshot: { payments: [], contractLinked: {} },
+    toolCalls: [], approvals: [], envSnapshot: { contractLinked: {} },
     finalAssistantText: 'a', totalUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
   };
 }
