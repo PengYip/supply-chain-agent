@@ -27,7 +27,7 @@ export function buildCreateEntityTool() {
 export function buildLinkEntitiesTool() {
   return tool({
     description:
-      '在两个已存在的实体之间创建一条有向关系 (如 buyer_of / plays_role / references). src/dst 必须是 create_entity 返回的 elementId. 不会隐式创建节点.',
+      '在两个已存在的实体之间建立一条有向关系 (如 buyer_of / plays_role / references). src/dst 必须是 create_entity 返回的 elementId. 不会隐式创建节点. 幂等: 同一 (src, 关系类型, dst) 只保留一条边, 重复调用仅更新属性.',
     inputSchema: z.object({
       srcId: z.string().min(1).describe('源实体 elementId'),
       dstId: z.string().min(1).describe('目标实体 elementId'),

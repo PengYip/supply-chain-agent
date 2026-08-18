@@ -1,9 +1,10 @@
 // Backend graph REST surface (read-only). Mounted at /api/graph in index.ts and
 // gated there by requireAuth (any authenticated role may read; no requireRole).
-// Three GET endpoints:
+// Four GET endpoints:
 //   GET /documents — the current user's documents that have a graph node
 //   GET /query     — bounded traversal from a subject elementId (Neo4j elementId)
 //   GET /entities  — kind+name entity search (CONTAINS / exact)
+//   GET /resolve   — docId + contractNo -> graph nodes (binding workbench link)
 // Neo4j unconfigured (NEO4J_PASSWORD unset) or unreachable -> 503 with a clear
 // Chinese message; the frontend surfaces it as "graph service unavailable".
 
@@ -20,6 +21,7 @@ import {
   listDocumentNodes,
   type GraphEntity,
 } from '../graph/repo.js';
+import { normalizeName } from '../graph/normalize.js';
 
 export const graphRoute = new Hono<AuthEnv>();
 
@@ -57,6 +59,11 @@ const entitiesSchema = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((v) => v === 'true'),
+});
+
+const resolveSchema = z.object({
+  docId: z.string().min(1).optional(),
+  contractNo: z.string().min(1).optional(),
 });
 
 /** GET /api/graph/documents — list the current user's graph-backed documents. */
@@ -152,5 +159,45 @@ graphRoute.get('/entities', async (c) => {
     }
     console.error('[graph] findEntities failed:', errDetail(e));
     return c.json({ error: 'entities query failed', detail: errDetail(e) }, 500);
+  }
+});
+
+/** GET /api/graph/resolve?docId=&contractNo= — resolve a binding's endpoints to
+ *  graph nodes. Binding workbench uses this to locate the mini-graph center:
+ *  doc = Document node with name === docId; contract = Contract node with
+ *  name === normalizeName(contractNo) (same convention as bindingGraphSync /
+ *  graphWriter). Either side may be null when the binding has not been synced
+ *  (graph_status failed/skipped) — the frontend shows "未同步到图谱". */
+graphRoute.get('/resolve', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+
+  const parsed = resolveSchema.safeParse(c.req.query());
+  if (!parsed.success || (!parsed.data?.docId && !parsed.data?.contractNo)) {
+    return c.json({ error: 'docId 与 contractNo 至少提供一个' }, 400);
+  }
+  const { docId, contractNo } = parsed.data;
+  try {
+    let doc: GraphEntity | null = null;
+    let contract: GraphEntity | null = null;
+    if (docId) {
+      // Document.name = docId (exact); findEntities caps at 10, take first hit.
+      const hits = await findEntities({ kind: 'Document', name: docId, exact: true });
+      doc = hits[0] ?? null;
+    }
+    if (contractNo) {
+      const normalized = normalizeName(contractNo);
+      if (normalized) {
+        const hits = await findEntities({ kind: 'Contract', name: normalized, exact: true });
+        contract = hits[0] ?? null;
+      }
+    }
+    return c.json({ doc, contract });
+  } catch (e) {
+    if (isGraphUnavailable(e)) {
+      return c.json({ error: '图谱服务未配置或不可用' }, 503);
+    }
+    console.error('[graph] resolve failed:', errDetail(e));
+    return c.json({ error: 'resolve query failed', detail: errDetail(e) }, 500);
   }
 });

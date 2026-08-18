@@ -113,6 +113,17 @@ describe.skipIf(skip)('graph repo (live Neo4j)', () => {
     expect(res.edges.filter((e) => e.dstId === b.elementId)).toHaveLength(1);
   });
 
+  it('linkEntities 与 mergeEdge 同语义：重复 link 不堆积历史边（最终结果）', async () => {
+    const a = await createEntity({ kind: 'Party', name: `LKA-${RUN_ID}`, props: { scaRunId: RUN_ID } });
+    const b = await createEntity({ kind: 'Contract', name: `LKB-${RUN_ID}`, props: { scaRunId: RUN_ID } });
+    await linkEntities({ srcId: a.elementId, dstId: b.elementId, kind: 'buyer_of', confidence: 0.8, props: { scaRunId: RUN_ID } });
+    await linkEntities({ srcId: a.elementId, dstId: b.elementId, kind: 'buyer_of', confidence: 0.95, props: { scaRunId: RUN_ID, role: '买方' } });
+    const res = await graphQuery({ subjectId: a.elementId, depth: 1, edgeKinds: ['buyer_of'], direction: 'out' });
+    const edges = res.edges.filter((e) => e.dstId === b.elementId);
+    expect(edges).toHaveLength(1); // 第二次 link 是更新, 不是新增
+    expect(edges[0].confidence).toBe(0.95); // 属性被最新一次覆盖
+  });
+
   it('findEntities 按 kind+contains 模糊与 exact 精确匹配', async () => {
     await createEntity({ kind: 'Party', name: `中石化-${RUN_ID}`, props: { scaRunId: RUN_ID } });
     await createEntity({ kind: 'Party', name: `中石化贸易-${RUN_ID}`, props: { scaRunId: RUN_ID } });

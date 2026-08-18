@@ -123,37 +123,13 @@ export interface LinkEntitiesInput {
   confidence?: number;
   sourceSpan?: unknown;
 }
+/**
+ * Agent-facing link (graph_link_entities 工具入口)。2026-08-18 语义统一：
+ * 最终结果语义 —— 同一 (src, kind, dst) 幂等 MERGE，重复调用只更新属性，
+ * 不堆积历史边；图谱始终只体现最终关系状态。直接委托 mergeEdge。
+ */
 export async function linkEntities(input: LinkEntitiesInput): Promise<GraphEdge> {
-  const cypher = `
-    MATCH (a) WHERE elementId(a) = $srcId
-    MATCH (b) WHERE elementId(b) = $dstId
-    CREATE (a)-[r:$($kind)]->(b)
-    SET r += $props, r.confidence = $confidence, r.createdAt = datetime()
-    RETURN r AS rel
-  `;
-  const props = { ...(input.props ?? {}) };
-  if (input.sourceSpan !== undefined) props.sourceSpan = input.sourceSpan;
-  const session = getDriver().session();
-  try {
-    const { records } = await session.executeWrite(async (txc) => {
-      const result = await txc.run(cypher, {
-        srcId: input.srcId,
-        dstId: input.dstId,
-        kind: input.kind,
-        props,
-        confidence: input.confidence ?? 0,
-      });
-      return result;
-    });
-    if (records.length === 0) {
-      throw new Error(`linkEntities: src or dst node not found (src=${input.srcId} dst=${input.dstId})`);
-    }
-    const rec = records[0];
-    if (!rec) throw new Error('linkEntities: unexpected empty record');
-    return relToEdge(rec.get('rel') as Relationship);
-  } finally {
-    await session.close();
-  }
+  return mergeEdge(input);
 }
 
 export interface MergeEdgeInput {
@@ -166,8 +142,9 @@ export interface MergeEdgeInput {
 }
 /**
  * Idempotent link: MERGE on (src)-[kind]->(dst) —— 重复确认同一文档不会产生
- * 重复边（design 2026-08-17 §4）。与 agent 面向的 linkEntities（CREATE）不同，
- * 这是确认写入器（graphWriter）专用的确定性入口。
+ * 重复边（design 2026-08-17 §4）。graphWriter（文档确认）与 bindingGraphSync
+ * （工作台绑定）以及 agent 工具 linkEntities 都走此入口（2026-08-18 统一为
+ * 最终结果语义）。
  */
 export async function mergeEdge(input: MergeEdgeInput): Promise<GraphEdge> {
   assertToken(input.kind, 'label'); // followup P3: 与 findEntities 对齐的预检（不触驱动）
