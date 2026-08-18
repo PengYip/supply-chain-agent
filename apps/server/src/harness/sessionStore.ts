@@ -17,6 +17,9 @@ const DB_PATH = path.join(DATA_DIR, 'agent.db');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 export const db = new Database(DB_PATH);
+// busy_timeout 必须先于 WAL 设置: 并发测试 worker 同时 import 本模块时,
+// 第二个进程的 journal_mode 切换会撞 SQLITE_BUSY 直接抛错(CI 上已复现)。
+db.pragma('busy_timeout = 5000');
 db.pragma('journal_mode = WAL');
 
 db.exec(`
