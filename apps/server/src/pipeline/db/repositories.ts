@@ -26,6 +26,7 @@ import {
   // pg parity for the previously-stubbed fns.
   countDocumentsPg,
   countExtractionsNeedingReviewPg,
+  listUserDocumentsPg,
   loadExtractionPg,
   saveClassificationPg,
   loadClassificationPg,
@@ -97,6 +98,31 @@ export async function countExtractionsNeedingReview(ctx: DbContext, userId?: str
     )
     .get(uid) as { n: number } | undefined;
   return row?.n ?? 0;
+}
+
+/** Minimal doc row shape the graph route needs: id + created_at for sorting. */
+export interface UserDocumentRow {
+  id: string;
+  createdAt: string;
+}
+
+/**
+ * List the caller's document rows (own rows + legacy user_id='' / NULL, same
+ * visibility convention as countDocuments). Returns id + created_at only — the
+ * graph route joins these against graph Document nodes by id.
+ */
+export async function listUserDocuments(
+  ctx: DbContext,
+  userId: string,
+): Promise<UserDocumentRow[]> {
+  if (ctx.backend === 'postgres') return listUserDocumentsPg(ctx, userId);
+  const uid = effectiveUserId(userId);
+  const rows = ctx.sqlite
+    .prepare(
+      "SELECT id, created_at FROM documents WHERE (user_id = ? OR user_id = '' OR user_id IS NULL) ORDER BY created_at DESC",
+    )
+    .all(uid) as Array<{ id: string; created_at: string }>;
+  return rows.map((r) => ({ id: r.id, createdAt: r.created_at }));
 }
 
 export interface ExtractionInput {

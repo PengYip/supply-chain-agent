@@ -571,6 +571,19 @@ export async function countExtractionsNeedingReviewPg(ctx: PostgresDbContext, us
   return Number(res.rows[0]?.n ?? 0);
 }
 
+/** pg twin of listUserDocuments (see repositories.ts). */
+export async function listUserDocumentsPg(
+  ctx: PostgresDbContext,
+  userId: string,
+): Promise<Array<{ id: string; createdAt: string }>> {
+  const uid = effectiveUserId(userId);
+  const res = await ctx.pool.query(
+    "SELECT id, created_at FROM documents WHERE (user_id = $1 OR user_id = '' OR user_id IS NULL) ORDER BY created_at DESC",
+    [uid],
+  );
+  return res.rows.map((r) => ({ id: r.id, createdAt: r.created_at }));
+}
+
 export async function loadExtractionPg(
   ctx: PostgresDbContext,
   extractionId: string,

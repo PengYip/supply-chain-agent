@@ -236,6 +236,26 @@ export async function findEntities(input: FindEntitiesInput): Promise<GraphEntit
   }
 }
 
+/**
+ * 按 docId 批量查 Document 图节点（name = docId，见 graphWriter）。仅返回已有
+ * 图节点的文档——docId 尚未写入图（graph_status 未落库）则自然不在结果中。
+ * 调用方（路由层）负责与 DB 行对齐。
+ */
+export async function listDocumentNodes(docIds: string[]): Promise<GraphEntity[]> {
+  if (docIds.length === 0) return [];
+  const session = getDriver().session({ defaultAccessMode: neo4j.session.READ });
+  try {
+    const cypher =
+      'MATCH (n:Document) WHERE n.name IN $docIds RETURN n AS node ORDER BY n.name';
+    const result = await session.executeRead((txc) =>
+      txc.run(cypher, { docIds }),
+    );
+    return result.records.map((rec) => nodeToEntity(rec.get('node') as Node));
+  } finally {
+    await session.close();
+  }
+}
+
 const DIR_TEMPLATES: Record<Direction, string> = {
   out: '-[:$($edgeKinds)]->',
   in: '<-[:$($edgeKinds)]-',

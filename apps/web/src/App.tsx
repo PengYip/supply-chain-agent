@@ -8,7 +8,8 @@ import { type FileEntry, type ContextFile, useFiles } from './hooks/useFiles';
 import { processDocument, type DocParseState } from './api/process';
 import { useSessions } from './hooks/useSessions';
 import { EvalWorkbenchView } from './components/eval/EvalWorkbenchView';
-import { FlaskConical, MessageSquare } from 'lucide-react';
+import { GraphView } from './components/graph/GraphView';
+import { FlaskConical, MessageSquare, Network } from 'lucide-react';
 import clsx from 'clsx';
 
 function App() {
@@ -16,7 +17,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [filePanelVisible, setFilePanelVisible] = useState(false);
-  const [view, setView] = useState<'chat' | 'eval'>('chat');
+  const [view, setView] = useState<'chat' | 'eval' | 'graph'>('chat');
   const [contextFiles, setContextFiles] = useState<ContextFile[]>([]);
   // Phase 5: sessions live at App so the sidebar (data) and RealChatView
   // (refresh trigger) can share one useSessions instance.
@@ -105,8 +106,16 @@ function App() {
           className={clsx('w-9 h-9 rounded-lg flex items-center justify-center', view === 'eval' ? 'bg-deepSea text-white' : 'text-textGray hover:bg-bgGray')}>
           <FlaskConical className="h-5 w-5" aria-hidden />
         </button>
+        <button type="button" title="图谱" aria-label="图谱" onClick={() => setView('graph')}
+          className={clsx('w-9 h-9 rounded-lg flex items-center justify-center', view === 'graph' ? 'bg-deepSea text-white' : 'text-textGray hover:bg-bgGray')}>
+          <Network className="h-5 w-5" aria-hidden />
+        </button>
       </div>
-      {view === 'eval' ? (
+      {view === 'graph' ? (
+        <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
+          <GraphView />
+        </div>
+      ) : view === 'eval' ? (
         <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
           <EvalWorkbenchView />
         </div>

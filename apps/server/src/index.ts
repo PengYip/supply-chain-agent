@@ -14,6 +14,7 @@ import { approvalCallback } from './routes/approvalCallback.js';
 import { statusRoute } from './routes/status.js';
 import { sessionsRoute } from './routes/sessions.js';
 import { filesRoute } from './routes/files.js';
+import { graphRoute } from './routes/graph.js';
 import { reviewRoute } from './routes/review.js';
 import { createEvalResultsRoute } from './routes/evalResults.js';
 import { evalRunRoute } from './routes/evalRun.js';
@@ -96,6 +97,7 @@ app.use('/api/sessions/*', requireAuth);
 app.use('/api/approval/*', requireAuth);
 app.use('/api/documents/*', requireAuth);
 app.use('/api/eval/*', requireAuth);
+app.use('/api/graph/*', requireAuth);
 
 app.route('/api', chatRoute);
 app.route('/api', approvalCallback);
@@ -110,6 +112,9 @@ app.route('/api/files', filesRoute);
 // Feature: in-card correction HITL. Mounted at /api/documents so the route's
 // POST /:docId/review resolves to the final path /api/documents/:docId/review.
 app.route('/api/documents', reviewRoute);
+
+// Graph REST surface (read-only): user documents, bounded traversal, entity search.
+app.route('/api/graph', graphRoute);
 
 // Eval results viewer (read-only): scan/aggregate CLI-written results dirs.
 app.route('/api/eval', createEvalResultsRoute());
