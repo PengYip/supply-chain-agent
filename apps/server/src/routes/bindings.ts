@@ -154,6 +154,17 @@ bindingsRoute.post('/', async (c) => {
   const db = ctx();
   const existing = await findBindingByDocAndContract(db, documentId, contractNo, user.id);
   if (existing && existing.status !== 'rejected') {
+    // 重试同步入口(前端 graph_status 非 ok 时幂等调用): confirmed 行重跑
+    // syncBindingEdge 并落真实 graph_status; proposed 行尚未确认, 不该有边, 直接返回。
+    if (existing.status === 'confirmed') {
+      const sync = await syncBindingEdge({
+        docId: documentId, contractNo, relation: existing.relation,
+        bindingId: existing.id, confidence: existing.confidence,
+      });
+      const gs = await graphStatusFor(sync.outcome, sync.reason);
+      await setBindingGraphStatus(db, existing.id, gs, user.id);
+      return c.json({ ok: true, bindingId: existing.id, existing: true, graphSync: sync.outcome, ...(sync.reason ? { graphReason: sync.reason } : {}) });
+    }
     return c.json({ ok: true, bindingId: existing.id, existing: true, graphSync: 'ok' });
   }
   const bindingId = await saveBinding(db, {

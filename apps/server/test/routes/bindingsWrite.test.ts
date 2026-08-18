@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import type { AuthEnv } from '../../src/lib/auth-middleware.js';
 import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.js';
 import {
-  createDocumentStub, saveBinding, findBindingById,
+  createDocumentStub, saveBinding, findBindingById, setBindingGraphStatus,
 } from '../../src/pipeline/db/repositories.js';
 
 const { ctxHolder } = vi.hoisted(() => ({ ctxHolder: { current: null as DbContext | null } }));
@@ -87,6 +87,25 @@ describe('POST /api/bindings/confirm|reject|unbind|batch-confirm', () => {
     const data = await res.json() as { existing?: boolean; bindingId: string };
     expect(data.existing).toBe(true);
     expect(data.bindingId).toBe(existingId);
+  });
+
+  it('重试同步: confirmed 且 graph_status=failed 的行 POST / 真实重跑同步并落库更新', async () => {
+    const { docId } = await createDocumentStub(ctx, { sourceUri: 'file:///r.pdf', docType: '发票' });
+    const bindingId = await saveBinding(ctx, {
+      documentId: docId, contractNo: 'HT-3', relation: '凭证',
+      sourceRefs: [], confidence: 1, createdBy: 'agent', status: 'confirmed', confirmationSource: 'human',
+    }, 'u1');
+    await setBindingGraphStatus(ctx, bindingId, { status: 'failed', reason: 'boom', syncedAt: '2026-08-18T00:00:00Z' }, 'u1');
+    const res = await appAs('u1').request('/api/bindings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ documentId: docId, contractNo: 'HT-3', relation: '凭证' }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json() as { existing?: boolean; graphSync: string };
+    expect(data.existing).toBe(true);
+    expect(data.graphSync).toBe('skipped'); // 真实重跑(无 Neo4j -> skipped), 非硬编码 'ok'
+    const row = await findBindingById(ctx!, bindingId, 'u1');
+    expect(row?.graphStatus?.status).toBe('skipped');
   });
 
   it('unbind: confirmed->rejected', async () => {
