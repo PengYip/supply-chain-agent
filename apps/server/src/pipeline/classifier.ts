@@ -22,7 +22,7 @@ export interface ClassifierResult {
   source: 'classified' | 'hint' | 'fallback';
 }
 
-const DOC_TYPES = ['合同', '发票', '提单', '装箱单', '其他'] as const;
+const DOC_TYPES = ['合同', '发票', '提单', '装箱单', '货转单', '化验报告', '付款凭证', '其他'] as const;
 const ClassifierSchema = z.object({
   docType: z.enum(DOC_TYPES),
   confidence: z.number().min(0).max(1),
@@ -30,7 +30,7 @@ const ClassifierSchema = z.object({
 
 const CLASSIFIER_PROMPT = [
   '你是供应链单据分类器。只依据给定原文判断这份单据属于哪一类。',
-  '类别取值固定为五种之一: 合同 / 发票 / 提单 / 装箱单 / 其他。',
+  '类别取值固定为八种之一: 合同 / 发票 / 提单 / 装箱单 / 货转单 / 化验报告 / 付款凭证 / 其他。',
   'confidence 是你对本次分类的自评置信度 (0..1); 不确定就给较低值。',
   '严禁凭空臆造原文中不存在的单据类型信号。',
   '严格以 JSON 格式输出, 不要包含任何注释或解释文字。',

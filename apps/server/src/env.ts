@@ -78,6 +78,13 @@ const EnvSchema = z.object({
   EVAL_JUDGE_BASE_URL: z.string().url().optional(),
   EVAL_JUDGE_API_KEY: z.string().optional(),
   EVAL_JUDGE_MODEL: z.string().optional(),
+  // VLM (vision-language model) for image voucher parsing (Phase A: 图片凭证
+  // VLM 解析分支). All optional: when unset, image-voucher ingest fails with an
+  // explicit error instead of crashing startup. Keys are never hardcoded.
+  VLM_BASE_URL: z.string().url().optional(),
+  VLM_API_KEY: z.string().optional(),
+  VLM_MODEL: z.string().default('qwen3.8-max'),
+  VLM_TIMEOUT_MS: z.coerce.number().int().positive().default(180000),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

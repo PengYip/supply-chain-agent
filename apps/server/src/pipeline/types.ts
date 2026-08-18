@@ -1,7 +1,7 @@
 // Stable pipeline contract: every ingest adapter normalizes to BlockModel;
 // every downstream stage (extraction, validation, confidence) consumes BlockModel.
 
-export type DocType = '合同' | '发票' | '提单' | '装箱单' | '其他';
+export type DocType = '合同' | '发票' | '提单' | '装箱单' | '货转单' | '化验报告' | '付款凭证' | '其他';
 export type Modality = 'digital' | 'scanned';
 export type BlockType = 'text' | 'kv' | 'table_row' | 'figure';
 

@@ -24,6 +24,11 @@ export const CHUNK_TAG_TAXONOMY: Record<DocType, string[]> = {
     '购方/销方', '唛头', '货物描述', '数量', '毛重', '净重',
     '体积', '包装方式', '批次号',
   ],
+  // Phase A 图片凭证: 单虚拟 chunk(字段 KV 文本), 无段落语义可打标签 ->
+  // 空 taxonomy 与 其他 一致(信号 tagChunks 跳过 LLM 打标)。
+  货转单: [],
+  化验报告: [],
+  付款凭证: [],
   其他: [],
 };
 

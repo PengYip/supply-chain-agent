@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
 import type { DbContext } from '../db/client.js';
 import {
@@ -30,6 +31,13 @@ import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
 import { validateSpan, type SpanMatchStrength } from '../spanValidator.js';
 import { buildLedgerEntryFromExtraction } from '../contractLedger.js';
 import { upsertContractLedgerEntry } from '../db/repositories.js';
+import { extractVoucher, mimeForExtension, type VlmResult } from '../vlmAdapter.js';
+import { VOUCHER_SCHEMAS, validateVoucher, type VoucherType } from '../schemas/vouchers.js';
+
+/** Phase A: 图片凭证 VLM 解析依赖(可注入 fake 供测试; 缺省用真实 extractVoucher)。 */
+export interface VlmDeps {
+  extract: (buffer: Buffer, mime: string) => Promise<VlmResult>;
+}
 
 export interface ToolDeps {
   ctx: DbContext;
@@ -47,6 +55,9 @@ export interface ToolDeps {
   /** Phase 2 business-data isolation: stamp + filter rows by this user. When
    *  unset or empty, the unscoped (legacy/test) path is used -- no filtering. */
   userId?: string;
+  /** Phase A: 图片凭证 VLM 解析依赖。缺省用真实 extractVoucher(需 VLM 配置);
+   *  测试注入 fake 以离线验证图片分支。 */
+  vlm?: VlmDeps;
 }
 
 /**
@@ -137,6 +148,224 @@ export function buildLedgerWritingDeps(
   };
 }
 
+// ---- Phase A: 图片凭证 VLM 解析分支 ------------------------------------------
+//
+// 业务凭证(银行回单/货权转移单/化验报告, jpg/png 照片)无法走文本解析路径
+// (digitalAdapter 按 utf-8 读图片是乱码, OCR 回退仅限 .pdf)。本分支在
+// ingestFile 层分流: 扩展名 .jpg/.jpeg/.png -> VLM 端到端提取 -> zod 校验 ->
+// 交叉校验 warnings -> 落库(document/classification/单chunk/extraction)。
+// 不触发合同抽取/ledger 回写(writeContractLedger 仅合同类); VLM 失败时
+// parse_status 置 'failed'(错误可追溯), 不静默成功。
+
+const VOUCHER_IMAGE_EXT = /\.(jpe?g|png)$/i;
+
+function isVoucherImage(sourcePath: string): boolean {
+  return VOUCHER_IMAGE_EXT.test(sourcePath);
+}
+
+/** 把凭证字段序列化为紧凑中文 KV 文本(单虚拟 chunk 用): 编号:xxx 合同号:xxx ...,
+ *  明细行/指标等数组拍平为 行N.字段:值。 */
+function voucherFieldsToText(voucherType: VoucherType, fields: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(fields)) {
+    if (v === null || v === undefined) continue;
+    if (Array.isArray(v)) {
+      v.forEach((row, i) => {
+        if (row === null || typeof row !== 'object') return;
+        for (const [rk, rv] of Object.entries(row as Record<string, unknown>)) {
+          if (rv === null || rv === undefined) continue;
+          parts.push(`${k}${i + 1}.${rk}:${String(rv)}`);
+        }
+      });
+    } else {
+      parts.push(`${k}:${String(v)}`);
+    }
+  }
+  return parts.join(' ');
+}
+
+interface VoucherIngestInput {
+  ctx: DbContext;
+  sourcePath: string;
+  docId: string;
+  embedder?: Embedder;
+  userId?: string;
+  vlm?: VlmDeps;
+}
+
+/**
+ * 图片凭证 VLM 入库。先落占位 document 行(parse_status='parsing')使 VLM 失败
+ * 时可追溯(parse_status='failed'), 成功后 updateDocumentMeta 换成真实
+ * block_model 并置 'parsed'。返回与 ingestFile 相同的形状。
+ */
+async function ingestVoucherImage(input: VoucherIngestInput): Promise<{
+  docId: string;
+  blockCount: number;
+  modality: string;
+  classifiedDocType: DocType;
+  classificationConfidence: number;
+  classificationSource: 'classified' | 'hint' | 'fallback';
+  tags: string[];
+  vectorization: VectorizationStatus;
+}> {
+  const { ctx, sourcePath, docId, embedder, userId, vlm } = input;
+  const ext = sourcePath.split('.').pop() ?? '';
+  const mime = mimeForExtension(ext);
+  if (!mime) {
+    throw new Error(`不支持的图片扩展名 .${ext}，仅支持 jpg/jpeg/png`);
+  }
+
+  // 1. 先落占位行(parse_status='parsing'), 使后续失败可追溯。
+  const placeholder: BlockModel = {
+    docId,
+    docType: '其他',
+    modality: 'scanned',
+    blocks: [],
+    sourceUri: sourcePath,
+    createdAt: new Date().toISOString(),
+  };
+  await saveDocument(ctx, placeholder, userId);
+  await setDocumentParseStatus(ctx, docId, 'parsing', userId);
+
+  try {
+    // 2. VLM 提取(可注入 fake; 缺省真实 extractVoucher, 未配置时抛明确错误)。
+    const buffer = readFileSync(sourcePath);
+    const extract = vlm?.extract ?? extractVoucher;
+    const result = await extract(buffer, mime);
+
+    // 3. zod 校验(按 voucherType 选 schema; '其他' 无 schema 跳过)。
+    const schema = result.voucherType === '其他' ? undefined : VOUCHER_SCHEMAS[result.voucherType];
+    if (schema) {
+      const parsed = schema.safeParse(result.fields);
+      if (!parsed.success) {
+        const detail = parsed.error.issues
+          .map((i) => `${i.path.join('.') || '(root)'} ${i.message}`)
+          .join('; ');
+        throw new Error(`凭证字段校验失败(${result.voucherType}): ${detail}`);
+      }
+    }
+    const warnings = validateVoucher(result.voucherType, result.fields);
+    const docType = result.voucherType as DocType;
+
+    // 4. 真实 block_model: 单合成块(与 schema 兼容, 无文本块可 span 接地)。
+    const chunkText = voucherFieldsToText(result.voucherType, result.fields);
+    const blockModel: BlockModel = {
+      docId,
+      docType,
+      modality: 'scanned',
+      blocks: [
+        {
+          id: 'b0',
+          type: 'text',
+          text: chunkText,
+          page: 1,
+          bbox: null,
+          ocrConfidence: 1.0,
+        },
+      ],
+      sourceUri: sourcePath,
+      createdAt: new Date().toISOString(),
+    };
+    await updateDocumentMeta(ctx, docId, { docType, modality: 'scanned', blockModel }, userId);
+
+    // 5. 分类: source 'classified', confidence 用 VLM 自报类型置信或 0.9。
+    const typeConf = result.字段置信度['voucherType'] ?? result.字段置信度['凭证类型'];
+    const classificationConfidence = typeof typeConf === 'number' ? typeConf : 0.9;
+    await saveClassification(
+      ctx,
+      { documentId: docId, docType, confidence: classificationConfidence, source: 'classified', hint: docType },
+      userId,
+    );
+
+    // 6. 单虚拟 chunk + 有 embedder 就照常嵌入(1 doc = 1 vector, 无害)。
+    const chunkRowIds = await saveChunks(ctx, docId, [{ text: chunkText, index: 0 }]);
+    let vectorization: VectorizationStatus = { status: 'skipped', mode: 'none', chunkCount: 1 };
+    if (embedder) {
+      if (await isVecReady(ctx)) {
+        try {
+          const vecs = await embedder.embed([chunkText]);
+          await saveChunkVectors(ctx, [{ chunkRowId: chunkRowIds[0]!, vec: vecs[0] ?? [] }]);
+          vectorization = { status: 'ok', mode: embedder.kind, chunkCount: 1 };
+        } catch (e) {
+          vectorization = {
+            status: 'failed', mode: embedder.kind, chunkCount: 1,
+            reason: (e as Error).message,
+          };
+          console.warn('[ingestVoucherImage] vector embedding failed; FTS5 recall still available:', vectorization.reason);
+        }
+      } else {
+        vectorization = { status: 'skipped', mode: embedder.kind, chunkCount: 1, reason: 'vec_store_not_ready' };
+      }
+    }
+
+    // 7. 自动标签(byproduct, 容错)。
+    let tags: string[] = [];
+    try {
+      tags = deriveAutoTags({ docType, blocks: blockModel.blocks });
+      await saveDocumentTags(ctx, docId, tags, 'auto', userId);
+    } catch (e) {
+      console.error('[ingestVoucherImage] auto-tag persistence failed:', (e as Error).message);
+    }
+
+    try {
+      await setDocumentVectorization(ctx, docId, vectorization, userId);
+    } catch (e) {
+      console.error('[ingestVoucherImage] vectorization_meta persistence failed:', (e as Error).message);
+    }
+
+    // 8. saveExtraction: 标量字段原生值, 数组/对象字段 JSON 序列化(保留全部数据);
+    //    sourceSpans 空数组(图片无文本块, 现有 schema 允许空数组)。
+    //    field_meta 携带 字段置信度 + _warnings(交叉校验结果)。
+    const fields: Record<string, { value: string | number; sourceSpans: SourceSpan[] }> = {};
+    const fieldMeta: Record<string, { strength: SpanMatchStrength; confidence: number }> = {};
+    for (const [k, v] of Object.entries(result.fields)) {
+      if (v === null || v === undefined) continue;
+      const value = typeof v === 'object' ? JSON.stringify(v) : v;
+      fields[k] = { value: typeof value === 'number' ? value : String(value), sourceSpans: [] };
+      const conf = result.字段置信度[k];
+      fieldMeta[k] = { strength: 'none', confidence: typeof conf === 'number' ? conf : 0.9 };
+    }
+    const confidences = Object.values(fieldMeta).map((m) => m.confidence);
+    const overallConfidence = confidences.length > 0 ? Math.min(...confidences) : 0.9;
+    const needsReview = warnings.length > 0 || overallConfidence < 0.85;
+    (fieldMeta as Record<string, unknown>)['_warnings'] = {
+      strength: 'none',
+      confidence: 1,
+      warnings,
+    };
+    await saveExtraction(
+      ctx,
+      {
+        documentId: docId,
+        docType,
+        fields,
+        fieldMeta,
+        overallConfidence,
+        needsReview,
+      },
+      userId,
+    );
+
+    // 9. 成功: parse_status='parsed'。
+    await setDocumentParseStatus(ctx, docId, 'parsed', userId);
+
+    return {
+      docId,
+      blockCount: blockModel.blocks.length,
+      modality: blockModel.modality,
+      classifiedDocType: docType,
+      classificationConfidence,
+      classificationSource: 'classified',
+      tags,
+      vectorization,
+    };
+  } catch (e) {
+    // VLM 失败 -> parse_status='failed'(错误可追溯), 不静默成功。
+    await setDocumentParseStatus(ctx, docId, 'failed', userId).catch(() => {});
+    throw e;
+  }
+}
+
 /**
  * Reusable ingest pipeline (Phase 3 bridge): parse -> persist BlockModel ->
  * chunk -> index (FTS5 always; vectors when an embedder is wired and the vector
@@ -160,6 +389,8 @@ export interface IngestOptions {
   /** Lane B: per-chunk semantic tagger. When set + taxonomy non-empty, chunks are
    *  tagged against getTaxonomy(docType) and stored on doc_chunk.tags. */
   tagger?: ChunkTagger;
+  /** Phase A: 图片凭证 VLM 解析依赖(同 ToolDeps.vlm)。 */
+  vlm?: VlmDeps;
 }
 
 export async function ingestFile(opts: IngestOptions): Promise<{
@@ -172,11 +403,17 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   tags: string[];
   vectorization: VectorizationStatus;
 }> {
-  const { ctx, sourcePath, docType, modality, embedder, classifier, userId, extraction, tagger } = opts;
+  const { ctx, sourcePath, docType, modality, embedder, classifier, userId, extraction, tagger, vlm } = opts;
   ensureFk(ctx);
   // Path allowlist (injection defense): reject anything outside INGEST_ROOT.
   const safePath = assertWithinRoot(sourcePath);
   const docId = newDocId();
+
+  // Phase A: 图片凭证走 VLM 分支(不经过文本解析/分类器; 合同 PDF 仍走原路径)。
+  if (isVoucherImage(safePath)) {
+    return ingestVoucherImage({ ctx, sourcePath: safePath, docId, embedder, userId, vlm });
+  }
+
   // Parse (pure, no DB) — extracted into parseDocument primitive (Phase 1).
   const blockModel = await parseDocument({ sourcePath: safePath, docType: docType ?? '其他', docId, modality });
 
@@ -717,6 +954,7 @@ export function buildIngestDocumentTool(deps: ToolDeps) {
         userId: deps.userId,
         extraction: deps.extraction,
         tagger: deps.tagger,
+        vlm: deps.vlm,
       });
       // Vectorization outcome is now persisted inside ingestFile (Bug fix), so
       // present_document_review reads it back via getReviewSnapshot — no in-memory
