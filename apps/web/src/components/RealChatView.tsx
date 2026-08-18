@@ -62,6 +62,7 @@ function ContextChipStatus({ state }: { state?: DocParseState }) {
 /** L3 人工复核卡（挂在输入框上方）：结构化问答式交互 —— 问题 + 两个带说明
  *  的处理选项 + 可选补充意见，单次提交。选项与意见构成一条原子化的人工
  *  判断：提交前可完整核对，补充意见原文作为 reason 传给 Agent。
+ *  「暂不处理」是本地逃生口：仅隐藏本卡，不回调后端，工单保持 pending。
  *  视觉上是 L2 SoftGateCard 的姊妹卡（同布局语法），配色用 deepSea 区分
  *  「人工复核」与 L2 的琥珀色「操作确认」。 */
 const HumanReviewCard: React.FC<{
@@ -74,10 +75,15 @@ const HumanReviewCard: React.FC<{
   note: string
   onNoteChange: (note: string) => void
   onSubmit: () => void
+  onDismiss: () => void
   loading: boolean
   error: string | null
-}> = ({ ticketId, issueText, severity, category, choice, onChoice, note, onNoteChange, onSubmit, loading, error }) => {
-  const options: Array<{ value: 'approve' | 'deny'; label: string; description: string }> = [
+}> = ({ ticketId, issueText, severity, category, choice, onChoice, note, onNoteChange, onSubmit, onDismiss, loading, error }) => {
+  // 保守默认原则：高风险工单推荐驳回（先停止，人工核查后再继续），
+  // 其余（medium/low/未知）推荐通过。推荐只影响排序与标识，不代替选择，
+  // 提交前仍需人工显式选中。
+  const recommended: 'approve' | 'deny' = severity === 'high' ? 'deny' : 'approve'
+  const baseOptions: Array<{ value: 'approve' | 'deny'; label: string; description: string }> = [
     {
       value: 'approve',
       label: '通过，继续处理',
@@ -89,6 +95,8 @@ const HumanReviewCard: React.FC<{
       description: '该工单对应的操作不执行，Agent 停止后续尝试并如实转达',
     },
   ]
+  // 推荐项排在首位（高风险时「驳回」在前）。
+  const options = recommended === 'deny' ? [baseOptions[1], baseOptions[0]] : baseOptions
   return (
     <div className="mb-3 rounded-lg border border-deepSea/30 bg-deepSea/5 p-3">
       {/* 头部：图标 + 标题 + 工单号 + 分类/严重度徽章 */}
@@ -146,7 +154,14 @@ const HumanReviewCard: React.FC<{
                 {selected && <span className="w-1.5 h-1.5 rounded-full bg-deepSea" />}
               </span>
               <span className="min-w-0">
-                <span className="block text-[13px] font-medium text-textDark">{opt.label}</span>
+                <span className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[13px] font-medium text-textDark">{opt.label}</span>
+                  {opt.value === recommended && (
+                    <span className="text-[10px] leading-none rounded-full px-1.5 py-0.5 bg-deepSea/5 text-deepSea border border-deepSea/20">
+                      推荐
+                    </span>
+                  )}
+                </span>
                 <span className="block text-[11px] text-textGray leading-relaxed mt-0.5">{opt.description}</span>
               </span>
             </button>
@@ -176,14 +191,27 @@ const HumanReviewCard: React.FC<{
         </div>
       )}
 
-      <div className="mt-3 flex items-center justify-between gap-2">
-        {!choice && !loading && <span className="text-[11px] text-textGray">请选择一种处理方式</span>}
+      <div className="mt-3 flex items-center gap-3">
+        <div className="flex-1 min-w-0">
+          {!choice && !loading && <span className="text-[11px] text-textGray">请选择一种处理方式</span>}
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          disabled={loading}
+          className={clsx(
+            'shrink-0 text-[11px] text-textGray hover:text-textDark transition-colors',
+            loading && 'cursor-not-allowed opacity-50',
+          )}
+        >
+          暂不处理
+        </button>
         <button
           type="button"
           onClick={onSubmit}
           disabled={!choice || loading}
           className={clsx(
-            'ml-auto shrink-0 inline-flex items-center gap-1 px-3.5 py-1.5 rounded-md text-xs font-medium transition-colors',
+            'shrink-0 inline-flex items-center gap-1 px-3.5 py-1.5 rounded-md text-xs font-medium transition-colors',
             !choice || loading
               ? 'bg-borderGray text-textGray cursor-not-allowed'
               : 'bg-deepSea text-white hover:bg-deepSea/90',
@@ -370,6 +398,9 @@ export const RealChatView: React.FC<{
   // 复核卡的选项与补充意见（choice + note 作为一条人工判断原子提交）。
   const [reviewChoice, setReviewChoice] = useState<'approve' | 'deny' | null>(null)
   const [reviewNote, setReviewNote] = useState('')
+  // 已「暂不处理」的 L3 工单集合（按 ticketId 记忆）：忽略只是本地隐藏复核
+  // 卡，不回调后端，工单在服务端仍处 pending；新工单不在集合内，照常亮卡。
+  const [dismissedTickets, setDismissedTickets] = useState<Set<string>>(new Set())
   const [sendError, setSendError] = useState<string | null>(null)
 
   // 当前待处理项的唯一键：切换工单 / 切换会话时用于复位复核卡。
@@ -393,6 +424,12 @@ export const RealChatView: React.FC<{
       setCallbackState('idle')
     }
   }, [pendingKey])
+
+  // 切换会话：忽略集合复位（回到会话时重新提供复核入口）。同一会话内忽略
+  // 按 ticketId 持续记忆，不随工单流转丢失。
+  useEffect(() => {
+    setDismissedTickets(new Set())
+  }, [sessionId])
 
   const postApproval = async (
     body: { approvalId?: string; ticketId?: string; approved: boolean },
@@ -458,6 +495,25 @@ export const RealChatView: React.FC<{
   const pendingL3 = pendingApproval && pendingApproval.kind === 'L3' ? pendingApproval : null
   const escalateInfo = pendingL3 ? parseEscalateArgs(pendingL3.args) : null
   const issueText = pendingL3 ? (escalateInfo?.issue || pendingL3.message || '').trim() : ''
+
+  // 暂不处理：忽略不等于驳回 —— 仅本地隐藏复核卡，不 POST 回调，工单在
+  // 服务端保持 pending（L3 不阻塞对话，可继续聊天）。
+  const isDismissed = pendingL3 !== null && dismissedTickets.has(pendingL3.ticketId)
+
+  const handleDismissReview = () => {
+    if (!pendingL3 || callbackState === 'loading') return
+    setDismissedTickets((prev) => new Set(prev).add(pendingL3.ticketId))
+  }
+
+  // 重新打开：移除忽略标记。已选选项/已填意见原样保留（半成品判断不丢失）。
+  const handleReopenReview = () => {
+    if (!pendingL3) return
+    setDismissedTickets((prev) => {
+      const next = new Set(prev)
+      next.delete(pendingL3.ticketId)
+      return next
+    })
+  }
 
   const renderItems = useMemo(() => buildRenderItems(messages as unknown[]), [messages])
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -587,7 +643,7 @@ export const RealChatView: React.FC<{
       {/* Composer */}
       <div className="bg-white border-t border-borderGray p-4">
         <div className="max-w-3xl mx-auto">
-          {pendingL3 && callbackState !== 'success' && (
+          {pendingL3 && callbackState !== 'success' && !isDismissed && (
             <HumanReviewCard
               ticketId={pendingL3.ticketId}
               issueText={issueText}
@@ -598,9 +654,25 @@ export const RealChatView: React.FC<{
               note={reviewNote}
               onNoteChange={setReviewNote}
               onSubmit={handleSubmitReview}
+              onDismiss={handleDismissReview}
               loading={callbackState === 'loading'}
               error={callbackError}
             />
+          )}
+          {pendingL3 && callbackState !== 'success' && isDismissed && (
+            <div className="mb-3 rounded-lg border border-borderGray bg-white px-3 py-2 flex items-center gap-2 text-[11px] text-textGray">
+              <ShieldCheck className="w-3.5 h-3.5 text-steelBlue shrink-0" />
+              <span className="break-all">
+                有 1 条待复核工单 <span className="font-mono">{pendingL3.ticketId}</span>
+              </span>
+              <button
+                type="button"
+                onClick={handleReopenReview}
+                className="ml-auto shrink-0 text-steelBlue hover:text-deepSea transition-colors"
+              >
+                重新打开
+              </button>
+            </div>
           )}
           {callbackState === 'success' && (
             <div className={clsx(
