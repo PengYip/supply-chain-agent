@@ -176,6 +176,13 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'none',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
   },
+  list_binding_proposals: {
+    // Phase B: 待确认的凭证-合同绑定建议(只读)。返回系统生成的 contractNo/score/
+    // evidence(details 为人类可读的中文说明, 无文档原文) -> output 'raw' /
+    // injection 'safe'。条数有界 -> budget 'summary'。signal 'counter'(读)。
+    output: 'raw', budget: 'summary', signal: 'counter',
+    persist: 'business', risk: { level: 'L1', injection: 'safe' },
+  },
 };
 
 /** True iff a contract exists for the given tool name. */

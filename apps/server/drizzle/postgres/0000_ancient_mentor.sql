@@ -6,7 +6,11 @@ CREATE TABLE "bindings" (
 	"source_refs" jsonb NOT NULL,
 	"confidence" numeric(5, 4) NOT NULL,
 	"created_by" text NOT NULL,
-	"createdAt" timestamp with time zone DEFAULT now() NOT NULL
+	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
+	"status" text DEFAULT 'confirmed' NOT NULL,
+	"confirmation_source" text,
+	"proposed_by" text,
+	"evidence" jsonb
 );
 --> statement-breakpoint
 CREATE TABLE "doc_chunk" (

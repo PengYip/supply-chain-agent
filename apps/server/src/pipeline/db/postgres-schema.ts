@@ -140,6 +140,11 @@ export const bindings = pgTable(
     createdBy: text('created_by').notNull(),
     userId: text('user_id').notNull().default(''),
     createdAt: nowTs(),
+    // Phase B bindings state machine (mirror of the SQLite schema.ts columns).
+    status: text('status').notNull().default('confirmed'),
+    confirmationSource: text('confirmation_source'),
+    proposedBy: text('proposed_by'),
+    evidence: jsonb('evidence'),
   },
   (t) => ({
     contractIdx: index('idx_bindings_contract').on(t.contractNo),

@@ -14,6 +14,9 @@ import {
   // Lane A (2a): extraction-status reader + extraction-row probe for
   // ensureDocumentExtracted's re-extraction decision.
   getExtractionStatus, loadLatestExtractionByDocId,
+  // Phase B bindings state machine.
+  listContractLedgerEntries, findBindingByDocAndContract, listBindingProposals,
+  updateBindingStatus, type BindingRow,
 } from '../db/repositories.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
@@ -33,6 +36,8 @@ import { buildLedgerEntryFromExtraction } from '../contractLedger.js';
 import { upsertContractLedgerEntry } from '../db/repositories.js';
 import { extractVoucher, mimeForExtension, type VlmResult } from '../vlmAdapter.js';
 import { VOUCHER_SCHEMAS, validateVoucher, type VoucherType } from '../schemas/vouchers.js';
+import { extractAnchors } from '../schemas/vouchers.js';
+import { generateBindingProposals, type BindingProposal, type BindingRoute } from '../bindingProposal.js';
 
 /** Phase A: 图片凭证 VLM 解析依赖(可注入 fake 供测试; 缺省用真实 extractVoucher)。 */
 export interface VlmDeps {
@@ -184,6 +189,20 @@ function voucherFieldsToText(voucherType: VoucherType, fields: Record<string, un
   return parts.join(' ');
 }
 
+/** 凭证类型 -> binding relation 语义(Phase B)。 */
+function bindingRelationFor(voucherType: VoucherType): string {
+  switch (voucherType) {
+    case '货转单':
+      return '货权转移';
+    case '付款凭证':
+      return '付款';
+    case '化验报告':
+      return '质检';
+    default:
+      return '凭证';
+  }
+}
+
 interface VoucherIngestInput {
   ctx: DbContext;
   sourcePath: string;
@@ -207,6 +226,7 @@ async function ingestVoucherImage(input: VoucherIngestInput): Promise<{
   classificationSource: 'classified' | 'hint' | 'fallback';
   tags: string[];
   vectorization: VectorizationStatus;
+  bindingProposals: Array<{ contractNo: string; score: number; route: BindingRoute }>;
 }> {
   const { ctx, sourcePath, docId, embedder, userId, vlm } = input;
   const ext = sourcePath.split('.').pop() ?? '';
@@ -346,7 +366,41 @@ async function ingestVoucherImage(input: VoucherIngestInput): Promise<{
       userId,
     );
 
-    // 9. 成功: parse_status='parsed'。
+    // 9. Phase B: 绑定建议生成 + 落库(失败不阻断入库, 同 auto-tags 模式)。
+    //    锚点 -> 与合同台账匹配 -> 多锚点评分 -> 阈值路由(auto_rule/human/none)。
+    const bindingProposals: Array<{ contractNo: string; score: number; route: BindingRoute }> = [];
+    try {
+      const anchors = extractAnchors(result.voucherType, result.fields);
+      const ledger = await listContractLedgerEntries(ctx, userId);
+      const proposals = generateBindingProposals(anchors, ledger);
+      for (const p of proposals.filter((x) => x.route !== 'none')) {
+        try {
+          await saveBinding(
+            ctx,
+            {
+              documentId: docId,
+              contractNo: p.contractNo,
+              relation: bindingRelationFor(result.voucherType),
+              confidence: p.score,
+              status: p.route === 'auto_rule' ? 'confirmed' : 'proposed',
+              confirmationSource: p.route === 'auto_rule' ? 'auto_rule' : null,
+              proposedBy: 'system',
+              evidence: p.evidence,
+              sourceRefs: [],
+              createdBy: 'system',
+            },
+            userId,
+          );
+          bindingProposals.push({ contractNo: p.contractNo, score: p.score, route: p.route });
+        } catch (e) {
+          console.warn('[ingestVoucherImage] binding proposal persistence failed:', (e as Error).message);
+        }
+      }
+    } catch (e) {
+      console.warn('[ingestVoucherImage] binding proposal generation failed:', (e as Error).message);
+    }
+
+    // 10. 成功: parse_status='parsed'。
     await setDocumentParseStatus(ctx, docId, 'parsed', userId);
 
     return {
@@ -358,6 +412,7 @@ async function ingestVoucherImage(input: VoucherIngestInput): Promise<{
       classificationSource: 'classified',
       tags,
       vectorization,
+      bindingProposals,
     };
   } catch (e) {
     // VLM 失败 -> parse_status='failed'(错误可追溯), 不静默成功。
@@ -402,6 +457,8 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   classificationSource: 'classified' | 'hint' | 'fallback';
   tags: string[];
   vectorization: VectorizationStatus;
+  /** Phase B: 凭证图片分支的绑定建议(非 none 路由); 文本/PDF 路径为空数组。 */
+  bindingProposals: Array<{ contractNo: string; score: number; route: BindingRoute }>;
 }> {
   const { ctx, sourcePath, docType, modality, embedder, classifier, userId, extraction, tagger, vlm } = opts;
   ensureFk(ctx);
@@ -532,6 +589,8 @@ export async function ingestFile(opts: IngestOptions): Promise<{
     classificationSource: cls.source,
     tags,
     vectorization,
+    // 文本/PDF 路径无凭证绑定建议。
+    bindingProposals: [],
   };
 }
 
@@ -1146,7 +1205,10 @@ export function buildTagDocumentTool(deps: ToolDeps) {
 export function buildBindDocumentTool(deps: ToolDeps) {
   return tool({
     description:
-      '将已录入并抽取的单据绑定到业务实体(合同号)。L2 操作: 调用方需附带人工授权(needsApproval)。每条绑定记录来源 span 与置信度, 写入审计。',
+      '将已录入并抽取的单据绑定到业务实体(合同号)。L2 操作: 调用方需附带人工授权(needsApproval)。' +
+      'upsert 语义: 若已存在同 (document_id, contract_no, user_id) 且 status=proposed 的系统建议, ' +
+      '直接确认该建议(confirmed/human)返回 confirmedProposal=true; 否则插入新 confirmed 绑定。' +
+      '每条绑定记录来源 span 与置信度, 写入审计。',
     inputSchema: z.object({
       documentId: z.string().min(1),
       contractNo: z.string().min(1),
@@ -1160,11 +1222,24 @@ export function buildBindDocumentTool(deps: ToolDeps) {
       ensureFk(deps.ctx);
       const blockModel = await loadDocument(deps.ctx, documentId, deps.userId);
       if (!blockModel) return { ok: false as const, reason: 'document_not_found' };
+
+      // upsert: 已有 proposed 系统建议 -> 确认它(人工确认), 不插新行。
+      const existing = await findBindingByDocAndContract(deps.ctx, documentId, contractNo, deps.userId);
+      if (existing && existing.status === 'proposed') {
+        await updateBindingStatus(deps.ctx, existing.id, 'confirmed', 'human', deps.userId);
+        const linkRes = linkDocumentToContract(contractNo, documentId);
+        return {
+          ok: true as const, bindingId: existing.id, contractNo, documentId,
+          confirmedProposal: true as const, linkedToContract: linkRes.ok,
+        };
+      }
+
       const bindingId = await saveBinding(
         deps.ctx,
         {
           documentId, contractNo, relation,
           sourceRefs: [sourceSpan], confidence, createdBy: 'trader-agent',
+          status: 'confirmed', confirmationSource: 'human', proposedBy: 'agent',
         },
         deps.userId,
       );
@@ -1172,6 +1247,41 @@ export function buildBindDocumentTool(deps: ToolDeps) {
       // link_document — also reflect the binding in the in-memory contract graph.
       const linkRes = linkDocumentToContract(contractNo, documentId);
       return { ok: true as const, bindingId, contractNo, documentId, linkedToContract: linkRes.ok };
+    },
+  });
+}
+
+/**
+ * list_binding_proposals — L1 只读工具 (Phase B)。
+ * 供 agent 主动查看待确认的凭证-合同绑定建议(status 缺省 'proposed')。
+ * 输出 bindingId/documentId/docType/contractNo/score/evidence.details。
+ */
+export function buildListBindingProposalsTool(deps: ToolDeps) {
+  return tool({
+    description:
+      '查看凭证入库时自动生成的凭证-合同绑定建议(待人工确认)。' +
+      '用途: 用户问"有哪些待确认的绑定"或需要逐条确认系统推断的凭证归属时调用。' +
+      'status 可选过滤(默认 proposed); 确认操作走 bind_document(需人工授权)。' +
+      '输出每条建议的 bindingId/documentId/docType/contractNo/score 与评分证据 details。',
+    inputSchema: z.object({
+      status: z.enum(['proposed', 'confirmed', 'rejected']).optional().default('proposed')
+        .describe('绑定状态过滤, 默认 proposed(待确认)'),
+    }),
+    execute: async ({ status }) => {
+      const rows = await listBindingProposals(deps.ctx, deps.userId, status);
+      return {
+        matchCount: rows.length,
+        proposals: rows.map((r) => ({
+          bindingId: r.id,
+          documentId: r.documentId,
+          docType: r.docType,
+          contractNo: r.contractNo,
+          score: r.confidence,
+          status: r.status,
+          confirmationSource: r.confirmationSource,
+          evidence: r.evidence,
+        })),
+      };
     },
   });
 }

@@ -75,7 +75,12 @@ export function migrate(sqlite: Database.Database): void {
       confidence REAL NOT NULL,
       created_by TEXT NOT NULL,
       user_id TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      -- Phase B bindings state machine (see schema.ts): 存量行默认 confirmed。
+      status TEXT NOT NULL DEFAULT 'confirmed',
+      confirmation_source TEXT,
+      proposed_by TEXT,
+      evidence TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_bindings_contract ON bindings(contract_no);
     CREATE INDEX IF NOT EXISTS idx_extractions_doc ON extractions(document_id);
@@ -251,6 +256,28 @@ export function migrate(sqlite: Database.Database): void {
     }
   }
 
+  // Phase B bindings state machine: pre-existing dev DBs created bindings WITHOUT
+  // status/confirmation_source/proposed_by/evidence (CREATE TABLE IF NOT EXISTS
+  // adds no columns). Same guarded ALTER pattern; try/catch each so concurrent
+  // module init (separate vitest workers / processes sharing the same SQLite
+  // file) cannot crash on "duplicate column name" -- see sessionStore.ts 51ef03c.
+  {
+    const cols = sqlite.prepare('PRAGMA table_info(bindings)').all() as Array<{ name: string }>;
+    const has = (name: string): boolean => cols.some((c) => c.name === name);
+    if (!has('status')) {
+      try { sqlite.exec("ALTER TABLE bindings ADD COLUMN status TEXT NOT NULL DEFAULT 'confirmed'"); } catch { /* concurrent */ }
+    }
+    if (!has('confirmation_source')) {
+      try { sqlite.exec('ALTER TABLE bindings ADD COLUMN confirmation_source TEXT'); } catch { /* concurrent */ }
+    }
+    if (!has('proposed_by')) {
+      try { sqlite.exec('ALTER TABLE bindings ADD COLUMN proposed_by TEXT'); } catch { /* concurrent */ }
+    }
+    if (!has('evidence')) {
+      try { sqlite.exec('ALTER TABLE bindings ADD COLUMN evidence TEXT'); } catch { /* concurrent */ }
+    }
+  }
+
   // Backfill created_at (+ user_id) on classifications/document_tags/extractions
   // for old prod DBs whose tables predate these columns. CREATE TABLE IF NOT
   // EXISTS adds no columns to an existing table, and these previously had no
@@ -317,6 +344,12 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     `ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE extractions ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE bindings ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''`,
+    // Phase B bindings state machine: status/confirmation_source/proposed_by/
+    // evidence (see postgres-schema.ts). Idempotent; 存量行默认 confirmed 语义正确。
+    `ALTER TABLE bindings ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'confirmed'`,
+    `ALTER TABLE bindings ADD COLUMN IF NOT EXISTS confirmation_source TEXT`,
+    `ALTER TABLE bindings ADD COLUMN IF NOT EXISTS proposed_by TEXT`,
+    `ALTER TABLE bindings ADD COLUMN IF NOT EXISTS evidence TEXT`,
     `CREATE INDEX IF NOT EXISTS documents_user_id_idx ON documents(user_id)`,
     `CREATE INDEX IF NOT EXISTS extractions_user_id_idx ON extractions(user_id)`,
     `CREATE INDEX IF NOT EXISTS bindings_user_id_idx ON bindings(user_id)`,

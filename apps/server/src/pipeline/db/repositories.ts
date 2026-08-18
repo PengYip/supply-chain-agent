@@ -54,6 +54,11 @@ import {
   // contract ledger (ingest extraction write-back): pg twins.
   upsertContractLedgerEntryPg,
   findContractLedgerByNoPg,
+  listContractLedgerEntriesPg,
+  // Phase B bindings state machine: pg twins.
+  findBindingByDocAndContractPg,
+  listBindingProposalsPg,
+  updateBindingStatusPg,
 } from './postgres-repositories.js';
 
 // Phase 2 business-data isolation: a normalized userId is '' / undefined when the
@@ -105,6 +110,22 @@ export interface ExtractionInput {
   proposedRelationships?: ProposedRelationship[];
 }
 
+/** Phase B binding state machine. 存量行默认 'confirmed'(走过 L2 审批)。 */
+export type BindingStatus = 'confirmed' | 'proposed' | 'rejected';
+/** 确认来源: 'auto_rule' = 合同号精确命中自动确认; 'human' = 人工确认。 */
+export type ConfirmationSource = 'auto_rule' | 'human';
+/** 提议来源: 'system' = 凭证入库自动生成; 'agent' = 工具显式调用。 */
+export type BindingProposedBy = 'system' | 'agent';
+
+/** 评分证据(JSON 落库, 供评审卡展示)。 */
+export interface BindingEvidence {
+  partyScore: number;
+  timeScore: number;
+  amountScore: number;
+  qtyScore: number;
+  details: string[];
+}
+
 export interface BindingInput {
   documentId: string;
   contractNo: string;
@@ -112,6 +133,11 @@ export interface BindingInput {
   sourceRefs: SourceSpan[];
   confidence: number;
   createdBy: string;
+  /** Phase B: 默认 'confirmed'(旧调用方不变)。 */
+  status?: BindingStatus;
+  confirmationSource?: ConfirmationSource | null;
+  proposedBy?: BindingProposedBy;
+  evidence?: BindingEvidence | null;
 }
 
 export interface BindingRow {
@@ -122,6 +148,11 @@ export interface BindingRow {
   sourceRefs: SourceSpan[];
   confidence: number;
   createdBy: string;
+  /** Phase B columns (旧行为兼容: 未落新列时为默认值)。 */
+  status: BindingStatus;
+  confirmationSource: ConfirmationSource | null;
+  proposedBy: BindingProposedBy | null;
+  evidence: BindingEvidence | null;
 }
 
 // ---- Post-ingest review (Task 3) -------------------------------------------
@@ -532,6 +563,11 @@ export async function saveBinding(ctx: DbContext, input: BindingInput, userId?: 
     confidence: input.confidence,
     createdBy: input.createdBy,
     userId: effectiveUserId(userId),
+    // Phase B columns: 默认值保持旧调用兼容(status 缺省 'confirmed')。
+    status: input.status ?? 'confirmed',
+    confirmationSource: input.confirmationSource ?? null,
+    proposedBy: input.proposedBy ?? null,
+    evidence: input.evidence ? JSON.stringify(input.evidence) : null,
   }).run();
   return id;
 }
@@ -549,7 +585,133 @@ export async function listBindingsForContract(
     sourceRefs: JSON.parse(r.sourceRefs) as SourceSpan[],
     confidence: r.confidence,
     createdBy: r.createdBy,
+    status: (r.status ?? 'confirmed') as BindingStatus,
+    confirmationSource: (r.confirmationSource ?? null) as ConfirmationSource | null,
+    proposedBy: (r.proposedBy ?? null) as BindingProposedBy | null,
+    evidence: r.evidence ? (JSON.parse(r.evidence) as BindingEvidence) : null,
   }));
+}
+
+// ---- Phase B: bindings 状态机 -------------------------------------------------
+
+/**
+ * 按 (document_id, contract_no, user_id) 查单条 binding(proposal 确认/upsert 用)。
+ * 返回最近一条(created_at DESC); 无则 null。
+ */
+export async function findBindingByDocAndContract(
+  ctx: DbContext,
+  documentId: string,
+  contractNo: string,
+  userId?: string,
+): Promise<BindingRow | null> {
+  if (ctx.backend === 'postgres') return findBindingByDocAndContractPg(ctx, documentId, contractNo, userId);
+  const uid = effectiveUserId(userId);
+  const filter = uid
+    ? and(
+        eq(bindings.documentId, documentId),
+        eq(bindings.contractNo, contractNo),
+        or(eq(bindings.userId, uid), eq(bindings.userId, ''), isNull(bindings.userId)),
+      )
+    : and(eq(bindings.documentId, documentId), eq(bindings.contractNo, contractNo));
+  const row = ctx.db
+    .select()
+    .from(bindings)
+    .where(filter)
+    .orderBy(desc(bindings.createdAt))
+    .all()[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    documentId: row.documentId,
+    contractNo: row.contractNo,
+    relation: row.relation,
+    sourceRefs: JSON.parse(row.sourceRefs) as SourceSpan[],
+    confidence: row.confidence,
+    createdBy: row.createdBy,
+    status: (row.status ?? 'confirmed') as BindingStatus,
+    confirmationSource: (row.confirmationSource ?? null) as ConfirmationSource | null,
+    proposedBy: (row.proposedBy ?? null) as BindingProposedBy | null,
+    evidence: row.evidence ? (JSON.parse(row.evidence) as BindingEvidence) : null,
+  };
+}
+
+/**
+ * 列出绑定建议(join documents 取 doc_type/source_uri)。status 缺省 'proposed'。
+ * 按 user 过滤(legacy 行 3-way OR), 按 created_at DESC。
+ */
+export async function listBindingProposals(
+  ctx: DbContext,
+  userId?: string,
+  status: BindingStatus = 'proposed',
+): Promise<
+  Array<BindingRow & { docType: string; fileName: string }>
+> {
+  if (ctx.backend === 'postgres') return listBindingProposalsPg(ctx, userId, status);
+  const uid = effectiveUserId(userId);
+  const rows = uid
+    ? (ctx.db
+        .select({
+          b: bindings,
+          docType: documents.docType,
+          sourceUri: documents.sourceUri,
+        })
+        .from(bindings)
+        .innerJoin(documents, eq(bindings.documentId, documents.id))
+        .where(
+          and(
+            eq(bindings.status, status),
+            or(eq(bindings.userId, uid), eq(bindings.userId, ''), isNull(bindings.userId)),
+          ),
+        )
+        .orderBy(desc(bindings.createdAt))
+        .all() as unknown as Array<{ b: (typeof bindings)['$inferSelect']; docType: string; sourceUri: string }>)
+    : (ctx.db
+        .select({
+          b: bindings,
+          docType: documents.docType,
+          sourceUri: documents.sourceUri,
+        })
+        .from(bindings)
+        .innerJoin(documents, eq(bindings.documentId, documents.id))
+        .where(eq(bindings.status, status))
+        .orderBy(desc(bindings.createdAt))
+        .all() as unknown as Array<{ b: (typeof bindings)['$inferSelect']; docType: string; sourceUri: string }>);
+  return rows.map((r) => ({
+    id: r.b.id,
+    documentId: r.b.documentId,
+    contractNo: r.b.contractNo,
+    relation: r.b.relation,
+    sourceRefs: JSON.parse(r.b.sourceRefs) as SourceSpan[],
+    confidence: r.b.confidence,
+    createdBy: r.b.createdBy,
+    status: (r.b.status ?? 'confirmed') as BindingStatus,
+    confirmationSource: (r.b.confirmationSource ?? null) as ConfirmationSource | null,
+    proposedBy: (r.b.proposedBy ?? null) as BindingProposedBy | null,
+    evidence: r.b.evidence ? (JSON.parse(r.b.evidence) as BindingEvidence) : null,
+    docType: r.docType,
+    fileName: r.sourceUri.split('/').pop() ?? r.sourceUri,
+  }));
+}
+
+/** 确认/拒绝一条 binding(状态机流转)。 */
+export async function updateBindingStatus(
+  ctx: DbContext,
+  bindingId: string,
+  status: BindingStatus,
+  confirmationSource: ConfirmationSource,
+  userId?: string,
+): Promise<boolean> {
+  if (ctx.backend === 'postgres') return updateBindingStatusPg(ctx, bindingId, status, confirmationSource, userId);
+  const uid = effectiveUserId(userId);
+  const filter = uid
+    ? and(eq(bindings.id, bindingId), or(eq(bindings.userId, uid), eq(bindings.userId, ''), isNull(bindings.userId)))
+    : eq(bindings.id, bindingId);
+  const res = ctx.db
+    .update(bindings)
+    .set({ status, confirmationSource })
+    .where(filter)
+    .run();
+  return res.changes > 0;
 }
 
 // ---- L4 document recall (FTS5 BM25 over chunked doc text) ------------------
@@ -1570,4 +1732,68 @@ export async function findContractLedgerByNo(
     needsReview: !!row.needs_review,
     userId: row.user_id,
   };
+}
+
+/**
+ * 列出合同台账全部条目(Phase B 绑定建议匹配用)。按 user 过滤(legacy 行 3-way OR),
+ * 按 updated_at DESC。字段形状与 findContractLedgerByNo 一致。
+ */
+export async function listContractLedgerEntries(
+  ctx: DbContext,
+  userId?: string,
+): Promise<ContractLedgerEntry[]> {
+  if (ctx.backend === 'postgres') return listContractLedgerEntriesPg(ctx, userId);
+  const uid = effectiveUserId(userId);
+  const rows = uid
+    ? (ctx.sqlite
+        .prepare(
+          `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+                  overall_confidence, needs_review, user_id
+           FROM contract_ledger
+           WHERE user_id = ? OR user_id = '' OR user_id IS NULL
+           ORDER BY updated_at DESC`,
+        )
+        .all(uid) as unknown as Array<{
+        contract_no: string;
+        display_contract_no: string;
+        doc_type: string;
+        document_id: string;
+        title: string;
+        fields: string;
+        field_meta: string;
+        overall_confidence: number;
+        needs_review: number;
+        user_id: string;
+      }>)
+    : (ctx.sqlite
+        .prepare(
+          `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+                  overall_confidence, needs_review, user_id
+           FROM contract_ledger
+           ORDER BY updated_at DESC`,
+        )
+        .all() as unknown as Array<{
+        contract_no: string;
+        display_contract_no: string;
+        doc_type: string;
+        document_id: string;
+        title: string;
+        fields: string;
+        field_meta: string;
+        overall_confidence: number;
+        needs_review: number;
+        user_id: string;
+      }>);
+  return rows.map((row) => ({
+    contractNo: row.contract_no,
+    displayContractNo: row.display_contract_no,
+    docType: row.doc_type,
+    documentId: row.document_id,
+    title: row.title,
+    fields: JSON.parse(row.fields) as ContractLedgerEntry['fields'],
+    fieldMeta: JSON.parse(row.field_meta) as ContractLedgerEntry['fieldMeta'],
+    overallConfidence: row.overall_confidence,
+    needsReview: !!row.needs_review,
+    userId: row.user_id,
+  }));
 }

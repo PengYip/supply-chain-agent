@@ -60,6 +60,15 @@ export const bindings = sqliteTable(
     createdBy: text('created_by').notNull(),
     userId: text('user_id').notNull().default(''),
     createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+    // Phase B bindings state machine: 存量行全部走过 L2 人工审批 -> 默认
+    // 'confirmed' 语义正确。'proposed' = 系统推断待人工确认; 'rejected' = 已拒绝。
+    status: text('status').notNull().default('confirmed'),
+    /** 'auto_rule' = 合同号精确命中自动确认; 'human' = 人工确认; null = 历史行。 */
+    confirmationSource: text('confirmation_source'),
+    /** 'system' = 凭证入库自动生成; 'agent' = 工具显式调用。 */
+    proposedBy: text('proposed_by'),
+    /** JSON(BindingEvidence): 评分证据, 供评审卡展示。 */
+    evidence: text('evidence'),
   },
   (t) => ({ userIdx: index('idx_bindings_user').on(t.userId) }),
 );

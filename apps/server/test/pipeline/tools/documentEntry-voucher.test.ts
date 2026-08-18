@@ -7,8 +7,13 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createDb, migrate } from '../../../src/pipeline/db/client.js';
 import { env } from '../../../src/env.js';
-import { buildIngestDocumentTool, type VlmDeps } from '../../../src/pipeline/tools/documentEntry.js';
+import {
+  buildIngestDocumentTool, buildBindDocumentTool, type VlmDeps,
+} from '../../../src/pipeline/tools/documentEntry.js';
 import type { VlmResult } from '../../../src/pipeline/vlmAdapter.js';
+import { buildLedgerEntryFromExtraction } from '../../../src/pipeline/contractLedger.js';
+import { upsertContractLedgerEntry } from '../../../src/pipeline/db/repositories.js';
+import type { ContractLedgerEntry } from '../../../src/pipeline/contractLedger.js';
 
 let ctx: ReturnType<typeof createDb>;
 let dir: string;
@@ -193,5 +198,186 @@ describe('ingest_document 图片凭证 VLM 分支', () => {
     );
     expect(res.classifiedDocType).toBe('合同');
     expect(res.modality).toBe('digital');
+  });
+});
+
+// ---- Phase B: 绑定建议生成 + 确认 -------------------------------------------
+
+const span = { blockId: 'b1', start: 0, end: 10 };
+
+/** 通过 buildLedgerEntryFromExtraction + upsert 落一条合同台账(真实写入路径)。 */
+async function seedLedger(contractNo: string, fields: Record<string, string | number>): Promise<void> {
+  const entry = buildLedgerEntryFromExtraction({
+    documentId: 'DOC-LEDGER',
+    docType: '合同',
+    fields: Object.fromEntries(
+      Object.entries(fields).map(([k, v]) => [k, { value: v, sourceSpans: [span] }]),
+    ) as ContractLedgerEntry['fields'],
+    fieldMeta: Object.fromEntries(
+      Object.keys(fields).map((k) => [k, { strength: 'exact' as const, confidence: 0.95 }]),
+    ),
+  });
+  if (!entry) throw new Error('seedLedger: 无效合同号');
+  await upsertContractLedgerEntry(ctx, entry, '');
+}
+
+function bindingRow(bindingId: string): { status: string; confirmation_source: string | null; proposed_by: string | null } {
+  return ctx.sqlite
+    .prepare('SELECT status, confirmation_source, proposed_by FROM bindings WHERE id = ?')
+    .get(bindingId) as { status: string; confirmation_source: string | null; proposed_by: string | null };
+}
+
+describe('Phase B: ingestVoucherImage 绑定建议', () => {
+  it('货转单自带合同号命中台账 -> binding confirmed/auto_rule + 返回值带建议', async () => {
+    await seedLedger('CJXC-CTCL-JY-2024-131-01', {
+      合同号: 'CJXC-CTCL-JY-2024-131-01',
+      甲方: '山西焦煤集团有限责任公司',
+      乙方: '内蒙古伊泰煤炭股份有限公司',
+      签订日: '2024-06-01',
+      金额: 3500000,
+      数量: 5259,
+    });
+    const f = join(dir, 'hz.jpg');
+    writeFileSync(f, Buffer.from('fake-jpeg-bytes'));
+    const ingest = buildIngestDocumentTool({ ctx, vlm: fakeVlm(货转单Result) });
+    const res = await ingest.execute(
+      { sourceUri: f, docType: '其他', modality: 'scanned' },
+      execOpts,
+    );
+
+    expect(res.bindingProposals).toHaveLength(1);
+    expect(res.bindingProposals[0]!.route).toBe('auto_rule');
+    expect(res.bindingProposals[0]!.contractNo).toBe('CJXC-CTCL-JY-2024-131-01');
+    expect(res.bindingProposals[0]!.score).toBe(0.99);
+
+    const row = ctx.sqlite
+      .prepare('SELECT id AS id FROM bindings')
+      .get() as { id: string };
+    const b = bindingRow(row.id);
+    expect(b.status).toBe('confirmed');
+    expect(b.confirmation_source).toBe('auto_rule');
+    expect(b.proposed_by).toBe('system');
+    // evidence 落库(JSON)。
+    const ev = ctx.sqlite
+      .prepare('SELECT evidence AS e FROM bindings WHERE id = ?')
+      .get(row.id) as { e: string };
+    expect(JSON.parse(ev.e)).toHaveProperty('details');
+  });
+
+  it('付款凭证(无合同号, 主体+时间窗命中) -> binding status=proposed', async () => {
+    await seedLedger('HT-2024-001', {
+      合同号: 'HT-2024-001',
+      甲方: '山西焦煤集团有限责任公司',
+      乙方: '内蒙古伊泰煤炭股份有限公司',
+      签订日: '2024-06-01',
+      交货日期: '2024-07-20',
+      金额: 2800000,
+      数量: 5200,
+    });
+    const 付款凭证Result: VlmResult = {
+      voucherType: '付款凭证',
+      fields: {
+        付款人名称: '山西焦煤集团有限责任公司',
+        收款人名称: '内蒙古伊泰煤炭股份有限公司',
+        金额: 2841620.27,
+        金额大写: '贰佰捌拾肆万壹仟陆佰贰拾元零贰角柒分',
+        入账日期: '2024-07-16',
+      },
+      字段置信度: {
+        voucherType: 0.99,
+        付款人名称: 0.98,
+        收款人名称: 0.97,
+        金额: 0.99,
+        入账日期: 0.95,
+      },
+    };
+    const f = join(dir, 'pay.jpg');
+    writeFileSync(f, Buffer.from('fake-jpeg-bytes'));
+    const ingest = buildIngestDocumentTool({ ctx, vlm: fakeVlm(付款凭证Result) });
+    const res = await ingest.execute(
+      { sourceUri: f, docType: '其他', modality: 'scanned' },
+      execOpts,
+    );
+
+    expect(res.bindingProposals).toHaveLength(1);
+    expect(res.bindingProposals[0]!.route).toBe('human');
+    expect(res.bindingProposals[0]!.contractNo).toBe('HT-2024-001');
+
+    const row = ctx.sqlite
+      .prepare('SELECT id AS id, relation AS relation FROM bindings')
+      .get() as { id: string; relation: string };
+    expect(row.relation).toBe('付款');
+    const b = bindingRow(row.id);
+    expect(b.status).toBe('proposed');
+    expect(b.confirmation_source).toBeNull();
+    expect(b.proposed_by).toBe('system');
+  });
+
+  it('弱锚点(无匹配) -> 不落 binding 行', async () => {
+    await seedLedger('HT-2024-001', {
+      合同号: 'HT-2024-001',
+      甲方: '山西焦煤集团有限责任公司',
+      乙方: '内蒙古伊泰煤炭股份有限公司',
+    });
+    const weak: VlmResult = {
+      voucherType: '付款凭证',
+      fields: {
+        付款人名称: '未知公司XYZ',
+        收款人名称: '另一未知公司',
+        金额: 123.45,
+        入账日期: '2024-07-16',
+      },
+      字段置信度: { voucherType: 0.9, 付款人名称: 0.8, 收款人名称: 0.8, 金额: 0.9, 入账日期: 0.9 },
+    };
+    const f = join(dir, 'weak.jpg');
+    writeFileSync(f, Buffer.from('fake-jpeg-bytes'));
+    const ingest = buildIngestDocumentTool({ ctx, vlm: fakeVlm(weak) });
+    const res = await ingest.execute(
+      { sourceUri: f, docType: '其他', modality: 'scanned' },
+      execOpts,
+    );
+    expect(res.bindingProposals).toEqual([]);
+    expect(countRows('bindings')).toBe(0);
+  });
+
+  it('bind_document 确认 proposed 建议 -> 翻转 confirmed/human, 不插新行', async () => {
+    await seedLedger('HT-2024-001', {
+      合同号: 'HT-2024-001',
+      甲方: '山西焦煤集团有限责任公司',
+      乙方: '内蒙古伊泰煤炭股份有限公司',
+      签订日: '2024-06-01',
+      交货日期: '2024-07-20',
+      金额: 2800000,
+      数量: 5200,
+    });
+    const 付款凭证Result: VlmResult = {
+      voucherType: '付款凭证',
+      fields: {
+        付款人名称: '山西焦煤集团有限责任公司',
+        收款人名称: '内蒙古伊泰煤炭股份有限公司',
+        金额: 2841620.27,
+        入账日期: '2024-07-16',
+      },
+      字段置信度: { voucherType: 0.99, 付款人名称: 0.98, 收款人名称: 0.97, 金额: 0.99, 入账日期: 0.95 },
+    };
+    const f = join(dir, 'pay2.jpg');
+    writeFileSync(f, Buffer.from('fake-jpeg-bytes'));
+    const ingest = buildIngestDocumentTool({ ctx, vlm: fakeVlm(付款凭证Result) });
+    const ing: any = await ingest.execute(
+      { sourceUri: f, docType: '其他', modality: 'scanned' },
+      execOpts,
+    );
+
+    const bind = buildBindDocumentTool({ ctx });
+    const res = await bind.execute(
+      { documentId: ing.docId, contractNo: 'HT-2024-001', relation: 'primary', confidence: 1, sourceSpan: span },
+      execOpts,
+    );
+    expect(res.ok).toBe(true);
+    expect(res.confirmedProposal).toBe(true);
+    expect(countRows('bindings')).toBe(1); // upsert: 不插新行
+    const b = bindingRow(res.bindingId);
+    expect(b.status).toBe('confirmed');
+    expect(b.confirmation_source).toBe('human');
   });
 });

@@ -25,6 +25,10 @@ import type {
   ExtractionInput,
   BindingInput,
   BindingRow,
+  BindingStatus,
+  ConfirmationSource,
+  BindingProposedBy,
+  BindingEvidence,
   ChunkInput,
   ChunkMatch,
   ChunkMeta,
@@ -132,8 +136,9 @@ export async function saveBindingPg(
   const id = rid('BD');
   await ctx.pool.query(
     `INSERT INTO bindings
-       (id, document_id, contract_no, relation, source_refs, confidence, created_by, user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+       (id, document_id, contract_no, relation, source_refs, confidence, created_by, user_id,
+        status, confirmation_source, proposed_by, evidence)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
     [
       id,
       input.documentId,
@@ -143,6 +148,10 @@ export async function saveBindingPg(
       input.confidence,
       input.createdBy,
       effectiveUserId(userId),
+      input.status ?? 'confirmed',
+      input.confirmationSource ?? null,
+      input.proposedBy ?? null,
+      input.evidence ? JSON.stringify(input.evidence) : null,
     ],
   );
   return id;
@@ -153,7 +162,8 @@ export async function listBindingsForContractPg(
   contractNo: string,
 ): Promise<BindingRow[]> {
   const res = await ctx.pool.query(
-    `SELECT id, document_id, contract_no, relation, source_refs, confidence, created_by
+    `SELECT id, document_id, contract_no, relation, source_refs, confidence, created_by,
+            status, confirmation_source, proposed_by, evidence
      FROM bindings WHERE contract_no = $1`,
     [contractNo],
   );
@@ -165,6 +175,153 @@ export async function listBindingsForContractPg(
     sourceRefs: r.source_refs as SourceSpan[],
     confidence: Number(r.confidence),
     createdBy: r.created_by,
+    status: (r.status ?? 'confirmed') as BindingStatus,
+    confirmationSource: (r.confirmation_source ?? null) as ConfirmationSource | null,
+    proposedBy: (r.proposed_by ?? null) as BindingProposedBy | null,
+    evidence: r.evidence as BindingEvidence | null,
+  }));
+}
+
+// ---- Phase B: bindings 状态机 (pg twins) -------------------------------------
+
+export async function findBindingByDocAndContractPg(
+  ctx: PostgresDbContext,
+  documentId: string,
+  contractNo: string,
+  userId?: string,
+): Promise<BindingRow | null> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT id, document_id, contract_no, relation, source_refs, confidence, created_by,
+                status, confirmation_source, proposed_by, evidence
+         FROM bindings
+         WHERE document_id = $1 AND contract_no = $2
+           AND (user_id = $3 OR user_id = '' OR user_id IS NULL)
+         ORDER BY created_at DESC LIMIT 1`,
+        [documentId, contractNo, uid],
+      )
+    : await ctx.pool.query(
+        `SELECT id, document_id, contract_no, relation, source_refs, confidence, created_by,
+                status, confirmation_source, proposed_by, evidence
+         FROM bindings
+         WHERE document_id = $1 AND contract_no = $2
+         ORDER BY created_at DESC LIMIT 1`,
+        [documentId, contractNo],
+      );
+  if (!res.rows[0]) return null;
+  const r = res.rows[0];
+  return {
+    id: r.id,
+    documentId: r.document_id,
+    contractNo: r.contract_no,
+    relation: r.relation,
+    sourceRefs: r.source_refs as SourceSpan[],
+    confidence: Number(r.confidence),
+    createdBy: r.created_by,
+    status: (r.status ?? 'confirmed') as BindingStatus,
+    confirmationSource: (r.confirmation_source ?? null) as ConfirmationSource | null,
+    proposedBy: (r.proposed_by ?? null) as BindingProposedBy | null,
+    evidence: r.evidence as BindingEvidence | null,
+  };
+}
+
+export async function listBindingProposalsPg(
+  ctx: PostgresDbContext,
+  userId?: string,
+  status: BindingStatus = 'proposed',
+): Promise<Array<BindingRow & { docType: string; fileName: string }>> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT b.id, b.document_id, b.contract_no, b.relation, b.source_refs, b.confidence,
+                b.created_by, b.status, b.confirmation_source, b.proposed_by, b.evidence,
+                d.doc_type AS "docType", d.source_uri AS "sourceUri"
+         FROM bindings AS b
+         JOIN documents AS d ON d.id = b.document_id
+         WHERE b.status = $1 AND (b.user_id = $2 OR b.user_id = '' OR b.user_id IS NULL)
+         ORDER BY b.created_at DESC`,
+        [status, uid],
+      )
+    : await ctx.pool.query(
+        `SELECT b.id, b.document_id, b.contract_no, b.relation, b.source_refs, b.confidence,
+                b.created_by, b.status, b.confirmation_source, b.proposed_by, b.evidence,
+                d.doc_type AS "docType", d.source_uri AS "sourceUri"
+         FROM bindings AS b
+         JOIN documents AS d ON d.id = b.document_id
+         WHERE b.status = $1
+         ORDER BY b.created_at DESC`,
+        [status],
+      );
+  return res.rows.map((r) => ({
+    id: r.id,
+    documentId: r.document_id,
+    contractNo: r.contract_no,
+    relation: r.relation,
+    sourceRefs: r.source_refs as SourceSpan[],
+    confidence: Number(r.confidence),
+    createdBy: r.created_by,
+    status: (r.status ?? 'confirmed') as BindingStatus,
+    confirmationSource: (r.confirmation_source ?? null) as ConfirmationSource | null,
+    proposedBy: (r.proposed_by ?? null) as BindingProposedBy | null,
+    evidence: r.evidence as BindingEvidence | null,
+    docType: r.docType,
+    fileName: String(r.sourceUri).split('/').pop() ?? String(r.sourceUri),
+  }));
+}
+
+export async function updateBindingStatusPg(
+  ctx: PostgresDbContext,
+  bindingId: string,
+  status: BindingStatus,
+  confirmationSource: ConfirmationSource,
+  userId?: string,
+): Promise<boolean> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `UPDATE bindings SET status = $1, confirmation_source = $2
+         WHERE id = $3 AND (user_id = $4 OR user_id = '' OR user_id IS NULL)`,
+        [status, confirmationSource, bindingId, uid],
+      )
+    : await ctx.pool.query(
+        `UPDATE bindings SET status = $1, confirmation_source = $2 WHERE id = $3`,
+        [status, confirmationSource, bindingId],
+      );
+  return (res.rowCount ?? 0) > 0;
+}
+
+export async function listContractLedgerEntriesPg(
+  ctx: PostgresDbContext,
+  userId?: string,
+): Promise<ContractLedgerEntry[]> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+                overall_confidence, needs_review, user_id
+         FROM contract_ledger
+         WHERE user_id = $1 OR user_id = '' OR user_id IS NULL
+         ORDER BY updated_at DESC`,
+        [uid],
+      )
+    : await ctx.pool.query(
+        `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+                overall_confidence, needs_review, user_id
+         FROM contract_ledger
+         ORDER BY updated_at DESC`,
+      );
+  return res.rows.map((r) => ({
+    contractNo: r.contract_no,
+    displayContractNo: r.display_contract_no,
+    docType: r.doc_type,
+    documentId: r.document_id,
+    title: r.title,
+    fields: r.fields as ContractLedgerEntry['fields'],
+    fieldMeta: r.field_meta as ContractLedgerEntry['fieldMeta'],
+    overallConfidence: Number(r.overall_confidence),
+    needsReview: !!r.needs_review,
+    userId: r.user_id,
   }));
 }
 
