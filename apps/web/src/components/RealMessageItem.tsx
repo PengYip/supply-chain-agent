@@ -10,12 +10,18 @@ import {
   Database,
   Wrench,
   ShieldAlert,
-  AlertTriangle,
-  ExternalLink,
+  ArrowDown,
   Check,
   X,
 } from 'lucide-react'
-import { type RenderItem, type ToolCallStep } from '../utils/realChatUtils'
+import {
+  type RenderItem,
+  type ToolCallStep,
+  parseEscalateArgs,
+  escalateCategoryLabel,
+  severityLabel,
+  severityBadgeClass,
+} from '../utils/realChatUtils'
 import clsx from 'clsx'
 import { DocumentReviewCard, type DocumentReviewPayload } from './DocumentReviewCard'
 
@@ -108,40 +114,57 @@ const MarkdownContent: React.FC<{ children: string }> = ({ children }) => {
   )
 }
 
+/** L3 人工复核工单的展示卡（纯信息展示，记录在时间线里）。escalate_to_human
+ *  的入参渲染为可读徽章（分类/严重度）+ 问题原文；其他工具保持通用形态。
+ *  交互入口不在这里：可操作的复核卡挂在输入框上方（见 RealChatView）。 */
 const BlockedCard: React.FC<{ toolName: string; args: unknown; blocked: NonNullable<ToolCallStep['blocked']> }> = ({
   toolName,
   args,
   blocked,
 }) => {
+  const esc = toolName === 'escalate_to_human' ? parseEscalateArgs(args) : null
   return (
-    <div className="rounded-lg border border-danger/20 bg-danger/5 p-3 mt-2">
-      <div className="flex items-start gap-2.5 mb-2.5">
-        <div className="w-6 h-6 rounded-full bg-danger/10 flex items-center justify-center shrink-0">
-          <AlertTriangle className="w-3.5 h-3.5 text-danger" />
+    <div className="rounded-lg border border-deepSea/20 bg-white p-3 mt-2">
+      <div className="flex items-start gap-2.5">
+        <div className="w-6 h-6 rounded-full bg-deepSea/10 flex items-center justify-center shrink-0">
+          <ShieldAlert className="w-3.5 h-3.5 text-deepSea" />
         </div>
-        <div className="min-w-0">
-          <div className="text-sm font-medium text-textDark truncate">外部审批 · {toolName}</div>
-          {formatArgs(args) && (
-            <div className="text-[11px] font-mono text-steelBlue bg-white/50 rounded px-1.5 py-0.5 border border-borderGray/50 inline-block mt-1 truncate max-w-full">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium text-textDark truncate">
+            {esc ? '人工复核工单' : '操作已阻断'} · {toolName}
+          </div>
+          <div className="mt-1.5 flex items-center flex-wrap gap-1.5">
+            <span className="text-[11px] font-mono text-steelBlue bg-bgGray rounded px-1.5 py-0.5 border border-borderGray">
+              {blocked.ticketId}
+            </span>
+            {esc?.category && (
+              <span className="text-[11px] leading-none rounded-full px-2 py-1 bg-white text-deepSea border border-deepSea/20">
+                {escalateCategoryLabel(esc.category)}
+              </span>
+            )}
+            {esc?.severity && (
+              <span className={clsx('text-[11px] leading-none rounded-full px-2 py-1 border', severityBadgeClass(esc.severity))}>
+                {severityLabel(esc.severity)}
+              </span>
+            )}
+          </div>
+          {!esc && formatArgs(args) && (
+            <div className="mt-1.5 text-[11px] font-mono text-steelBlue bg-bgGray/50 rounded px-1.5 py-0.5 border border-borderGray/50 inline-block truncate max-w-full">
               {formatArgs(args)}
             </div>
           )}
+          {esc && <p className="text-xs text-textDark leading-relaxed mt-2 break-words">{esc.issue}</p>}
+          {blocked.message && (
+            <p className={clsx('leading-relaxed mt-1.5 break-words', esc ? 'text-[11px] text-textGray' : 'text-xs text-textDark')}>
+              {blocked.message}
+            </p>
+          )}
+          <div className="text-[11px] text-textGray mt-2">已阻断，等待人工复核</div>
         </div>
       </div>
-      <div className="space-y-1 text-xs text-textDark">
-        <div className="flex gap-3">
-          <span className="text-textGray shrink-0">审批单号</span>
-          <span className="font-mono text-danger">{blocked.ticketId}</span>
-        </div>
-        <div className="flex gap-3">
-          <span className="text-textGray shrink-0">状态</span>
-          <span>已阻断，等待财务主管审批</span>
-        </div>
-        {blocked.message && <p className="text-textGray leading-relaxed mt-1">{blocked.message}</p>}
-      </div>
-      <div className="mt-3 text-[11px] text-textGray flex items-center gap-1">
-        <ExternalLink className="w-3 h-3" />
-        请在飞书审批流中处理，完成后再回到对话继续。
+      <div className="mt-2.5 pt-2 border-t border-borderGray/60 flex items-center gap-1 text-[11px] text-textGray">
+        <ArrowDown className="w-3 h-3 shrink-0" />
+        在下方复核卡中选择处理方式
       </div>
     </div>
   )

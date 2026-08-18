@@ -11,6 +11,52 @@ export interface ToolCallStep {
   }
 }
 
+/** L3 escalate_to_human 工具参数中可读展示的字段（context 不在此展开）。 */
+export type EscalateCategory = 'data_conflict' | 'data_missing' | 'low_confidence' | 'rule_boundary' | 'other'
+export type EscalateSeverity = 'low' | 'medium' | 'high'
+
+export interface EscalateInfo {
+  issue: string
+  category?: EscalateCategory
+  severity?: EscalateSeverity
+}
+
+const ESCALATE_CATEGORY_LABELS: Record<EscalateCategory, string> = {
+  data_conflict: '数据冲突',
+  data_missing: '数据缺失',
+  low_confidence: '置信度不足',
+  rule_boundary: '规则边界',
+  other: '其他',
+}
+
+/** 从工具入参里解析 escalate_to_human 的问题/分类/严重度；issue 缺失时返回
+ *  null（调用方回退到 blocked.message），分类/严重度取值未知时省略对应徽章。 */
+export const parseEscalateArgs = (args: unknown): EscalateInfo | null => {
+  if (args === null || typeof args !== 'object') return null
+  const a = args as Record<string, unknown>
+  if (typeof a.issue !== 'string' || a.issue.trim() === '') return null
+  const category =
+    typeof a.category === 'string' && a.category in ESCALATE_CATEGORY_LABELS
+      ? (a.category as EscalateCategory)
+      : undefined
+  const severity =
+    a.severity === 'high' || a.severity === 'medium' || a.severity === 'low' ? a.severity : undefined
+  return { issue: a.issue, category, severity }
+}
+
+export const escalateCategoryLabel = (category: EscalateCategory): string => ESCALATE_CATEGORY_LABELS[category]
+
+export const severityLabel = (severity: EscalateSeverity): string =>
+  severity === 'high' ? '高风险' : severity === 'medium' ? '中风险' : '低风险'
+
+/** L3 卡片共用的严重度徽标配色：high=danger / medium=amber / low=中性。 */
+export const severityBadgeClass = (severity: EscalateSeverity): string =>
+  severity === 'high'
+    ? 'bg-danger/10 text-danger border-danger/20'
+    : severity === 'medium'
+      ? 'bg-amber/10 text-amber border-amber/20'
+      : 'bg-white text-textGray border-borderGray'
+
 // 按 parts 原始顺序交错的渲染段。文本段与工具段保持模型产出的时间顺序，
 // 避免把工具调用统一挤到末尾（agent loop 通常是：先调工具→后总结文本）。
 export type Segment =
