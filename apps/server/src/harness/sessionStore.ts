@@ -69,10 +69,12 @@ CREATE TABLE IF NOT EXISTS session_events (
 
 // Phase 2: add user_id to pre-existing dev databases (CREATE TABLE IF NOT EXISTS
 // does not add columns to an already-existing table). Idempotent + guarded.
+// try/catch: vitest workers / clustered processes can race the PRAGMA check
+// (check-then-act) against the same SQLite file -- same pattern as client.ts.
 {
   const cols = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
   if (!cols.some((c) => c.name === 'user_id')) {
-    db.exec('ALTER TABLE sessions ADD COLUMN user_id TEXT');
+    try { db.exec('ALTER TABLE sessions ADD COLUMN user_id TEXT'); } catch { /* concurrent */ }
   }
 }
 
@@ -83,14 +85,17 @@ CREATE TABLE IF NOT EXISTS session_events (
 {
   const cols = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
   const has = (name: string): boolean => cols.some((c) => c.name === name);
+  // try/catch each ALTER: concurrent module init (separate vitest workers /
+  // processes sharing this file) can pass the PRAGMA check simultaneously and
+  // the second ALTER would throw "duplicate column name" without it.
   if (!has('status')) {
-    db.exec("ALTER TABLE sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'idle'");
+    try { db.exec("ALTER TABLE sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'idle'"); } catch { /* concurrent */ }
   }
   if (!has('run_id')) {
-    db.exec('ALTER TABLE sessions ADD COLUMN run_id TEXT');
+    try { db.exec('ALTER TABLE sessions ADD COLUMN run_id TEXT'); } catch { /* concurrent */ }
   }
   if (!has('current_run_started_at')) {
-    db.exec('ALTER TABLE sessions ADD COLUMN current_run_started_at TEXT');
+    try { db.exec('ALTER TABLE sessions ADD COLUMN current_run_started_at TEXT'); } catch { /* concurrent */ }
   }
 }
 
