@@ -69,6 +69,8 @@ export const bindings = sqliteTable(
     proposedBy: text('proposed_by'),
     /** JSON(BindingEvidence): 评分证据, 供评审卡展示。 */
     evidence: text('evidence'),
+    /** JSON(BindingGraphStatus): 工作台确认后图谱同步结果。 */
+    graphStatus: text('graph_status'),
   },
   (t) => ({ userIdx: index('idx_bindings_user').on(t.userId) }),
 );

@@ -21,6 +21,7 @@ import type { SpanMatchStrength } from '../spanValidator.js';
 import { normalizeContractNo } from '../contractLedger.js';
 import type { ContractLedgerEntry } from '../contractLedger.js';
 import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.js';
+import { parseGraphStatus } from './repositories.js';
 import type {
   ExtractionInput,
   BindingInput,
@@ -29,6 +30,7 @@ import type {
   ConfirmationSource,
   BindingProposedBy,
   BindingEvidence,
+  BindingGraphStatus,
   ChunkInput,
   ChunkMatch,
   ChunkMeta,
@@ -163,23 +165,11 @@ export async function listBindingsForContractPg(
 ): Promise<BindingRow[]> {
   const res = await ctx.pool.query(
     `SELECT id, document_id, contract_no, relation, source_refs, confidence, created_by,
-            status, confirmation_source, proposed_by, evidence
+            status, confirmation_source, proposed_by, evidence, graph_status
      FROM bindings WHERE contract_no = $1`,
     [contractNo],
   );
-  return res.rows.map((r) => ({
-    id: r.id,
-    documentId: r.document_id,
-    contractNo: r.contract_no,
-    relation: r.relation,
-    sourceRefs: r.source_refs as SourceSpan[],
-    confidence: Number(r.confidence),
-    createdBy: r.created_by,
-    status: (r.status ?? 'confirmed') as BindingStatus,
-    confirmationSource: (r.confirmation_source ?? null) as ConfirmationSource | null,
-    proposedBy: (r.proposed_by ?? null) as BindingProposedBy | null,
-    evidence: r.evidence as BindingEvidence | null,
-  }));
+  return res.rows.map(bindingRowFromPg);
 }
 
 // ---- Phase B: bindings 状态机 (pg twins) -------------------------------------
@@ -194,7 +184,7 @@ export async function findBindingByDocAndContractPg(
   const res = uid
     ? await ctx.pool.query(
         `SELECT id, document_id, contract_no, relation, source_refs, confidence, created_by,
-                status, confirmation_source, proposed_by, evidence
+                status, confirmation_source, proposed_by, evidence, graph_status
          FROM bindings
          WHERE document_id = $1 AND contract_no = $2
            AND (user_id = $3 OR user_id = '' OR user_id IS NULL)
@@ -203,27 +193,14 @@ export async function findBindingByDocAndContractPg(
       )
     : await ctx.pool.query(
         `SELECT id, document_id, contract_no, relation, source_refs, confidence, created_by,
-                status, confirmation_source, proposed_by, evidence
+                status, confirmation_source, proposed_by, evidence, graph_status
          FROM bindings
          WHERE document_id = $1 AND contract_no = $2
          ORDER BY created_at DESC LIMIT 1`,
         [documentId, contractNo],
       );
   if (!res.rows[0]) return null;
-  const r = res.rows[0];
-  return {
-    id: r.id,
-    documentId: r.document_id,
-    contractNo: r.contract_no,
-    relation: r.relation,
-    sourceRefs: r.source_refs as SourceSpan[],
-    confidence: Number(r.confidence),
-    createdBy: r.created_by,
-    status: (r.status ?? 'confirmed') as BindingStatus,
-    confirmationSource: (r.confirmation_source ?? null) as ConfirmationSource | null,
-    proposedBy: (r.proposed_by ?? null) as BindingProposedBy | null,
-    evidence: r.evidence as BindingEvidence | null,
-  };
+  return bindingRowFromPg(res.rows[0]);
 }
 
 export async function listBindingProposalsPg(
@@ -235,7 +212,7 @@ export async function listBindingProposalsPg(
   const res = uid
     ? await ctx.pool.query(
         `SELECT b.id, b.document_id, b.contract_no, b.relation, b.source_refs, b.confidence,
-                b.created_by, b.status, b.confirmation_source, b.proposed_by, b.evidence,
+                b.created_by, b.status, b.confirmation_source, b.proposed_by, b.evidence, b.graph_status,
                 d.doc_type AS "docType", d.source_uri AS "sourceUri"
          FROM bindings AS b
          JOIN documents AS d ON d.id = b.document_id
@@ -245,7 +222,7 @@ export async function listBindingProposalsPg(
       )
     : await ctx.pool.query(
         `SELECT b.id, b.document_id, b.contract_no, b.relation, b.source_refs, b.confidence,
-                b.created_by, b.status, b.confirmation_source, b.proposed_by, b.evidence,
+                b.created_by, b.status, b.confirmation_source, b.proposed_by, b.evidence, b.graph_status,
                 d.doc_type AS "docType", d.source_uri AS "sourceUri"
          FROM bindings AS b
          JOIN documents AS d ON d.id = b.document_id
@@ -254,17 +231,7 @@ export async function listBindingProposalsPg(
         [status],
       );
   return res.rows.map((r) => ({
-    id: r.id,
-    documentId: r.document_id,
-    contractNo: r.contract_no,
-    relation: r.relation,
-    sourceRefs: r.source_refs as SourceSpan[],
-    confidence: Number(r.confidence),
-    createdBy: r.created_by,
-    status: (r.status ?? 'confirmed') as BindingStatus,
-    confirmationSource: (r.confirmation_source ?? null) as ConfirmationSource | null,
-    proposedBy: (r.proposed_by ?? null) as BindingProposedBy | null,
-    evidence: r.evidence as BindingEvidence | null,
+    ...bindingRowFromPg(r),
     docType: r.docType,
     fileName: String(r.sourceUri).split('/').pop() ?? String(r.sourceUri),
   }));
@@ -288,6 +255,57 @@ export async function updateBindingStatusPg(
         `UPDATE bindings SET status = $1, confirmation_source = $2 WHERE id = $3`,
         [status, confirmationSource, bindingId],
       );
+  return (res.rowCount ?? 0) > 0;
+}
+
+// ---- 绑定工作台: graph_status + 工作台查询 (pg twins) -----------------------
+
+/** bindings pg 行 -> BindingRow(所有 PG 读取函数共用, 含 graphStatus)。 */
+function bindingRowFromPg(r: Record<string, unknown>): BindingRow {
+  return {
+    id: String(r.id),
+    documentId: String(r.document_id),
+    contractNo: String(r.contract_no),
+    relation: String(r.relation),
+    sourceRefs: r.source_refs as SourceSpan[],
+    confidence: Number(r.confidence),
+    createdBy: String(r.created_by),
+    status: (r.status ?? 'confirmed') as BindingStatus,
+    confirmationSource: (r.confirmation_source ?? null) as ConfirmationSource | null,
+    proposedBy: (r.proposed_by ?? null) as BindingProposedBy | null,
+    evidence: r.evidence as BindingEvidence | null,
+    graphStatus: parseGraphStatus((r.graph_status ?? null) as string | null),
+  };
+}
+
+export async function findBindingByIdPg(
+  ctx: PostgresDbContext, bindingId: string, userId?: string,
+): Promise<BindingRow | null> {
+  const uid = effectiveUserId(userId);
+  const rows = await ctx.pool.query(
+    'SELECT * FROM bindings WHERE id = $1 AND ($2 = \'\' OR user_id = $2 OR user_id = \'\' OR user_id IS NULL)',
+    [bindingId, uid],
+  );
+  return rows.rows[0] ? bindingRowFromPg(rows.rows[0]) : null;
+}
+
+export async function listBindingsForUserPg(ctx: PostgresDbContext, userId?: string): Promise<BindingRow[]> {
+  const uid = effectiveUserId(userId);
+  const rows = await ctx.pool.query(
+    'SELECT * FROM bindings WHERE ($1 = \'\' OR user_id = $1 OR user_id = \'\' OR user_id IS NULL) ORDER BY created_at DESC',
+    [uid],
+  );
+  return rows.rows.map(bindingRowFromPg);
+}
+
+export async function setBindingGraphStatusPg(
+  ctx: PostgresDbContext, bindingId: string, graphStatus: BindingGraphStatus, userId?: string,
+): Promise<boolean> {
+  const uid = effectiveUserId(userId);
+  const res = await ctx.pool.query(
+    'UPDATE bindings SET graph_status = $3 WHERE id = $1 AND ($2 = \'\' OR user_id = $2 OR user_id = \'\' OR user_id IS NULL)',
+    [bindingId, uid, JSON.stringify(graphStatus)],
+  );
   return (res.rowCount ?? 0) > 0;
 }
 

@@ -60,6 +60,10 @@ import {
   findBindingByDocAndContractPg,
   listBindingProposalsPg,
   updateBindingStatusPg,
+  // 绑定工作台: pg twins for graph_status + 工作台查询。
+  findBindingByIdPg,
+  listBindingsForUserPg,
+  setBindingGraphStatusPg,
 } from './postgres-repositories.js';
 
 // Phase 2 business-data isolation: a normalized userId is '' / undefined when the
@@ -152,6 +156,13 @@ export interface BindingEvidence {
   details: string[];
 }
 
+/** 工作台图同步结果(落 bindings.graph_status, JSON)。 */
+export interface BindingGraphStatus {
+  status: 'ok' | 'skipped' | 'failed';
+  reason?: string;
+  syncedAt?: string;
+}
+
 export interface BindingInput {
   documentId: string;
   contractNo: string;
@@ -179,6 +190,8 @@ export interface BindingRow {
   confirmationSource: ConfirmationSource | null;
   proposedBy: BindingProposedBy | null;
   evidence: BindingEvidence | null;
+  /** 工作台确认后图谱同步结果(JSON 落 bindings.graph_status)。 */
+  graphStatus: BindingGraphStatus | null;
 }
 
 // ---- Post-ingest review (Task 3) -------------------------------------------
@@ -603,19 +616,7 @@ export async function listBindingsForContract(
   contractNo: string,
 ): Promise<BindingRow[]> {
   if (ctx.backend === 'postgres') return listBindingsForContractPg(ctx, contractNo);
-  return ctx.db.select().from(bindings).where(eq(bindings.contractNo, contractNo)).all().map((r) => ({
-    id: r.id,
-    documentId: r.documentId,
-    contractNo: r.contractNo,
-    relation: r.relation,
-    sourceRefs: JSON.parse(r.sourceRefs) as SourceSpan[],
-    confidence: r.confidence,
-    createdBy: r.createdBy,
-    status: (r.status ?? 'confirmed') as BindingStatus,
-    confirmationSource: (r.confirmationSource ?? null) as ConfirmationSource | null,
-    proposedBy: (r.proposedBy ?? null) as BindingProposedBy | null,
-    evidence: r.evidence ? (JSON.parse(r.evidence) as BindingEvidence) : null,
-  }));
+  return ctx.db.select().from(bindings).where(eq(bindings.contractNo, contractNo)).all().map(rowToBinding);
 }
 
 // ---- Phase B: bindings 状态机 -------------------------------------------------
@@ -646,19 +647,7 @@ export async function findBindingByDocAndContract(
     .orderBy(desc(bindings.createdAt))
     .all()[0];
   if (!row) return null;
-  return {
-    id: row.id,
-    documentId: row.documentId,
-    contractNo: row.contractNo,
-    relation: row.relation,
-    sourceRefs: JSON.parse(row.sourceRefs) as SourceSpan[],
-    confidence: row.confidence,
-    createdBy: row.createdBy,
-    status: (row.status ?? 'confirmed') as BindingStatus,
-    confirmationSource: (row.confirmationSource ?? null) as ConfirmationSource | null,
-    proposedBy: (row.proposedBy ?? null) as BindingProposedBy | null,
-    evidence: row.evidence ? (JSON.parse(row.evidence) as BindingEvidence) : null,
-  };
+  return rowToBinding(row);
 }
 
 /**
@@ -703,17 +692,7 @@ export async function listBindingProposals(
         .orderBy(desc(bindings.createdAt))
         .all() as unknown as Array<{ b: (typeof bindings)['$inferSelect']; docType: string; sourceUri: string }>);
   return rows.map((r) => ({
-    id: r.b.id,
-    documentId: r.b.documentId,
-    contractNo: r.b.contractNo,
-    relation: r.b.relation,
-    sourceRefs: JSON.parse(r.b.sourceRefs) as SourceSpan[],
-    confidence: r.b.confidence,
-    createdBy: r.b.createdBy,
-    status: (r.b.status ?? 'confirmed') as BindingStatus,
-    confirmationSource: (r.b.confirmationSource ?? null) as ConfirmationSource | null,
-    proposedBy: (r.b.proposedBy ?? null) as BindingProposedBy | null,
-    evidence: r.b.evidence ? (JSON.parse(r.b.evidence) as BindingEvidence) : null,
+    ...rowToBinding(r.b),
     docType: r.docType,
     fileName: r.sourceUri.split('/').pop() ?? r.sourceUri,
   }));
@@ -738,6 +717,62 @@ export async function updateBindingStatus(
     .where(filter)
     .run();
   return res.changes > 0;
+}
+
+// ---- 绑定工作台: graph_status + 工作台查询 ---------------------------------
+
+export function parseGraphStatus(raw: string | null): BindingGraphStatus | null {
+  if (!raw) return null;
+  try { return JSON.parse(raw) as BindingGraphStatus; } catch { return null; }
+}
+
+export async function findBindingById(
+  ctx: DbContext, bindingId: string, userId?: string,
+): Promise<BindingRow | null> {
+  if (ctx.backend === 'postgres') return findBindingByIdPg(ctx, bindingId, userId);
+  const uid = effectiveUserId(userId);
+  const filter = uid
+    ? and(eq(bindings.id, bindingId), or(eq(bindings.userId, uid), eq(bindings.userId, ''), isNull(bindings.userId)))
+    : eq(bindings.id, bindingId);
+  const row = ctx.db.select().from(bindings).where(filter).all()[0];
+  return row ? rowToBinding(row) : null;
+}
+
+/** 全状态绑定列表(工作台 overview 用), created_at DESC。 */
+export async function listBindingsForUser(ctx: DbContext, userId?: string): Promise<BindingRow[]> {
+  if (ctx.backend === 'postgres') return listBindingsForUserPg(ctx, userId);
+  const uid = effectiveUserId(userId);
+  const filter = uid ? or(eq(bindings.userId, uid), eq(bindings.userId, ''), isNull(bindings.userId)) : undefined;
+  const rows = ctx.db.select().from(bindings).where(filter).orderBy(desc(bindings.createdAt)).all();
+  return rows.map(rowToBinding);
+}
+
+export async function setBindingGraphStatus(
+  ctx: DbContext, bindingId: string, graphStatus: BindingGraphStatus, userId?: string,
+): Promise<boolean> {
+  if (ctx.backend === 'postgres') return setBindingGraphStatusPg(ctx, bindingId, graphStatus, userId);
+  const uid = effectiveUserId(userId);
+  const filter = uid
+    ? and(eq(bindings.id, bindingId), or(eq(bindings.userId, uid), eq(bindings.userId, ''), isNull(bindings.userId)))
+    : eq(bindings.id, bindingId);
+  const res = ctx.db.update(bindings)
+    .set({ graphStatus: JSON.stringify(graphStatus) })
+    .where(filter).run();
+  return res.changes > 0;
+}
+
+/** bindings drizzle 行 -> BindingRow(所有读取函数共用, 含 graphStatus)。 */
+function rowToBinding(r: (typeof bindings)['$inferSelect']): BindingRow {
+  return {
+    id: r.id, documentId: r.documentId, contractNo: r.contractNo, relation: r.relation,
+    sourceRefs: JSON.parse(r.sourceRefs) as SourceSpan[],
+    confidence: r.confidence, createdBy: r.createdBy,
+    status: (r.status ?? 'confirmed') as BindingStatus,
+    confirmationSource: (r.confirmationSource ?? null) as ConfirmationSource | null,
+    proposedBy: (r.proposedBy ?? null) as BindingProposedBy | null,
+    evidence: r.evidence ? (JSON.parse(r.evidence) as BindingEvidence) : null,
+    graphStatus: parseGraphStatus(r.graphStatus ?? null),
+  };
 }
 
 // ---- L4 document recall (FTS5 BM25 over chunked doc text) ------------------

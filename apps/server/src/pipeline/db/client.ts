@@ -276,6 +276,10 @@ export function migrate(sqlite: Database.Database): void {
     if (!has('evidence')) {
       try { sqlite.exec('ALTER TABLE bindings ADD COLUMN evidence TEXT'); } catch { /* concurrent */ }
     }
+    // 绑定工作台: 确认后图谱同步结果(JSON(BindingGraphStatus))。
+    if (!has('graph_status')) {
+      try { sqlite.exec('ALTER TABLE bindings ADD COLUMN graph_status TEXT'); } catch { /* concurrent */ }
+    }
   }
 
   // Backfill created_at (+ user_id) on classifications/document_tags/extractions
@@ -350,6 +354,8 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     `ALTER TABLE bindings ADD COLUMN IF NOT EXISTS confirmation_source TEXT`,
     `ALTER TABLE bindings ADD COLUMN IF NOT EXISTS proposed_by TEXT`,
     `ALTER TABLE bindings ADD COLUMN IF NOT EXISTS evidence TEXT`,
+    // 绑定工作台: 确认后图谱同步结果(JSON(BindingGraphStatus))。
+    `ALTER TABLE bindings ADD COLUMN IF NOT EXISTS graph_status TEXT`,
     `CREATE INDEX IF NOT EXISTS documents_user_id_idx ON documents(user_id)`,
     `CREATE INDEX IF NOT EXISTS extractions_user_id_idx ON extractions(user_id)`,
     `CREATE INDEX IF NOT EXISTS bindings_user_id_idx ON bindings(user_id)`,

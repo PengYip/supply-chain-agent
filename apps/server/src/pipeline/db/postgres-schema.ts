@@ -145,6 +145,8 @@ export const bindings = pgTable(
     confirmationSource: text('confirmation_source'),
     proposedBy: text('proposed_by'),
     evidence: jsonb('evidence'),
+    // 工作台确认后图谱同步结果: text 存 JSON 字符串, 与 SQLite 一致。
+    graphStatus: text('graph_status'),
   },
   (t) => ({
     contractIdx: index('idx_bindings_contract').on(t.contractNo),
