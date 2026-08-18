@@ -21,6 +21,13 @@ export const KIND_STYLES: Record<string, KindStyle> = {
 
 const FALLBACK_STYLE: KindStyle = { color: '#6B7280', softBg: '#F3F4F6', softBorder: '#E5E7EB', label: '节点' };
 
+/* 预编译的 uuid 匹配（8-4-4-4-12 hex）。 */
+const UUID_HEX = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+/** 串首或下划线之后引出的 <uuid>-，后接到串尾的文件名。限定起点避免误切文件名中段。 */
+const INLINE_UUID_NAME = new RegExp(`(?:^|_)${UUID_HEX}-(.+)$`);
+/** 扁平化 key 的 users_<userId>_ 前缀（userId 是 uuid，不含下划线）。 */
+const USERS_UUID_PREFIX = new RegExp(`^users_${UUID_HEX}_(.+)$`);
+
 export function kindStyle(kind: string): KindStyle {
   return KIND_STYLES[kind] ?? FALLBACK_STYLE;
 }
@@ -37,16 +44,28 @@ export function edgeLabel(type: string): string {
   return EDGE_LABELS[type] ?? type;
 }
 
-/** 展示名兜底：空名显示占位。 */
-export function nodeDisplayName(node: Pick<GraphNode, 'name' | 'kind'>): string {
+/** 展示名：Document 节点优先从 props.sourceUri 解析原始文件名，回退 name / 占位。 */
+export function nodeDisplayName(node: Pick<GraphNode, 'name' | 'kind' | 'props'>): string {
+  if (node.kind === 'Document') {
+    const uri = node.props?.sourceUri;
+    if (typeof uri === 'string' && uri) {
+      const fileName = prettyDocName(uri);
+      if (fileName) return fileName;
+    }
+  }
   return node.name || `${kindStyle(node.kind).label}（未命名）`;
 }
 
-/** 从 sourceUri 提取可读文件名：取末段，剥掉 MinIO 扁平化带来的 uuid 前缀。 */
+/** 从 sourceUri 提取可读文件名。兼容两类形态：
+ *  - MinIO 对象 key（/ 分隔，末段形如 <uuid>-文件名）
+ *  - INGEST_ROOT 扁平化路径（key 的 / 被替换为 _，如 users_<userId>_合同_<uuid>-文件名.pdf）
+ *  先取 / 末段；再匹配「串首或 _ 引出的 <uuid>-」取其后文件名；无 uuid 则剥 users_<userId>_ 前缀；兜底返回末段。 */
 export function prettyDocName(sourceUri: string): string {
+  if (!sourceUri) return '';
   const base = sourceUri.split('/').pop() || sourceUri;
-  const uuidPrefix = base.match(
-    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}-(.+)$/,
-  );
-  return uuidPrefix ? uuidPrefix[1] : base;
+  const inlineUuid = INLINE_UUID_NAME.exec(base);
+  if (inlineUuid) return inlineUuid[1];
+  const usersPrefix = USERS_UUID_PREFIX.exec(base);
+  if (usersPrefix) return usersPrefix[1];
+  return base;
 }

@@ -1,11 +1,11 @@
 import { useCallback, useMemo, useState } from 'react';
 import clsx from 'clsx';
-import { AlertTriangle, Network, RefreshCw } from 'lucide-react';
+import { AlertTriangle, ChevronLeft, ChevronRight, Network, RefreshCw, type LucideIcon } from 'lucide-react';
 import { useGraph, type GraphDirection, type GraphDocument, type GraphEdge, type GraphNode, type InspectTarget } from '../../hooks/useGraph';
 import { DocumentListPanel } from './DocumentListPanel';
 import { GraphCanvas } from './GraphCanvas';
 import { DetailPanel } from './DetailPanel';
-import { KIND_STYLES, kindStyle, prettyDocName } from './kinds';
+import { KIND_STYLES, nodeDisplayName, prettyDocName } from './kinds';
 
 const DEPTH_OPTIONS = [1, 2, 3, 4, 5];
 
@@ -22,6 +22,52 @@ interface CenterState {
   label: string;
   /** 中心是否来自左侧文档列表（用于展示「返回文档」入口） */
   fromDocument: boolean;
+}
+
+/** 面板折叠把手：贴在面板画布侧边缘的窄竖条。折叠后仅剩本条，画布占满剩余空间。 */
+function PanelRail({
+  collapsed,
+  side,
+  label,
+  onToggle,
+}: {
+  collapsed: boolean;
+  side: 'left' | 'right';
+  label: string;
+  onToggle: () => void;
+}) {
+  // 箭头指向状态变化方向：展开态指向收起方向，折叠态指向展开方向
+  const Chevron: LucideIcon = collapsed
+    ? side === 'left'
+      ? ChevronRight
+      : ChevronLeft
+    : side === 'left'
+      ? ChevronLeft
+      : ChevronRight;
+  const action = collapsed ? `展开${label}面板` : `收起${label}面板`;
+  return (
+    <div
+      className={clsx(
+        'flex w-7 shrink-0 flex-col items-center bg-white',
+        side === 'left' ? 'border-r border-borderGray' : 'border-l border-borderGray',
+      )}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        title={action}
+        aria-label={action}
+        className="mt-1 flex h-7 w-7 items-center justify-center rounded-md text-textGray transition-colors hover:bg-bgGray hover:text-deepSea"
+      >
+        <Chevron className="h-4 w-4" aria-hidden />
+      </button>
+      {collapsed && (
+        <div className="flex flex-1 items-center justify-center pt-2 text-[11px] tracking-[0.3em] text-textGray [writing-mode:vertical-rl]">
+          {label}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function GraphView() {
@@ -43,6 +89,9 @@ export function GraphView() {
   // 悬停即时查看，点击固定详情；固定优先展示
   const [hovered, setHovered] = useState<InspectTarget | null>(null);
   const [pinned, setPinned] = useState<InspectTarget | null>(null);
+  // 面板折叠（默认展开，不持久化）：折叠后只留窄把手，画布占满
+  const [docsCollapsed, setDocsCollapsed] = useState(false);
+  const [detailCollapsed, setDetailCollapsed] = useState(false);
 
   const query = useCallback(
     (id: string, label: string, fromDocument: boolean, d: number, dir: GraphDirection) => {
@@ -64,7 +113,7 @@ export function GraphView() {
 
   const handleExpandNode = useCallback(
     (node: GraphNode) => {
-      query(node.elementId, node.name || kindStyle(node.kind).label, false, depth, direction);
+      query(node.elementId, nodeDisplayName(node), false, depth, direction);
     },
     [query, depth, direction],
   );
@@ -101,7 +150,8 @@ export function GraphView() {
   const nameLookup = useMemo(() => {
     const map = new Map<string, string>();
     if (subgraph) {
-      for (const node of subgraph.nodes) map.set(node.elementId, node.name);
+      // 统一走展示名解析：Document 节点解析出原始文件名，避免显示 docId
+      for (const node of subgraph.nodes) map.set(node.elementId, nodeDisplayName(node));
     }
     return map;
   }, [subgraph]);
@@ -196,15 +246,28 @@ export function GraphView() {
         </div>
       </div>
 
-      {/* 三栏主体 */}
+      {/* 三栏主体：左右面板可折叠，宽度过渡期间内容溢出裁剪 */}
       <div className="flex min-h-0 flex-1">
-        <DocumentListPanel
-          documents={documents}
-          loading={docsLoading}
-          error={docsError}
-          selectedId={selectedDoc?.elementId ?? null}
-          onSelect={handleSelectDoc}
-          onRetry={() => void refreshDocuments()}
+        <div
+          className={clsx(
+            'flex min-h-0 shrink-0 overflow-hidden transition-[width] duration-200',
+            docsCollapsed ? 'w-0' : 'w-64',
+          )}
+        >
+          <DocumentListPanel
+            documents={documents}
+            loading={docsLoading}
+            error={docsError}
+            selectedId={selectedDoc?.elementId ?? null}
+            onSelect={handleSelectDoc}
+            onRetry={() => void refreshDocuments()}
+          />
+        </div>
+        <PanelRail
+          collapsed={docsCollapsed}
+          side="left"
+          label="文档"
+          onToggle={() => setDocsCollapsed((v) => !v)}
         />
 
         <main className="relative min-w-0 flex-1">
@@ -275,12 +338,25 @@ export function GraphView() {
           )}
         </main>
 
-        <DetailPanel
-          inspect={inspect}
-          isCenter={isCenter}
-          resolveName={resolveName}
-          onExpand={handleExpandNode}
+        <PanelRail
+          collapsed={detailCollapsed}
+          side="right"
+          label="详情"
+          onToggle={() => setDetailCollapsed((v) => !v)}
         />
+        <div
+          className={clsx(
+            'flex min-h-0 shrink-0 overflow-hidden transition-[width] duration-200',
+            detailCollapsed ? 'w-0' : 'w-72',
+          )}
+        >
+          <DetailPanel
+            inspect={inspect}
+            isCenter={isCenter}
+            resolveName={resolveName}
+            onExpand={handleExpandNode}
+          />
+        </div>
       </div>
     </div>
   );
