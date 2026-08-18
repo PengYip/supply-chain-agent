@@ -127,13 +127,11 @@ export function BindingsView() {
 
   /* ---------- 派生状态 ---------- */
 
-  const unboundCount = useMemo(() => overview.filter((d) => d.bindings.length === 0).length, [overview]);
-
-  const proposalsByDoc = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const p of proposals) map.set(p.documentId, (map.get(p.documentId) ?? 0) + 1);
-    return map;
-  }, [proposals]);
+  // 分组语义与左栏一致: 有 confirmed 行才算已绑定, 仅有待确认建议仍计入未绑定。
+  const unboundCount = useMemo(
+    () => overview.filter((d) => !d.bindings.some((x) => x.status === 'confirmed')).length,
+    [overview],
+  );
 
   // overview 刷新后同步 selected(文档仍存在则保留选中)。
   useEffect(() => {
@@ -620,7 +618,6 @@ export function BindingsView() {
             loading={b.loading}
             error={b.error}
             selectedDocId={selectedDocId}
-            proposalsByDoc={proposalsByDoc}
             onSelect={handleSelectDoc}
             onRetry={() => void b.refreshOverview()}
           />

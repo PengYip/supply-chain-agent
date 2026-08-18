@@ -18,8 +18,6 @@ interface DocListPanelProps {
   loading: boolean;
   error: string | null;
   selectedDocId: string | null;
-  /** 每文档的待确认建议数(未绑定文档显示提示角标)。 */
-  proposalsByDoc: Map<string, number>;
   onSelect: (doc: OverviewDoc) => void;
   onRetry: () => void;
 }
@@ -37,17 +35,16 @@ function GroupHeader({ label, count, hint }: { label: string; count: number; hin
 function DocRow({
   doc,
   selected,
-  proposalCount,
   onSelect,
 }: {
   doc: OverviewDoc;
   selected: boolean;
-  proposalCount: number;
   onSelect: () => void;
 }) {
   const name = prettyDocName(doc.fileName) || doc.fileName || doc.docId;
   const date = formatDate(doc.createdAt);
-  const bound = doc.bindings.length > 0;
+  // 分组语义: 有 confirmed 行才算"已绑定"; 仅有 proposed(待确认建议)留在未绑定组。
+  const bound = doc.bindings.some((b) => b.status === 'confirmed');
   const pendingCount = doc.bindings.filter((b) => b.status === 'proposed').length;
   return (
     <button
@@ -64,9 +61,9 @@ function DocRow({
         <span className="max-w-[110px] shrink-0 truncate rounded border border-[#D8E2EB] bg-[#EEF2F6] px-1.5 py-px text-[10px] text-steelBlue">
           {doc.docType || '文档'}
         </span>
-        {!bound && proposalCount > 0 && (
+        {!bound && pendingCount > 0 && (
           <span className="shrink-0 rounded border border-[#F0D9B0] bg-[#FBF0DE] px-1.5 py-px text-[10px] text-amber">
-            建议 {proposalCount}
+            建议 {pendingCount}
           </span>
         )}
         {bound && (
@@ -88,9 +85,10 @@ function DocRow({
   );
 }
 
-export function DocListPanel({ docs, loading, error, selectedDocId, proposalsByDoc, onSelect, onRetry }: DocListPanelProps) {
-  const unbound = docs.filter((d) => d.bindings.length === 0);
-  const bound = docs.filter((d) => d.bindings.length > 0);
+export function DocListPanel({ docs, loading, error, selectedDocId, onSelect, onRetry }: DocListPanelProps) {
+  // 分组语义: 有 confirmed 行才算"已绑定"; 仅有 proposed(待确认建议)留在未绑定组。
+  const unbound = docs.filter((d) => !d.bindings.some((b) => b.status === 'confirmed'));
+  const bound = docs.filter((d) => d.bindings.some((b) => b.status === 'confirmed'));
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-borderGray bg-white">
@@ -132,23 +130,11 @@ export function DocListPanel({ docs, loading, error, selectedDocId, proposalsByD
           <>
             <GroupHeader label="未绑定" count={unbound.length} hint="待处理" />
             {unbound.map((doc) => (
-              <DocRow
-                key={doc.docId}
-                doc={doc}
-                selected={doc.docId === selectedDocId}
-                proposalCount={proposalsByDoc.get(doc.docId) ?? 0}
-                onSelect={() => onSelect(doc)}
-              />
+              <DocRow key={doc.docId} doc={doc} selected={doc.docId === selectedDocId} onSelect={() => onSelect(doc)} />
             ))}
             <GroupHeader label="已绑定" count={bound.length} />
             {bound.map((doc) => (
-              <DocRow
-                key={doc.docId}
-                doc={doc}
-                selected={doc.docId === selectedDocId}
-                proposalCount={proposalsByDoc.get(doc.docId) ?? 0}
-                onSelect={() => onSelect(doc)}
-              />
+              <DocRow key={doc.docId} doc={doc} selected={doc.docId === selectedDocId} onSelect={() => onSelect(doc)} />
             ))}
           </>
         )}
