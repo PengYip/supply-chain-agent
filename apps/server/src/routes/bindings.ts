@@ -7,8 +7,11 @@ import { getDbContext } from '../pipeline/db/dbBackend.js';
 import type { DbContext } from '../pipeline/db/client.js';
 import {
   listUserDocuments, listBindingsForUser, listBindingProposals, listContractLedgerEntries,
+  findBindingById, updateBindingStatus, saveBinding, findBindingByDocAndContract,
+  listBindingsForContract, setBindingGraphStatus, type BindingGraphStatus,
 } from '../pipeline/db/repositories.js';
 import { buildBindingCandidates } from '../pipeline/bindingCandidates.js';
+import { syncBindingEdge, removeBindingEdge, type GraphSyncOutcome } from '../pipeline/bindingGraphSync.js';
 
 export const bindingsRoute = new Hono<AuthEnv>();
 
@@ -83,4 +86,120 @@ bindingsRoute.get('/contracts', async (c) => {
       docType: e.docType, title: e.title, overallConfidence: e.overallConfidence,
     })),
   });
+});
+
+// ---- 写端点(spec §5.2) ------------------------------------------------------
+//
+// 图同步永不阻塞业务写: 同步结果持久化到 bindings.graph_status, 前端按角标
+// 展示并允许重试(确认/手动创建会再次同步; unbind 幂等删边)。
+
+const bindingIdSchema = z.object({ bindingId: z.string().min(1) });
+
+async function graphStatusFor(outcome: GraphSyncOutcome, reason?: string): Promise<BindingGraphStatus> {
+  return outcome === 'ok'
+    ? { status: 'ok', syncedAt: new Date().toISOString() }
+    : { status: outcome, ...(reason ? { reason } : {}), syncedAt: new Date().toISOString() };
+}
+
+/** confirm 单条(内部, batch 复用)。前置: 行存在且 status='proposed'。 */
+async function confirmOne(db: DbContext, userId: string, bindingId: string) {
+  const row = await findBindingById(db, bindingId, userId);
+  if (!row) return { status: 404 as const, body: { error: 'binding not found', bindingId } };
+  if (row.status !== 'proposed') return { status: 409 as const, body: { error: `binding status is ${row.status}, expected proposed`, bindingId } };
+  const updated = await updateBindingStatus(db, bindingId, 'confirmed', 'human', userId);
+  if (!updated) return { status: 409 as const, body: { error: 'concurrent state change', bindingId } };
+  const sync = await syncBindingEdge({
+    docId: row.documentId, contractNo: row.contractNo, relation: row.relation,
+    bindingId: row.id, confidence: row.confidence,
+  });
+  const gs = await graphStatusFor(sync.outcome, sync.reason);
+  await setBindingGraphStatus(db, bindingId, gs, userId);
+  return { status: 200 as const, body: { ok: true, bindingId, graphSync: sync.outcome, ...(sync.reason ? { graphReason: sync.reason } : {}) } };
+}
+
+bindingsRoute.post('/confirm', async (c) => {
+  const user = c.get('user')!;
+  const parsed = bindingIdSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
+  const r = await confirmOne(ctx(), user.id, parsed.data.bindingId);
+  return c.json(r.body, r.status);
+});
+
+bindingsRoute.post('/reject', async (c) => {
+  const user = c.get('user')!;
+  const parsed = bindingIdSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
+  const db = ctx();
+  const row = await findBindingById(db, parsed.data.bindingId, user.id);
+  if (!row) return c.json({ error: 'binding not found' }, 404);
+  if (row.status !== 'proposed') return c.json({ error: `binding status is ${row.status}, expected proposed` }, 409);
+  const ok = await updateBindingStatus(db, parsed.data.bindingId, 'rejected', 'human', user.id);
+  if (!ok) return c.json({ error: 'concurrent state change' }, 409);
+  return c.json({ ok: true, bindingId: parsed.data.bindingId });
+});
+
+const createSchema = z.object({
+  documentId: z.string().min(1),
+  contractNo: z.string().min(1),
+  relation: z.string().min(1),
+  note: z.string().optional(),
+});
+
+/** 手动创建绑定(upsert 语义, spec §7 幂等)。 */
+bindingsRoute.post('/', async (c) => {
+  const user = c.get('user')!;
+  const parsed = createSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: 'invalid body', detail: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) }, 400);
+  const { documentId, contractNo, relation } = parsed.data;
+  const db = ctx();
+  const existing = await findBindingByDocAndContract(db, documentId, contractNo, user.id);
+  if (existing && existing.status !== 'rejected') {
+    return c.json({ ok: true, bindingId: existing.id, existing: true, graphSync: 'ok' });
+  }
+  const bindingId = await saveBinding(db, {
+    documentId, contractNo, relation, sourceRefs: [],
+    confidence: 1, createdBy: user.id,
+    status: 'confirmed', confirmationSource: 'human', proposedBy: 'agent',
+  }, user.id);
+  const sync = await syncBindingEdge({ docId: documentId, contractNo, relation, bindingId, confidence: 1 });
+  const gs = await graphStatusFor(sync.outcome, sync.reason);
+  await setBindingGraphStatus(db, bindingId, gs, user.id);
+  return c.json({ ok: true, bindingId, graphSync: sync.outcome, ...(sync.reason ? { graphReason: sync.reason } : {}) });
+});
+
+bindingsRoute.post('/unbind', async (c) => {
+  const user = c.get('user')!;
+  const parsed = bindingIdSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
+  const db = ctx();
+  const row = await findBindingById(db, parsed.data.bindingId, user.id);
+  if (!row) return c.json({ error: 'binding not found' }, 404);
+  if (row.status !== 'confirmed') return c.json({ error: `binding status is ${row.status}, expected confirmed` }, 409);
+  const ok = await updateBindingStatus(db, row.id, 'rejected', 'human', user.id);
+  if (!ok) return c.json({ error: 'concurrent state change' }, 409);
+  // 共享边守卫(spec §5.2): 同 (doc, contract) 还有其他 confirmed 行 -> 不删边。
+  const siblings = (await listBindingsForContract(db, row.contractNo))
+    .filter((b) => b.documentId === row.documentId && b.id !== row.id && b.status === 'confirmed');
+  let graphSync: GraphSyncOutcome = 'ok';
+  if (siblings.length === 0) {
+    const sync = await removeBindingEdge({ docId: row.documentId, contractNo: row.contractNo });
+    graphSync = sync.outcome;
+  }
+  return c.json({ ok: true, bindingId: row.id, graphSync });
+});
+
+const batchSchema = z.object({ bindingIds: z.array(z.string().min(1)).min(1) });
+
+bindingsRoute.post('/batch-confirm', async (c) => {
+  const user = c.get('user')!;
+  const parsed = batchSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
+  const db = ctx();
+  const results: Array<{ bindingId: string; ok: true; graphSync: string } | { bindingId: string; ok: false; error: string }> = [];
+  for (const bindingId of parsed.data.bindingIds) {
+    const r = await confirmOne(db, user.id, bindingId);
+    if (r.status === 200) results.push({ bindingId, ok: true, graphSync: String(r.body.graphSync) });
+    else results.push({ bindingId, ok: false, error: String((r.body as { error: string }).error) });
+  }
+  return c.json({ results });
 });

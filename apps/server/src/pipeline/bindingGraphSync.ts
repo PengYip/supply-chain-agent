@@ -27,7 +27,7 @@ export const defaultBindingGraphSyncIo: BindingGraphSyncIo = {
 export const BINDS_EDGE = 'binds';
 
 async function ensureNode(
-  io: BindingGraphSyncIo, kind: string, name: string, props: Record<string, unknown>,
+  io: BindingGraphSyncIo, kind: string, name: string,
   createFallback: () => Promise<{ elementId: string }>,
 ): Promise<{ elementId: string }> {
   const found = await io.findEntityByName(kind, name);
@@ -45,10 +45,8 @@ export async function syncBindingEdge(
     const contractName = normalizeName(input.contractNo);
     if (!contractName) return { outcome: 'failed', reason: 'contractNo normalized to empty' };
     const docNode = await ensureNode(io, 'Document', input.docId,
-      { docId: input.docId, ...(input.docType ? { docType: input.docType } : {}) },
-      () => io.createEntity({ kind: 'Document', name: input.docId, props: { docId: input.docId } }));
+      () => io.createEntity({ kind: 'Document', name: input.docId, props: { docId: input.docId, ...(input.docType ? { docType: input.docType } : {}) } }));
     const contractNode = await ensureNode(io, 'Contract', contractName,
-      { rawName: input.contractNo },
       () => io.createEntity({ kind: 'Contract', name: contractName, props: { rawName: input.contractNo } }));
     await io.mergeEdge({
       srcId: docNode.elementId,
