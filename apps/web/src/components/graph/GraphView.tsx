@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { AlertTriangle, ChevronLeft, ChevronRight, Network, RefreshCw, type LucideIcon } from 'lucide-react';
 import { useGraph, type GraphDirection, type GraphDocument, type GraphEdge, type GraphNode, type InspectTarget } from '../../hooks/useGraph';
@@ -6,6 +6,7 @@ import { DocumentListPanel } from './DocumentListPanel';
 import { GraphCanvas } from './GraphCanvas';
 import { DetailPanel } from './DetailPanel';
 import { KIND_STYLES, nodeDisplayName, prettyDocName } from './kinds';
+import type { GraphFocus } from './focus';
 
 const DEPTH_OPTIONS = [1, 2, 3, 4, 5];
 
@@ -70,7 +71,7 @@ function PanelRail({
   );
 }
 
-export function GraphView() {
+export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
   const {
     documents,
     docsLoading,
@@ -102,6 +103,16 @@ export function GraphView() {
     },
     [loadSubgraph],
   );
+
+  // 外部定位（绑定工作台跳入）：以合同节点为中心重新查询，替换原有中心。
+  // nonce 保证重复跳转同一节点也会触发；页内切换深度/方向不会误触发。
+  const handledFocusNonceRef = useRef(-1);
+  useEffect(() => {
+    if (!focus || focus.nonce === handledFocusNonceRef.current) return;
+    handledFocusNonceRef.current = focus.nonce;
+    setSelectedDoc(null);
+    query(focus.elementId, focus.label, false, depth, direction);
+  }, [focus, query, depth, direction]);
 
   const handleSelectDoc = useCallback(
     (doc: GraphDocument) => {

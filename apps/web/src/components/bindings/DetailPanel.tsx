@@ -1,7 +1,10 @@
+import { useState } from 'react';
 import clsx from 'clsx';
-import { Check, Link2, Loader2, MousePointerClick, RefreshCw, Unlink, X } from 'lucide-react';
+import { Check, ChevronDown, Link2, Loader2, MousePointerClick, Network, RefreshCw, Unlink, X } from 'lucide-react';
 import type { Anchors, BindingListItem, OverviewDoc } from '../../hooks/useBindings';
+import type { GraphFocusTarget } from '../graph/focus';
 import type { WorkbenchRow } from './BindingsView';
+import { BindingMiniGraph } from './BindingMiniGraph';
 
 function ratio(score: number | undefined | null): number {
   if (typeof score !== 'number' || !Number.isFinite(score) || score <= 0) return 0;
@@ -219,24 +222,30 @@ function CandidateDetail({
 
 function BindingCard({
   binding,
+  docId,
   pending,
   onConfirm,
   onReject,
   onUnbind,
   onRetrySync,
+  onOpenInGraph,
 }: {
   binding: BindingListItem;
+  docId: string;
   pending: Set<string>;
   onConfirm: (binding: BindingListItem) => void;
   onReject: (binding: BindingListItem) => void;
   onUnbind: (binding: BindingListItem) => void;
   onRetrySync: (binding: BindingListItem) => void;
+  onOpenInGraph?: (target: GraphFocusTarget) => void;
 }) {
   const isPending = pending.has(binding.bindingId);
   const retryPending = pending.has(`retry:${binding.bindingId}`);
   const graphIssue = !!binding.graphStatus && binding.graphStatus.status !== 'ok';
   const graphReason = binding.graphStatus?.reason;
   const proposed = binding.status === 'proposed';
+  // 已确认绑定的内嵌迷你图谱（合同邻域），默认收起
+  const [graphOpen, setGraphOpen] = useState(false);
   return (
     <div className="animate-fade-in rounded-md border border-borderGray px-3 py-2.5">
       <div className="flex items-start gap-1.5">
@@ -287,6 +296,19 @@ function BindingCard({
             重试同步
           </button>
         )}
+        {!proposed && (
+          <button
+            type="button"
+            onClick={() => setGraphOpen((v) => !v)}
+            aria-expanded={graphOpen}
+            title={graphOpen ? '收起图谱邻域' : '查看该绑定在图谱中的关联'}
+            className="mr-auto flex h-6 items-center gap-1 rounded-md border border-borderGray bg-white px-2 text-[11px] text-textGray transition-colors hover:border-deepSea hover:text-deepSea"
+          >
+            <Network className="h-3 w-3" aria-hidden />
+            图谱
+            <ChevronDown className={clsx('h-3 w-3 transition-transform', graphOpen && 'rotate-180')} aria-hidden />
+          </button>
+        )}
         {proposed ? (
           <>
             <button
@@ -319,6 +341,15 @@ function BindingCard({
           </button>
         )}
       </div>
+
+      {!proposed && graphOpen && (
+        <BindingMiniGraph
+          docId={docId}
+          contractNo={binding.contractNo}
+          bindingId={binding.bindingId}
+          onOpenInGraph={onOpenInGraph}
+        />
+      )}
     </div>
   );
 }
@@ -334,6 +365,7 @@ interface DetailPanelProps {
   onRejectBinding: (binding: BindingListItem) => void;
   onUnbind: (binding: BindingListItem) => void;
   onRetrySync: (binding: BindingListItem) => void;
+  onOpenInGraph?: (target: GraphFocusTarget) => void;
 }
 
 export function DetailPanel({
@@ -347,6 +379,7 @@ export function DetailPanel({
   onRejectBinding,
   onUnbind,
   onRetrySync,
+  onOpenInGraph,
 }: DetailPanelProps) {
   return (
     <aside className="flex w-80 shrink-0 flex-col border-l border-borderGray bg-white">
@@ -373,11 +406,13 @@ export function DetailPanel({
                 <BindingCard
                   key={b.bindingId}
                   binding={b}
+                  docId={doc.docId}
                   pending={pending}
                   onConfirm={onConfirmBinding}
                   onReject={onRejectBinding}
                   onUnbind={onUnbind}
                   onRetrySync={onRetrySync}
+                  onOpenInGraph={onOpenInGraph}
                 />
               ))}
             </div>

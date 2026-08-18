@@ -1,24 +1,17 @@
 import { Fragment } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
-import { Building2, FileSignature, FileText, Package, type LucideIcon } from 'lucide-react';
-import { kindStyle, nodeDisplayName } from './kinds';
+import { FileText } from 'lucide-react';
+import { KIND_ICONS, kindStyle, nodeDisplayName } from './kinds';
 import type { GraphNode } from '../../hooks/useGraph';
 
 /** 自定义节点携带的数据：原始 GraphNode 直接透传，便于回调查询。 */
 export type ScaNodeData = { graph: GraphNode; isCenter: boolean };
 export type ScaFlowNode = Node<ScaNodeData, 'sca'>;
 
-const KIND_ICONS: Record<string, LucideIcon> = {
-  Document: FileText,
-  Party: Building2,
-  Commodity: Package,
-  Contract: FileSignature,
-};
-
 const HANDLE_SIDES = [Position.Top, Position.Right, Position.Bottom, Position.Left] as const;
 
 /** 四边各挂一组 source/target 隐藏锚点，连线走向在布局阶段按相对方位计算。 */
-function AllSideHandles() {
+export function AllSideHandles() {
   return (
     <>
       {HANDLE_SIDES.map((side) => (

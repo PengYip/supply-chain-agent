@@ -17,6 +17,7 @@ import {
   type ProposalItem,
 } from '../../hooks/useBindings';
 import { prettyDocName } from '../graph/kinds';
+import type { GraphFocusTarget } from '../graph/focus';
 import { DocListPanel } from './DocListPanel';
 import { CandidatePanel } from './CandidatePanel';
 import { DetailPanel } from './DetailPanel';
@@ -105,7 +106,7 @@ function PanelRail({
   );
 }
 
-export function BindingsView() {
+export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: GraphFocusTarget) => void }) {
   const b = useBindings();
   const { overview, proposals, candidates, contracts } = b;
 
@@ -672,6 +673,7 @@ export function BindingsView() {
             onRejectBinding={requestRejectBinding}
             onUnbind={requestUnbind}
             onRetrySync={handleRetrySync}
+            onOpenInGraph={onOpenInGraph}
           />
         </div>
       </div>

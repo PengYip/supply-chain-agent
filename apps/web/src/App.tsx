@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { authClient } from './lib/auth';
 import { LoginPage } from './components/LoginPage';
 import { RealChatView } from './components/RealChatView';
@@ -10,6 +10,7 @@ import { useSessions } from './hooks/useSessions';
 import { EvalWorkbenchView } from './components/eval/EvalWorkbenchView';
 import { GraphView } from './components/graph/GraphView';
 import { BindingsView } from './components/bindings/BindingsView';
+import type { GraphFocus, GraphFocusTarget } from './components/graph/focus';
 import { FlaskConical, Link2, MessageSquare, Network } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -19,6 +20,15 @@ function App() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [filePanelVisible, setFilePanelVisible] = useState(false);
   const [view, setView] = useState<'chat' | 'eval' | 'graph' | 'bindings'>('chat');
+  // 跨视图定位：绑定工作台 -> 图谱页，以合同节点为中心展开。
+  // nonce 自增保证重复跳转同一合同也会触发图谱页重新查询。
+  const [graphFocus, setGraphFocus] = useState<GraphFocus | null>(null);
+  const graphFocusNonceRef = useRef(0);
+  const openInGraph = useCallback((target: GraphFocusTarget) => {
+    graphFocusNonceRef.current += 1;
+    setGraphFocus({ ...target, nonce: graphFocusNonceRef.current });
+    setView('graph');
+  }, []);
   const [contextFiles, setContextFiles] = useState<ContextFile[]>([]);
   // Phase 5: sessions live at App so the sidebar (data) and RealChatView
   // (refresh trigger) can share one useSessions instance.
@@ -107,8 +117,17 @@ function App() {
           className={clsx('w-9 h-9 rounded-lg flex items-center justify-center', view === 'eval' ? 'bg-deepSea text-white' : 'text-textGray hover:bg-bgGray')}>
           <FlaskConical className="h-5 w-5" aria-hidden />
         </button>
-        <button type="button" title="图谱" aria-label="图谱" onClick={() => setView('graph')}
-          className={clsx('w-9 h-9 rounded-lg flex items-center justify-center', view === 'graph' ? 'bg-deepSea text-white' : 'text-textGray hover:bg-bgGray')}>
+        <button
+          type="button"
+          title="图谱"
+          aria-label="图谱"
+          // 手动进入图谱页时清掉旧的外部定位，避免残留合同中心覆盖用户操作
+          onClick={() => {
+            setGraphFocus(null);
+            setView('graph');
+          }}
+          className={clsx('w-9 h-9 rounded-lg flex items-center justify-center', view === 'graph' ? 'bg-deepSea text-white' : 'text-textGray hover:bg-bgGray')}
+        >
           <Network className="h-5 w-5" aria-hidden />
         </button>
         <button type="button" title="绑定" aria-label="绑定" onClick={() => setView('bindings')}
@@ -118,11 +137,11 @@ function App() {
       </div>
       {view === 'bindings' ? (
         <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
-          <BindingsView />
+          <BindingsView onOpenInGraph={openInGraph} />
         </div>
       ) : view === 'graph' ? (
         <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
-          <GraphView />
+          <GraphView focus={graphFocus} />
         </div>
       ) : view === 'eval' ? (
         <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>

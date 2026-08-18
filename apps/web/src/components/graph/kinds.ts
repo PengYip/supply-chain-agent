@@ -1,4 +1,13 @@
+import { Building2, FileSignature, FileText, Package, type LucideIcon } from 'lucide-react';
 import type { GraphNode } from '../../hooks/useGraph';
+
+/** 四类节点的图标（主/迷你画布节点共用）。 */
+export const KIND_ICONS: Record<string, LucideIcon> = {
+  Document: FileText,
+  Party: Building2,
+  Commodity: Package,
+  Contract: FileSignature,
+};
 
 /** 四类节点的配色与文案：全部取自现有自定义色板，融入 deepSea 主色系。 */
 export interface KindStyle {
