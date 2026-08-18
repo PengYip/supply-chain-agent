@@ -6,7 +6,15 @@ import { HumanAgentStatusBar } from './HumanAgentStatusBar'
 import { useHumanAgentStatus } from '../hooks/useHumanAgentStatus'
 import { type ContextFile } from '../hooks/useFiles'
 import { type DocParseState } from '../api/process'
-import { buildRenderItems } from '../utils/realChatUtils'
+import {
+  buildRenderItems,
+  parseEscalateArgs,
+  escalateCategoryLabel,
+  severityLabel,
+  severityBadgeClass,
+  type EscalateCategory,
+  type EscalateSeverity,
+} from '../utils/realChatUtils'
 import { authClient } from '../lib/auth'
 import clsx from 'clsx'
 
@@ -48,6 +56,153 @@ function ContextChipStatus({ state }: { state?: DocParseState }) {
       <AlertCircle size={11} />
       解析失败
     </span>
+  )
+}
+
+/** L3 人工复核卡（挂在输入框上方）：结构化问答式交互 —— 问题 + 两个带说明
+ *  的处理选项 + 可选补充意见，单次提交。选项与意见构成一条原子化的人工
+ *  判断：提交前可完整核对，补充意见原文作为 reason 传给 Agent。
+ *  视觉上是 L2 SoftGateCard 的姊妹卡（同布局语法），配色用 deepSea 区分
+ *  「人工复核」与 L2 的琥珀色「操作确认」。 */
+const HumanReviewCard: React.FC<{
+  ticketId: string
+  issueText: string
+  severity?: EscalateSeverity
+  category?: EscalateCategory
+  choice: 'approve' | 'deny' | null
+  onChoice: (choice: 'approve' | 'deny') => void
+  note: string
+  onNoteChange: (note: string) => void
+  onSubmit: () => void
+  loading: boolean
+  error: string | null
+}> = ({ ticketId, issueText, severity, category, choice, onChoice, note, onNoteChange, onSubmit, loading, error }) => {
+  const options: Array<{ value: 'approve' | 'deny'; label: string; description: string }> = [
+    {
+      value: 'approve',
+      label: '通过，继续处理',
+      description: '确认无误或已补充信息，Agent 按人工判断继续',
+    },
+    {
+      value: 'deny',
+      label: '驳回，停止该操作',
+      description: '该工单对应的操作不执行，Agent 停止后续尝试并如实转达',
+    },
+  ]
+  return (
+    <div className="mb-3 rounded-lg border border-deepSea/30 bg-deepSea/5 p-3">
+      {/* 头部：图标 + 标题 + 工单号 + 分类/严重度徽章 */}
+      <div className="flex items-start gap-2.5">
+        <div className="w-6 h-6 rounded-full bg-deepSea/10 flex items-center justify-center shrink-0">
+          <ShieldCheck className="w-3.5 h-3.5 text-deepSea" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-medium text-textDark">人工复核</span>
+            <span className="text-[11px] font-mono text-steelBlue bg-white rounded px-1.5 py-0.5 border border-borderGray">
+              {ticketId}
+            </span>
+            {category && (
+              <span className="text-[11px] leading-none rounded-full px-2 py-1 bg-white text-deepSea border border-deepSea/20">
+                {escalateCategoryLabel(category)}
+              </span>
+            )}
+            {severity && (
+              <span className={clsx('text-[11px] leading-none rounded-full px-2 py-1 border', severityBadgeClass(severity))}>
+                {severityLabel(severity)}
+              </span>
+            )}
+          </div>
+          {issueText && (
+            <p className="text-[13px] text-textDark leading-relaxed mt-1.5 break-words">{issueText}</p>
+          )}
+        </div>
+      </div>
+
+      {/* 处理方式：单选项 + 一行说明（选中态在提交前保持可视区分） */}
+      <div className="mt-3 space-y-2">
+        {options.map((opt) => {
+          const selected = choice === opt.value
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              disabled={loading}
+              onClick={() => onChoice(opt.value)}
+              className={clsx(
+                'w-full text-left rounded-lg border px-3 py-2 flex items-start gap-2.5 transition-colors',
+                selected
+                  ? 'border-deepSea bg-white ring-1 ring-deepSea/30'
+                  : 'border-borderGray bg-white/70 hover:border-steelBlue',
+                loading && 'cursor-not-allowed opacity-70',
+              )}
+            >
+              <span
+                className={clsx(
+                  'w-3.5 h-3.5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center',
+                  selected ? 'border-deepSea' : 'border-borderGray',
+                )}
+              >
+                {selected && <span className="w-1.5 h-1.5 rounded-full bg-deepSea" />}
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[13px] font-medium text-textDark">{opt.label}</span>
+                <span className="block text-[11px] text-textGray leading-relaxed mt-0.5">{opt.description}</span>
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* 补充意见：原文作为人工判断依据（reason）注入 Agent 恢复指令 */}
+      <div className="mt-3">
+        <div className="text-[11px] text-textGray mb-1">
+          补充意见（可选）— 会作为人工判断依据直接传给 Agent
+        </div>
+        <textarea
+          value={note}
+          onChange={(e) => onNoteChange(e.target.value)}
+          disabled={loading}
+          rows={2}
+          placeholder="例如：平仓基准价 P=812 元/吨，硫分 0.8%，请按此计算"
+          className="w-full rounded-lg border border-borderGray bg-white p-2 text-xs text-textDark placeholder:text-textGray focus:outline-none focus:border-steelBlue resize-none disabled:opacity-70"
+        />
+      </div>
+
+      {error && (
+        <div className="mt-2 text-[11px] text-danger flex items-start gap-1">
+          <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
+          <span className="break-all">{error}</span>
+        </div>
+      )}
+
+      <div className="mt-3 flex items-center justify-between gap-2">
+        {!choice && !loading && <span className="text-[11px] text-textGray">请选择一种处理方式</span>}
+        <button
+          type="button"
+          onClick={onSubmit}
+          disabled={!choice || loading}
+          className={clsx(
+            'ml-auto shrink-0 inline-flex items-center gap-1 px-3.5 py-1.5 rounded-md text-xs font-medium transition-colors',
+            !choice || loading
+              ? 'bg-borderGray text-textGray cursor-not-allowed'
+              : 'bg-deepSea text-white hover:bg-deepSea/90',
+          )}
+        >
+          {loading ? (
+            <>
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              提交中...
+            </>
+          ) : (
+            <>
+              <ShieldCheck className="w-3.5 h-3.5" />
+              提交复核结果
+            </>
+          )}
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -193,7 +348,14 @@ export const RealChatView: React.FC<{
             output?.reason === 'requires_external_approval' &&
             typeof output?.ticketId === 'string'
           ) {
-            return { kind: 'L3' as const, ticketId: output.ticketId }
+            return {
+              kind: 'L3' as const,
+              ticketId: output.ticketId,
+              // 携带工具入参（issue/category/severity）与阻断消息，供复核卡展示。
+              toolName: typeof part.toolName === 'string' ? part.toolName : '',
+              args: part.input,
+              message: typeof output.message === 'string' ? output.message : undefined,
+            }
           }
         }
       }
@@ -204,17 +366,51 @@ export const RealChatView: React.FC<{
   const [callbackState, setCallbackState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
   const [callbackError, setCallbackError] = useState<string | null>(null)
   const [lastApprovalApproved, setLastApprovalApproved] = useState(true)
+  const [lastApprovalKind, setLastApprovalKind] = useState<'L2' | 'L3'>('L3')
+  // 复核卡的选项与补充意见（choice + note 作为一条人工判断原子提交）。
+  const [reviewChoice, setReviewChoice] = useState<'approve' | 'deny' | null>(null)
+  const [reviewNote, setReviewNote] = useState('')
   const [sendError, setSendError] = useState<string | null>(null)
 
-  const postApproval = async (body: { approvalId?: string; ticketId?: string; approved: boolean }) => {
+  // 当前待处理项的唯一键：切换工单 / 切换会话时用于复位复核卡。
+  const pendingKey =
+    pendingApproval === null
+      ? null
+      : pendingApproval.kind === 'L3'
+        ? pendingApproval.ticketId
+        : pendingApproval.approvalId
+
+  // 上一张已成功回调的工单键。工单变化时若上一单已 success，则重新亮卡
+  // （否则同一会话内的第二次升级工单永远不会出现复核卡）。
+  const lastResolvedKeyRef = useRef<string | null>(null)
+
+  // 待处理工单变化（新工单 / 已解除 / 切会话）：清空上一单的选项、意见与错误。
+  useEffect(() => {
+    setReviewChoice(null)
+    setReviewNote('')
+    setCallbackError(null)
+    if (pendingKey && lastResolvedKeyRef.current && pendingKey !== lastResolvedKeyRef.current) {
+      setCallbackState('idle')
+    }
+  }, [pendingKey])
+
+  const postApproval = async (
+    body: { approvalId?: string; ticketId?: string; approved: boolean },
+    reason?: string,
+  ) => {
     if (!sessionId || callbackState === 'loading') return
     setCallbackState('loading')
     setCallbackError(null)
     try {
+      const trimmedReason = reason?.trim()
       const res = await fetch('/api/approval/callback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-session-id': sessionId },
-        body: JSON.stringify({ ...body, reason: body.approved ? '用户确认执行' : '用户拒绝执行' }),
+        body: JSON.stringify({
+          ...body,
+          // 人工补充意见优先作为 reason 原文传给 Agent；为空时回退默认文案。
+          reason: trimmedReason || (body.approved ? '用户确认执行' : '用户拒绝执行'),
+        }),
       })
       if (!res.ok) {
         const text = await res.text()
@@ -228,7 +424,7 @@ export const RealChatView: React.FC<{
         if (res.status === 409) {
           throw new Error(
             approvalResolved
-              ? '审批已记录，但会话正忙，稍后重发消息即可恢复'
+              ? '复核结果已记录，但会话正忙，稍后重发消息即可恢复'
               : '会话正忙，请稍后重试',
           )
         }
@@ -239,6 +435,8 @@ export const RealChatView: React.FC<{
       // renders; the approval card clears when the tool part reaches
       // output-available. No local stream merge is needed anymore.
       setLastApprovalApproved(body.approved)
+      setLastApprovalKind(body.ticketId ? 'L3' : 'L2')
+      lastResolvedKeyRef.current = body.ticketId ?? body.approvalId ?? null
       setCallbackState('success')
     } catch (err) {
       console.error('[approval callback] failed:', err)
@@ -247,14 +445,19 @@ export const RealChatView: React.FC<{
     }
   }
 
-  const handleApprovalCallback = async () => {
-    if (!pendingApproval || callbackState === 'loading') return
-    if (pendingApproval.kind === 'L3') {
-      void postApproval({ ticketId: pendingApproval.ticketId, approved: true })
-    } else {
-      void postApproval({ approvalId: pendingApproval.approvalId, approved: true })
-    }
+  const handleSubmitReview = () => {
+    if (!pendingApproval || pendingApproval.kind !== 'L3' || !reviewChoice || callbackState === 'loading') return
+    void postApproval(
+      { ticketId: pendingApproval.ticketId, approved: reviewChoice === 'approve' },
+      reviewNote,
+    )
   }
+
+  // 复核卡展示数据：escalate 入参优先（issue 是抛给人的问题），缺失时回退
+  // 到工具返回的 blocked.message。
+  const pendingL3 = pendingApproval && pendingApproval.kind === 'L3' ? pendingApproval : null
+  const escalateInfo = pendingL3 ? parseEscalateArgs(pendingL3.args) : null
+  const issueText = pendingL3 ? (escalateInfo?.issue || pendingL3.message || '').trim() : ''
 
   const renderItems = useMemo(() => buildRenderItems(messages as unknown[]), [messages])
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -384,47 +587,20 @@ export const RealChatView: React.FC<{
       {/* Composer */}
       <div className="bg-white border-t border-borderGray p-4">
         <div className="max-w-3xl mx-auto">
-          {pendingApproval && callbackState !== 'success' && (
-            <div className="mb-3 rounded-lg border border-amber/30 bg-amber/5 p-2.5 flex items-start gap-2">
-              <div className="w-6 h-6 rounded-full bg-amber/15 flex items-center justify-center shrink-0 mt-0.5">
-                <ShieldCheck className="w-3.5 h-3.5 text-amber" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-medium text-textDark">
-                  模拟审批通过 · {pendingApproval.kind === 'L3' ? `票据 ${pendingApproval.ticketId}` : `approval ${pendingApproval.approvalId.slice(0, 8)}`}
-                </div>
-                <div className="text-[11px] text-textGray mt-0.5">调试：POST /api/approval/callback</div>
-                {callbackError && (
-                  <div className="mt-1.5 text-[11px] text-danger flex items-start gap-1">
-                    <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
-                    <span className="break-all">{callbackError}</span>
-                  </div>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={handleApprovalCallback}
-                disabled={callbackState === 'loading'}
-                className={clsx(
-                  'shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
-                  callbackState === 'loading'
-                    ? 'bg-borderGray text-textGray cursor-not-allowed'
-                    : 'bg-deepSea text-white hover:bg-deepSea/90'
-                )}
-              >
-                {callbackState === 'loading' ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    审批处理中...
-                  </>
-                ) : (
-                  <>
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    模拟审批通过
-                  </>
-                )}
-              </button>
-            </div>
+          {pendingL3 && callbackState !== 'success' && (
+            <HumanReviewCard
+              ticketId={pendingL3.ticketId}
+              issueText={issueText}
+              severity={escalateInfo?.severity}
+              category={escalateInfo?.category}
+              choice={reviewChoice}
+              onChoice={setReviewChoice}
+              note={reviewNote}
+              onNoteChange={setReviewNote}
+              onSubmit={handleSubmitReview}
+              loading={callbackState === 'loading'}
+              error={callbackError}
+            />
           )}
           {callbackState === 'success' && (
             <div className={clsx(
@@ -433,8 +609,10 @@ export const RealChatView: React.FC<{
                 ? 'border-success/20 bg-success/5 text-success'
                 : 'border-borderGray bg-bgGray text-textGray',
             )}>
-              <ShieldCheck className="w-3.5 h-3.5" />
-              {lastApprovalApproved ? '审批已通过，新消息已追加到对话' : '已拒绝执行该操作'}
+              <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+              {lastApprovalKind === 'L3'
+                ? (lastApprovalApproved ? '复核意见已提交，Agent 已继续处理' : '已驳回该工单，Agent 将停止该操作')
+                : (lastApprovalApproved ? '已确认执行，新消息已追加到对话' : '已拒绝执行该操作')}
             </div>
           )}
           {sendError && (
