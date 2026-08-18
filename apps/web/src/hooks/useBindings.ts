@@ -94,6 +94,7 @@ async function getJson<T>(url: string): Promise<T> {
   } catch {
     throw new Error('网络错误，请稍后重试');
   }
+  await assertOk(res);
   return parseResponse<T>(res);
 }
 
@@ -109,25 +110,29 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   } catch {
     throw new Error('网络错误，请稍后重试');
   }
-  if (!res.ok) {
-    let message = `请求失败（${res.status}）`;
-    try {
-      const data = (await res.json()) as { error?: unknown; message?: unknown; detail?: unknown };
-      const serverMsg =
-        typeof data.error === 'string' && data.error
-          ? data.error
-          : typeof data.message === 'string' && data.message
-            ? data.message
-            : Array.isArray(data.detail)
-              ? data.detail.join('；')
-              : '';
-      if (serverMsg) message = serverMsg;
-    } catch {
-      /* 非 JSON 响应，保留状态码消息 */
-    }
-    throw new Error(message);
-  }
+  await assertOk(res);
   return parseResponse<T>(res);
+}
+
+/** 非 2xx 时解析服务端 error/message/detail 并抛中文错误(照 useGraph.ts:53-66 模式)。 */
+async function assertOk(res: Response): Promise<void> {
+  if (res.ok) return;
+  let message = `请求失败（${res.status}）`;
+  try {
+    const data = (await res.json()) as { error?: unknown; message?: unknown; detail?: unknown };
+    const serverMsg =
+      typeof data.error === 'string' && data.error
+        ? data.error
+        : typeof data.message === 'string' && data.message
+          ? data.message
+          : Array.isArray(data.detail)
+            ? data.detail.join('；')
+            : '';
+    if (serverMsg) message = serverMsg;
+  } catch {
+    /* 非 JSON 响应，保留状态码消息 */
+  }
+  throw new Error(message);
 }
 
 async function parseResponse<T>(res: Response): Promise<T> {
