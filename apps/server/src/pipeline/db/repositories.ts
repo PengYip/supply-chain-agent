@@ -52,6 +52,7 @@ import {
   setDocumentParseStatusPg,
   getDocumentParseStatusPg,
   getDocumentSourceUriPg,
+  getDocumentMetaPg,
   // contract ledger (ingest extraction write-back): pg twins.
   upsertContractLedgerEntryPg,
   findContractLedgerByNoPg,
@@ -1626,6 +1627,28 @@ export async function getDocumentSourceUri(
     .prepare('SELECT source_uri FROM documents WHERE id = ?')
     .get(docId) as { source_uri: string } | undefined;
   return row ? row.source_uri : null;
+}
+
+export interface DocumentMeta {
+  sourceUri: string | null;
+  docType: string | null;
+}
+
+/**
+ * Read source_uri + doc_type in one call for graph sync（绑定同步要把两者回填进
+ * Document 图节点，缺失会导致前端显示 docId 而非文件名）。Row 不存在返回 null。
+ */
+export async function getDocumentMeta(
+  ctx: DbContext,
+  docId: string,
+  userId?: string,
+): Promise<DocumentMeta | null> {
+  if (ctx.backend === 'postgres') return getDocumentMetaPg(ctx, docId, userId);
+  void userId;
+  const row = ctx.sqlite
+    .prepare('SELECT source_uri, doc_type FROM documents WHERE id = ?')
+    .get(docId) as { source_uri: string | null; doc_type: string | null } | undefined;
+  return row ? { sourceUri: row.source_uri, docType: row.doc_type } : null;
 }
 
 /**

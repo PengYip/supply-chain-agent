@@ -59,16 +59,55 @@ export function edgeLabel(type: string): string {
   return EDGE_LABELS[type] ?? type;
 }
 
-/** 展示名：Document 节点优先从 props.sourceUri 解析原始文件名，回退 name / 占位。 */
-export function nodeDisplayName(node: Pick<GraphNode, 'name' | 'kind' | 'props'>): string {
+/** docId 对应的展示元数据：原始文件名 + 业务类型。由文档列表构建，用于补齐老图谱 Document 节点缺失的 props。 */
+export interface DocMeta {
+  /** 可读文件名（已剥 uuid/前缀）。 */
+  name: string;
+  /** 业务类型（合同/发票/物流单据...，可能为空串）。 */
+  docType: string;
+}
+
+/** docId -> 展示元数据 解析器；未命中返回 null。 */
+export type DocMetaResolver = (docId: string) => DocMeta | null;
+
+/** Document 节点的 docId：优先 props.docId，老数据回退 node.name（绑定同步兜底路径里 name 即 docId）。 */
+export function docIdOf(node: Pick<GraphNode, 'name' | 'props'>): string {
+  const p = node.props?.docId;
+  return typeof p === 'string' && p ? p : node.name;
+}
+
+/** 展示名：Document 节点优先从 props.sourceUri 解析原始文件名；缺失时用文档列表按 docId 兜底；最后回退 name / 占位。 */
+export function nodeDisplayName(
+  node: Pick<GraphNode, 'name' | 'kind' | 'props'>,
+  docMeta?: DocMetaResolver | null,
+): string {
   if (node.kind === 'Document') {
     const uri = node.props?.sourceUri;
     if (typeof uri === 'string' && uri) {
       const fileName = prettyDocName(uri);
       if (fileName) return fileName;
     }
+    if (docMeta) {
+      const meta = docMeta(docIdOf(node));
+      if (meta?.name) return meta.name;
+    }
   }
   return node.name || `${kindStyle(node.kind).label}（未命名）`;
+}
+
+/** Document 节点的业务类型：props.docType 优先，缺失时用文档列表按 docId 兜底；都无则返回空串（调用方显示「文档」）。 */
+export function docTypeName(
+  node: Pick<GraphNode, 'name' | 'kind' | 'props'>,
+  docMeta?: DocMetaResolver | null,
+): string {
+  if (node.kind !== 'Document') return '';
+  const fromProps = node.props?.docType;
+  if (typeof fromProps === 'string' && fromProps) return fromProps;
+  if (docMeta) {
+    const meta = docMeta(docIdOf(node));
+    if (meta?.docType) return meta.docType;
+  }
+  return '';
 }
 
 /** 从 sourceUri 提取可读文件名。兼容两类形态：

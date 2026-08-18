@@ -1385,6 +1385,22 @@ export async function getDocumentSourceUriPg(
   return res.rows[0].source_uri as string;
 }
 
+/** Read source_uri + doc_type in one call (graph sync backfill), or null (pg). */
+export async function getDocumentMetaPg(
+  ctx: PostgresDbContext,
+  docId: string,
+  userId?: string,
+): Promise<{ sourceUri: string | null; docType: string | null } | null> {
+  void userId; // signature parity; doc-level scope already authorizes the caller
+  const res = await ctx.pool.query(
+    'SELECT source_uri, doc_type FROM documents WHERE id = $1',
+    [docId],
+  );
+  if (!res.rows[0]) return null;
+  const r = res.rows[0] as { source_uri: string | null; doc_type: string | null };
+  return { sourceUri: r.source_uri, docType: r.doc_type };
+}
+
 // ---- Contract ledger (ingest extraction write-back, pg twins) --------------
 //
 // Mirror of upsertContractLedgerEntry / findContractLedgerByNoPg in

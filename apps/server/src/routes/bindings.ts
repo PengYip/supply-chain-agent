@@ -8,7 +8,7 @@ import type { DbContext } from '../pipeline/db/client.js';
 import {
   listUserDocuments, listBindingsForUser, listBindingProposals, listContractLedgerEntries,
   findBindingById, updateBindingStatus, saveBinding, findBindingByDocAndContract,
-  listBindingsForContract, setBindingGraphStatus, type BindingGraphStatus,
+  listBindingsForContract, setBindingGraphStatus, getDocumentMeta, type BindingGraphStatus,
 } from '../pipeline/db/repositories.js';
 import { buildBindingCandidates } from '../pipeline/bindingCandidates.js';
 import { syncBindingEdge, removeBindingEdge, type GraphSyncOutcome } from '../pipeline/bindingGraphSync.js';
@@ -101,6 +101,27 @@ async function graphStatusFor(outcome: GraphSyncOutcome, reason?: string): Promi
     : { status: outcome, ...(reason ? { reason } : {}), syncedAt: new Date().toISOString() };
 }
 
+/** syncBindingEdge + 查 documents 行带上 sourceUri/docType：同步时把这些回填进
+ *  Document 图节点（ON MATCH SET），兜底节点缺 sourceUri 导致前端显示 docId 的
+ *  问题由此自愈。meta 读取失败不阻断同步。 */
+async function syncBindingEdgeWithMeta(
+  db: DbContext,
+  userId: string,
+  input: { docId: string; contractNo: string; relation: string; bindingId: string; confidence: number },
+) {
+  let meta: Awaited<ReturnType<typeof getDocumentMeta>> = null;
+  try {
+    meta = await getDocumentMeta(db, input.docId, userId);
+  } catch {
+    // 行读不到（已删除等）不阻断图同步，仅少回填两个属性
+  }
+  return syncBindingEdge({
+    ...input,
+    ...(meta?.docType ? { docType: meta.docType } : {}),
+    ...(meta?.sourceUri ? { sourceUri: meta.sourceUri } : {}),
+  });
+}
+
 /** confirm 单条(内部, batch 复用)。前置: 行存在且 status='proposed'。 */
 async function confirmOne(db: DbContext, userId: string, bindingId: string) {
   const row = await findBindingById(db, bindingId, userId);
@@ -108,7 +129,7 @@ async function confirmOne(db: DbContext, userId: string, bindingId: string) {
   if (row.status !== 'proposed') return { status: 409 as const, body: { error: `binding status is ${row.status}, expected proposed`, bindingId } };
   const updated = await updateBindingStatus(db, bindingId, 'confirmed', 'human', userId);
   if (!updated) return { status: 409 as const, body: { error: 'concurrent state change', bindingId } };
-  const sync = await syncBindingEdge({
+  const sync = await syncBindingEdgeWithMeta(db, userId, {
     docId: row.documentId, contractNo: row.contractNo, relation: row.relation,
     bindingId: row.id, confidence: row.confidence,
   });
@@ -157,7 +178,7 @@ bindingsRoute.post('/', async (c) => {
     // 重试同步入口(前端 graph_status 非 ok 时幂等调用): confirmed 行重跑
     // syncBindingEdge 并落真实 graph_status; proposed 行尚未确认, 不该有边, 直接返回。
     if (existing.status === 'confirmed') {
-      const sync = await syncBindingEdge({
+      const sync = await syncBindingEdgeWithMeta(db, user.id, {
         docId: documentId, contractNo, relation: existing.relation,
         bindingId: existing.id, confidence: existing.confidence,
       });
@@ -172,7 +193,7 @@ bindingsRoute.post('/', async (c) => {
     confidence: 1, createdBy: user.id,
     status: 'confirmed', confirmationSource: 'human', proposedBy: 'agent',
   }, user.id);
-  const sync = await syncBindingEdge({ docId: documentId, contractNo, relation, bindingId, confidence: 1 });
+  const sync = await syncBindingEdgeWithMeta(db, user.id, { docId: documentId, contractNo, relation, bindingId, confidence: 1 });
   const gs = await graphStatusFor(sync.outcome, sync.reason);
   await setBindingGraphStatus(db, bindingId, gs, user.id);
   return c.json({ ok: true, bindingId, graphSync: sync.outcome, ...(sync.reason ? { graphReason: sync.reason } : {}) });

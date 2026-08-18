@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import clsx from 'clsx';
 import {
   ReactFlow,
   Background,
@@ -11,7 +12,15 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { AlertTriangle, Network, RefreshCw } from 'lucide-react';
-import { EDGE_STYLE_OVERRIDES, KIND_ICONS, edgeLabel, kindStyle, nodeDisplayName } from '../graph/kinds';
+import {
+  EDGE_STYLE_OVERRIDES,
+  KIND_ICONS,
+  docTypeName,
+  edgeLabel,
+  kindStyle,
+  nodeDisplayName,
+  type DocMetaResolver,
+} from '../graph/kinds';
 import { AllSideHandles } from '../graph/GraphFlowNode';
 import type { GraphFocusTarget } from '../graph/focus';
 import type { GraphEdge, GraphNode } from '../../hooks/useGraph';
@@ -117,48 +126,20 @@ async function fetchNeighborhood(subject: string): Promise<{ nodes: GraphNode[];
   return { nodes, edges };
 }
 
-/* ---------- 迷你节点：主画布节点的紧凑版 ---------- */
+/* ---------- 迷你节点：与主画布同语言的两族卡片（文档=纸片+类型徽章，实体=类别色实底）的紧凑版 ---------- */
 
-type MiniNodeData = { graph: GraphNode; isCenter: boolean; isBound: boolean };
+type MiniNodeData = { graph: GraphNode; isCenter: boolean; isBound: boolean; docMeta: DocMetaResolver | null };
 type MiniFlowNode = Node<MiniNodeData, 'mini'>;
 
-function MiniGraphNode({ data }: NodeProps<MiniFlowNode>) {
-  const { graph, isCenter, isBound } = data;
+function MiniDocumentNode({ graph, isCenter, isBound, docMeta }: Omit<MiniNodeData, 'isBound'> & { isBound: boolean }) {
   const style = kindStyle(graph.kind);
-  const Icon = KIND_ICONS[graph.kind] ?? KIND_ICONS.Document;
-  const name = nodeDisplayName(graph);
-
-  if (isCenter) {
-    // 合同中心节点：主色实底反白，尺寸大于周围节点
-    return (
-      <div
-        className="w-36 rounded-lg px-2.5 py-1.5 shadow-card"
-        style={{ background: style.color, boxShadow: '0 3px 10px rgba(15, 58, 92, 0.3)' }}
-        title={name}
-      >
-        <div className="flex items-center gap-1">
-          <span
-            className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded"
-            style={{ background: 'rgba(255,255,255,0.18)' }}
-          >
-            <Icon className="h-2 w-2 text-white" aria-hidden />
-          </span>
-          <span className="truncate text-[9px] font-medium tracking-wider text-white/85">
-            {style.label} · 中心
-          </span>
-        </div>
-        <div className="mt-0.5 line-clamp-2 break-all text-[11px] font-medium leading-4 text-white">{name}</div>
-        <AllSideHandles />
-      </div>
-    );
-  }
-
-  // 周围节点：白卡 + 类别色徽章；被绑定文档加深色描边圈突出
+  const name = nodeDisplayName(graph, docMeta);
+  const docType = docTypeName(graph, docMeta) || '文档';
   return (
     <div
-      className="w-28 rounded-lg border bg-white px-2.5 py-1.5 shadow-card"
+      className={clsx('w-28 rounded-lg border-l-[3px] bg-white px-2.5 py-1.5 shadow-card', isCenter ? 'border-l-4' : '')}
       style={{
-        borderColor: style.softBorder,
+        borderLeftColor: style.color,
         ...(isBound ? { boxShadow: '0 0 0 2px #0F3A5C' } : undefined),
       }}
       title={name}
@@ -168,16 +149,59 @@ function MiniGraphNode({ data }: NodeProps<MiniFlowNode>) {
           className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded"
           style={{ background: style.softBg, color: style.color }}
         >
-          <Icon className="h-2 w-2" aria-hidden />
+          <KIND_ICONS.Document className="h-2 w-2" aria-hidden />
         </span>
-        <span className="min-w-0 truncate text-[9px] font-medium tracking-wider" style={{ color: style.color }}>
-          {isBound ? `${style.label} · 本绑定` : style.label}
+        <span className="min-w-0 max-w-[68px] shrink truncate rounded border border-[#D8E2EB] bg-[#EEF2F6] px-1 py-px text-[9px] leading-4 text-steelBlue">
+          {docType}
         </span>
+        {isBound && (
+          <span className="ml-auto shrink-0 rounded bg-deepSea px-1 py-px text-[9px] leading-4 text-white">绑定</span>
+        )}
       </div>
       <div className="mt-0.5 line-clamp-2 break-all text-[11px] leading-4 text-textDark">{name}</div>
       <AllSideHandles />
     </div>
   );
+}
+
+function MiniEntityNode({ graph, isCenter }: { graph: GraphNode; isCenter: boolean }) {
+  const style = kindStyle(graph.kind);
+  const Icon = KIND_ICONS[graph.kind] ?? KIND_ICONS.Document;
+  const name = nodeDisplayName(graph);
+  return (
+    <div
+      className={clsx('rounded-md px-2.5 py-1.5', isCenter ? 'w-36' : 'w-28')}
+      style={{
+        background: style.color,
+        boxShadow: isCenter ? '0 3px 10px rgba(15, 58, 92, 0.3)' : '0 1px 2px rgba(15, 58, 92, 0.2)',
+      }}
+      title={name}
+    >
+      <div className="flex items-center gap-1">
+        <span
+          className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded"
+          style={{ background: 'rgba(255,255,255,0.18)' }}
+        >
+          <Icon className="h-2 w-2 text-white" aria-hidden />
+        </span>
+        <span className="shrink-0 truncate text-[9px] font-medium tracking-wider" style={{ color: 'rgba(255,255,255,0.85)' }}>
+          {style.label}
+        </span>
+        {isCenter && (
+          <span className="ml-auto shrink-0 rounded bg-white/20 px-1 py-px text-[9px] leading-4 text-white">中心</span>
+        )}
+      </div>
+      <div className="mt-0.5 line-clamp-2 break-all text-[11px] font-medium leading-4 text-white">{name}</div>
+      <AllSideHandles />
+    </div>
+  );
+}
+
+function MiniGraphNode({ data }: NodeProps<MiniFlowNode>) {
+  if (data.graph.kind === 'Document') {
+    return <MiniDocumentNode graph={data.graph} isCenter={data.isCenter} isBound={data.isBound} docMeta={data.docMeta} />;
+  }
+  return <MiniEntityNode graph={data.graph} isCenter={data.isCenter} />;
 }
 
 const MINI_NODE_TYPES: NodeTypes = { mini: MiniGraphNode };
@@ -220,6 +244,7 @@ interface MiniReady {
 function buildMiniLayout(
   ready: MiniReady,
   bindingId: string | null,
+  docMeta: DocMetaResolver | null,
 ): { flowNodes: MiniFlowNode[]; flowEdges: Edge[] } {
   const centerId = ready.contract.elementId;
   const others = ready.nodes
@@ -243,6 +268,7 @@ function buildMiniLayout(
       graph: node,
       isCenter: node.elementId === centerId,
       isBound: ready.docElementId != null && node.elementId === ready.docElementId,
+      docMeta,
     },
   }));
 
@@ -273,8 +299,19 @@ function buildMiniLayout(
   return { flowNodes, flowEdges };
 }
 
-function MiniGraphCanvas({ ready, bindingId }: { ready: MiniReady; bindingId: string | null }) {
-  const { flowNodes, flowEdges } = useMemo(() => buildMiniLayout(ready, bindingId), [ready, bindingId]);
+function MiniGraphCanvas({
+  ready,
+  bindingId,
+  docMeta,
+}: {
+  ready: MiniReady;
+  bindingId: string | null;
+  docMeta: DocMetaResolver | null;
+}) {
+  const { flowNodes, flowEdges } = useMemo(
+    () => buildMiniLayout(ready, bindingId, docMeta),
+    [ready, bindingId, docMeta],
+  );
   return (
     <ReactFlow<MiniFlowNode>
       className="sca-flow"
@@ -313,12 +350,14 @@ interface BindingMiniGraphProps {
   contractNo: string;
   /** 用于精确高亮本绑定对应的 binds 边。 */
   bindingId: string | null;
+  /** 可选 docId -> 文件名/业务类型 兜底（绑定文档节点缺 props 时补齐显示）。 */
+  docMeta?: DocMetaResolver | null;
   /** 跳转完整图谱：以合同节点为中心展开。 */
   onOpenInGraph?: (target: GraphFocusTarget) => void;
 }
 
 /** 绑定条目的内嵌迷你图谱：合同节点为中心的 1 跳邻域，被绑定文档高亮。 */
-export function BindingMiniGraph({ docId, contractNo, bindingId, onOpenInGraph }: BindingMiniGraphProps) {
+export function BindingMiniGraph({ docId, contractNo, bindingId, docMeta = null, onOpenInGraph }: BindingMiniGraphProps) {
   const [state, setState] = useState<MiniState>({ phase: 'loading' });
   // 递增请求序号：丢弃过期响应（快速重试 / 参数变化时）
   const requestIdRef = useRef(0);
@@ -397,7 +436,9 @@ export function BindingMiniGraph({ docId, contractNo, bindingId, onOpenInGraph }
             </button>
           </div>
         )}
-        {ready && <MiniGraphCanvas key={ready.loadId} ready={ready} bindingId={bindingId} />}
+        {ready && (
+          <MiniGraphCanvas key={ready.loadId} ready={ready} bindingId={bindingId} docMeta={docMeta} />
+        )}
       </div>
 
       {ready && onOpenInGraph && (

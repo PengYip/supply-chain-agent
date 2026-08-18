@@ -47,6 +47,42 @@ describe('syncBindingEdge', () => {
     expect([...edges][0]).toContain('binds');
   });
 
+  it('sourceUri/docType 随同步写入 Document 节点 props（前端显示文件名依赖此回填）', async () => {
+    const created: Array<{ kind: string; name: string; props?: Record<string, unknown> }> = [];
+    const { io } = makeIo();
+    const spyIo: BindingGraphSyncIo = {
+      ...io,
+      createEntity: async (i) => {
+        created.push({ kind: i.kind, name: i.name, props: i.props });
+        return io.createEntity(i);
+      },
+    };
+    const r = await syncBindingEdge(
+      { docId: 'D1', docType: '货权转移凭证', sourceUri: 'ingest-root/users_u1_abc-04_货权转移.pdf', contractNo: 'HT-1', relation: '货权', bindingId: 'B1', confidence: 1 },
+      spyIo,
+    );
+    expect(r.outcome).toBe('ok');
+    const docCreate = created.find((c) => c.kind === 'Document');
+    expect(docCreate?.props?.docType).toBe('货权转移凭证');
+    expect(docCreate?.props?.sourceUri).toBe('ingest-root/users_u1_abc-04_货权转移.pdf');
+  });
+
+  it('未传 sourceUri/docType 时 props 不含空值键（不覆盖既有节点属性）', async () => {
+    const created: Array<{ kind: string; name: string; props?: Record<string, unknown> }> = [];
+    const { io } = makeIo();
+    const spyIo: BindingGraphSyncIo = {
+      ...io,
+      createEntity: async (i) => {
+        created.push({ kind: i.kind, name: i.name, props: i.props });
+        return io.createEntity(i);
+      },
+    };
+    await syncBindingEdge({ docId: 'D1', contractNo: 'HT-1', relation: 'x', bindingId: 'B1', confidence: 1 }, spyIo);
+    const docProps = created.find((c) => c.kind === 'Document')?.props ?? {};
+    expect('sourceUri' in docProps).toBe(false);
+    expect('docType' in docProps).toBe(false);
+  });
+
   it('已有 Contract 节点(如 HT-2024-001)复用不重建', async () => {
     const { io, nodes } = makeIo();
     nodes.set('Contract:HT-2024-001', 'existing-eid');

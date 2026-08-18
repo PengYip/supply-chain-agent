@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { Check, ChevronDown, Link2, Loader2, MousePointerClick, Network, RefreshCw, Unlink, X } from 'lucide-react';
 import type { Anchors, BindingListItem, OverviewDoc } from '../../hooks/useBindings';
 import type { GraphFocusTarget } from '../graph/focus';
+import { buildDocMetaResolver } from '../graph/docMeta';
+import type { DocMetaResolver } from '../graph/kinds';
 import type { WorkbenchRow } from './BindingsView';
 import { BindingMiniGraph } from './BindingMiniGraph';
 
@@ -223,6 +225,7 @@ function CandidateDetail({
 function BindingCard({
   binding,
   docId,
+  docMeta,
   pending,
   onConfirm,
   onReject,
@@ -232,6 +235,7 @@ function BindingCard({
 }: {
   binding: BindingListItem;
   docId: string;
+  docMeta: DocMetaResolver | null;
   pending: Set<string>;
   onConfirm: (binding: BindingListItem) => void;
   onReject: (binding: BindingListItem) => void;
@@ -347,6 +351,7 @@ function BindingCard({
           docId={docId}
           contractNo={binding.contractNo}
           bindingId={binding.bindingId}
+          docMeta={docMeta}
           onOpenInGraph={onOpenInGraph}
         />
       )}
@@ -381,6 +386,14 @@ export function DetailPanel({
   onRetrySync,
   onOpenInGraph,
 }: DetailPanelProps) {
+  // 迷你图谱的 docId 兜底：单条映射（当前文档），足以补齐被绑定文档节点缺 sourceUri 的老数据。
+  const docMeta: DocMetaResolver | null = useMemo(
+    () =>
+      doc
+        ? buildDocMetaResolver([{ docId: doc.docId, sourceUri: doc.fileName, docType: doc.docType }])
+        : null,
+    [doc],
+  );
   return (
     <aside className="flex w-80 shrink-0 flex-col border-l border-borderGray bg-white">
       <div className="shrink-0 border-b border-borderGray px-4 py-3 text-[15px] font-semibold text-textDark">详情</div>
@@ -407,6 +420,7 @@ export function DetailPanel({
                   key={b.bindingId}
                   binding={b}
                   docId={doc.docId}
+                  docMeta={docMeta}
                   pending={pending}
                   onConfirm={onConfirmBinding}
                   onReject={onRejectBinding}

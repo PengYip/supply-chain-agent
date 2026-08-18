@@ -199,7 +199,12 @@ export function GraphCanvas({ subgraph, centerElementId, onHover, onNodeSelect, 
         zoomable
         position="bottom-right"
         maskColor="rgba(245, 247, 250, 0.78)"
+        // 小地图与画布同语言：文档=白底描边（纸片），实体=类别色实心（色块）
         nodeColor={(n) => {
+          const data = (n as ScaFlowNode).data as { graph?: GraphNode } | undefined;
+          return data?.graph?.kind === 'Document' ? '#FFFFFF' : kindStyle(data?.graph?.kind ?? '').color;
+        }}
+        nodeStrokeColor={(n) => {
           const data = (n as ScaFlowNode).data as { graph?: GraphNode } | undefined;
           return kindStyle(data?.graph?.kind ?? '').color;
         }}

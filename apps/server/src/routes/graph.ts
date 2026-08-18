@@ -86,7 +86,9 @@ graphRoute.get('/documents', async (c) => {
   }
   const byId = new Map(nodes.map((n) => [n.name, n]));
   // Only docs that have a graph node (graph_status written) are returned; the
-  // frontend aligns the rest by itself.
+  // frontend aligns the rest by itself. sourceUri/docType ride along so the
+  // doc list and canvas node cards can show file names + business type even
+  // when the graph node's own props are stale (pre-backfill).
   const documents = docs
     .filter((d) => byId.has(d.id))
     .map((d) => {
@@ -97,6 +99,8 @@ graphRoute.get('/documents', async (c) => {
         kind: node?.kind ?? 'Document',
         name: node?.name ?? d.id,
         props: node?.props ?? {},
+        docType: d.docType ?? '',
+        sourceUri: d.sourceUri ?? '',
         createdAt: d.createdAt,
       };
     });

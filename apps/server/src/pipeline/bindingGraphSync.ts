@@ -36,7 +36,7 @@ async function ensureNode(
 }
 
 export async function syncBindingEdge(
-  input: { docId: string; docType?: string; contractNo: string; relation: string; bindingId: string; confidence: number },
+  input: { docId: string; docType?: string; sourceUri?: string | null; contractNo: string; relation: string; bindingId: string; confidence: number },
   io: BindingGraphSyncIo = defaultBindingGraphSyncIo,
 ): Promise<BindingGraphSyncResult> {
   if (!process.env.NEO4J_PASSWORD) return { outcome: 'skipped', reason: 'NEO4J_PASSWORD not set' };
@@ -44,8 +44,18 @@ export async function syncBindingEdge(
     // 节点名与 graphWriter 一致: Document.name = docId; Contract.name = normalizeName(合同号)。
     const contractName = normalizeName(input.contractNo);
     if (!contractName) return { outcome: 'failed', reason: 'contractNo normalized to empty' };
-    const docNode = await ensureNode(io, 'Document', input.docId,
-      () => io.createEntity({ kind: 'Document', name: input.docId, props: { docId: input.docId, ...(input.docType ? { docType: input.docType } : {}) } }));
+    // Document 节点直接走 createEntity（MERGE 幂等）：ON MATCH SET 会把
+    // sourceUri/docType 回填进既有节点——绑定先于抽取确认发生时，兜底节点缺
+    // sourceUri，前端只能显示 docId；回填后自愈（2026-08-18）。
+    const docNode = await io.createEntity({
+      kind: 'Document',
+      name: input.docId,
+      props: {
+        docId: input.docId,
+        ...(input.docType ? { docType: input.docType } : {}),
+        ...(input.sourceUri ? { sourceUri: input.sourceUri } : {}),
+      },
+    });
     const contractNode = await ensureNode(io, 'Contract', contractName,
       () => io.createEntity({ kind: 'Contract', name: contractName, props: { rawName: input.contractNo } }));
     await io.mergeEdge({

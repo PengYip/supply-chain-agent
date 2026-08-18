@@ -6,6 +6,7 @@ import { DocumentListPanel } from './DocumentListPanel';
 import { GraphCanvas } from './GraphCanvas';
 import { DetailPanel } from './DetailPanel';
 import { KIND_STYLES, nodeDisplayName, prettyDocName } from './kinds';
+import { DocMetaProvider, buildDocMetaResolver } from './docMeta';
 import type { GraphFocus } from './focus';
 
 const DEPTH_OPTIONS = [1, 2, 3, 4, 5];
@@ -94,6 +95,10 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
   const [docsCollapsed, setDocsCollapsed] = useState(false);
   const [detailCollapsed, setDetailCollapsed] = useState(false);
 
+  // docId -> 文件名/业务类型 兜底解析：老图谱 Document 节点缺 sourceUri/docType 时，
+  // 用文档列表补齐展示（画布节点卡/详情/边端点名共用，经 context 下发到节点卡）。
+  const docMetaResolver = useMemo(() => buildDocMetaResolver(documents), [documents]);
+
   const query = useCallback(
     (id: string, label: string, fromDocument: boolean, d: number, dir: GraphDirection) => {
       setCenter({ id, label, fromDocument });
@@ -124,9 +129,9 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
 
   const handleExpandNode = useCallback(
     (node: GraphNode) => {
-      query(node.elementId, nodeDisplayName(node), false, depth, direction);
+      query(node.elementId, nodeDisplayName(node, docMetaResolver), false, depth, direction);
     },
-    [query, depth, direction],
+    [query, depth, direction, docMetaResolver],
   );
 
   const handleDepthChange = useCallback(
@@ -161,11 +166,11 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
   const nameLookup = useMemo(() => {
     const map = new Map<string, string>();
     if (subgraph) {
-      // 统一走展示名解析：Document 节点解析出原始文件名，避免显示 docId
-      for (const node of subgraph.nodes) map.set(node.elementId, nodeDisplayName(node));
+      // 统一走展示名解析：Document 节点解析出原始文件名（缺 props 时按 docId 查文档列表兜底）
+      for (const node of subgraph.nodes) map.set(node.elementId, nodeDisplayName(node, docMetaResolver));
     }
     return map;
-  }, [subgraph]);
+  }, [subgraph, docMetaResolver]);
 
   const resolveName = useCallback((elementId: string) => nameLookup.get(elementId) ?? '', [nameLookup]);
 
@@ -175,6 +180,7 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
   const graphEmpty = !!subgraph && subgraph.nodes.length === 0 && !graphLoading && !graphError;
 
   return (
+    <DocMetaProvider value={docMetaResolver}>
     <div className="flex h-full flex-col bg-bgGray">
       {/* 顶部工具条 */}
       <div className="flex h-14 shrink-0 items-center gap-3 border-b border-borderGray bg-white px-4">
@@ -249,7 +255,16 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
           <div className="hidden items-center gap-2.5 border-l border-borderGray pl-3 xl:flex">
             {LEGEND_KINDS.map((kind) => (
               <span key={kind} className="flex items-center gap-1 text-[11px] text-textGray">
-                <span className="h-2 w-2 rounded-full" style={{ background: KIND_STYLES[kind].color }} />
+                {kind === 'Document' ? (
+                  // 文档=空心圆、实体=实心圆，与画布上纸片/色块的家族区分呼应
+                  <span
+                    className="h-2 w-2 rounded-full border-2 bg-white"
+                    style={{ borderColor: KIND_STYLES[kind].color }}
+                    aria-hidden
+                  />
+                ) : (
+                  <span className="h-2 w-2 rounded-full" style={{ background: KIND_STYLES[kind].color }} aria-hidden />
+                )}
                 {KIND_STYLES[kind].label}
               </span>
             ))}
@@ -370,6 +385,7 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
         </div>
       </div>
     </div>
+    </DocMetaProvider>
   );
 }
 

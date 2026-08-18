@@ -1,5 +1,6 @@
 import { ArrowRight, Crosshair, MousePointerClick } from 'lucide-react';
-import { edgeLabel, kindStyle, nodeDisplayName } from './kinds';
+import { docTypeName, edgeLabel, kindStyle, nodeDisplayName } from './kinds';
+import { useDocMeta } from './docMeta';
 import type { GraphEdge, GraphNode, InspectTarget } from '../../hooks/useGraph';
 
 /** props 值格式化为短文本；对象截断序列化。 */
@@ -83,7 +84,9 @@ function NodeDetail({
   isCenter: boolean;
   onExpand: (node: GraphNode) => void;
 }) {
+  const docMeta = useDocMeta();
   const style = kindStyle(node.kind);
+  const docType = docTypeName(node, docMeta);
   const displayProps = node.props
     ? Object.fromEntries(Object.entries(node.props).filter(([key]) => key !== 'name'))
     : null;
@@ -96,9 +99,14 @@ function NodeDetail({
         >
           {style.label}
         </span>
+        {docType && (
+          <span className="rounded border border-[#D8E2EB] bg-[#EEF2F6] px-1.5 py-px text-[10px] text-steelBlue">
+            {docType}
+          </span>
+        )}
         {isCenter && <span className="rounded bg-deepSea px-1.5 py-px text-[10px] text-white">当前中心</span>}
       </div>
-      <div className="mt-2 break-all text-[14px] font-medium leading-5 text-textDark">{nodeDisplayName(node)}</div>
+      <div className="mt-2 break-all text-[14px] font-medium leading-5 text-textDark">{nodeDisplayName(node, docMeta)}</div>
       <div className="mt-1 break-all font-mono text-[10px] leading-4 text-textGray">{node.elementId}</div>
       <PropsTable props={displayProps} />
       {!isCenter && (
