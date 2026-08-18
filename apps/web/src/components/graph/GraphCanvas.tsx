@@ -14,7 +14,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import './graph-canvas.css';
 import { GraphFlowNode, type ScaFlowNode } from './GraphFlowNode';
-import { edgeLabel, kindStyle } from './kinds';
+import { edgeLabel, kindStyle, EDGE_STYLE_OVERRIDES } from './kinds';
 import type { GraphEdge, GraphNode, InspectTarget, Subgraph } from '../../hooks/useGraph';
 
 /* ---------- 径向布局：中心在原点，其余按 BFS 深度分层成环 ---------- */
@@ -117,6 +117,8 @@ function buildLayout(subgraph: Subgraph, centerId: string): CanvasLayout {
     const src = positions.get(edge.srcId) ?? { x: 0, y: 0 };
     const dst = positions.get(edge.dstId) ?? { x: 0, y: 0 };
     const { sourceHandle, targetHandle } = handlePairFor(src, dst);
+    const override = EDGE_STYLE_OVERRIDES[edge.type];
+    const stroke = override?.color ?? EDGE_STROKE;
     return {
       id: edge.elementId,
       source: edge.srcId,
@@ -124,12 +126,12 @@ function buildLayout(subgraph: Subgraph, centerId: string): CanvasLayout {
       sourceHandle,
       targetHandle,
       label: edgeLabel(edge.type),
-      style: { stroke: EDGE_STROKE, strokeWidth: 1.5 },
+      style: { stroke, strokeWidth: 1.5, ...(override?.dashed ? { strokeDasharray: '6 4' } : {}) },
       labelStyle: { fill: '#4B5563', fontSize: 11 },
       labelBgStyle: { fill: '#FFFFFF', stroke: '#E5E7EB', strokeWidth: 1 },
       labelBgPadding: [5, 2] as [number, number],
       labelBgBorderRadius: 4,
-      markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: EDGE_STROKE },
+      markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: stroke },
     };
   });
   const edgeMap = new Map<string, GraphEdge>();

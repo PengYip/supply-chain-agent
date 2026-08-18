@@ -38,6 +38,12 @@ export const EDGE_LABELS: Record<string, string> = {
   commodity: '商品',
   references: '引用',
   executes: '履行',
+  binds: '绑定',
+};
+
+/** 边样式覆盖: binds(人工确认的绑定)与抽取级提及边视觉区分。 */
+export const EDGE_STYLE_OVERRIDES: Record<string, { color: string; dashed: boolean }> = {
+  binds: { color: '#15803D', dashed: true },
 };
 
 export function edgeLabel(type: string): string {
