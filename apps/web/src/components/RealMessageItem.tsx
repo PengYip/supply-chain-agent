@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import {
   type RenderItem,
+  type Segment,
   type ToolCallStep,
   parseEscalateArgs,
   escalateCategoryLabel,
@@ -23,6 +24,7 @@ import {
   severityBadgeClass,
 } from '../utils/realChatUtils'
 import clsx from 'clsx'
+import { FileAttachmentCard } from './FileAttachmentCard'
 import { DocumentReviewCard, type DocumentReviewPayload } from './DocumentReviewCard'
 
 /** Write message text to the clipboard. Primary path is navigator.clipboard
@@ -378,13 +380,74 @@ export const RealMessageItem: React.FC<{
     .filter((s): s is { kind: 'text'; text: string } => s.kind === 'text')
     .map((s) => s.text)
     .join('\n\n')
+  type AttachmentSegment = Extract<Segment, { kind: 'attachment' }>
+  const attachmentSegments = item.segments.filter(
+    (s): s is AttachmentSegment => s.kind === 'attachment',
+  )
+  // 用户消息含附件时：卡片堆叠在气泡上方（同一右对齐列），与参考截图一致。
+  const wrapped = isUser && attachmentSegments.length > 0
+  const contentSegments = wrapped
+    ? item.segments.filter((s) => s.kind !== 'attachment')
+    : item.segments
+
   // 找最后一个文本段的位置：流式光标只挂在末尾文本段上（避免中间文本段也出光标）
-  let lastTextSegmentIdx = -1
-  for (let i = item.segments.length - 1; i >= 0; i--) {
-    if (item.segments[i].kind === 'text') {
-      lastTextSegmentIdx = i
-      break
+  const renderSegments = (segs: Segment[]) => {
+    let lastTextSegmentIdx = -1
+    for (let i = segs.length - 1; i >= 0; i--) {
+      if (segs[i].kind === 'text') {
+        lastTextSegmentIdx = i
+        break
+      }
     }
+    return segs.map((seg, idx) => {
+      if (seg.kind === 'text') {
+        const isLastText = idx === lastTextSegmentIdx
+        return (
+          <div key={`t-${idx}`} className="text-textDark">
+            <MarkdownContent>{seg.text}</MarkdownContent>
+            {isStreaming && !isUser && isLastText && (
+              <span className="inline-flex ml-1 gap-0.5 align-middle">
+                <span className="w-1 h-1 rounded-full bg-textGray animate-pulse-dot" style={{ animationDelay: '0ms' }} />
+                <span className="w-1 h-1 rounded-full bg-textGray animate-pulse-dot" style={{ animationDelay: '200ms' }} />
+                <span className="w-1 h-1 rounded-full bg-textGray animate-pulse-dot" style={{ animationDelay: '400ms' }} />
+              </span>
+            )}
+          </div>
+        )
+      }
+
+      if (seg.kind === 'approval-request') {
+        return (
+          <SoftGateCard
+            key={`a-${seg.approvalId}`}
+            approvalId={seg.approvalId}
+            toolName={seg.toolName}
+            args={seg.args}
+            onApprove={onApprove || (() => {})}
+            onDeny={onDeny || (() => {})}
+          />
+        )
+      }
+
+      if (seg.kind === 'attachment') {
+        return <FileAttachmentCard key={`att-${seg.attachment.docId}-${idx}`} attachment={seg.attachment} />
+      }
+
+      // tool-group：连续工具调用归一组，保持时间顺序（夹在前后文本段之间）
+      return (
+        <div key={`g-${idx}`} className="rounded-lg border border-borderGray bg-bgGray/50 overflow-hidden mt-2">
+          <div className="px-3 py-2 border-b border-borderGray bg-deepSea/5 flex items-center gap-2">
+            <Wrench className="w-4 h-4 text-steelBlue" />
+            <span className="text-xs font-medium text-textDark">工具调用</span>
+          </div>
+          <div className="px-3 divide-y divide-borderGray/50">
+            {seg.steps.map((step) => (
+              <RealToolStep key={step.toolCallId} step={step} />
+            ))}
+          </div>
+        </div>
+      )
+    })
   }
 
   return (
@@ -397,87 +460,57 @@ export const RealMessageItem: React.FC<{
       >
         {isUser ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
       </div>
-      <div
-        className={clsx(
-          'group max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm',
-          isUser ? 'bg-steelBlue text-white rounded-tr-sm' : 'bg-white border border-borderGray text-textDark rounded-tl-sm'
-        )}
-      >
-        <div className="space-y-2">
-          {item.segments.map((seg, idx) => {
-            if (seg.kind === 'text') {
-              const isLastText = idx === lastTextSegmentIdx
-              return (
-                <div key={`t-${idx}`} className="text-textDark">
-                  <MarkdownContent>{seg.text}</MarkdownContent>
-                  {isStreaming && !isUser && isLastText && (
-                    <span className="inline-flex ml-1 gap-0.5 align-middle">
-                      <span className="w-1 h-1 rounded-full bg-textGray animate-pulse-dot" style={{ animationDelay: '0ms' }} />
-                      <span className="w-1 h-1 rounded-full bg-textGray animate-pulse-dot" style={{ animationDelay: '200ms' }} />
-                      <span className="w-1 h-1 rounded-full bg-textGray animate-pulse-dot" style={{ animationDelay: '400ms' }} />
-                    </span>
-                  )}
-                </div>
-              )
-            }
-
-            if (seg.kind === 'approval-request') {
-              return (
-                <SoftGateCard
-                  key={`a-${seg.approvalId}`}
-                  approvalId={seg.approvalId}
-                  toolName={seg.toolName}
-                  args={seg.args}
-                  onApprove={onApprove || (() => {})}
-                  onDeny={onDeny || (() => {})}
-                />
-              )
-            }
-
-            // tool-group：连续工具调用归一组，保持时间顺序（夹在前后文本段之间）
-            return (
-              <div key={`g-${idx}`} className="rounded-lg border border-borderGray bg-bgGray/50 overflow-hidden mt-2">
-                <div className="px-3 py-2 border-b border-borderGray bg-deepSea/5 flex items-center gap-2">
-                  <Wrench className="w-4 h-4 text-steelBlue" />
-                  <span className="text-xs font-medium text-textDark">工具调用</span>
-                </div>
-                <div className="px-3 divide-y divide-borderGray/50">
-                  {seg.steps.map((step) => (
-                    <RealToolStep key={step.toolCallId} step={step} />
-                  ))}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-        {/* Copy-to-clipboard affordance (assistant messages with text only).
-            Hover-revealed via the `group` on the bubble; force-visible for the
-            1.5s confirmation window after a click. */}
-        {!isUser && fullText && (
-          <div className="flex justify-end mt-1.5 -mb-1">
-            <button
-              type="button"
-              onClick={async () => {
-                await copyMessageText(fullText)
-                setCopiedId(item.id)
-                setTimeout(
-                  () => setCopiedId((cur) => (cur === item.id ? null : cur)),
-                  1500,
-                )
-              }}
-              title="复制"
-              className={clsx(
-                'transition text-[11px] text-textGray hover:text-textDark',
-                copiedId === item.id
-                  ? 'opacity-100'
-                  : 'opacity-0 group-hover:opacity-100',
-              )}
-            >
-              {copiedId === item.id ? '已复制' : '复制'}
-            </button>
+      {wrapped ? (
+        <div className="flex flex-col items-end gap-2 max-w-[85%] min-w-0">
+          {attachmentSegments.map((seg, idx) => (
+            <FileAttachmentCard key={`att-${seg.attachment.docId}-${idx}`} attachment={seg.attachment} />
+          ))}
+          <div
+            className={clsx(
+              'group rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm',
+              isUser ? 'bg-steelBlue text-white rounded-tr-sm' : 'bg-white border border-borderGray text-textDark rounded-tl-sm',
+            )}
+          >
+            <div className="space-y-2">{renderSegments(contentSegments)}</div>
           </div>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div
+          className={clsx(
+            'group max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm',
+            isUser ? 'bg-steelBlue text-white rounded-tr-sm' : 'bg-white border border-borderGray text-textDark rounded-tl-sm',
+          )}
+        >
+          <div className="space-y-2">{renderSegments(item.segments)}</div>
+          {/* Copy-to-clipboard affordance (assistant messages with text only).
+              Hover-revealed via the `group` on the bubble; force-visible for the
+              1.5s confirmation window after a click. */}
+          {!isUser && fullText && (
+            <div className="flex justify-end mt-1.5 -mb-1">
+              <button
+                type="button"
+                onClick={async () => {
+                  await copyMessageText(fullText)
+                  setCopiedId(item.id)
+                  setTimeout(
+                    () => setCopiedId((cur) => (cur === item.id ? null : cur)),
+                    1500,
+                  )
+                }}
+                title="复制"
+                className={clsx(
+                  'transition text-[11px] text-textGray hover:text-textDark',
+                  copiedId === item.id
+                    ? 'opacity-100'
+                    : 'opacity-0 group-hover:opacity-100',
+                )}
+              >
+                {copiedId === item.id ? '已复制' : '复制'}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
