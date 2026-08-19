@@ -149,6 +149,8 @@ export const executionFlows = sqliteTable(
     quantityTon: real('quantity_ton'),
     docType: text('doc_type').notNull(),
     voucherDate: text('voucher_date'),
+    /** 溯源: 物化时读到的抽取行 id, 修正重建后指向新行(防漂移审计线索)。 */
+    extractionId: text('extraction_id'),
     confidence: real('confidence').notNull().default(0),
     createdBy: text('created_by').notNull(),
     userId: text('user_id'),

@@ -6,6 +6,8 @@ import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.
 const mocks = vi.hoisted(() => ({
   upsertExecutionFlow: vi.fn<(args: any[]) => Promise<any>>(async () => 'EX-1'),
   retractExecutionFlowForBinding: vi.fn<(args: any[]) => Promise<any>>(async () => true),
+  retractExecutionFlowsForDocument: vi.fn<(args: any[]) => Promise<any>>(async () => 0),
+  listConfirmedBindingsForDocument: vi.fn<(args: any[]) => Promise<any>>(async () => []),
   loadLatestExtractionByDocId: vi.fn<(args: any[]) => Promise<any>>(async () => null),
   summarizeExecutionFlows: vi.fn<(args: any[]) => Promise<any>>(async () => []),
   listExecutionFlows: vi.fn<(args: any[]) => Promise<any>>(async () => []),
@@ -14,6 +16,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../src/pipeline/db/repositories.js', () => ({
   upsertExecutionFlow: mocks.upsertExecutionFlow,
   retractExecutionFlowForBinding: mocks.retractExecutionFlowForBinding,
+  retractExecutionFlowsForDocument: mocks.retractExecutionFlowsForDocument,
+  listConfirmedBindingsForDocument: mocks.listConfirmedBindingsForDocument,
   loadLatestExtractionByDocId: mocks.loadLatestExtractionByDocId,
   summarizeExecutionFlows: mocks.summarizeExecutionFlows,
   listExecutionFlows: mocks.listExecutionFlows,
@@ -21,6 +25,7 @@ vi.mock('../../src/pipeline/db/repositories.js', () => ({
 
 import {
   materializeExecutionFlow,
+  refreshExecutionFlowsForDocument,
   retractExecutionFlow,
   buildQueryExecutionFlowsTool,
 } from '../../src/pipeline/executionFlow.js';
@@ -34,6 +39,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.upsertExecutionFlow.mockResolvedValue('EX-1');
   mocks.retractExecutionFlowForBinding.mockResolvedValue(true);
+  mocks.retractExecutionFlowsForDocument.mockResolvedValue(0);
+  mocks.listConfirmedBindingsForDocument.mockResolvedValue([]);
   mocks.summarizeExecutionFlows.mockResolvedValue([]);
   mocks.listExecutionFlows.mockResolvedValue([]);
 });
@@ -214,6 +221,78 @@ describe('retractExecutionFlow', () => {
   });
 });
 
+describe('refreshExecutionFlowsForDocument 修正后重建', () => {
+  it('先撤回全部流水, 再按 confirmed 绑定逐条重物化(带最新 extractionId)', async () => {
+    mocks.retractExecutionFlowsForDocument.mockResolvedValue(2);
+    mocks.listConfirmedBindingsForDocument.mockResolvedValue([
+      { id: 'BD-1', contractNo: 'CJXC-001', confidence: 0.9 },
+      { id: 'BD-2', contractNo: 'CJXC-002', confidence: 0.8 },
+    ]);
+    mocks.loadLatestExtractionByDocId.mockResolvedValue(
+      extractionRow('付款凭证', {
+        付款人名称: '我方贸易有限公司',
+        收款人名称: '对手方有限公司',
+        金额: 500,
+        入账日期: '2026-08-01',
+      }),
+    );
+    const out = await refreshExecutionFlowsForDocument(ctx, 'DOC-1', 'u1', SELF);
+    expect(out).toEqual({ retracted: 2, materialized: 2 });
+    expect(mocks.retractExecutionFlowsForDocument).toHaveBeenCalledWith(ctx, 'DOC-1', 'u1');
+    expect(mocks.listConfirmedBindingsForDocument).toHaveBeenCalledWith(ctx, 'DOC-1', 'u1');
+    expect(mocks.upsertExecutionFlow).toHaveBeenCalledTimes(2);
+    // 溯源: 重建后的流水指向触发本次重建的抽取行 id。
+    expect(mocks.upsertExecutionFlow).toHaveBeenCalledWith(
+      ctx,
+      expect.objectContaining({
+        bindingId: 'BD-2',
+        contractNo: 'CJXC-002',
+        flowType: '资金流',
+        direction: 'out',
+        amount: 500,
+        extractionId: 'EX-1',
+        createdBy: 'review-refresh',
+      }),
+      'u1',
+    );
+  });
+
+  it('单条绑定重物化抛错 -> 告警跳过, 其余绑定继续', async () => {
+    mocks.retractExecutionFlowsForDocument.mockResolvedValue(2);
+    mocks.listConfirmedBindingsForDocument.mockResolvedValue([
+      { id: 'BD-1', contractNo: 'CJXC-001', confidence: 0.9 },
+      { id: 'BD-2', contractNo: 'CJXC-002', confidence: 0.8 },
+    ]);
+    // 第一条绑定的抽取行加载失败, 第二条正常。
+    mocks.loadLatestExtractionByDocId
+      .mockRejectedValueOnce(new Error('db boom'))
+      .mockResolvedValue(
+        extractionRow('发票', {
+          买方: '我方贸易有限公司',
+          卖方: '对手方有限公司',
+          金额: 88000,
+          开票日期: '2026-08-05',
+        }),
+      );
+    const out = await refreshExecutionFlowsForDocument(ctx, 'DOC-1', 'u1', SELF);
+    expect(out).toEqual({ retracted: 2, materialized: 1 });
+    expect(mocks.upsertExecutionFlow).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertExecutionFlow).toHaveBeenCalledWith(
+      ctx,
+      expect.objectContaining({ bindingId: 'BD-2', flowType: '发票流', direction: 'in' }),
+      'u1',
+    );
+  });
+
+  it('无 confirmed 绑定 -> 只撤回不重建; 白名单外抽取自然落空', async () => {
+    mocks.retractExecutionFlowsForDocument.mockResolvedValue(1);
+    mocks.listConfirmedBindingsForDocument.mockResolvedValue([]);
+    const out = await refreshExecutionFlowsForDocument(ctx, 'DOC-1', 'u1', SELF);
+    expect(out).toEqual({ retracted: 1, materialized: 0 });
+    expect(mocks.upsertExecutionFlow).not.toHaveBeenCalled();
+  });
+});
+
 describe('buildQueryExecutionFlowsTool', () => {
   it('execute 返回六向汇总 + 逐笔明细(只读, 无 needsApproval)', async () => {
     mocks.summarizeExecutionFlows.mockResolvedValue([
@@ -239,7 +318,7 @@ describe('buildQueryExecutionFlowsTool', () => {
       {
         flowId: 'EF-1', bindingId: 'BD-1', documentId: 'DOC-1',
         flowType: '资金流', direction: 'out', amount: 1234500, quantityTon: null,
-        voucherDate: '2026-08-01', docType: '付款凭证',
+        voucherDate: '2026-08-01', docType: '付款凭证', extractionId: null,
       },
     ]);
     expect(mocks.summarizeExecutionFlows).toHaveBeenCalledWith(ctx, 'CJXC-001', 'u1');

@@ -21,6 +21,7 @@ import {
   setReviewStatus,
 } from '../pipeline/db/repositories.js';
 import { ensureDocumentExtracted } from '../pipeline/tools/documentEntry.js';
+import { refreshExecutionFlowsForDocument } from '../pipeline/executionFlow.js';
 import { commitDocumentGraph } from '../pipeline/graphCommit.js';
 import { buildIngestDeps } from '../pipeline/ingestModel.js';
 import type { DocType, Modality } from '../pipeline/types.js';
@@ -115,6 +116,13 @@ reviewRoute.post('/:docId/review', async (c) => {
       snapshot = await applyDocumentCorrections(ctx(), docId, corrections, user.id);
       if (!snapshot) {
         return c.json({ ok: false, error: 'document_or_extraction_not_found' }, 404);
+      }
+      // 修正后的防漂移钩子(旁路): 已确认绑定的执行流水按最新抽取重建。
+      // 失败仅告警, 绝不影响修正主流程(与 L2 工具侧同一钩子)。
+      try {
+        await refreshExecutionFlowsForDocument(ctx(), docId, user.id);
+      } catch (e) {
+        console.warn('[executionFlow] 修正后重建执行流水失败:', docId, (e as Error).message);
       }
     } else if (confirm) {
       // Confirm-as-is: flip reviewStatus to 'confirmed' (previously a dead

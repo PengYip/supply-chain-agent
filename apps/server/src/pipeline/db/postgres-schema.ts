@@ -241,6 +241,7 @@ export const executionFlows = pgTable(
     quantityTon: doublePrecision('quantity_ton'),
     docType: text('doc_type').notNull(),
     voucherDate: text('voucher_date'),
+    extractionId: text('extraction_id'),
     confidence: numeric('confidence', { precision: 5, scale: 4 }).notNull().default(sql`0`),
     createdBy: text('created_by').notNull(),
     userId: text('user_id'),

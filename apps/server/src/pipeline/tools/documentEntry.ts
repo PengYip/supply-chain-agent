@@ -38,7 +38,7 @@ import { extractVoucher, mimeForExtension, type VlmResult } from '../vlmAdapter.
 import { VOUCHER_SCHEMAS, validateVoucher, type VoucherType } from '../schemas/vouchers.js';
 import { extractAnchors } from '../schemas/vouchers.js';
 import { generateBindingProposals, type BindingProposal, type BindingRoute } from '../bindingProposal.js';
-import { materializeExecutionFlow } from '../executionFlow.js';
+import { materializeExecutionFlow, refreshExecutionFlowsForDocument } from '../executionFlow.js';
 
 /** Phase A: 图片凭证 VLM 解析依赖(可注入 fake 供测试; 缺省用真实 extractVoucher)。 */
 export interface VlmDeps {
@@ -1379,6 +1379,13 @@ export function buildUpdateDocumentFieldsTool(deps: ToolDeps) {
       // (extraction_not_found) without duplicating the merge code here.
       const snapshot = await applyDocumentCorrections(deps.ctx, docId, corrections, deps.userId);
       if (!snapshot) return { status: 'error' as const, reason: 'extraction_not_found' };
+      // 修正后的防漂移钩子(旁路): 该文档已确认绑定的执行流水按最新抽取重建。
+      // 失败仅告警, 绝不影响修正主流程。
+      try {
+        await refreshExecutionFlowsForDocument(deps.ctx, docId, deps.userId);
+      } catch (e) {
+        console.warn('[executionFlow] 修正后重建执行流水失败:', docId, (e as Error).message);
+      }
       return {
         ok: true as const,
         docId,

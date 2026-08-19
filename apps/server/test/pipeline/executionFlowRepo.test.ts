@@ -3,8 +3,12 @@ import { createDb, migrate } from '../../src/pipeline/db/client.js';
 import {
   upsertExecutionFlow,
   retractExecutionFlowForBinding,
+  retractExecutionFlowsForDocument,
+  listConfirmedBindingsForDocument,
   listExecutionFlows,
   summarizeExecutionFlows,
+  saveBinding,
+  deleteDocument,
   type ExecutionFlowInput,
 } from '../../src/pipeline/db/repositories.js';
 
@@ -13,6 +17,16 @@ beforeEach(() => {
   ctx = createDb(':memory:');
   migrate(ctx.sqlite);
 });
+
+/** 插入最小 documents 行(deleteDocument 的所有权检查需要)。 */
+function insertDocumentStub(id: string, userId = ''): void {
+  ctx.sqlite
+    .prepare(
+      `INSERT INTO documents (id, doc_type, modality, source_uri, block_model, user_id)
+       VALUES (?, '其他', 'digital', 'stub://doc', 'stub', ?)`,
+    )
+    .run(id, userId);
+}
 
 function flow(overrides: Partial<ExecutionFlowInput> = {}): ExecutionFlowInput {
   return {
@@ -61,6 +75,87 @@ describe('upsertExecutionFlow', () => {
     expect(rows[0]!.amount).toBe(2000); // second write won
     expect(rows[0]!.quantityTon).toBe(20);
     expect(rows[0]!.voucherDate).toBe('2024-02-01');
+  });
+
+  it('round-trips extractionId (溯源列), null when omitted', async () => {
+    await upsertExecutionFlow(ctx, flow({ extractionId: 'EX-42' }));
+    await upsertExecutionFlow(ctx, flow({ bindingId: 'BD-2' })); // extractionId omitted -> null
+
+    const rows = await listExecutionFlows(ctx, 'HT-2024-001');
+    expect(rows).toHaveLength(2);
+    const traced = rows.find((r) => r.bindingId === 'BD-1')!;
+    expect(traced.extractionId).toBe('EX-42');
+    const untraced = rows.find((r) => r.bindingId === 'BD-2')!;
+    expect(untraced.extractionId).toBeNull();
+  });
+});
+
+describe('retractExecutionFlowsForDocument', () => {
+  it('deletes only the given document rows and returns the count', async () => {
+    await upsertExecutionFlow(ctx, flow({ documentId: 'DOC-1', bindingId: 'BD-1' }));
+    await upsertExecutionFlow(ctx, flow({ documentId: 'DOC-1', bindingId: 'BD-2' }));
+    await upsertExecutionFlow(ctx, flow({ documentId: 'DOC-2', bindingId: 'BD-3' }));
+
+    expect(await retractExecutionFlowsForDocument(ctx, 'DOC-1')).toBe(2);
+    expect(await listExecutionFlows(ctx, 'HT-2024-001')).toHaveLength(1); // DOC-2 row survives
+
+    // Idempotent: nothing left, second retract reports 0.
+    expect(await retractExecutionFlowsForDocument(ctx, 'DOC-1')).toBe(0);
+  });
+
+  it('respects the legacy 3-way OR user filter when scoped', async () => {
+    await upsertExecutionFlow(ctx, flow({ documentId: 'DOC-1' }), 'u-a');
+    await upsertExecutionFlow(ctx, flow({ documentId: 'DOC-1', bindingId: 'BD-9' }), 'u-b');
+
+    // u-b's own row plus legacy '' rows are retractable; u-a's private row is not.
+    expect(await retractExecutionFlowsForDocument(ctx, 'DOC-1', 'u-b')).toBe(1);
+    const remaining = ctx.sqlite
+      .prepare('SELECT binding_id AS b FROM execution_flows WHERE document_id = ?')
+      .all('DOC-1') as Array<{ b: string }>;
+    expect(remaining.map((r) => r.b)).toEqual(['BD-1']);
+  });
+});
+
+describe('listConfirmedBindingsForDocument', () => {
+  it('returns only confirmed bindings of that document, latest first', async () => {
+    insertDocumentStub('DOC-1');
+    insertDocumentStub('DOC-2');
+    const b1 = await saveBinding(ctx, {
+      documentId: 'DOC-1', contractNo: 'HT-2024-001', relation: '执行',
+      sourceRefs: [], confidence: 0.9, createdBy: 'human',
+    });
+    // pending binding -> excluded even though same document.
+    await saveBinding(ctx, {
+      documentId: 'DOC-1', contractNo: 'HT-2024-001', relation: '执行',
+      sourceRefs: [], confidence: 0.7, createdBy: 'agent', status: 'pending',
+    });
+    // confirmed but different document -> excluded.
+    await saveBinding(ctx, {
+      documentId: 'DOC-2', contractNo: 'HT-2024-001', relation: '执行',
+      sourceRefs: [], confidence: 0.8, createdBy: 'human',
+    });
+
+    const rows = await listConfirmedBindingsForDocument(ctx, 'DOC-1');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(b1);
+    expect(rows[0]!.contractNo).toBe('HT-2024-001');
+    expect(rows[0]!.status).toBe('confirmed');
+  });
+});
+
+describe('deleteDocument cleans execution_flows', () => {
+  it('removes flow rows of the deleted document (防孤儿行)', async () => {
+    insertDocumentStub('DOC-1');
+    await upsertExecutionFlow(ctx, flow({ documentId: 'DOC-1', bindingId: 'BD-1' }));
+    await upsertExecutionFlow(ctx, flow({ documentId: 'DOC-2', bindingId: 'BD-2' }));
+
+    const { deleted } = await deleteDocument(ctx, 'DOC-1');
+    expect(deleted).toBe(true);
+
+    const remaining = ctx.sqlite
+      .prepare('SELECT document_id AS d FROM execution_flows')
+      .all() as Array<{ d: string }>;
+    expect(remaining.map((r) => r.d)).toEqual(['DOC-2']);
   });
 });
 

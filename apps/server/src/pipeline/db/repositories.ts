@@ -68,6 +68,8 @@ import {
   // 执行流水(六向): pg twins for upsert/retract/list/summarize。
   upsertExecutionFlowPg,
   retractExecutionFlowForBindingPg,
+  retractExecutionFlowsForDocumentPg,
+  listConfirmedBindingsForDocumentPg,
   listExecutionFlowsPg,
   summarizeExecutionFlowsPg,
 } from './postgres-repositories.js';
@@ -1050,6 +1052,8 @@ export async function deleteDocument(ctx: DbContext, docId: string, userId?: str
     sqlite.prepare('DELETE FROM extractions WHERE document_id = ?').run(docId);
     sqlite.prepare('DELETE FROM classifications WHERE document_id = ?').run(docId);
     sqlite.prepare('DELETE FROM bindings WHERE document_id = ?').run(docId);
+    // 执行流水随绑定与抽取一起清理(无 FK, 显式删; 防孤儿行)。
+    sqlite.prepare('DELETE FROM execution_flows WHERE document_id = ?').run(docId);
     sqlite.prepare('DELETE FROM document_tags WHERE document_id = ?').run(docId);
     // 8. parent last (after all referencers gone).
     sqlite.prepare('DELETE FROM documents WHERE id = ?').run(docId);
@@ -1917,6 +1921,8 @@ export interface ExecutionFlowInput {
   quantityTon: number | null;
   docType: string;
   voucherDate: string | null;
+  /** 溯源: 物化时读到的抽取行 id(修正重建后指向新行, 防漂移审计线索)。 */
+  extractionId?: string | null;
   confidence: number;
   createdBy: string;
 }
@@ -1954,8 +1960,8 @@ export async function upsertExecutionFlow(
     .prepare(
       `INSERT INTO execution_flows
          (id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton,
-          doc_type, voucher_date, confidence, created_by, user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          doc_type, voucher_date, extraction_id, confidence, created_by, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(binding_id, user_id) DO UPDATE SET
          document_id = excluded.document_id,
          contract_no = excluded.contract_no,
@@ -1965,6 +1971,7 @@ export async function upsertExecutionFlow(
          quantity_ton = excluded.quantity_ton,
          doc_type = excluded.doc_type,
          voucher_date = excluded.voucher_date,
+         extraction_id = excluded.extraction_id,
          confidence = excluded.confidence,
          created_by = excluded.created_by`,
     )
@@ -1979,6 +1986,7 @@ export async function upsertExecutionFlow(
       input.quantityTon,
       input.docType,
       input.voucherDate,
+      input.extractionId ?? null,
       input.confidence,
       input.createdBy,
       effectiveUserId(userId),
@@ -2008,6 +2016,56 @@ export async function retractExecutionFlowForBinding(
   return info.changes > 0;
 }
 
+/**
+ * 撤回一份文档名下的全部流水行(DELETE)。复核修正触发全量重建的前半段:
+ * 先清空该文档旧流水, 再按最新抽取逐绑定重物化(见 executionFlow.ts 的
+ * refreshExecutionFlowsForDocument), 保证流水与抽取不漂移。幂等。
+ */
+export async function retractExecutionFlowsForDocument(
+  ctx: DbContext,
+  documentId: string,
+  userId?: string,
+): Promise<number> {
+  if (ctx.backend === 'postgres') return retractExecutionFlowsForDocumentPg(ctx, documentId, userId);
+  const uid = effectiveUserId(userId);
+  const info = uid
+    ? ctx.sqlite
+        .prepare(
+          `DELETE FROM execution_flows
+           WHERE document_id = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)`,
+        )
+        .run(documentId, uid)
+    : ctx.sqlite.prepare('DELETE FROM execution_flows WHERE document_id = ?').run(documentId);
+  return info.changes;
+}
+
+/**
+ * 列出一份文档的全部 confirmed 绑定(重建流水的原料)。按 user 过滤
+ * (legacy 行 3-way OR), 按 created_at DESC。
+ */
+export async function listConfirmedBindingsForDocument(
+  ctx: DbContext,
+  documentId: string,
+  userId?: string,
+): Promise<BindingRow[]> {
+  if (ctx.backend === 'postgres') return listConfirmedBindingsForDocumentPg(ctx, documentId, userId);
+  const uid = effectiveUserId(userId);
+  const filter = uid
+    ? and(
+        eq(bindings.documentId, documentId),
+        eq(bindings.status, 'confirmed'),
+        or(eq(bindings.userId, uid), eq(bindings.userId, ''), isNull(bindings.userId)),
+      )
+    : and(eq(bindings.documentId, documentId), eq(bindings.status, 'confirmed'));
+  const rows = ctx.db
+    .select()
+    .from(bindings)
+    .where(filter)
+    .orderBy(desc(bindings.createdAt))
+    .all();
+  return rows.map(rowToBinding);
+}
+
 /** SQLite execution_flows 行 -> ExecutionFlowRow(所有 SQLite 读取函数共用)。 */
 function executionFlowRowFromSqlite(r: {
   id: string;
@@ -2020,6 +2078,7 @@ function executionFlowRowFromSqlite(r: {
   quantity_ton: number | null;
   doc_type: string;
   voucher_date: string | null;
+  extraction_id: string | null;
   confidence: number;
   created_by: string;
   user_id: string | null;
@@ -2036,6 +2095,7 @@ function executionFlowRowFromSqlite(r: {
     quantityTon: r.quantity_ton ?? null,
     docType: r.doc_type,
     voucherDate: r.voucher_date ?? null,
+    extractionId: r.extraction_id ?? null,
     confidence: r.confidence,
     createdBy: r.created_by,
     userId: r.user_id ?? null,
@@ -2055,7 +2115,7 @@ export async function listExecutionFlows(
     ? ctx.sqlite
         .prepare(
           `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton,
-                  doc_type, voucher_date, confidence, created_by, user_id, created_at
+                  doc_type, voucher_date, extraction_id, confidence, created_by, user_id, created_at
            FROM execution_flows
            WHERE contract_no = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)
            ORDER BY created_at ASC`,
@@ -2064,7 +2124,7 @@ export async function listExecutionFlows(
     : ctx.sqlite
         .prepare(
           `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton,
-                  doc_type, voucher_date, confidence, created_by, user_id, created_at
+                  doc_type, voucher_date, extraction_id, confidence, created_by, user_id, created_at
            FROM execution_flows
            WHERE contract_no = ?
            ORDER BY created_at ASC`,
@@ -2080,6 +2140,7 @@ export async function listExecutionFlows(
     quantity_ton: number | null;
     doc_type: string;
     voucher_date: string | null;
+    extraction_id: string | null;
     confidence: number;
     created_by: string;
     user_id: string | null;

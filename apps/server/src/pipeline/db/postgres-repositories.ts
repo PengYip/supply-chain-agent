@@ -801,6 +801,8 @@ export async function deleteDocumentPg(
     await client.query('DELETE FROM extractions WHERE document_id = $1', [docId]);
     await client.query('DELETE FROM classifications WHERE document_id = $1', [docId]);
     await client.query('DELETE FROM bindings WHERE document_id = $1', [docId]);
+    // 执行流水随绑定与抽取一起清理(无 FK, 显式删; 防孤儿行)。
+    await client.query('DELETE FROM execution_flows WHERE document_id = $1', [docId]);
     await client.query('DELETE FROM document_tags WHERE document_id = $1', [docId]);
     await client.query('DELETE FROM documents WHERE id = $1', [docId]);
     await client.query('COMMIT');
@@ -1535,6 +1537,7 @@ function executionFlowRowFromPg(r: Record<string, unknown>): ExecutionFlowRow {
     quantityTon: r.quantity_ton === null || r.quantity_ton === undefined ? null : Number(r.quantity_ton),
     docType: String(r.doc_type),
     voucherDate: r.voucher_date === null || r.voucher_date === undefined ? null : String(r.voucher_date),
+    extractionId: r.extraction_id === null || r.extraction_id === undefined ? null : String(r.extraction_id),
     confidence: Number(r.confidence),
     createdBy: String(r.created_by),
     userId: r.user_id === null || r.user_id === undefined ? null : String(r.user_id),
@@ -1555,8 +1558,8 @@ export async function upsertExecutionFlowPg(
   await ctx.pool.query(
     `INSERT INTO execution_flows
        (id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton,
-        doc_type, voucher_date, confidence, created_by, user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        doc_type, voucher_date, extraction_id, confidence, created_by, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
      ON CONFLICT (binding_id, user_id) DO UPDATE SET
        document_id = EXCLUDED.document_id,
        contract_no = EXCLUDED.contract_no,
@@ -1566,6 +1569,7 @@ export async function upsertExecutionFlowPg(
        quantity_ton = EXCLUDED.quantity_ton,
        doc_type = EXCLUDED.doc_type,
        voucher_date = EXCLUDED.voucher_date,
+       extraction_id = EXCLUDED.extraction_id,
        confidence = EXCLUDED.confidence,
        created_by = EXCLUDED.created_by`,
     [
@@ -1579,6 +1583,7 @@ export async function upsertExecutionFlowPg(
       input.quantityTon,
       input.docType,
       input.voucherDate,
+      input.extractionId ?? null,
       input.confidence,
       input.createdBy,
       effectiveUserId(userId),
@@ -1604,6 +1609,51 @@ export async function retractExecutionFlowForBindingPg(
   return (res.rowCount ?? 0) > 0;
 }
 
+/** 撤回一份文档名下的全部流水行(pg)。修正触发全量重建的前半段, 幂等。 */
+export async function retractExecutionFlowsForDocumentPg(
+  ctx: PostgresDbContext,
+  documentId: string,
+  userId?: string,
+): Promise<number> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `DELETE FROM execution_flows
+         WHERE document_id = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)`,
+        [documentId, uid],
+      )
+    : await ctx.pool.query('DELETE FROM execution_flows WHERE document_id = $1', [documentId]);
+  return res.rowCount ?? 0;
+}
+
+/** 列出一份文档的全部 confirmed 绑定(pg, 重建流水的原料)。 */
+export async function listConfirmedBindingsForDocumentPg(
+  ctx: PostgresDbContext,
+  documentId: string,
+  userId?: string,
+): Promise<BindingRow[]> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT id, document_id, contract_no, relation, source_refs, confidence, created_by,
+                status, confirmation_source, proposed_by, evidence, graph_status
+         FROM bindings
+         WHERE document_id = $1 AND status = 'confirmed'
+           AND (user_id = $2 OR user_id = '' OR user_id IS NULL)
+         ORDER BY created_at DESC`,
+        [documentId, uid],
+      )
+    : await ctx.pool.query(
+        `SELECT id, document_id, contract_no, relation, source_refs, confidence, created_by,
+                status, confirmation_source, proposed_by, evidence, graph_status
+         FROM bindings
+         WHERE document_id = $1 AND status = 'confirmed'
+         ORDER BY created_at DESC`,
+        [documentId],
+      );
+  return res.rows.map(bindingRowFromPg);
+}
+
 /** 明细行(pg), 按 created_at 升序。 */
 export async function listExecutionFlowsPg(
   ctx: PostgresDbContext,
@@ -1614,7 +1664,7 @@ export async function listExecutionFlowsPg(
   const res = uid
     ? await ctx.pool.query(
         `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton,
-                doc_type, voucher_date, confidence, created_by, user_id, created_at
+                doc_type, voucher_date, extraction_id, confidence, created_by, user_id, created_at
          FROM execution_flows
          WHERE contract_no = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)
          ORDER BY created_at ASC`,
@@ -1622,7 +1672,7 @@ export async function listExecutionFlowsPg(
       )
     : await ctx.pool.query(
         `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton,
-                doc_type, voucher_date, confidence, created_by, user_id, created_at
+                doc_type, voucher_date, extraction_id, confidence, created_by, user_id, created_at
          FROM execution_flows
          WHERE contract_no = $1
          ORDER BY created_at ASC`,

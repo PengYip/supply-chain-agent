@@ -189,6 +189,7 @@ export function migrate(sqlite: Database.Database): void {
       quantity_ton REAL,
       doc_type TEXT NOT NULL,
       voucher_date TEXT,
+      extraction_id TEXT,
       confidence REAL NOT NULL DEFAULT 0,
       created_by TEXT NOT NULL,
       user_id TEXT,
@@ -210,6 +211,15 @@ export function migrate(sqlite: Database.Database): void {
       } catch {
         // Column may have been added concurrently; safe to ignore.
       }
+    }
+  }
+
+  // 执行流水溯源(移植自 CodeX-2): extraction_flows 先建的 dev 库补 extraction_id
+  // 列。同一 guarded ALTER 模式。
+  {
+    const cols = sqlite.prepare('PRAGMA table_info(execution_flows)').all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'extraction_id')) {
+      try { sqlite.exec('ALTER TABLE execution_flows ADD COLUMN extraction_id TEXT'); } catch { /* concurrent */ }
     }
   }
 
@@ -467,6 +477,7 @@ export async function migratePostgres(pool: Pool): Promise<void> {
        quantity_ton double precision,
        doc_type TEXT NOT NULL,
        voucher_date TEXT,
+       extraction_id TEXT,
        confidence numeric(5,4) NOT NULL DEFAULT 0,
        created_by TEXT NOT NULL,
        user_id TEXT,
@@ -474,6 +485,8 @@ export async function migratePostgres(pool: Pool): Promise<void> {
      )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_flows_binding ON execution_flows(binding_id, user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_execution_flows_contract ON execution_flows(contract_no, user_id)`,
+    // Traceability for pre-existing PG dev DBs (SQLite mirrors the guarded ALTER above).
+    `ALTER TABLE execution_flows ADD COLUMN IF NOT EXISTS extraction_id TEXT`,
     // L4 FTS fix (2026-08-17): drizzle migration 0000 created doc_chunk.fts_vector
     // as a PLAIN tsvector column (no GENERATED), so it stays NULL forever and
     // every FTS query silently returns 0 hits. Recreate it as a GENERATED column

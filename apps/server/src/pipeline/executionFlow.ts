@@ -18,6 +18,8 @@ import {
   loadLatestExtractionByDocId,
   upsertExecutionFlow,
   retractExecutionFlowForBinding,
+  retractExecutionFlowsForDocument,
+  listConfirmedBindingsForDocument,
   summarizeExecutionFlows,
   listExecutionFlows,
 } from './db/repositories.js';
@@ -105,11 +107,51 @@ export async function materializeExecutionFlow(
       quantityTon: anchors.quantityTon ?? null,
       docType: extraction.docType,
       voucherDate: anchors.date ?? null,
+      // 溯源: 这行流水来自哪次抽取(修正重建后指向新行, 审计线索)。
+      extractionId: extraction.id,
       confidence: input.confidence,
       createdBy: input.createdBy,
     },
     userId,
   );
+}
+
+/**
+ * 复核修正后的防漂移重建(移植自 CodeX-2): 先撤回该文档名下全部流水行,
+ * 再按最新抽取对每条 confirmed 绑定重新物化。抽取字段被人工修正
+ * (applyDocumentCorrections)或重抽取后由调用方触发; 白名单外/方向判不出
+ * 的绑定重物化自然落空 -> 旧流水被清掉, 流水表始终反映最新抽取, 不漂移。
+ * 单条失败仅告警, 不中断其余绑定(旁路语义与物化一致)。
+ */
+export async function refreshExecutionFlowsForDocument(
+  ctx: DbContext,
+  documentId: string,
+  userId?: string,
+  selfPartyNames?: string[],
+): Promise<{ retracted: number; materialized: number }> {
+  const retracted = await retractExecutionFlowsForDocument(ctx, documentId, userId);
+  const bindings = await listConfirmedBindingsForDocument(ctx, documentId, userId);
+  let materialized = 0;
+  for (const b of bindings) {
+    try {
+      const flowId = await materializeExecutionFlow(
+        ctx,
+        {
+          documentId,
+          contractNo: b.contractNo,
+          bindingId: b.id,
+          confidence: b.confidence,
+          createdBy: 'review-refresh',
+        },
+        userId,
+        selfPartyNames,
+      );
+      if (flowId) materialized += 1;
+    } catch (e) {
+      console.warn('[executionFlow] 重建流水失败(跳过该绑定):', b.id, (e as Error).message);
+    }
+  }
+  return { retracted, materialized };
 }
 
 /** 解绑/拒绝时撤销该 binding 的执行流水(转调存储层)。 */
@@ -159,6 +201,7 @@ export function buildQueryExecutionFlowsTool(deps: QueryFlowsToolDeps) {
           quantityTon: f.quantityTon,
           voucherDate: f.voucherDate,
           docType: f.docType,
+          extractionId: f.extractionId ?? null,
         })),
       };
     },
