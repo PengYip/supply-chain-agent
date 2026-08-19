@@ -5,7 +5,7 @@ import { validateSpan, type SpanMatchStrength } from './spanValidator.js';
 import { computeFieldConfidence, decisionForField } from './confidence.js';
 import { REQUIRED_CONTRACT_FIELDS } from './schemas/contract.js';
 import type { ProposedRelationship, ProposedEdge } from './db/repositories.js';
-import { REL_ROLE_BY_FIELD, COMMODITY_FIELDS, CONTRACT_FIELDS, EXECUTES_DOCTYPES } from '../domain/tradeSemantics.js';
+import { TRADE_VOCAB, type TradeVocabulary } from '../domain/tradeSemantics.js';
 
 export interface GroundedField {
   name: string;
@@ -112,16 +112,19 @@ export interface RelationshipFieldInput {
 }
 
 /** Pure: derive candidate Party/Commodity/Contract entities from flat extracted fields. */
-export function deriveProposedRelationships(fields: RelationshipFieldInput[]): ProposedRelationship[] {
+export function deriveProposedRelationships(
+  fields: RelationshipFieldInput[],
+  vocab: TradeVocabulary = TRADE_VOCAB,
+): ProposedRelationship[] {
   const out: ProposedRelationship[] = [];
   for (const f of fields) {
     const val = typeof f.value === 'string' ? f.value.trim() : '';
     if (!val) continue;
-    if (REL_ROLE_BY_FIELD[f.name]) {
-      out.push({ kind: 'Party', role: REL_ROLE_BY_FIELD[f.name], name: val, confidence: f.confidence });
-    } else if (COMMODITY_FIELDS.has(f.name)) {
+    if (vocab.roleByField[f.name]) {
+      out.push({ kind: 'Party', role: vocab.roleByField[f.name]!, name: val, confidence: f.confidence });
+    } else if (vocab.commodityFields.has(f.name)) {
       out.push({ kind: 'Commodity', name: val, confidence: f.confidence });
-    } else if (CONTRACT_FIELDS.has(f.name)) {
+    } else if (vocab.contractFields.has(f.name)) {
       out.push({ kind: 'Contract', name: val, confidence: f.confidence });
     }
   }
@@ -139,19 +142,23 @@ export interface EdgeFieldInput {
  * 纯函数：从扁平字段确定性派生 Document->实体边，无 LLM 参与。抽取时与确认时
  * （graphCommit）跑同一规则，复核卡展示与图写入不会漂移。
  */
-export function deriveProposedEdges(docType: string, fields: EdgeFieldInput[]): ProposedEdge[] {
+export function deriveProposedEdges(
+  docType: string,
+  fields: EdgeFieldInput[],
+  vocab: TradeVocabulary = TRADE_VOCAB,
+): ProposedEdge[] {
   const out: ProposedEdge[] = [];
   const contractConf = new Map<string, number>();
   const contractOrder: string[] = [];
   for (const f of fields) {
     const val = typeof f.value === 'string' ? f.value.trim() : '';
     if (!val) continue;
-    const role = REL_ROLE_BY_FIELD[f.name];
+    const role = vocab.roleByField[f.name];
     if (role) {
       out.push({ type: 'party', dstKind: 'Party', dstName: val, role, confidence: f.confidence });
-    } else if (COMMODITY_FIELDS.has(f.name)) {
+    } else if (vocab.commodityFields.has(f.name)) {
       out.push({ type: 'commodity', dstKind: 'Commodity', dstName: val, confidence: f.confidence });
-    } else if (CONTRACT_FIELDS.has(f.name)) {
+    } else if (vocab.contractFields.has(f.name)) {
       if (!contractConf.has(val)) contractOrder.push(val);
       contractConf.set(val, Math.max(contractConf.get(val) ?? 0, f.confidence));
     }
@@ -159,7 +166,7 @@ export function deriveProposedEdges(docType: string, fields: EdgeFieldInput[]): 
   for (const name of contractOrder) {
     const confidence = contractConf.get(name) ?? 0;
     out.push({ type: 'references', dstKind: 'Contract', dstName: name, confidence });
-    if (EXECUTES_DOCTYPES.has(docType)) {
+    if (vocab.executesDocTypes.has(docType)) {
       out.push({ type: 'executes', dstKind: 'Contract', dstName: name, confidence });
     }
   }

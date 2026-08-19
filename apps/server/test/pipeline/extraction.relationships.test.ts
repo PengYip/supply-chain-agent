@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { deriveProposedRelationships } from '../../src/pipeline/extraction.js';
+import { deriveProposedRelationships, deriveProposedEdges } from '../../src/pipeline/extraction.js';
 import type { ExtractedField } from '../../src/pipeline/extraction.js';
+import { TRADE_VOCAB, type TradeVocabulary } from '../../src/domain/tradeSemantics.js';
 
 function f(name: string, value: string, confidence = 0.9): ExtractedField {
   return { name, value, sourceSpans: [], strength: 'exact', confidence, needsReview: false, autoAccepted: true, citedText: '' };
@@ -41,5 +42,32 @@ describe('deriveProposedRelationships', () => {
     expect(rels).toContainEqual(expect.objectContaining({ kind: 'Party', role: '发货人', name: 'S公司' }));
     expect(rels).toContainEqual(expect.objectContaining({ kind: 'Party', role: '收货人', name: 'R公司' }));
     expect(rels).toContainEqual(expect.objectContaining({ kind: 'Party', role: '承运人', name: 'C航运' }));
+  });
+});
+
+describe('TradeVocabulary 注入（L2 租户定制口子）', () => {
+  /** 客户别名词汇表: 「购方/销方」当角色字段, 私有合同号字段 「契约编号」。 */
+  const custom: TradeVocabulary = {
+    ...TRADE_VOCAB,
+    roleByField: { 购方: '买方', 销方: '卖方' },
+    contractFields: new Set(['契约编号']),
+    executesDocTypes: new Set(['货转单']),
+  };
+
+  it('deriveProposedRelationships 用注入词汇表识别客户别名角色', () => {
+    const rels = deriveProposedRelationships([f('购方', '华能'), f('契约编号', 'HT-9')], custom);
+    expect(rels).toContainEqual(expect.objectContaining({ kind: 'Party', role: '买方', name: '华能' }));
+    expect(rels).toContainEqual(expect.objectContaining({ kind: 'Contract', name: 'HT-9' }));
+    // 默认词汇表不认识这些字段名 -> 同输入派生不出提议。
+    expect(deriveProposedRelationships([f('购方', '华能')])).toEqual([]);
+  });
+
+  it('deriveProposedEdges 用注入词汇表决定 executes 边的 docType 集合', () => {
+    const fields = [f('契约编号', 'HT-9')];
+    const customEdges = deriveProposedEdges('货转单', fields, custom);
+    expect(customEdges).toContainEqual(expect.objectContaining({ type: 'executes', dstName: 'HT-9' }));
+    // 默认词汇表不认识 契约编号 字段 -> 同输入派生不出任何边。
+    const defaultEdges = deriveProposedEdges('货转单', fields);
+    expect(defaultEdges).toEqual([]);
   });
 });

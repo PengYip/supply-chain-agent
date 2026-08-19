@@ -1,45 +1,43 @@
 import { describe, it, expect } from 'vitest';
 import {
-  REL_ROLE_BY_FIELD,
-  COMMODITY_FIELDS,
-  CONTRACT_FIELDS,
-  EXECUTES_DOCTYPES,
+  TRADE_VOCAB,
   bindingRelationFor,
   CHUNK_TAG_TAXONOMY,
   getTaxonomy,
+  type TradeVocabulary,
 } from '../../src/domain/tradeSemantics.js';
 
 describe('tradeSemantics (L1 行业词汇表)', () => {
-  describe('REL_ROLE_BY_FIELD', () => {
+  describe('TRADE_VOCAB.roleByField', () => {
     it('maps 甲方/乙方 to 买方/卖方', () => {
-      expect(REL_ROLE_BY_FIELD['甲方']).toBe('买方');
-      expect(REL_ROLE_BY_FIELD['乙方']).toBe('卖方');
+      expect(TRADE_VOCAB.roleByField['甲方']).toBe('买方');
+      expect(TRADE_VOCAB.roleByField['乙方']).toBe('卖方');
     });
 
     it('contains 发货人/收货人/承运人 with identity values', () => {
       for (const key of ['发货人', '收货人', '承运人']) {
-        expect(REL_ROLE_BY_FIELD[key]).toBe(key);
+        expect(TRADE_VOCAB.roleByField[key]).toBe(key);
       }
     });
   });
 
-  it('CONTRACT_FIELDS contains exactly 合同号 and 合同编号', () => {
-    expect(CONTRACT_FIELDS.size).toBe(2);
-    expect(CONTRACT_FIELDS.has('合同号')).toBe(true);
-    expect(CONTRACT_FIELDS.has('合同编号')).toBe(true);
+  it('contractFields contains exactly 合同号 and 合同编号', () => {
+    expect(TRADE_VOCAB.contractFields.size).toBe(2);
+    expect(TRADE_VOCAB.contractFields.has('合同号')).toBe(true);
+    expect(TRADE_VOCAB.contractFields.has('合同编号')).toBe(true);
   });
 
-  it('COMMODITY_FIELDS contains exactly 标的物 and 商品', () => {
-    expect(COMMODITY_FIELDS.size).toBe(2);
-    expect(COMMODITY_FIELDS.has('标的物')).toBe(true);
-    expect(COMMODITY_FIELDS.has('商品')).toBe(true);
+  it('commodityFields contains exactly 标的物 and 商品', () => {
+    expect(TRADE_VOCAB.commodityFields.size).toBe(2);
+    expect(TRADE_VOCAB.commodityFields.has('标的物')).toBe(true);
+    expect(TRADE_VOCAB.commodityFields.has('商品')).toBe(true);
   });
 
-  it('EXECUTES_DOCTYPES contains exactly 发票/提单/装箱单', () => {
-    expect(EXECUTES_DOCTYPES.size).toBe(3);
-    expect(EXECUTES_DOCTYPES.has('发票')).toBe(true);
-    expect(EXECUTES_DOCTYPES.has('提单')).toBe(true);
-    expect(EXECUTES_DOCTYPES.has('装箱单')).toBe(true);
+  it('executesDocTypes contains exactly 发票/提单/装箱单', () => {
+    expect(TRADE_VOCAB.executesDocTypes.size).toBe(3);
+    expect(TRADE_VOCAB.executesDocTypes.has('发票')).toBe(true);
+    expect(TRADE_VOCAB.executesDocTypes.has('提单')).toBe(true);
+    expect(TRADE_VOCAB.executesDocTypes.has('装箱单')).toBe(true);
   });
 
   describe('bindingRelationFor', () => {
@@ -48,6 +46,16 @@ describe('tradeSemantics (L1 行业词汇表)', () => {
       expect(bindingRelationFor('付款凭证')).toBe('付款');
       expect(bindingRelationFor('化验报告')).toBe('质检');
       expect(bindingRelationFor('其他')).toBe('凭证');
+    });
+
+    it('falls back when a custom vocab omits the voucher type', () => {
+      const custom: TradeVocabulary = {
+        ...TRADE_VOCAB,
+        bindingRelationByVoucherType: { 货转单: '交付' },
+        bindingRelationFallback: '默认凭证',
+      };
+      expect(bindingRelationFor('货转单', custom)).toBe('交付');
+      expect(bindingRelationFor('付款凭证', custom)).toBe('默认凭证');
     });
   });
 
