@@ -10,8 +10,9 @@ import { useSessions } from './hooks/useSessions';
 import { EvalWorkbenchView } from './components/eval/EvalWorkbenchView';
 import { GraphView } from './components/graph/GraphView';
 import { BindingsView } from './components/bindings/BindingsView';
+import { FlowsView } from './components/flows/FlowsView';
 import type { GraphFocus, GraphFocusTarget } from './components/graph/focus';
-import { FlaskConical, Link2, MessageSquare, Network } from 'lucide-react';
+import { ArrowLeftRight, FlaskConical, Link2, MessageSquare, Network } from 'lucide-react';
 import clsx from 'clsx';
 
 function App() {
@@ -19,7 +20,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [filePanelVisible, setFilePanelVisible] = useState(false);
-  const [view, setView] = useState<'chat' | 'eval' | 'graph' | 'bindings'>('chat');
+  const [view, setView] = useState<'chat' | 'eval' | 'graph' | 'bindings' | 'flows'>('chat');
   // 跨视图定位：绑定工作台 -> 图谱页，以合同节点为中心展开。
   // nonce 自增保证重复跳转同一合同也会触发图谱页重新查询。
   const [graphFocus, setGraphFocus] = useState<GraphFocus | null>(null);
@@ -134,10 +135,18 @@ function App() {
           className={clsx('w-9 h-9 rounded-lg flex items-center justify-center', view === 'bindings' ? 'bg-deepSea text-white' : 'text-textGray hover:bg-bgGray')}>
           <Link2 className="h-5 w-5" aria-hidden />
         </button>
+        <button type="button" title="执行流水" aria-label="执行流水" onClick={() => setView('flows')}
+          className={clsx('w-9 h-9 rounded-lg flex items-center justify-center', view === 'flows' ? 'bg-deepSea text-white' : 'text-textGray hover:bg-bgGray')}>
+          <ArrowLeftRight className="h-5 w-5" aria-hidden />
+        </button>
       </div>
       {view === 'bindings' ? (
         <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
           <BindingsView onOpenInGraph={openInGraph} />
+        </div>
+      ) : view === 'flows' ? (
+        <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
+          <FlowsView />
         </div>
       ) : view === 'graph' ? (
         <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>

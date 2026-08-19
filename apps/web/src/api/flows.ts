@@ -147,3 +147,65 @@ export async function fetchExecutionFlows(contractNo: string): Promise<Execution
   }
   return envelope
 }
+
+/** GET /api/bindings/contracts 的台账行(报表页合同下拉用)。 */
+export interface FlowContractOption {
+  contractNo: string
+  displayContractNo: string | null
+  docType: string | null
+  title: string | null
+}
+
+/** GET /api/bindings/contracts。响应信封 { contracts: [...] }, 逐项防御性规整(非对象项/缺 contractNo 跳过)。 */
+export async function fetchFlowContracts(): Promise<FlowContractOption[]> {
+  let res: Response
+  try {
+    res = await fetch('/api/bindings/contracts', {
+      credentials: 'include',
+    })
+  } catch {
+    throw new Error('网络错误，请稍后重试')
+  }
+
+  if (!res.ok) {
+    let message = `请求失败（${res.status}）`
+    try {
+      const data = (await res.json()) as { ok?: unknown; error?: unknown }
+      if (data && data.ok === false && typeof data.error === 'string' && data.error) {
+        message = data.error
+      }
+    } catch {
+      /* response wasn't JSON — keep the status-based message */
+    }
+    throw new Error(message)
+  }
+
+  let data: unknown
+  try {
+    data = await res.json()
+  } catch {
+    throw new Error('响应格式异常')
+  }
+  const envelope = data as { contracts?: unknown }
+  const rawList =
+    envelope && typeof envelope === 'object' && !Array.isArray(envelope) && Array.isArray(envelope.contracts)
+      ? envelope.contracts
+      : []
+  const rows: FlowContractOption[] = []
+  for (const raw of rawList) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const r = raw as Record<string, unknown>
+    const contractNo = typeof r.contractNo === 'string' ? r.contractNo : ''
+    if (!contractNo) continue
+    const displayNo = typeof r.displayContractNo === 'string' ? r.displayContractNo : ''
+    const docType = typeof r.docType === 'string' ? r.docType : ''
+    const title = typeof r.title === 'string' ? r.title : ''
+    rows.push({
+      contractNo,
+      displayContractNo: displayNo || contractNo,
+      docType: docType || null,
+      title: title || null,
+    })
+  }
+  return rows
+}

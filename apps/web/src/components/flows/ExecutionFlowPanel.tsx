@@ -18,8 +18,8 @@ export interface ExecutionFlowPanelProps {
   contractNo: string;
   /** 头部展示用, 缺省用 contractNo。 */
   displayContractNo?: string;
-  /** 溯源: 定位到该凭证所属文档。 */
-  onLocateDocument: (documentId: string) => void;
+  /** 溯源: 定位到该凭证所属文档。缺省时不渲染按钮, 溯源列降级为悬浮文本。 */
+  onLocateDocument?: (documentId: string) => void;
 }
 
 type Phase = 'idle' | 'loading' | 'ready' | 'error';
@@ -60,18 +60,21 @@ function SummaryCard({ summary, groupFlows }: { summary: FlowSummary; groupFlows
   );
 }
 
-/** 逐笔明细行: 流向徽章 + 金额/数量(右对齐) + 凭证日期 + 凭证类型 + 溯源按钮。 */
+/** 逐笔明细行: 流向徽章 + 金额/数量(右对齐) + 凭证日期 + 凭证类型 + 溯源列。 */
 function FlowRow({
   flow,
   onLocateDocument,
 }: {
   flow: ExecutionFlowItem;
-  onLocateDocument: (documentId: string) => void;
+  onLocateDocument?: (documentId: string) => void;
 }) {
   const isIn = flow.direction === 'in';
   const badgeCls = isIn
     ? 'border-[#CBE5D3] bg-[#E9F4EC] text-[#15803D]'
     : 'border-[#CFDCE6] bg-[#EBF1F5] text-steelBlue';
+  const traceTitle = flow.extractionId
+    ? `documentId: ${flow.documentId} / extractionId: ${flow.extractionId}`
+    : `documentId: ${flow.documentId}`;
   return (
     <div className="grid grid-cols-[64px_1fr_1fr_92px_1fr_84px] items-center border-b border-borderGray/60 last:border-b-0">
       <div className="px-2 py-1.5">
@@ -87,18 +90,20 @@ function FlowRow({
       <div className="break-all px-2 py-1.5 text-[12px] leading-4 text-textDark">{flowText(flow.docType)}</div>
       <div className="px-2 py-1.5">
         {flow.documentId ? (
-          <button
-            type="button"
-            onClick={() => onLocateDocument(flow.documentId)}
-            title={
-              flow.extractionId
-                ? `documentId: ${flow.documentId} / extractionId: ${flow.extractionId}`
-                : `documentId: ${flow.documentId}`
-            }
-            className="text-[11px] text-deepSea transition-colors hover:underline"
-          >
-            定位凭证
-          </button>
+          onLocateDocument ? (
+            <button
+              type="button"
+              onClick={() => onLocateDocument(flow.documentId)}
+              title={traceTitle}
+              className="text-[11px] text-deepSea transition-colors hover:underline"
+            >
+              定位凭证
+            </button>
+          ) : (
+            <span className="cursor-default text-[11px] text-textGray" title={traceTitle}>
+              {flow.documentId.length > 12 ? `${flow.documentId.slice(0, 12)}…` : flow.documentId}
+            </span>
+          )
         ) : (
           <span className="text-[12px] text-borderGray">—</span>
         )}
@@ -107,7 +112,7 @@ function FlowRow({
   );
 }
 
-/** 执行流水(四流合一)报表: 六向汇总卡 + 逐笔明细表。挂在绑定工作台中栏候选列表下方。 */
+/** 执行流水(四流合一)报表: 六向汇总卡 + 逐笔明细表。 */
 export function ExecutionFlowPanel({ contractNo, displayContractNo, onLocateDocument }: ExecutionFlowPanelProps) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [data, setData] = useState<ExecutionFlowsResponse | null>(null);
