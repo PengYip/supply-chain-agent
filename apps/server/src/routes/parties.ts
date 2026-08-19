@@ -76,7 +76,6 @@ partiesRoute.post('/', async (c) => {
 
 /** DELETE /:name — URL-encoded 原始名精确删除; 不追溯撤销已物化流水。 */
 partiesRoute.delete('/:name', async (c) => {
-  const user = c.get('user')!;
   const name = decodeURIComponent(c.req.param('name'));
   const removed = await removeSelfParty(getDbContext(), name);
   return c.json({ ok: true, removed });
