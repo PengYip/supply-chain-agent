@@ -21,6 +21,7 @@ import type { GraphFocusTarget } from '../graph/focus';
 import { DocListPanel } from './DocListPanel';
 import { CandidatePanel } from './CandidatePanel';
 import { DetailPanel } from './DetailPanel';
+import { ExecutionFlowPanel } from './ExecutionFlowPanel';
 
 /* ---------- 视图模型：候选行(实时评分) + 已保存建议(proposals) 合并 ---------- */
 
@@ -263,6 +264,16 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
     setFocusedKey(null);
     setBatchErrors({});
   };
+
+  /** 溯源定位: 切到该凭证所属文档。不收起报表(focusedKey 保留), 也不触发候选重算。 */
+  const handleLocateDocument = useCallback(
+    (docId: string) => {
+      setSelectedDocId(docId);
+      const doc = overview.find((d) => d.docId === docId) ?? null;
+      if (doc) setSelected(doc);
+    },
+    [overview],
+  );
 
   const handleRefresh = () => {
     b.refreshAll(selectedDocId);
@@ -630,25 +641,34 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
           onToggle={() => setDocsCollapsed((v) => !v)}
         />
 
-        <CandidatePanel
-          doc={selected}
-          rows={rows}
-          anchors={candidates?.anchors ?? null}
-          hasExtraction={candidates?.hasExtraction ?? true}
-          loading={b.candidatesLoading}
-          error={b.candidatesError}
-          focusedKey={focusedKey}
-          contracts={contracts}
-          batchErrors={batchErrors}
-          pending={pending}
-          batchPending={batchPending}
-          onFocus={setFocusedKey}
-          onConfirm={requestConfirmRow}
-          onReject={requestRejectRow}
-          onBatchConfirm={requestBatchConfirm}
-          onManualCreate={handleManualCreate}
-          onRetryLoad={() => selectedDocId && void b.loadCandidates(selectedDocId)}
-        />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <CandidatePanel
+            doc={selected}
+            rows={rows}
+            anchors={candidates?.anchors ?? null}
+            hasExtraction={candidates?.hasExtraction ?? true}
+            loading={b.candidatesLoading}
+            error={b.candidatesError}
+            focusedKey={focusedKey}
+            contracts={contracts}
+            batchErrors={batchErrors}
+            pending={pending}
+            batchPending={batchPending}
+            onFocus={setFocusedKey}
+            onConfirm={requestConfirmRow}
+            onReject={requestRejectRow}
+            onBatchConfirm={requestBatchConfirm}
+            onManualCreate={handleManualCreate}
+            onRetryLoad={() => selectedDocId && void b.loadCandidates(selectedDocId)}
+          />
+          {focusedKey && (
+            <ExecutionFlowPanel
+              contractNo={focusedKey}
+              displayContractNo={focusedRow?.ledger?.displayContractNo}
+              onLocateDocument={handleLocateDocument}
+            />
+          )}
+        </div>
 
         <PanelRail
           collapsed={detailCollapsed}

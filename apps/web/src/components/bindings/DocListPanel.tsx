@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import clsx from 'clsx';
 import { FileStack, RefreshCw } from 'lucide-react';
 import type { OverviewDoc } from '../../hooks/useBindings';
@@ -90,6 +91,17 @@ export function DocListPanel({ docs, loading, error, selectedDocId, onSelect, on
   const unbound = docs.filter((d) => !d.bindings.some((b) => b.status === 'confirmed'));
   const bound = docs.filter((d) => d.bindings.some((b) => b.status === 'confirmed'));
 
+  // 行元素收集(按 docId) + 溯源定位时滚动到目标行。
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  useEffect(() => {
+    if (!selectedDocId) return;
+    rowRefs.current.get(selectedDocId)?.scrollIntoView({ block: 'nearest' });
+  }, [selectedDocId]);
+  const setRowRef = (docId: string) => (el: HTMLDivElement | null) => {
+    if (el) rowRefs.current.set(docId, el);
+    else rowRefs.current.delete(docId);
+  };
+
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-borderGray bg-white">
       <div className="shrink-0 border-b border-borderGray px-4 py-3">
@@ -130,11 +142,15 @@ export function DocListPanel({ docs, loading, error, selectedDocId, onSelect, on
           <>
             <GroupHeader label="未绑定" count={unbound.length} hint="待处理" />
             {unbound.map((doc) => (
-              <DocRow key={doc.docId} doc={doc} selected={doc.docId === selectedDocId} onSelect={() => onSelect(doc)} />
+              <div key={doc.docId} ref={setRowRef(doc.docId)}>
+                <DocRow doc={doc} selected={doc.docId === selectedDocId} onSelect={() => onSelect(doc)} />
+              </div>
             ))}
             <GroupHeader label="已绑定" count={bound.length} />
             {bound.map((doc) => (
-              <DocRow key={doc.docId} doc={doc} selected={doc.docId === selectedDocId} onSelect={() => onSelect(doc)} />
+              <div key={doc.docId} ref={setRowRef(doc.docId)}>
+                <DocRow doc={doc} selected={doc.docId === selectedDocId} onSelect={() => onSelect(doc)} />
+              </div>
             ))}
           </>
         )}
