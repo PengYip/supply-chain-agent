@@ -14,6 +14,12 @@ describe('normalizeCompanyName', () => {
     expect(normalizeCompanyName(' HuaNeng Power ')).toBe('HUANENGPOWER');
     expect(normalizeCompanyName('华能　电厂')).toBe('华能电厂');
   });
+  it('全角括号/标点剥离, OCR 写法变体归一为同一键', () => {
+    expect(normalizeCompanyName('华能（上海）')).toBe('华能上海');
+    expect(normalizeCompanyName('华能(上海)')).toBe('华能上海');
+    expect(normalizeCompanyName('ＡＢＣ－Ｐｏｗｅｒ')).toBe('ABCPOWER');
+    expect(normalizeCompanyName('华能·电力,')).toBe('华能电力');
+  });
 });
 
 describe('parseSelfPartyNames', () => {
@@ -39,6 +45,9 @@ describe('resolveSelfSide', () => {
   });
   it('写法变体(全角空格)仍命中', () => {
     expect(resolveSelfSide(names, { buyer: '华能　电厂' })).toBe('buyer');
+  });
+  it('写法变体(全角括号)仍命中', () => {
+    expect(resolveSelfSide(names, { buyer: '华能（电厂）' })).toBe('buyer');
   });
   it('两侧都未命中返回 null', () => {
     expect(resolveSelfSide(names, { buyer: '甲公司', seller: '乙公司' })).toBeNull();
