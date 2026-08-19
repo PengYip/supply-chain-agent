@@ -114,6 +114,21 @@ describe('generateBindingProposals (路由)', () => {
     expect(proposals[0]!.route).toBe('auto_rule');
   });
 
+  it('合同号括号参与精确匹配(全角/半角括号不产生新合同)', () => {
+    const anchors = {
+      ...货转单Anchors,
+      contractNo: ' ２０２１－ＺＮＦＸＣＧ（Ｔ１）－０１０ ',
+    };
+    const contract = ledger('2021-ZNFXCG(T1)-010', {
+      甲方: '山西焦煤集团有限责任公司',
+      乙方: '内蒙古伊泰煤炭股份有限公司',
+    });
+    const proposals = generateBindingProposals(anchors, [contract]);
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]!.route).toBe('auto_rule');
+    expect(proposals[0]!.contractNo).toBe('2021-ZNFXCG(T1)-010');
+  });
+
   it('多个条目共享同一归一化合同号 -> 不落 auto_rule(歧义)', () => {
     const otherUser = ledger('CJXC-CTCL-JY-2024-131-01', { 甲方: '另一公司', 乙方: '另一公司' });
     const proposals = generateBindingProposals(货转单Anchors, [主合同, otherUser]);

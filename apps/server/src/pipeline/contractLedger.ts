@@ -30,9 +30,11 @@ export interface ContractLedgerEntry {
  * Normalize a raw contract number into its canonical lookup form:
  * trim; full-width ASCII (U+FF01..U+FF5E) mapped back to half-width; full-width
  * space (U+3000) and all whitespace (incl. zero-width space U+200B) removed;
- * uppercased; only [A-Z0-9-] kept, everything else dropped. '' means "no usable
- * contract number" (an extracted field that normalizes away does not form an
- * entry). Example: ' ｃｊｘｃ－ｃｔｃｌ－ｊｙ－2024-131-01 ' -> 'CJXC-CTCL-JY-2024-131-01'.
+ * uppercased; only [A-Z0-9()-] kept, everything else dropped. Parentheses are
+ * contract-number identity (e.g. '2021-ZNFXCG(T1)-010'), not OCR noise. ''
+ * means "no usable contract number" (an extracted field that normalizes away
+ * does not form an entry). Example:
+ * ' ｃｊｘｃ－ｃｔｃｌ－ｊｙ－2024-131-01 ' -> 'CJXC-CTCL-JY-2024-131-01'.
  */
 export function normalizeContractNo(raw: string): string {
   // Map full-width ASCII (U+FF01..U+FF5E) to its half-width equivalent so an
@@ -42,10 +44,10 @@ export function normalizeContractNo(raw: string): string {
     const code = ch.codePointAt(0)!;
     half += code >= 0xff01 && code <= 0xff5e ? String.fromCharCode(code - 0xfee0) : ch;
   }
-  // Uppercase + keep only [A-Z0-9-]. The single pass drops everything else:
+  // Uppercase + keep only [A-Z0-9()-]. The single pass drops everything else:
   // full-width space (U+3000), all whitespace (incl. zero-width space U+200B),
   // and stray punctuation/illegal characters.
-  return half.toUpperCase().replace(/[^A-Z0-9-]/g, '');
+  return half.toUpperCase().replace(/[^A-Z0-9()-]/g, '');
 }
 
 /**

@@ -10,6 +10,7 @@
 // 实体匹配必须模糊容错(matchEntity), 不能精确字符串匹配。
 
 import type { VoucherAnchors } from './schemas/vouchers.js';
+import { normalizeContractNo } from './contractLedger.js';
 
 // LedgerEntry 使用 contractLedger.ts 的真实形状(ContractLedgerEntry): fields 为
 // Record<字段名, { value, sourceSpans }>, 合同字段按 ContractSchema 命名
@@ -372,7 +373,7 @@ export function generateBindingProposals(
   ledgerEntries: LedgerEntryLike[],
 ): BindingProposal[] {
   // 合同号精确命中(归一化): ledger.contract_no 已是 normalizeContractNo 后的值。
-  const normalized = (anchors.contractNo ?? '').trim().toUpperCase();
+  const normalized = normalizeContractNo(anchors.contractNo ?? '');
   const exactMatches = normalized
     ? ledgerEntries.filter((l) => l.contractNo === normalized)
     : [];

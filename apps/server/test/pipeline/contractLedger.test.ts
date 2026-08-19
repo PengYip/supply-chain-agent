@@ -24,6 +24,13 @@ describe('normalizeContractNo', () => {
     expect(normalizeContractNo('合同号：无')).toBe('');
   });
 
+  it('keeps parentheses as part of the contract identity', () => {
+    expect(normalizeContractNo('2021-znfxcg(t1)-010')).toBe('2021-ZNFXCG(T1)-010');
+    expect(normalizeContractNo('２０２１－ＺＮＦＸＣＧ（Ｔ１）－０１０')).toBe(
+      '2021-ZNFXCG(T1)-010',
+    );
+  });
+
   it('returns empty string for empty / whitespace-only input', () => {
     expect(normalizeContractNo('')).toBe('');
     expect(normalizeContractNo('   ')).toBe('');
