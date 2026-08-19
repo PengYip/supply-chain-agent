@@ -21,6 +21,7 @@ import type { SpanMatchStrength } from '../spanValidator.js';
 import { normalizeContractNo } from '../contractLedger.js';
 import type { ContractLedgerEntry } from '../contractLedger.js';
 import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.js';
+import { normalizeCompanyName } from '../../domain/flowDirection.js';
 import { parseGraphStatus } from './repositories.js';
 import type {
   ExtractionInput,
@@ -51,6 +52,7 @@ import type {
   ExecutionFlowInput,
   ExecutionFlowRow,
   ExecutionFlowSummary,
+  SelfPartyRow,
 } from './repositories.js';
 
 // Phase 2 business-data isolation: same convention as repositories.ts -- a
@@ -1745,4 +1747,73 @@ export async function summarizeExecutionFlowsPg(
       r.total_quantity_ton === null || r.total_quantity_ton === undefined ? null : Number(r.total_quantity_ton),
     lastVoucherDate: r.last_voucher_date === null || r.last_voucher_date === undefined ? null : String(r.last_voucher_date),
   }));
+}
+
+// ---- 自主体名单(Task A): pg twins -------------------------------------------
+//
+// self_parties 为租户全局名单(无 user_id), 与 env.SELF_PARTY_NAMES 并集。
+
+/** pg twin of listSelfParties。 */
+export async function listSelfPartiesPg(ctx: PostgresDbContext): Promise<SelfPartyRow[]> {
+  const res = await ctx.pool.query(
+    'SELECT name, created_by, created_at FROM self_parties ORDER BY name ASC',
+  );
+  return res.rows.map((r) => ({
+    name: String(r.name),
+    createdBy: String(r.created_by),
+    createdAt: r.created_at === null || r.created_at === undefined ? null : String(r.created_at),
+  }));
+}
+
+/** pg twin of addSelfParty。归一化去重先读后插 + ON CONFLICT (name) DO NOTHING 兜底。 */
+export async function addSelfPartyPg(ctx: PostgresDbContext, name: string, createdBy: string): Promise<boolean> {
+  const trimmed = name.trim();
+  const norm = normalizeCompanyName(trimmed);
+  if (norm.length === 0) return false;
+  const existing = await ctx.pool.query('SELECT name FROM self_parties');
+  if (existing.rows.some((r) => normalizeCompanyName(String(r.name)) === norm)) return false;
+  const res = await ctx.pool.query(
+    'INSERT INTO self_parties (name, created_by) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING',
+    [trimmed, createdBy],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/** pg twin of removeSelfParty(原始名精确删除)。 */
+export async function removeSelfPartyPg(ctx: PostgresDbContext, name: string): Promise<boolean> {
+  const res = await ctx.pool.query('DELETE FROM self_parties WHERE name = $1', [name]);
+  return (res.rowCount ?? 0) > 0;
+}
+
+/** pg twin of listDocumentIdsWithConfirmedBindings。 */
+export async function listDocumentIdsWithConfirmedBindingsPg(
+  ctx: PostgresDbContext,
+  userId?: string,
+): Promise<string[]> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        "SELECT DISTINCT document_id FROM bindings WHERE status = 'confirmed' AND (user_id = $1 OR user_id = '' OR user_id IS NULL)",
+        [uid],
+      )
+    : await ctx.pool.query(
+        "SELECT DISTINCT document_id FROM bindings WHERE status = 'confirmed'",
+      );
+  return res.rows.map((r) => String(r.document_id));
+}
+
+/** pg twin of hasExecutionFlowsForDocument。 */
+export async function hasExecutionFlowsForDocumentPg(
+  ctx: PostgresDbContext,
+  documentId: string,
+  userId?: string,
+): Promise<boolean> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        "SELECT 1 FROM execution_flows WHERE document_id = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL) LIMIT 1",
+        [documentId, uid],
+      )
+    : await ctx.pool.query('SELECT 1 FROM execution_flows WHERE document_id = $1 LIMIT 1', [documentId]);
+  return (res.rowCount ?? 0) > 0;
 }

@@ -6,6 +6,7 @@ import type { SpanMatchStrength } from '../spanValidator.js';
 import { normalizeContractNo } from '../contractLedger.js';
 import type { ContractLedgerEntry } from '../contractLedger.js';
 import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.js';
+import { normalizeCompanyName } from '../../domain/flowDirection.js';
 // Postgres impls. Static import: pg is a declared dep on both backends now; the
 // functions are only CALLED on the postgres branch (lazy Pool connect), so the
 // import cost is one module load. Type-only for the input/output types below.
@@ -74,6 +75,12 @@ import {
   listConfirmedBindingsForDocumentPg,
   listExecutionFlowsPg,
   summarizeExecutionFlowsPg,
+  // 自主体名单(Task A): pg twins for self_parties CRUD + backfill helpers.
+  listSelfPartiesPg,
+  addSelfPartyPg,
+  removeSelfPartyPg,
+  listDocumentIdsWithConfirmedBindingsPg,
+  hasExecutionFlowsForDocumentPg,
 } from './postgres-repositories.js';
 
 // Phase 2 business-data isolation: a normalized userId is '' / undefined when the
@@ -2238,4 +2245,95 @@ export async function summarizeExecutionFlows(
       r.total_quantity_ton === null || r.total_quantity_ton === undefined ? null : Number(r.total_quantity_ton),
     lastVoucherDate: r.last_voucher_date ?? null,
   }));
+}
+
+// ---- 自主体名单(Task A) -------------------------------------------------------
+//
+// 六向执行流水的方向判定以"本公司是谁"为基准(env.SELF_PARTY_NAMES)。名单新增
+// DB 侧管理(self_parties)与 env 并集, 解决 env 未配置时流水静默跳过的 incident。
+// 名单租户全局(无 user_id), 与 env 变量同域; created_by 仅审计。
+
+export interface SelfPartyRow {
+  name: string;
+  createdBy: string;
+  createdAt: string | null;
+}
+
+/** 全量列出 DB 侧自主体名单(租户全局, 无 user 过滤), 按 name 升序。 */
+export async function listSelfParties(ctx: DbContext): Promise<SelfPartyRow[]> {
+  if (ctx.backend === 'postgres') return listSelfPartiesPg(ctx);
+  const rows = ctx.sqlite
+    .prepare('SELECT name, created_by, created_at FROM self_parties ORDER BY name ASC')
+    .all() as Array<{ name: string; created_by: string; created_at: string }>;
+  return rows.map((r) => ({
+    name: r.name,
+    createdBy: r.created_by,
+    createdAt: r.created_at,
+  }));
+}
+
+/**
+ * 新增自主体(原始名 raw, PK)。去重语义使用 domain normalizeCompanyName:
+ * 归一化形式已存在(含精确同名) -> 返回 false; 归一化后为空串 -> false。
+ * 调用方(路由)先做 400 校验, 此处为存储层兜底。
+ */
+export async function addSelfParty(ctx: DbContext, name: string, createdBy: string): Promise<boolean> {
+  if (ctx.backend === 'postgres') return addSelfPartyPg(ctx, name, createdBy);
+  const trimmed = name.trim();
+  const norm = normalizeCompanyName(trimmed);
+  if (norm.length === 0) return false;
+  const existing = ctx.sqlite.prepare('SELECT name FROM self_parties').all() as Array<{ name: string }>;
+  if (existing.some((r) => normalizeCompanyName(r.name) === norm)) return false;
+  const res = ctx.sqlite
+    .prepare('INSERT OR IGNORE INTO self_parties (name, created_by) VALUES (?, ?)')
+    .run(trimmed, createdBy);
+  return res.changes > 0;
+}
+
+/** 按原始名精确删除(路由已 URL-decode)。返回是否有行被删除。 */
+export async function removeSelfParty(ctx: DbContext, name: string): Promise<boolean> {
+  if (ctx.backend === 'postgres') return removeSelfPartyPg(ctx, name);
+  const res = ctx.sqlite.prepare('DELETE FROM self_parties WHERE name = ?').run(name);
+  return res.changes > 0;
+}
+
+/**
+ * 列出持有 confirmed 绑定(且对调用者可见)的文档 id 去重集合。回填(backfill)
+ * 原料: 新增名单后对候选文档重建执行流水。user 过滤与 listBindingsForUser 同款
+ * 3-way OR(legacy ''/NULL 行对任何调用者可见)。
+ */
+export async function listDocumentIdsWithConfirmedBindings(
+  ctx: DbContext,
+  userId?: string,
+): Promise<string[]> {
+  if (ctx.backend === 'postgres') return listDocumentIdsWithConfirmedBindingsPg(ctx, userId);
+  const uid = effectiveUserId(userId);
+  const rows = (uid
+    ? ctx.sqlite
+        .prepare(
+          "SELECT DISTINCT document_id AS d FROM bindings WHERE status = 'confirmed' AND (user_id = ? OR user_id = '' OR user_id IS NULL)",
+        )
+        .all(uid)
+    : ctx.sqlite
+        .prepare("SELECT DISTINCT document_id AS d FROM bindings WHERE status = 'confirmed'")
+        .all()) as Array<{ d: string }>;
+  return rows.map((r) => r.d);
+}
+
+/** 文档是否已有执行流水行(回填跳过已物化的文档)。 */
+export async function hasExecutionFlowsForDocument(
+  ctx: DbContext,
+  documentId: string,
+  userId?: string,
+): Promise<boolean> {
+  if (ctx.backend === 'postgres') return hasExecutionFlowsForDocumentPg(ctx, documentId, userId);
+  const uid = effectiveUserId(userId);
+  const row = uid
+    ? ctx.sqlite
+        .prepare(
+          "SELECT 1 FROM execution_flows WHERE document_id = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL) LIMIT 1",
+        )
+        .get(documentId, uid)
+    : ctx.sqlite.prepare('SELECT 1 FROM execution_flows WHERE document_id = ? LIMIT 1').get(documentId);
+  return !!row;
 }

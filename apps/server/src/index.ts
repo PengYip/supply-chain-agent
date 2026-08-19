@@ -16,6 +16,7 @@ import { sessionsRoute } from './routes/sessions.js';
 import { filesRoute } from './routes/files.js';
 import { graphRoute } from './routes/graph.js';
 import { bindingsRoute } from './routes/bindings.js';
+import { partiesRoute } from './routes/parties.js';
 import { reviewRoute } from './routes/review.js';
 import { createEvalResultsRoute } from './routes/evalResults.js';
 import { evalRunRoute } from './routes/evalRun.js';
@@ -100,6 +101,7 @@ app.use('/api/documents/*', requireAuth);
 app.use('/api/eval/*', requireAuth);
 app.use('/api/graph/*', requireAuth);
 app.use('/api/bindings/*', requireAuth);
+app.use('/api/parties/*', requireAuth);
 
 app.route('/api', chatRoute);
 app.route('/api', approvalCallback);
@@ -120,6 +122,9 @@ app.route('/api/graph', graphRoute);
 
 // Bindings workbench (read-only, spec §5.1): overview / proposals / candidates / contracts.
 app.route('/api/bindings', bindingsRoute);
+
+// Self-party list management (Task A): DB-backed 自主体名单 + candidates + backfill.
+app.route('/api/parties', partiesRoute);
 
 // Eval results viewer (read-only): scan/aggregate CLI-written results dirs.
 app.route('/api/eval', createEvalResultsRoute());

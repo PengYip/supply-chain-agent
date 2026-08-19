@@ -1,6 +1,8 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { documents, extractions, bindings, fileFolders, classifications, documentTags } from './schema.js';
+import {
+  documents, extractions, bindings, fileFolders, classifications, documentTags, selfParties,
+} from './schema.js';
 // Type-only import: erased at emit, so SQLite-only hosts do not need pg installed
 // to RUN; only the Postgres path (postgres-client.ts) does a real `import { Pool }`.
 import type { Pool } from 'pg';
@@ -31,7 +33,9 @@ export type DbContext = SqliteDbContext | PostgresDbContext;
 export function createDb(path = ':memory:'): SqliteDbContext {
   const sqlite = new Database(path);
   sqlite.pragma('journal_mode = WAL');
-  const db = drizzle(sqlite, { schema: { documents, extractions, bindings, fileFolders, classifications, documentTags } });
+  const db = drizzle(sqlite, {
+    schema: { documents, extractions, bindings, fileFolders, classifications, documentTags, selfParties },
+  });
   return { backend: 'sqlite', db, sqlite };
 }
 
@@ -87,6 +91,15 @@ export function migrate(sqlite: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
     CREATE INDEX IF NOT EXISTS idx_extractions_user ON extractions(user_id);
     CREATE INDEX IF NOT EXISTS idx_bindings_user ON bindings(user_id);
+
+    -- 自主体名单(Task A): 与 env.SELF_PARTY_NAMES 并集的 DB 侧名单。租户全局
+    -- (无 user_id 过滤), created_by 仅审计; name 为原始名(raw), 去重按
+    -- normalizeCompanyName 归一化形式(应用层判定, 见 addSelfParty)。
+    CREATE TABLE IF NOT EXISTS self_parties (
+      name TEXT PRIMARY KEY,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
 
     CREATE TABLE IF NOT EXISTS classifications (
       id TEXT PRIMARY KEY,
@@ -500,6 +513,13 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     // Unit as its own column (grafted from CodeX-2): bare '数量' fields carry no
     // unit semantics, so unit stays NULL rather than being guessed.
     `ALTER TABLE execution_flows ADD COLUMN IF NOT EXISTS unit TEXT`,
+    // 自主体名单(Task A): pg mirror of the SQLite self_parties. name 为原始名
+    // (PK), created_by 审计, created_at timestamptz。租户全局, 无 user_id。
+    `CREATE TABLE IF NOT EXISTS self_parties (
+       name TEXT PRIMARY KEY,
+       created_by TEXT NOT NULL,
+       created_at timestamptz NOT NULL DEFAULT NOW()
+     )`,
     // L4 FTS fix (2026-08-17): drizzle migration 0000 created doc_chunk.fts_vector
     // as a PLAIN tsvector column (no GENERATED), so it stays NULL forever and
     // every FTS query silently returns 0 hits. Recreate it as a GENERATED column

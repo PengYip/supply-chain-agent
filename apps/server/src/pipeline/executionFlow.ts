@@ -22,11 +22,13 @@ import {
   listConfirmedBindingsForDocument,
   summarizeExecutionFlows,
   listExecutionFlows,
+  listSelfParties,
 } from './db/repositories.js';
 import { extractAnchors, type VoucherType } from './schemas/vouchers.js';
 import { buildAnchorsFromFields } from './bindingProposal.js';
 import {
   parseSelfPartyNames,
+  normalizeCompanyName,
   resolveSelfSide,
   moneyDirectionFor,
   goodsDirectionFor,
@@ -60,8 +62,35 @@ function unwrapFieldValues(
 }
 
 /**
+ * 有效自主体名单: DB 侧(self_parties)与 env.SELF_PARTY_NAMES 的并集, 按
+ * 归一化形式去重。返回归一化列表(resolveSelfSide 期望归一化输入)。env 退化为
+ * 引导通道: DB 名单为空时 env 仍生效, 两者可同时存在。
+ */
+export async function getEffectiveSelfPartyNames(ctx: DbContext): Promise<string[]> {
+  const rows = await listSelfParties(ctx);
+  const envNames = parseSelfPartyNames(env.SELF_PARTY_NAMES);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const n of envNames) {
+    if (n && !seen.has(n)) {
+      seen.add(n);
+      out.push(n);
+    }
+  }
+  for (const r of rows) {
+    const n = normalizeCompanyName(r.name);
+    if (n && !seen.has(n)) {
+      seen.add(n);
+      out.push(n);
+    }
+  }
+  return out;
+}
+
+/**
  * 物化一条执行流水。安静旁路: 返回 null 表示本次不物化(无抽取/白名单外/方向未知),
- * 绝不抛错。selfPartyNames 可注入(测试用), 缺省读 env.SELF_PARTY_NAMES。
+ * 绝不抛错。selfPartyNames 可注入(测试用), 缺省取有效名单(getEffectiveSelfPartyNames:
+ * DB 名单 ∪ env.SELF_PARTY_NAMES, 归一化去重)。
  */
 export async function materializeExecutionFlow(
   ctx: DbContext,
@@ -82,7 +111,7 @@ export async function materializeExecutionFlow(
       ? buildAnchorsFromFields(extraction.docType, extraction.fields)
       : extractAnchors(extraction.docType as VoucherType, unwrapFieldValues(extraction.fields));
 
-  const names = selfPartyNames ?? parseSelfPartyNames(env.SELF_PARTY_NAMES);
+  const names = selfPartyNames ?? (await getEffectiveSelfPartyNames(ctx));
   const side = resolveSelfSide(names, anchors);
   if (!side) {
     // 名单未配置 / 两侧未命中 / 双侧命中: 方向未知, 安静跳过, 不猜测。

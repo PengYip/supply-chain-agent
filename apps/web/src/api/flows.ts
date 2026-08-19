@@ -35,11 +35,13 @@ export interface ExecutionFlowItem {
   createdAt: string
 }
 
-/** GET /api/bindings/flows 响应。 */
+/** GET /api/bindings/flows 响应。selfPartiesConfigured 为后端扩展字段:
+ *  生效主体名单非空时为 true; 旧后端不带该字段, 调用方按缺省 true 处理。 */
 export interface ExecutionFlowsResponse {
   contractNo: string
   summaries: FlowSummary[]
   flows: ExecutionFlowItem[]
+  selfPartiesConfigured?: boolean
 }
 
 /** 六向词汇映射(固定, 勿自造)。 */

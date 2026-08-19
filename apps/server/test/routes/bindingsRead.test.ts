@@ -4,6 +4,7 @@ import type { AuthEnv } from '../../src/lib/auth-middleware.js';
 import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.js';
 import {
   createDocumentStub, saveExtraction, saveBinding, upsertContractLedgerEntry,
+  addSelfParty,
 } from '../../src/pipeline/db/repositories.js';
 import type { ContractLedgerEntry } from '../../src/pipeline/contractLedger.js';
 
@@ -74,5 +75,32 @@ describe('GET /api/bindings/candidates', () => {
     expect(res.status).toBe(200);
     const data = await res.json() as { candidates: Array<{ route: string; score: number }> };
     expect(data.candidates[0]?.route).toBe('auto_rule');
+  });
+});
+
+describe('GET /api/bindings/flows (selfPartiesConfigured 标志)', () => {
+  it('名单未配置 -> selfPartiesConfigured:false', async () => {
+    const res = await appAs('u1').request('/api/bindings/flows?contractNo=HT-1');
+    expect(res.status).toBe(200);
+    const data = await res.json() as {
+      contractNo: string; summaries: unknown[]; flows: unknown[]; selfPartiesConfigured: boolean;
+    };
+    expect(data.contractNo).toBe('HT-1');
+    expect(data.summaries).toEqual([]);
+    expect(data.flows).toEqual([]);
+    expect(data.selfPartiesConfigured).toBe(false);
+  });
+
+  it('addSelfParty 后 -> selfPartiesConfigured:true', async () => {
+    await addSelfParty(ctx, '浙江浙能富兴燃料有限公司', 'u1');
+    const res = await appAs('u1').request('/api/bindings/flows?contractNo=HT-1');
+    expect(res.status).toBe(200);
+    const data = await res.json() as { selfPartiesConfigured: boolean };
+    expect(data.selfPartiesConfigured).toBe(true);
+  });
+
+  it('缺 contractNo -> 400', async () => {
+    const res = await appAs('u1').request('/api/bindings/flows');
+    expect(res.status).toBe(400);
   });
 });

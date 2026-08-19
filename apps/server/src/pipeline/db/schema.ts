@@ -130,6 +130,17 @@ export const fileFolders = sqliteTable(
 );
 
 /**
+ * 自主体名单(Task A): 与 env.SELF_PARTY_NAMES 并集的 DB 侧名单。name 为原始名
+ * (raw, PK); 应用层按 normalizeCompanyName 归一化去重。租户全局 —— 与 env 变
+ * 量同域, 物化不按 user 分区, 故无 user_id 列; created_by 仅审计。
+ */
+export const selfParties = sqliteTable('self_parties', {
+  name: text('name').primaryKey(),
+  createdBy: text('created_by').notNull(),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+});
+
+/**
  * 执行流水(execution_flows): 合同绑定确认后物化的六向流水明细
  * ('资金流' | '货物流' | '发票流' x 'in' | 'out')。flow_type 词汇由消费层定义,
  * 存储层只存字符串。唯一键 (binding_id, user_id): 同一绑定重复物化走 upsert

@@ -223,6 +223,17 @@ export const fileFolders = pgTable(
 );
 
 /**
+ * self_parties: 自主体名单 DB 侧(与 env.SELF_PARTY_NAMES 并集)。Mirrors SQLite
+ * self_parties; name 为原始名(PK), created_by 审计, created_at timestamptz。
+ * 租户全局(无 user_id), 归一化去重由应用层 addSelfParty 判定。
+ */
+export const selfParties = pgTable('self_parties', {
+  name: text('name').primaryKey(),
+  createdBy: text('created_by').notNull(),
+  createdAt: nowTs(),
+});
+
+/**
  * execution_flows: 六向执行流水('资金流' | '货物流' | '发票流' x 'in' | 'out')。
  * Mirrors SQLite execution_flows. amount/quantity_ton 用 double precision(对应
  * SQLite REAL); confidence 沿用 numeric(5,4) pg 惯例(与 bindings/extractions 一致);

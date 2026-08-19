@@ -6,7 +6,7 @@ import { ExecutionFlowPanel } from './ExecutionFlowPanel';
 type Phase = 'loading' | 'ready' | 'error';
 
 /** 执行流水(四流合一)独立报表页: 合同下拉 + 选中合同的六向汇总与逐笔明细。 */
-export function FlowsView() {
+export function FlowsView({ onOpenParties }: { onOpenParties?: () => void }) {
   const [phase, setPhase] = useState<Phase>('loading');
   const [contracts, setContracts] = useState<FlowContractOption[]>([]);
   const [error, setError] = useState('');
@@ -90,6 +90,7 @@ export function FlowsView() {
             <ExecutionFlowPanel
               contractNo={selectedNo}
               displayContractNo={selected?.displayContractNo ?? undefined}
+              onOpenParties={onOpenParties}
             />
           ))}
       </div>

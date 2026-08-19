@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => ({
   loadLatestExtractionByDocId: vi.fn<(args: any[]) => Promise<any>>(async () => null),
   summarizeExecutionFlows: vi.fn<(args: any[]) => Promise<any>>(async () => []),
   listExecutionFlows: vi.fn<(args: any[]) => Promise<any>>(async () => []),
+  // 自主体名单(Task A): materializeExecutionFlow 缺省名单走 getEffectiveSelfPartyNames
+  // -> listSelfParties。测试均显式注入 selfPartyNames, 此 mock 仅兜底默认路径。
+  listSelfParties: vi.fn<(args: any[]) => Promise<any>>(async () => []),
 }));
 
 vi.mock('../../src/pipeline/db/repositories.js', () => ({
@@ -21,6 +24,7 @@ vi.mock('../../src/pipeline/db/repositories.js', () => ({
   loadLatestExtractionByDocId: mocks.loadLatestExtractionByDocId,
   summarizeExecutionFlows: mocks.summarizeExecutionFlows,
   listExecutionFlows: mocks.listExecutionFlows,
+  listSelfParties: mocks.listSelfParties,
 }));
 
 import {

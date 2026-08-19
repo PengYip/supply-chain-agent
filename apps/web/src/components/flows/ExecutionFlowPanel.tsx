@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
-import { AlertTriangle, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Building2, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import {
   fetchExecutionFlows,
   flowDirectionLabel,
@@ -20,6 +20,8 @@ export interface ExecutionFlowPanelProps {
   displayContractNo?: string;
   /** 溯源: 定位到该凭证所属文档。缺省时不渲染按钮, 溯源列降级为悬浮文本。 */
   onLocateDocument?: (documentId: string) => void;
+  /** 引导跳转: 主体名单未配置且流水为空时, 提供前往主体名单页的入口。 */
+  onOpenParties?: () => void;
 }
 
 type Phase = 'idle' | 'loading' | 'ready' | 'error';
@@ -113,7 +115,12 @@ function FlowRow({
 }
 
 /** 执行流水(四流合一)报表: 六向汇总卡 + 逐笔明细表。 */
-export function ExecutionFlowPanel({ contractNo, displayContractNo, onLocateDocument }: ExecutionFlowPanelProps) {
+export function ExecutionFlowPanel({
+  contractNo,
+  displayContractNo,
+  onLocateDocument,
+  onOpenParties,
+}: ExecutionFlowPanelProps) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [data, setData] = useState<ExecutionFlowsResponse | null>(null);
   const [error, setError] = useState('');
@@ -157,6 +164,8 @@ export function ExecutionFlowPanel({ contractNo, displayContractNo, onLocateDocu
   }, [data]);
 
   const headerNo = displayContractNo || contractNo;
+  // 主体名单是否未配置: 响应缺省该字段(旧后端)时按已配置处理, 只有显式 false 才提示。
+  const partiesMissing = data?.selfPartiesConfigured === false;
 
   return (
     <div className="mt-2.5 animate-fade-in overflow-hidden rounded-md border border-borderGray bg-white">
@@ -208,7 +217,26 @@ export function ExecutionFlowPanel({ contractNo, displayContractNo, onLocateDocu
 
           {phase === 'ready' && data && data.flows.length === 0 && (
             <div className="flex flex-col items-center px-5 py-10 text-center">
-              <div className="text-[13px] font-medium text-textDark">该合同暂无执行流水</div>
+              {partiesMissing ? (
+                <>
+                  <div className="text-[13px] font-medium text-textDark">主体名单未配置，流水方向无法判定</div>
+                  <div className="mt-1.5 max-w-[320px] text-[12px] leading-5 text-textGray">
+                    到主体名单面板确认主体后，此处将自动回填执行流水
+                  </div>
+                  {onOpenParties && (
+                    <button
+                      type="button"
+                      onClick={onOpenParties}
+                      className="mt-3 flex h-7 items-center gap-1.5 rounded-md bg-deepSea px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-[#164a76]"
+                    >
+                      <Building2 className="h-3.5 w-3.5" aria-hidden />
+                      前往主体名单
+                    </button>
+                  )}
+                </>
+              ) : (
+                <div className="text-[13px] font-medium text-textDark">该合同暂无执行流水</div>
+              )}
             </div>
           )}
 

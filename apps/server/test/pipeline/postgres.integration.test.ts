@@ -28,6 +28,9 @@ import {
   getChunkMetaByRowids,
   upsertExecutionFlow,
   summarizeExecutionFlows,
+  addSelfParty,
+  listSelfParties,
+  removeSelfParty,
 } from '../../src/pipeline/db/repositories.js';
 import { saveChunkVectors, vectorKnn, isVecReady } from '../../src/pipeline/db/vecStore.js';
 import { buildIngestDocumentTool } from '../../src/pipeline/tools/documentEntry.js';
@@ -136,7 +139,7 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
   // Isolation: wipe pipeline tables between tests (dev container only).
   beforeEach(async () => {
     await ctx.pool.query(
-      'TRUNCATE doc_chunk, extractions, bindings, documents, execution_flows RESTART IDENTITY CASCADE',
+      'TRUNCATE doc_chunk, extractions, bindings, documents, execution_flows, self_parties RESTART IDENTITY CASCADE',
     );
   });
 
@@ -383,5 +386,29 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
     const outRow = summary.find((s) => s.direction === 'out')!;
     expect(outRow.entryCount).toBe(1);
     expect(outRow.totalAmount).toBe(500);
+  });
+
+  // ---- self_parties 自主体名单(Task A) ----------------------------------------
+
+  it('migratePostgres 建 self_parties 表; add/list/remove roundtrip + 幂等', async () => {
+    // migratePostgres 在 beforeAll 已跑: 表必须存在。
+    const table = await ctx.pool.query("SELECT to_regclass('public.self_parties') AS t");
+    expect(table.rows[0]?.t).toBeTruthy();
+
+    expect(await addSelfParty(ctx, '浙江浙能富兴燃料有限公司', 'u1')).toBe(true);
+    // 精确重复 -> 第二次 false(先读后插 + ON CONFLICT (name) DO NOTHING 兜底)。
+    expect(await addSelfParty(ctx, '浙江浙能富兴燃料有限公司', 'u1')).toBe(false);
+    // 归一化重复(全角括号)同样 false。
+    expect(await addSelfParty(ctx, '华能（上海）', 'u1')).toBe(true);
+    expect(await addSelfParty(ctx, '华能上海', 'u1')).toBe(false);
+
+    const rows = await listSelfParties(ctx);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.name).sort()).toEqual(['华能（上海）', '浙江浙能富兴燃料有限公司']);
+    expect(rows.every((r) => r.createdBy === 'u1' && !!r.createdAt)).toBe(true);
+
+    expect(await removeSelfParty(ctx, '浙江浙能富兴燃料有限公司')).toBe(true);
+    expect(await removeSelfParty(ctx, '浙江浙能富兴燃料有限公司')).toBe(false);
+    expect(await listSelfParties(ctx)).toHaveLength(1);
   });
 });

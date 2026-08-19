@@ -13,7 +13,7 @@ import {
 } from '../pipeline/db/repositories.js';
 import { buildBindingCandidates } from '../pipeline/bindingCandidates.js';
 import { syncBindingEdge, removeBindingEdge, type GraphSyncOutcome } from '../pipeline/bindingGraphSync.js';
-import { materializeExecutionFlow, retractExecutionFlow } from '../pipeline/executionFlow.js';
+import { materializeExecutionFlow, retractExecutionFlow, getEffectiveSelfPartyNames } from '../pipeline/executionFlow.js';
 import { DOC_TYPES } from '../pipeline/classifier.js';
 
 export const bindingsRoute = new Hono<AuthEnv>();
@@ -107,7 +107,9 @@ bindingsRoute.get('/flows', async (c) => {
     summarizeExecutionFlows(ctx(), contractNo, user.id),
     listExecutionFlows(ctx(), contractNo, user.id),
   ]);
-  return c.json({ contractNo, summaries, flows });
+  // 有效自主体名单是否非空(DB ∪ env)。前端据此提示"未配置名单时流水不会物化"。
+  const selfPartiesConfigured = (await getEffectiveSelfPartyNames(ctx())).length > 0;
+  return c.json({ contractNo, summaries, flows, selfPartiesConfigured });
 });
 
 // ---- 写端点(spec §5.2) ------------------------------------------------------

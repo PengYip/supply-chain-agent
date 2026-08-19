@@ -11,8 +11,9 @@ import { EvalWorkbenchView } from './components/eval/EvalWorkbenchView';
 import { GraphView } from './components/graph/GraphView';
 import { BindingsView } from './components/bindings/BindingsView';
 import { FlowsView } from './components/flows/FlowsView';
+import { SelfPartyPanel } from './components/parties/SelfPartyPanel';
 import type { GraphFocus, GraphFocusTarget } from './components/graph/focus';
-import { ArrowLeftRight, FlaskConical, Link2, MessageSquare, Network } from 'lucide-react';
+import { ArrowLeftRight, Building2, FlaskConical, Link2, MessageSquare, Network } from 'lucide-react';
 import clsx from 'clsx';
 
 function App() {
@@ -20,7 +21,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [filePanelVisible, setFilePanelVisible] = useState(false);
-  const [view, setView] = useState<'chat' | 'eval' | 'graph' | 'bindings' | 'flows'>('chat');
+  const [view, setView] = useState<'chat' | 'eval' | 'graph' | 'bindings' | 'flows' | 'parties'>('chat');
   // 跨视图定位：绑定工作台 -> 图谱页，以合同节点为中心展开。
   // nonce 自增保证重复跳转同一合同也会触发图谱页重新查询。
   const [graphFocus, setGraphFocus] = useState<GraphFocus | null>(null);
@@ -30,6 +31,8 @@ function App() {
     setGraphFocus({ ...target, nonce: graphFocusNonceRef.current });
     setView('graph');
   }, []);
+  // 执行流水页 -> 主体名单页的跳转(主体未配置导致流水为空时的引导)。
+  const openParties = useCallback(() => setView('parties'), []);
   const [contextFiles, setContextFiles] = useState<ContextFile[]>([]);
   // Phase 5: sessions live at App so the sidebar (data) and RealChatView
   // (refresh trigger) can share one useSessions instance.
@@ -139,6 +142,10 @@ function App() {
           className={clsx('w-9 h-9 rounded-lg flex items-center justify-center', view === 'flows' ? 'bg-deepSea text-white' : 'text-textGray hover:bg-bgGray')}>
           <ArrowLeftRight className="h-5 w-5" aria-hidden />
         </button>
+        <button type="button" title="主体名单" aria-label="主体名单" onClick={() => setView('parties')}
+          className={clsx('w-9 h-9 rounded-lg flex items-center justify-center', view === 'parties' ? 'bg-deepSea text-white' : 'text-textGray hover:bg-bgGray')}>
+          <Building2 className="h-5 w-5" aria-hidden />
+        </button>
       </div>
       {view === 'bindings' ? (
         <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
@@ -146,7 +153,11 @@ function App() {
         </div>
       ) : view === 'flows' ? (
         <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
-          <FlowsView />
+          <FlowsView onOpenParties={openParties} />
+        </div>
+      ) : view === 'parties' ? (
+        <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
+          <SelfPartyPanel />
         </div>
       ) : view === 'graph' ? (
         <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
