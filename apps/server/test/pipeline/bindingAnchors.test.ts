@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildAnchorsFromFields } from '../../src/pipeline/bindingProposal.js';
+import { buildAnchorsFromFields, PARTY_FIELD_ALIASES } from '../../src/pipeline/bindingProposal.js';
 
 describe('buildAnchorsFromFields(非图片凭证文档)', () => {
   it('发票: 合同号/买方/卖方/金额/日期字段映射到锚点', () => {
@@ -46,5 +46,70 @@ describe('buildAnchorsFromFields(非图片凭证文档)', () => {
 
   it('无可用字段返回空对象(调用方以此判定缺锚点)', () => {
     expect(buildAnchorsFromFields('其他', {})).toEqual({});
+  });
+
+  it('真实发票字段(购买方名称/销售方名称/价税合计小写_元 + 单位=吨) -> 新别名与显式单位命中', () => {
+    const a = buildAnchorsFromFields('发票', {
+      购买方名称: { value: '浙江浙能富兴燃料有限公司' },
+      销售方名称: { value: '上海某贸易有限公司' },
+      价税合计小写_元: { value: '1128515.08' },
+      开票日期: { value: '2021-06-08' },
+      发票号码: { value: '04981234' },
+      数量: { value: '3819.65' },
+      单位: { value: '吨' },
+      税率: { value: '13%' },
+      税额_元: { value: '129842.34' },
+    });
+    expect(a.buyer).toBe('浙江浙能富兴燃料有限公司');
+    expect(a.seller).toBe('上海某贸易有限公司');
+    expect(a.amount).toBe(1128515.08);
+    expect(a.date).toBe('2021-06-08');
+    expect(a.quantityTon).toBe(3819.65);
+    // 显式 单位=吨 字段 -> 裸 '数量' 的单位确定为吨。
+    expect(a.quantityUnit).toBe('吨');
+  });
+
+  it("数量 + 单位=千克 -> quantityUnit 缺省(仅'吨'被显式认定)", () => {
+    const a = buildAnchorsFromFields('发票', {
+      数量: { value: '1000' },
+      单位: { value: '千克' },
+    });
+    expect(a.quantityTon).toBe(1000);
+    expect(a.quantityUnit).toBeUndefined();
+  });
+
+  it('数量 + 无单位字段 -> quantityUnit 缺省(不猜测)', () => {
+    const a = buildAnchorsFromFields('发票', { 数量: { value: '120' } });
+    expect(a.quantityTon).toBe(120);
+    expect(a.quantityUnit).toBeUndefined();
+  });
+
+  it('货转单: 受让方/转让方 别名映射到买方/卖方', () => {
+    const a = buildAnchorsFromFields('货转单', {
+      受让方: { value: '浙江浙能富兴燃料有限公司' },
+      转让方: { value: '某电厂' },
+      航次: { value: 'V2021-01' },
+      船名: { value: '浙能1号' },
+      起运港: { value: '宁波' },
+      到达港: { value: '舟山' },
+    });
+    expect(a.buyer).toBe('浙江浙能富兴燃料有限公司');
+    expect(a.seller).toBe('某电厂');
+  });
+
+  it('只做精确键匹配: 部分重叠键(销售方/价税合计大写_元/购买方)不命中新别名', () => {
+    const a = buildAnchorsFromFields('发票', {
+      销售方: { value: '上海某贸易有限公司' },
+      价税合计大写_元: { value: '壹佰壹拾贰万捌仟伍佰壹拾伍元零捌分' },
+      购买方: { value: '浙江浙能富兴燃料有限公司' },
+    });
+    expect(a.seller).toBeUndefined();
+    expect(a.amount).toBeUndefined();
+    expect(a.buyer).toBeUndefined();
+  });
+
+  it('PARTY_FIELD_ALIASES 导出买方/卖方别名常量(供候选扫描复用)', () => {
+    expect(PARTY_FIELD_ALIASES.buyer).toEqual(['买方', '甲方', '收货人', '购买方名称', '受让方']);
+    expect(PARTY_FIELD_ALIASES.seller).toEqual(['卖方', '乙方', '发货人', '销售方名称', '转让方']);
   });
 });

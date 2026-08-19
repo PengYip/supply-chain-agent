@@ -4,7 +4,7 @@ import { Check, ChevronDown, Link2, Loader2, MousePointerClick, Network, Refresh
 import type { Anchors, BindingListItem, OverviewDoc } from '../../hooks/useBindings';
 import type { GraphFocusTarget } from '../graph/focus';
 import { buildDocMetaResolver } from '../graph/docMeta';
-import type { DocMetaResolver } from '../graph/kinds';
+import { prettyDocName, type DocMetaResolver } from '../graph/kinds';
 import type { WorkbenchRow } from './BindingsView';
 import { BindingMiniGraph } from './BindingMiniGraph';
 
@@ -364,6 +364,10 @@ interface DetailPanelProps {
   row: WorkbenchRow | null;
   anchors: Anchors | null;
   pending: Set<string>;
+  /** 文档类型可选值(来自 overview 响应的 docTypes, 前端有兜底常量)。 */
+  docTypes: string[];
+  /** 文档类型修正: 选中新类型即触发 PATCH, 失败时由调用方回显原值。 */
+  onChangeDocType: (docType: string) => void;
   onConfirm: (row: WorkbenchRow) => void;
   onReject: (row: WorkbenchRow) => void;
   onConfirmBinding: (binding: BindingListItem) => void;
@@ -378,6 +382,8 @@ export function DetailPanel({
   row,
   anchors,
   pending,
+  docTypes,
+  onChangeDocType,
   onConfirm,
   onReject,
   onConfirmBinding,
@@ -394,9 +400,44 @@ export function DetailPanel({
         : null,
     [doc],
   );
+  // 类型修正的选项: 当前类型不在列表中(历史数据/后端列表不一致)时追加为选项,
+  // 保证既有值始终可见、可回退; 空类型补一个「未识别」占位。
+  const typeOptions = useMemo(() => {
+    const list = docTypes.filter(Boolean);
+    if (doc?.docType && !list.includes(doc.docType)) list.push(doc.docType);
+    return list;
+  }, [docTypes, doc]);
+  const typePending = pending.has('docType');
   return (
     <aside className="flex w-80 shrink-0 flex-col border-l border-borderGray bg-white">
       <div className="shrink-0 border-b border-borderGray px-4 py-3 text-[15px] font-semibold text-textDark">详情</div>
+      {doc && (
+        <div className="shrink-0 border-b border-borderGray px-4 py-3">
+          <div className="truncate text-[13px] font-medium leading-5 text-textDark" title={doc.fileName}>
+            {prettyDocName(doc.fileName) || doc.fileName}
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <span className="shrink-0 text-[11px] font-medium text-textGray">文档类型</span>
+            <select
+              value={doc.docType}
+              onChange={(e) => onChangeDocType(e.target.value)}
+              disabled={typePending}
+              aria-label="修正文档类型"
+              title="修正文档类型"
+              className="h-7 min-w-0 flex-1 rounded-md border border-borderGray bg-white px-2 text-[12px] text-textDark focus:border-deepSea focus:outline-none disabled:opacity-50"
+            >
+              {doc.docType === '' && <option value="">未识别</option>}
+              {typeOptions.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+            {typePending && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-textGray" aria-hidden />}
+          </div>
+          <div className="mt-1.5 text-[10px] leading-4 text-textGray">修正类型后，绑定建议与关联流水将自动刷新</div>
+        </div>
+      )}
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {row ? (
           <CandidateDetail row={row} anchors={anchors} pending={pending} onConfirm={onConfirm} onReject={onReject} />

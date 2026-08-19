@@ -318,6 +318,13 @@ function firstNum(fields: Record<string, { value: string | number }>, keys: stri
   return undefined;
 }
 
+/** 买卖双方字段别名(精确键匹配, 不模糊)。导出供后续候选扫描特征复用:
+ *  真实发票用 购买方名称/销售方名称, 货转单用 受让方/转让方。 */
+export const PARTY_FIELD_ALIASES = {
+  buyer: ['买方', '甲方', '收货人', '购买方名称', '受让方'],
+  seller: ['卖方', '乙方', '发货人', '销售方名称', '转让方'],
+} as const;
+
 /**
  * 通用文档(发票/提单/装箱单等, 无专用 voucher schema)的抽取字段 -> 绑定锚点。
  * 字段名取自抽取器约定(domain/tradeSemantics.ts REL_ROLE_BY_FIELD / KEY_FIELDS):
@@ -330,16 +337,17 @@ export function buildAnchorsFromFields(
   const anchors: VoucherAnchors = {};
   const contractNo = firstStr(fields, ['合同号', '合同编号']);
   if (contractNo) anchors.contractNo = contractNo;
-  const buyer = firstStr(fields, ['买方', '甲方', '收货人']);
+  const buyer = firstStr(fields, [...PARTY_FIELD_ALIASES.buyer]);
   if (buyer) anchors.buyer = buyer;
-  const seller = firstStr(fields, ['卖方', '乙方', '发货人']);
+  const seller = firstStr(fields, [...PARTY_FIELD_ALIASES.seller]);
   if (seller) anchors.seller = seller;
   const date = firstStr(fields, ['日期', '开票日期', '签发日期', '签订日期']);
   if (date) anchors.date = date;
-  const amount = firstNum(fields, ['金额', '价税合计', '合计金额']);
+  const amount = firstNum(fields, ['金额', '价税合计', '价税合计小写_元', '合计金额']);
   if (amount !== undefined) anchors.amount = amount;
   // 数量锚点按字段优先级: 裸 '数量' 不带单位语义(可能是件/箱/吨), unit 留空不猜测;
-  // '_吨' 后缀字段单位确定为吨。
+  // '_吨' 后缀字段单位确定为吨。唯一例外: 存在显式 单位 字段且其值为 '吨' 时,
+  // 裸 '数量' 的单位随之确定为吨 —— 这是读取字段值而非猜测。
   const qtyFields: ReadonlyArray<readonly [string, string | undefined]> = [
     ['数量', undefined],
     ['重量_吨', '吨'],
@@ -350,6 +358,7 @@ export function buildAnchorsFromFields(
     if (q !== undefined) {
       anchors.quantityTon = q;
       if (unit) anchors.quantityUnit = unit;
+      else if (name === '数量' && firstStr(fields, ['单位']) === '吨') anchors.quantityUnit = '吨';
       break;
     }
   }

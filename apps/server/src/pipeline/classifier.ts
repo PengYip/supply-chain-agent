@@ -22,7 +22,10 @@ export interface ClassifierResult {
   source: 'classified' | 'hint' | 'fallback';
 }
 
-const DOC_TYPES = ['合同', '发票', '提单', '装箱单', '货转单', '化验报告', '付款凭证', '其他'] as const;
+/** 八类单据词汇表(SSOT for the docType vocabulary). Export 供路由层校验与
+ *  前端工作台消费; satisfies 断言其与 types.ts 的 DocType 联合类型兼容
+ *  (types.ts 不 import 本文件, 无循环依赖)。 */
+export const DOC_TYPES = ['合同', '发票', '提单', '装箱单', '货转单', '化验报告', '付款凭证', '其他'] as const satisfies readonly DocType[];
 const ClassifierSchema = z.object({
   docType: z.enum(DOC_TYPES),
   confidence: z.number().min(0).max(1),

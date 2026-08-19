@@ -85,6 +85,11 @@ export interface BatchConfirmResult {
   error?: string;
 }
 
+/** 文档类型修正下拉的兜底选项（仅当前端拿不到后端列表时使用）。
+ *  真实来源是 GET /api/bindings/overview 响应中的 docTypes 字段；
+ *  后端返回了合法列表时以后端为准，字段缺失或格式非法时回退到这里的固定 8 项。 */
+const DOC_TYPE_OPTIONS = ['合同', '发票', '提单', '装箱单', '货转单', '化验报告', '付款凭证', '其他'];
+
 /* ---------- 响应解析(照 useGraph.ts 模式: {ok,data} 信封兼容 + 中文错误) ---------- */
 
 async function getJson<T>(url: string): Promise<T> {
@@ -103,6 +108,22 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   try {
     res = await fetch(url, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new Error('网络错误，请稍后重试');
+  }
+  await assertOk(res);
+  return parseResponse<T>(res);
+}
+
+async function patchJson<T>(url: string, body: unknown): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify(body),
@@ -289,11 +310,18 @@ export function useBindings() {
 
   const [contracts, setContracts] = useState<ContractOption[]>([]);
 
+  // 文档类型可选值: 初始为兜底常量, overview 响应携带 docTypes 时以后端为准。
+  const [docTypes, setDocTypes] = useState<string[]>(DOC_TYPE_OPTIONS);
+
   const refreshOverview = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await getJson<{ documents?: unknown[] }>('/api/bindings/overview');
+      const data = await getJson<{ documents?: unknown[]; docTypes?: unknown[] }>('/api/bindings/overview');
+      // docTypes 防御性解析: 后端未上线该字段或格式非法时, 保持现有列表(首次即兜底常量)。
+      const rawTypes = Array.isArray(data?.docTypes) ? data.docTypes : [];
+      const typeList = rawTypes.map(asStr).filter(Boolean);
+      if (typeList.length > 0) setDocTypes(typeList);
       const rawList = Array.isArray(data?.documents) ? data.documents : [];
       const docs = rawList
         .map((raw) => (raw && typeof raw === 'object' ? normalizeOverviewDoc(raw as Record<string, unknown>) : null))
@@ -428,6 +456,16 @@ export function useBindings() {
     [],
   );
 
+  /** 修正文档类型(PATCH /api/documents/:docId/type), 成功返回回显 docType 与刷新的流水条数。 */
+  const correctDocType = useCallback(
+    (docId: string, docType: string) =>
+      patchJson<{ ok: boolean; docType: string; refreshedFlows: number }>(
+        `/api/documents/${encodeURIComponent(docId)}/type`,
+        { docType },
+      ),
+    [],
+  );
+
   /** 写操作成功后的统一对账(总览 + 建议 + 当前文档候选)。 */
   const refreshAll = useCallback(
     (docId: string | null) => {
@@ -462,11 +500,13 @@ export function useBindings() {
     candidatesError,
     loadCandidates,
     contracts,
+    docTypes,
     confirmBinding,
     rejectBinding,
     createBinding,
     unbindBinding,
     batchConfirm,
+    correctDocType,
     refreshAll,
   };
 }

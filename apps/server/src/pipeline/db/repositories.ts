@@ -53,6 +53,8 @@ import {
   getDocumentParseStatusPg,
   getDocumentSourceUriPg,
   getDocumentMetaPg,
+  // docType 修正端点: pg twin for updateDocumentType.
+  updateDocumentTypePg,
   // contract ledger (ingest extraction write-back): pg twins.
   upsertContractLedgerEntryPg,
   findContractLedgerByNoPg,
@@ -1590,6 +1592,39 @@ export async function updateDocumentMeta(
   if (sets.length === 0) return;
   params.push(docId);
   ctx.sqlite.prepare(`UPDATE documents SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+}
+
+/**
+ * 修正文档的 docType(PATCH /api/documents/:docId/type)。UPDATE documents 仅
+ * 改 doc_type 单列(区别于 updateDocumentMeta 的多列); 所有权作用域与
+ * updateBindingStatus 一致: uid 在 scope 时按 3-way OR(user_id 归属 + legacy
+ * ''/NULL)过滤, 他人私有行不可改。返回是否有行被更新(false -> 路由 404)。
+ *
+ * 级联: 执行流水物化(executionFlow.materializeExecutionFlow)与候选扫描
+ * (bindingCandidates)都以 extractions.doc_type 为 docType 事实来源, 因此
+ * documents.doc_type 修正后必须同步到该文档的 extraction 行, 否则改类型后
+ * 重建的执行流水仍按旧类型物化/落空。
+ */
+export async function updateDocumentType(
+  ctx: DbContext,
+  docId: string,
+  docType: DocType,
+  userId?: string,
+): Promise<boolean> {
+  if (ctx.backend === 'postgres') return updateDocumentTypePg(ctx, docId, docType, userId);
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? ctx.sqlite
+        .prepare(
+          `UPDATE documents SET doc_type = ?
+           WHERE id = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)`,
+        )
+        .run(docType, docId, uid)
+    : ctx.sqlite.prepare('UPDATE documents SET doc_type = ? WHERE id = ?').run(docType, docId);
+  if (res.changes === 0) return false;
+  // 级联到 extraction 行(见函数头注释)。所有权已由 documents 侧判定通过。
+  ctx.sqlite.prepare('UPDATE extractions SET doc_type = ? WHERE document_id = ?').run(docType, docId);
+  return true;
 }
 
 /**

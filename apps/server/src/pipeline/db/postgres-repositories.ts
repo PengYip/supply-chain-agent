@@ -1346,6 +1346,31 @@ export async function updateDocumentMetaPg(
   );
 }
 
+/**
+ * 修正文档的 docType(pg twin of updateDocumentType)。UPDATE documents 仅改
+ * doc_type 单列; uid 在 scope 时按 3-way OR 过滤所有权。返回是否有行被更新。
+ * 级联到 extractions.doc_type(执行流水物化/候选扫描以 extraction docType 为
+ * 事实来源, 见 repositories.ts 的函数头注释)。
+ */
+export async function updateDocumentTypePg(
+  ctx: PostgresDbContext,
+  docId: string,
+  docType: DocType,
+  userId?: string,
+): Promise<boolean> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `UPDATE documents SET doc_type = $1
+         WHERE id = $2 AND (user_id = $3 OR user_id = '' OR user_id IS NULL)`,
+        [docType, docId, uid],
+      )
+    : await ctx.pool.query('UPDATE documents SET doc_type = $1 WHERE id = $2', [docType, docId]);
+  if ((res.rowCount ?? 0) === 0) return false;
+  await ctx.pool.query('UPDATE extractions SET doc_type = $1 WHERE document_id = $2', [docType, docId]);
+  return true;
+}
+
 /** Set the parse_status lifecycle on a document (pg twin). */
 export async function setDocumentParseStatusPg(
   ctx: PostgresDbContext,

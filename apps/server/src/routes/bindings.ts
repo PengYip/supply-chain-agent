@@ -14,6 +14,7 @@ import {
 import { buildBindingCandidates } from '../pipeline/bindingCandidates.js';
 import { syncBindingEdge, removeBindingEdge, type GraphSyncOutcome } from '../pipeline/bindingGraphSync.js';
 import { materializeExecutionFlow, retractExecutionFlow } from '../pipeline/executionFlow.js';
+import { DOC_TYPES } from '../pipeline/classifier.js';
 
 export const bindingsRoute = new Hono<AuthEnv>();
 
@@ -49,7 +50,9 @@ bindingsRoute.get('/overview', async (c) => {
     createdAt: d.createdAt,
     bindings: byDoc.get(d.id) ?? [],
   }));
-  return c.json({ documents });
+  // 单据类型词汇表(SSOT: pipeline/classifier DOC_TYPES), 前端据此渲染 docType
+  // 下拉/徽章, 不必硬编码。
+  return c.json({ documents, docTypes: [...DOC_TYPES] });
 });
 
 /** GET /proposals — 现有 status=proposed 建议行。 */

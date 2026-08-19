@@ -12,6 +12,7 @@
 // (app.use('/api/documents/*', requireAuth)), so a user is always attached here.
 
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
 import type { DbContext } from '../pipeline/db/client.js';
@@ -19,11 +20,13 @@ import {
   applyDocumentCorrections,
   getReviewSnapshot,
   setReviewStatus,
+  updateDocumentType,
 } from '../pipeline/db/repositories.js';
 import { ensureDocumentExtracted } from '../pipeline/tools/documentEntry.js';
 import { refreshExecutionFlowsForDocument } from '../pipeline/executionFlow.js';
 import { commitDocumentGraph } from '../pipeline/graphCommit.js';
 import { buildIngestDeps } from '../pipeline/ingestModel.js';
+import { DOC_TYPES } from '../pipeline/classifier.js';
 import type { DocType, Modality } from '../pipeline/types.js';
 
 export const reviewRoute = new Hono<AuthEnv>();
@@ -209,6 +212,62 @@ reviewRoute.post('/:docId/process', async (c) => {
       return c.json({ ok: false, error: 'document_not_found' }, 404);
     }
     console.error('[review] process failed:', msg);
+    return c.json({ ok: false, error: msg }, 500);
+  }
+});
+
+const docTypeChangeSchema = z.object({ docType: z.string().min(1) });
+
+/**
+ * PATCH /api/documents/:docId/type
+ *
+ * 修正文档的业务类型(docType)。入库分类可能出错(如漏分类为 '其他'), 工作台
+ * 让用户直接改正: 落 documents.doc_type(级联 extractions.doc_type), 然后按
+ * 最新类型重建该文档全部已确认绑定的执行流水 —— refreshedFlows 计数是响应
+ * 契约的一部分, 重建失败返回 500 而非静默告警。
+ *
+ * Request body (JSON):
+ *   { docType: string }  — 必须在 DOC_TYPES 八类词汇内
+ *
+ * Responses:
+ *   200 { ok: true, docType, refreshedFlows }
+ *   400 { ok: false, error: 'invalid_body' | 'invalid_doc_type' }
+ *   401 { error: 'unauthorized' }            (requireAuth, applied in index.ts)
+ *   404 { ok: false, error: 'document_not_found' }
+ *   500 { ok: false, error: <message> }
+ */
+reviewRoute.patch('/:docId/type', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ ok: false, error: 'invalid_body' }, 400);
+  }
+  const parsed = docTypeChangeSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ ok: false, error: 'invalid_body' }, 400);
+  }
+  const docType = parsed.data.docType;
+  if (!(DOC_TYPES as readonly string[]).includes(docType)) {
+    return c.json({ ok: false, error: 'invalid_doc_type' }, 400);
+  }
+
+  const docId = c.req.param('docId');
+  try {
+    const updated = await updateDocumentType(ctx(), docId, docType as DocType, user.id);
+    if (!updated) {
+      return c.json({ ok: false, error: 'document_not_found' }, 404);
+    }
+    // 类型修正后按最新抽取重建执行流水; refreshedFlows 计数是响应契约的一部分,
+    // 失败不得告警吞掉(与修正钩子的 warn-only 语义不同)。
+    const { materialized } = await refreshExecutionFlowsForDocument(ctx(), docId, user.id);
+    return c.json({ ok: true, docType, refreshedFlows: materialized });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[review] docType change failed:', msg);
     return c.json({ ok: false, error: msg }, 500);
   }
 });

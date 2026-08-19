@@ -61,6 +61,13 @@ interface ToastItem {
   text: string;
 }
 
+/** 文档类型修正的服务端错误码 -> 中文文案(assertOk 会透传 data.error)。 */
+const DOC_TYPE_ERROR_TEXT: Record<string, string> = {
+  invalid_doc_type: '不支持的文档类型',
+  invalid_body: '请求参数错误',
+  document_not_found: '文档不存在或已删除',
+};
+
 /** 面板折叠把手(样式与 graph/GraphView.tsx 一致)。 */
 function PanelRail({
   collapsed,
@@ -266,6 +273,35 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
 
   const handleRefresh = () => {
     b.refreshAll(selectedDocId);
+  };
+
+  /* ---------- 文档类型修正 ---------- */
+
+  /** 轻量修正不做二次确认; 下拉值始终由 overview 的 docType 驱动,
+   *  成功才在本地补丁并全量对账, 失败不动本地状态即自动回显原值。 */
+  const handleChangeDocType = async (nextType: string) => {
+    if (!selected || pending.has('docType')) return;
+    if (!nextType || nextType === selected.docType) return;
+    const docId = selected.docId;
+    markPending('docType', true);
+    try {
+      const res = await b.correctDocType(docId, nextType);
+      // 本地先更新 docType, 右栏下拉与左栏徽标即时跟随; 随后刷新建议与候选。
+      b.patchOverview((docs) =>
+        docs.map((d) => (d.docId === docId ? { ...d, docType: res.docType || nextType } : d)),
+      );
+      const flows = Number.isFinite(res.refreshedFlows) ? res.refreshedFlows : 0;
+      pushToast(
+        'success',
+        flows > 0 ? `文档类型已改为「${nextType}」，已刷新 ${flows} 条关联流水` : `文档类型已改为「${nextType}」`,
+      );
+      b.refreshAll(docId);
+    } catch (e) {
+      const code = e instanceof Error ? e.message : '';
+      pushToast('error', DOC_TYPE_ERROR_TEXT[code] ?? (e instanceof Error ? e.message : '类型修正失败'));
+    } finally {
+      markPending('docType', false);
+    }
   };
 
   /* ---------- 写操作(二次确认 -> 乐观更新 -> 失败回滚 + toast) ---------- */
@@ -667,6 +703,8 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
             row={focusedRow}
             anchors={candidates?.anchors ?? null}
             pending={pending}
+            docTypes={b.docTypes}
+            onChangeDocType={(t) => void handleChangeDocType(t)}
             onConfirm={requestConfirmRow}
             onReject={requestRejectRow}
             onConfirmBinding={requestConfirmBinding}
