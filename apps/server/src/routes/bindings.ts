@@ -9,7 +9,7 @@ import {
   listUserDocuments, listBindingsForUser, listBindingProposals, listContractLedgerEntries,
   findBindingById, updateBindingStatus, saveBinding, findBindingByDocAndContract,
   listBindingsForContract, setBindingGraphStatus, getDocumentMeta, type BindingGraphStatus,
-  listExecutionFlows, summarizeExecutionFlows,
+  listExecutionFlows, summarizeExecutionFlows, getDocumentSourcesByIds,
 } from '../pipeline/db/repositories.js';
 import { buildBindingCandidates } from '../pipeline/bindingCandidates.js';
 import { syncBindingEdge, removeBindingEdge, type GraphSyncOutcome } from '../pipeline/bindingGraphSync.js';
@@ -107,9 +107,21 @@ bindingsRoute.get('/flows', async (c) => {
     summarizeExecutionFlows(ctx(), contractNo, user.id),
     listExecutionFlows(ctx(), contractNo, user.id),
   ]);
+  // 溯源列展示文件名 + 点击预览: 批量补文档来源(路径末段 + MinIO key)。
+  const docIds = [...new Set(flows.map((f) => f.documentId).filter((id) => id.length > 0))];
+  const sources = await getDocumentSourcesByIds(ctx(), docIds);
+  const sourceById = new Map(sources.map((s) => [s.id, s]));
+  const flowsWithSource = flows.map((f) => {
+    const s = sourceById.get(f.documentId);
+    return {
+      ...f,
+      documentFileName: s ? (s.sourceUri.split('/').pop() ?? s.sourceUri) : null,
+      documentMinioKey: s?.minioKey ?? null,
+    };
+  });
   // 有效自主体名单是否非空(DB ∪ env)。前端据此提示"未配置名单时流水不会物化"。
   const selfPartiesConfigured = (await getEffectiveSelfPartyNames(ctx())).length > 0;
-  return c.json({ contractNo, summaries, flows, selfPartiesConfigured });
+  return c.json({ contractNo, summaries, flows: flowsWithSource, selfPartiesConfigured });
 });
 
 // ---- 写端点(spec §5.2) ------------------------------------------------------

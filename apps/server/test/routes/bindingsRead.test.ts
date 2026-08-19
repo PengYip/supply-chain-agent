@@ -4,7 +4,7 @@ import type { AuthEnv } from '../../src/lib/auth-middleware.js';
 import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.js';
 import {
   createDocumentStub, saveExtraction, saveBinding, upsertContractLedgerEntry,
-  addSelfParty,
+  addSelfParty, upsertExecutionFlow,
 } from '../../src/pipeline/db/repositories.js';
 import type { ContractLedgerEntry } from '../../src/pipeline/contractLedger.js';
 
@@ -102,5 +102,32 @@ describe('GET /api/bindings/flows (selfPartiesConfigured 标志)', () => {
   it('缺 contractNo -> 400', async () => {
     const res = await appAs('u1').request('/api/bindings/flows');
     expect(res.status).toBe(400);
+  });
+});
+
+describe('GET /api/bindings/flows (溯源列文件名与预览 key)', () => {
+  it('flows 带 documentFileName(路径末段) 与 documentMinioKey; 文档缺 minio_key -> null', async () => {
+    const { docId } = await createDocumentStub(ctx, {
+      sourceUri: '/ingest/users_u1_721968f0-7f6f-4764-b36a-edf4742356d7-06_发票.jpg',
+      docType: '发票',
+    });
+    ctx.sqlite
+      .prepare('UPDATE documents SET minio_key = ? WHERE id = ?')
+      .run('users/u1/721968f0-7f6f-4764-b36a-edf4742356d7-06_发票.jpg', docId);
+    await upsertExecutionFlow(ctx, {
+      bindingId: 'BD-T', documentId: docId, contractNo: 'HT-1', flowType: '发票流',
+      direction: 'in', amount: 100, quantityTon: null, unit: null, docType: '发票',
+      voucherDate: '2026-08-19', confidence: 1, createdBy: 'human',
+    }, 'u1');
+    const res = await appAs('u1').request('/api/bindings/flows?contractNo=HT-1');
+    expect(res.status).toBe(200);
+    const data = await res.json() as {
+      flows: Array<{ documentId: string; documentFileName: string | null; documentMinioKey: string | null }>;
+    };
+    expect(data.flows).toHaveLength(1);
+    expect(data.flows[0]!.documentFileName)
+      .toBe('users_u1_721968f0-7f6f-4764-b36a-edf4742356d7-06_发票.jpg');
+    expect(data.flows[0]!.documentMinioKey)
+      .toBe('users/u1/721968f0-7f6f-4764-b36a-edf4742356d7-06_发票.jpg');
   });
 });

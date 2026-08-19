@@ -29,6 +29,10 @@ export interface ExecutionFlowItem {
   docType: string | null
   voucherDate: string | null
   extractionId: string | null
+  /** 溯源展示: 文档来源路径末段(未剥 uuid 前缀, 展示层用 prettyDocName 再加工)。 */
+  documentFileName: string | null
+  /** 溯源预览: MinIO 对象 key, 非空时可经 /api/files/stream 取流预览。 */
+  documentMinioKey: string | null
   confidence: number
   createdBy: string
   userId: string

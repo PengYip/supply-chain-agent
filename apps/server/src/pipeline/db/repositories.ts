@@ -81,6 +81,7 @@ import {
   removeSelfPartyPg,
   listDocumentIdsWithConfirmedBindingsPg,
   hasExecutionFlowsForDocumentPg,
+  getDocumentSourcesByIdsPg,
 } from './postgres-repositories.js';
 
 // Phase 2 business-data isolation: a normalized userId is '' / undefined when the
@@ -2252,6 +2253,27 @@ export async function summarizeExecutionFlows(
 // 六向执行流水的方向判定以"本公司是谁"为基准(env.SELF_PARTY_NAMES)。名单新增
 // DB 侧管理(self_parties)与 env 并集, 解决 env 未配置时流水静默跳过的 incident。
 // 名单租户全局(无 user_id), 与 env 变量同域; created_by 仅审计。
+
+export interface DocumentSourceRow {
+  id: string;
+  sourceUri: string;
+  minioKey: string | null;
+}
+
+/** 批量取文档的来源路径与 MinIO key(flows 溯源列展示文件名/点击预览用)。 */
+export async function getDocumentSourcesByIds(ctx: DbContext, ids: string[]): Promise<DocumentSourceRow[]> {
+  if (ids.length === 0) return [];
+  if (ctx.backend === 'postgres') return getDocumentSourcesByIdsPg(ctx, ids);
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = ctx.sqlite
+    .prepare(`SELECT id, source_uri, minio_key FROM documents WHERE id IN (${placeholders})`)
+    .all(...ids) as Array<{ id: string; source_uri: string | null; minio_key: string | null }>;
+  return rows.map((r) => ({
+    id: r.id,
+    sourceUri: r.source_uri ?? '',
+    minioKey: r.minio_key ?? null,
+  }));
+}
 
 export interface SelfPartyRow {
   name: string;

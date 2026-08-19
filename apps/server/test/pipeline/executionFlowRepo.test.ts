@@ -5,6 +5,7 @@ import {
   retractExecutionFlowForBinding,
   retractExecutionFlowsForDocument,
   listConfirmedBindingsForDocument,
+  getDocumentSourcesByIds,
   listExecutionFlows,
   summarizeExecutionFlows,
   saveBinding,
@@ -165,6 +166,26 @@ describe('deleteDocument cleans execution_flows', () => {
       .prepare('SELECT document_id AS d FROM execution_flows')
       .all() as Array<{ d: string }>;
     expect(remaining.map((r) => r.d)).toEqual(['DOC-2']);
+  });
+});
+
+describe('getDocumentSourcesByIds', () => {
+  it('批量返回 sourceUri 与 minioKey; 未知 id 跳过; 空 ids -> []', async () => {
+    insertDocumentStub('DOC-1');
+    insertDocumentStub('DOC-2');
+    ctx.sqlite
+      .prepare("UPDATE documents SET source_uri = '/ingest/users_u1_uuid-06_发票.jpg', minio_key = 'users/u1/uuid-06_发票.jpg' WHERE id = 'DOC-1'")
+      .run();
+
+    const rows = await getDocumentSourcesByIds(ctx, ['DOC-1', 'DOC-2', 'DOC-NONE']);
+    expect(rows).toHaveLength(2);
+    const r1 = rows.find((r) => r.id === 'DOC-1')!;
+    expect(r1.sourceUri).toBe('/ingest/users_u1_uuid-06_发票.jpg');
+    expect(r1.minioKey).toBe('users/u1/uuid-06_发票.jpg');
+    const r2 = rows.find((r) => r.id === 'DOC-2')!;
+    expect(r2.minioKey).toBeNull();
+
+    expect(await getDocumentSourcesByIds(ctx, [])).toEqual([]);
   });
 });
 

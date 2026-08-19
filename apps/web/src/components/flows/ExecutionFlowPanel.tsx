@@ -13,6 +13,8 @@ import {
   type ExecutionFlowsResponse,
   type FlowSummary,
 } from '../../api/flows';
+import { prettyDocName } from '../graph/kinds';
+import type { FileEntry } from '../../hooks/useFiles';
 
 export interface ExecutionFlowPanelProps {
   contractNo: string;
@@ -20,6 +22,8 @@ export interface ExecutionFlowPanelProps {
   displayContractNo?: string;
   /** 溯源: 定位到该凭证所属文档。缺省时不渲染按钮, 溯源列降级为悬浮文本。 */
   onLocateDocument?: (documentId: string) => void;
+  /** 溯源: 点击文件名打开预览(FilePreviewModal)。需要 documentMinioKey 非空。 */
+  onPreviewFile?: (file: FileEntry) => void;
   /** 引导跳转: 主体名单未配置且流水为空时, 提供前往主体名单页的入口。 */
   onOpenParties?: () => void;
 }
@@ -66,19 +70,29 @@ function SummaryCard({ summary, groupFlows }: { summary: FlowSummary; groupFlows
 function FlowRow({
   flow,
   onLocateDocument,
+  onPreviewFile,
 }: {
   flow: ExecutionFlowItem;
   onLocateDocument?: (documentId: string) => void;
+  onPreviewFile?: (file: FileEntry) => void;
 }) {
   const isIn = flow.direction === 'in';
   const badgeCls = isIn
     ? 'border-[#CBE5D3] bg-[#E9F4EC] text-[#15803D]'
     : 'border-[#CFDCE6] bg-[#EBF1F5] text-steelBlue';
-  const traceTitle = flow.extractionId
-    ? `documentId: ${flow.documentId} / extractionId: ${flow.extractionId}`
-    : `documentId: ${flow.documentId}`;
+  // 溯源展示: 优先文件名(prettyDocName 剥 uuid/users_ 前缀), 缺省降级 documentId 截断。
+  const displayName = flow.documentFileName ? prettyDocName(flow.documentFileName) : null;
+  const traceLabel = displayName
+    ?? (flow.documentId.length > 12 ? `${flow.documentId.slice(0, 12)}…` : flow.documentId);
+  const traceTitle = [
+    displayName,
+    `documentId: ${flow.documentId}`,
+    flow.extractionId ? `extractionId: ${flow.extractionId}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n');
   return (
-    <div className="grid grid-cols-[64px_1fr_1fr_92px_1fr_84px] items-center border-b border-borderGray/60 last:border-b-0">
+    <div className="grid grid-cols-[64px_1fr_1fr_92px_1fr_140px] items-center border-b border-borderGray/60 last:border-b-0">
       <div className="px-2 py-1.5">
         <span className={clsx('rounded border px-1.5 py-px text-[10px]', badgeCls)}>
           {flowDirectionLabel(flow.flowType, flow.direction)}
@@ -92,7 +106,26 @@ function FlowRow({
       <div className="break-all px-2 py-1.5 text-[12px] leading-4 text-textDark">{flowText(flow.docType)}</div>
       <div className="px-2 py-1.5">
         {flow.documentId ? (
-          onLocateDocument ? (
+          onPreviewFile && flow.documentMinioKey ? (
+            <button
+              type="button"
+              onClick={() =>
+                onPreviewFile({
+                  key: flow.documentMinioKey!,
+                  name: traceLabel,
+                  size: 0,
+                  lastModified: '',
+                  docId: flow.documentId,
+                  directory: '/',
+                  parseStatus: null,
+                })
+              }
+              title={traceTitle}
+              className="block max-w-full truncate text-left text-[11px] text-deepSea transition-colors hover:underline"
+            >
+              {traceLabel}
+            </button>
+          ) : onLocateDocument ? (
             <button
               type="button"
               onClick={() => onLocateDocument(flow.documentId)}
@@ -102,8 +135,8 @@ function FlowRow({
               定位凭证
             </button>
           ) : (
-            <span className="cursor-default text-[11px] text-textGray" title={traceTitle}>
-              {flow.documentId.length > 12 ? `${flow.documentId.slice(0, 12)}…` : flow.documentId}
+            <span className="cursor-default block truncate text-[11px] text-textGray" title={traceTitle}>
+              {traceLabel}
             </span>
           )
         ) : (
@@ -119,6 +152,7 @@ export function ExecutionFlowPanel({
   contractNo,
   displayContractNo,
   onLocateDocument,
+  onPreviewFile,
   onOpenParties,
 }: ExecutionFlowPanelProps) {
   const [phase, setPhase] = useState<Phase>('idle');
@@ -260,7 +294,7 @@ export function ExecutionFlowPanel({
               <div className="mt-2.5">
                 <div className="text-[11px] font-medium tracking-wide text-textGray">逐笔明细</div>
                 <div className="mt-1.5 overflow-hidden rounded-md border border-borderGray">
-                  <div className="grid grid-cols-[64px_1fr_1fr_92px_1fr_84px] border-b border-borderGray bg-bgGray text-[10px] font-medium text-textGray">
+                  <div className="grid grid-cols-[64px_1fr_1fr_92px_1fr_140px] border-b border-borderGray bg-bgGray text-[10px] font-medium text-textGray">
                     <div className="px-2 py-1.5">流向</div>
                     <div className="px-2 py-1.5 text-right">金额</div>
                     <div className="px-2 py-1.5 text-right">数量</div>
@@ -269,7 +303,7 @@ export function ExecutionFlowPanel({
                     <div className="px-2 py-1.5">溯源</div>
                   </div>
                   {data.flows.map((f) => (
-                    <FlowRow key={f.id} flow={f} onLocateDocument={onLocateDocument} />
+                    <FlowRow key={f.id} flow={f} onLocateDocument={onLocateDocument} onPreviewFile={onPreviewFile} />
                   ))}
                 </div>
               </div>

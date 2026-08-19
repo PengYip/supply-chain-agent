@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { fetchFlowContracts, type FlowContractOption } from '../../api/flows';
 import { ExecutionFlowPanel } from './ExecutionFlowPanel';
+import { FilePreviewModal } from '../FilePreviewModal';
+import type { FileEntry } from '../../hooks/useFiles';
 
 type Phase = 'loading' | 'ready' | 'error';
 
@@ -11,6 +13,7 @@ export function FlowsView({ onOpenParties }: { onOpenParties?: () => void }) {
   const [contracts, setContracts] = useState<FlowContractOption[]>([]);
   const [error, setError] = useState('');
   const [selectedNo, setSelectedNo] = useState('');
+  const [previewFile, setPreviewFile] = useState<FileEntry | null>(null);
 
   const load = useCallback(async () => {
     setPhase('loading');
@@ -91,8 +94,10 @@ export function FlowsView({ onOpenParties }: { onOpenParties?: () => void }) {
               contractNo={selectedNo}
               displayContractNo={selected?.displayContractNo ?? undefined}
               onOpenParties={onOpenParties}
+              onPreviewFile={setPreviewFile}
             />
           ))}
+        {previewFile && <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />}
       </div>
     </div>
   );

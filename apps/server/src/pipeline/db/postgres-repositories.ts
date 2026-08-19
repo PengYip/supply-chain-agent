@@ -53,6 +53,7 @@ import type {
   ExecutionFlowRow,
   ExecutionFlowSummary,
   SelfPartyRow,
+  DocumentSourceRow,
 } from './repositories.js';
 
 // Phase 2 business-data isolation: same convention as repositories.ts -- a
@@ -1754,6 +1755,23 @@ export async function summarizeExecutionFlowsPg(
 // self_parties 为租户全局名单(无 user_id), 与 env.SELF_PARTY_NAMES 并集。
 
 /** pg twin of listSelfParties。 */
+/** pg twin of getDocumentSourcesByIds。 */
+export async function getDocumentSourcesByIdsPg(
+  ctx: PostgresDbContext,
+  ids: string[],
+): Promise<DocumentSourceRow[]> {
+  if (ids.length === 0) return [];
+  const res = await ctx.pool.query(
+    'SELECT id, source_uri, minio_key FROM documents WHERE id = ANY($1::text[])',
+    [ids],
+  );
+  return res.rows.map((r) => ({
+    id: String(r.id),
+    sourceUri: r.source_uri === null || r.source_uri === undefined ? '' : String(r.source_uri),
+    minioKey: r.minio_key ?? null,
+  }));
+}
+
 export async function listSelfPartiesPg(ctx: PostgresDbContext): Promise<SelfPartyRow[]> {
   const res = await ctx.pool.query(
     'SELECT name, created_by, created_at FROM self_parties ORDER BY name ASC',
