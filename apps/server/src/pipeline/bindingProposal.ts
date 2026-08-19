@@ -337,8 +337,21 @@ export function buildAnchorsFromFields(
   if (date) anchors.date = date;
   const amount = firstNum(fields, ['金额', '价税合计', '合计金额']);
   if (amount !== undefined) anchors.amount = amount;
-  const qty = firstNum(fields, ['数量', '重量_吨', '交货总量_吨']);
-  if (qty !== undefined) anchors.quantityTon = qty;
+  // 数量锚点按字段优先级: 裸 '数量' 不带单位语义(可能是件/箱/吨), unit 留空不猜测;
+  // '_吨' 后缀字段单位确定为吨。
+  const qtyFields: ReadonlyArray<readonly [string, string | undefined]> = [
+    ['数量', undefined],
+    ['重量_吨', '吨'],
+    ['交货总量_吨', '吨'],
+  ];
+  for (const [name, unit] of qtyFields) {
+    const q = firstNum(fields, [name]);
+    if (q !== undefined) {
+      anchors.quantityTon = q;
+      if (unit) anchors.quantityUnit = unit;
+      break;
+    }
+  }
   return anchors;
 }
 

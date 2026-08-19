@@ -105,6 +105,8 @@ export async function materializeExecutionFlow(
       direction,
       amount: anchors.amount ?? null,
       quantityTon: anchors.quantityTon ?? null,
+      // 数量单位独立建模: '_吨' 后缀字段确定为吨; 裸 '数量' 不带单位语义, 留 null 不猜测。
+      unit: anchors.quantityUnit ?? null,
       docType: extraction.docType,
       voucherDate: anchors.date ?? null,
       // 溯源: 这行流水来自哪次抽取(修正重建后指向新行, 审计线索)。
@@ -199,6 +201,7 @@ export function buildQueryExecutionFlowsTool(deps: QueryFlowsToolDeps) {
           direction: f.direction,
           amount: f.amount,
           quantityTon: f.quantityTon,
+          unit: f.unit ?? null,
           voucherDate: f.voucherDate,
           docType: f.docType,
           extractionId: f.extractionId ?? null,

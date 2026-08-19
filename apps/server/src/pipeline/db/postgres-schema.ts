@@ -239,6 +239,7 @@ export const executionFlows = pgTable(
     direction: text('direction').notNull(),
     amount: doublePrecision('amount'),
     quantityTon: doublePrecision('quantity_ton'),
+    unit: text('unit'),
     docType: text('doc_type').notNull(),
     voucherDate: text('voucher_date'),
     extractionId: text('extraction_id'),

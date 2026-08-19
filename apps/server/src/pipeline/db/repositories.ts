@@ -1919,6 +1919,8 @@ export interface ExecutionFlowInput {
   direction: ExecutionFlowDirection;
   amount: number | null;
   quantityTon: number | null;
+  /** 数量单位('吨'等), 与 quantityTon 同源; 裸 '数量' 字段不带单位语义时为 null。 */
+  unit?: string | null;
   docType: string;
   voucherDate: string | null;
   /** 溯源: 物化时读到的抽取行 id(修正重建后指向新行, 防漂移审计线索)。 */
@@ -1946,7 +1948,7 @@ export interface ExecutionFlowSummary {
 /**
  * 物化/更新一条执行流水。唯一键 (binding_id, user_id): 冲突时更新业务列
  * (document_id / contract_no / flow_type / direction / amount / quantity_ton /
- * doc_type / voucher_date / confidence / created_by), created_at 保持首次写入值。
+ * unit / doc_type / voucher_date / confidence / created_by), created_at 保持首次写入值。
  * 返回 flow id。
  */
 export async function upsertExecutionFlow(
@@ -1959,9 +1961,9 @@ export async function upsertExecutionFlow(
   ctx.sqlite
     .prepare(
       `INSERT INTO execution_flows
-         (id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton,
+         (id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton, unit,
           doc_type, voucher_date, extraction_id, confidence, created_by, user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(binding_id, user_id) DO UPDATE SET
          document_id = excluded.document_id,
          contract_no = excluded.contract_no,
@@ -1969,6 +1971,7 @@ export async function upsertExecutionFlow(
          direction = excluded.direction,
          amount = excluded.amount,
          quantity_ton = excluded.quantity_ton,
+         unit = excluded.unit,
          doc_type = excluded.doc_type,
          voucher_date = excluded.voucher_date,
          extraction_id = excluded.extraction_id,
@@ -1984,6 +1987,7 @@ export async function upsertExecutionFlow(
       input.direction,
       input.amount,
       input.quantityTon,
+      input.unit ?? null,
       input.docType,
       input.voucherDate,
       input.extractionId ?? null,
@@ -2076,6 +2080,7 @@ function executionFlowRowFromSqlite(r: {
   direction: string;
   amount: number | null;
   quantity_ton: number | null;
+  unit: string | null;
   doc_type: string;
   voucher_date: string | null;
   extraction_id: string | null;
@@ -2093,6 +2098,7 @@ function executionFlowRowFromSqlite(r: {
     direction: r.direction as ExecutionFlowDirection,
     amount: r.amount ?? null,
     quantityTon: r.quantity_ton ?? null,
+    unit: r.unit ?? null,
     docType: r.doc_type,
     voucherDate: r.voucher_date ?? null,
     extractionId: r.extraction_id ?? null,
@@ -2114,7 +2120,7 @@ export async function listExecutionFlows(
   const rows = (uid
     ? ctx.sqlite
         .prepare(
-          `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton,
+          `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton, unit,
                   doc_type, voucher_date, extraction_id, confidence, created_by, user_id, created_at
            FROM execution_flows
            WHERE contract_no = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)
@@ -2123,7 +2129,7 @@ export async function listExecutionFlows(
         .all(contractNo, uid)
     : ctx.sqlite
         .prepare(
-          `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton,
+          `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton, unit,
                   doc_type, voucher_date, extraction_id, confidence, created_by, user_id, created_at
            FROM execution_flows
            WHERE contract_no = ?
@@ -2138,6 +2144,7 @@ export async function listExecutionFlows(
     direction: string;
     amount: number | null;
     quantity_ton: number | null;
+    unit: string | null;
     doc_type: string;
     voucher_date: string | null;
     extraction_id: string | null;

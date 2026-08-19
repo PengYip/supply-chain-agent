@@ -1535,6 +1535,7 @@ function executionFlowRowFromPg(r: Record<string, unknown>): ExecutionFlowRow {
     direction: String(r.direction) as ExecutionFlowRow['direction'],
     amount: r.amount === null || r.amount === undefined ? null : Number(r.amount),
     quantityTon: r.quantity_ton === null || r.quantity_ton === undefined ? null : Number(r.quantity_ton),
+    unit: r.unit === null || r.unit === undefined ? null : String(r.unit),
     docType: String(r.doc_type),
     voucherDate: r.voucher_date === null || r.voucher_date === undefined ? null : String(r.voucher_date),
     extractionId: r.extraction_id === null || r.extraction_id === undefined ? null : String(r.extraction_id),
@@ -1557,9 +1558,9 @@ export async function upsertExecutionFlowPg(
   const id = rid('EF');
   await ctx.pool.query(
     `INSERT INTO execution_flows
-       (id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton,
+       (id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton, unit,
         doc_type, voucher_date, extraction_id, confidence, created_by, user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
      ON CONFLICT (binding_id, user_id) DO UPDATE SET
        document_id = EXCLUDED.document_id,
        contract_no = EXCLUDED.contract_no,
@@ -1567,6 +1568,7 @@ export async function upsertExecutionFlowPg(
        direction = EXCLUDED.direction,
        amount = EXCLUDED.amount,
        quantity_ton = EXCLUDED.quantity_ton,
+       unit = EXCLUDED.unit,
        doc_type = EXCLUDED.doc_type,
        voucher_date = EXCLUDED.voucher_date,
        extraction_id = EXCLUDED.extraction_id,
@@ -1581,6 +1583,7 @@ export async function upsertExecutionFlowPg(
       input.direction,
       input.amount,
       input.quantityTon,
+      input.unit ?? null,
       input.docType,
       input.voucherDate,
       input.extractionId ?? null,
@@ -1663,7 +1666,7 @@ export async function listExecutionFlowsPg(
   const uid = effectiveUserId(userId);
   const res = uid
     ? await ctx.pool.query(
-        `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton,
+        `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton, unit,
                 doc_type, voucher_date, extraction_id, confidence, created_by, user_id, created_at
          FROM execution_flows
          WHERE contract_no = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)
@@ -1671,7 +1674,7 @@ export async function listExecutionFlowsPg(
         [contractNo, uid],
       )
     : await ctx.pool.query(
-        `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton,
+        `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton, unit,
                 doc_type, voucher_date, extraction_id, confidence, created_by, user_id, created_at
          FROM execution_flows
          WHERE contract_no = $1

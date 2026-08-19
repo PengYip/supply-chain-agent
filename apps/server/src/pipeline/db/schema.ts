@@ -147,6 +147,8 @@ export const executionFlows = sqliteTable(
     direction: text('direction').notNull(),
     amount: real('amount'),
     quantityTon: real('quantity_ton'),
+    /** 数量单位('吨'等), 与 quantity_ton 同源; 裸 '数量' 字段不带单位语义时为 NULL。 */
+    unit: text('unit'),
     docType: text('doc_type').notNull(),
     voucherDate: text('voucher_date'),
     /** 溯源: 物化时读到的抽取行 id, 修正重建后指向新行(防漂移审计线索)。 */

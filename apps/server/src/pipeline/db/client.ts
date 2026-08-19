@@ -187,6 +187,7 @@ export function migrate(sqlite: Database.Database): void {
       direction TEXT NOT NULL CHECK (direction IN ('in', 'out')),
       amount REAL,
       quantity_ton REAL,
+      unit TEXT,
       doc_type TEXT NOT NULL,
       voucher_date TEXT,
       extraction_id TEXT,
@@ -220,6 +221,14 @@ export function migrate(sqlite: Database.Database): void {
     const cols = sqlite.prepare('PRAGMA table_info(execution_flows)').all() as Array<{ name: string }>;
     if (!cols.some((c) => c.name === 'extraction_id')) {
       try { sqlite.exec('ALTER TABLE execution_flows ADD COLUMN extraction_id TEXT'); } catch { /* concurrent */ }
+    }
+  }
+
+  // 数量单位独立建模(移植自 CodeX-2): 裸 '数量' 字段不带单位语义, unit 为 NULL。
+  {
+    const cols = sqlite.prepare('PRAGMA table_info(execution_flows)').all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'unit')) {
+      try { sqlite.exec('ALTER TABLE execution_flows ADD COLUMN unit TEXT'); } catch { /* concurrent */ }
     }
   }
 
@@ -475,6 +484,7 @@ export async function migratePostgres(pool: Pool): Promise<void> {
        direction TEXT NOT NULL CHECK (direction IN ('in', 'out')),
        amount double precision,
        quantity_ton double precision,
+       unit TEXT,
        doc_type TEXT NOT NULL,
        voucher_date TEXT,
        extraction_id TEXT,
@@ -487,6 +497,9 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_execution_flows_contract ON execution_flows(contract_no, user_id)`,
     // Traceability for pre-existing PG dev DBs (SQLite mirrors the guarded ALTER above).
     `ALTER TABLE execution_flows ADD COLUMN IF NOT EXISTS extraction_id TEXT`,
+    // Unit as its own column (grafted from CodeX-2): bare '数量' fields carry no
+    // unit semantics, so unit stays NULL rather than being guessed.
+    `ALTER TABLE execution_flows ADD COLUMN IF NOT EXISTS unit TEXT`,
     // L4 FTS fix (2026-08-17): drizzle migration 0000 created doc_chunk.fts_vector
     // as a PLAIN tsvector column (no GENERATED), so it stays NULL forever and
     // every FTS query silently returns 0 hits. Recreate it as a GENERATED column

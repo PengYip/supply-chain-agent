@@ -27,6 +27,16 @@ describe('buildAnchorsFromFields(非图片凭证文档)', () => {
     expect(a.buyer).toBe('买方公司');
     expect(a.seller).toBe('卖方公司');
     expect(a.quantityTon).toBe(150);
+    // 裸 '数量' 字段不带单位语义: unit 缺省, 不猜测。
+    expect(a.quantityUnit).toBeUndefined();
+  });
+
+  it("'_吨' 后缀数量字段 -> quantityUnit 确定为吨", () => {
+    const a = buildAnchorsFromFields('装箱单', {
+      重量_吨: { value: '80.5' },
+    });
+    expect(a.quantityTon).toBe(80.5);
+    expect(a.quantityUnit).toBe('吨');
   });
 
   it('空字段/无法解析的数值 -> 对应锚点缺省', () => {

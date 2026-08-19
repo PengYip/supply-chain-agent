@@ -128,6 +128,7 @@ describe('extractAnchors (锚点提取)', () => {
     expect(a.seller).toBe('内蒙古伊泰煤炭股份有限公司');
     expect(a.amount).toBe(3500385.17);
     expect(a.quantityTon).toBe(5259.54);
+    expect(a.quantityUnit).toBe('吨');
     expect(a.contractNo).toBe('CJXC-CTCL-JY-2024-131-01');
     expect(a.date).toBe('2024-07-15');
   });
@@ -145,6 +146,7 @@ describe('extractAnchors (锚点提取)', () => {
     const a = extractAnchors('化验报告', 化验报告Fixture);
     expect(a.buyer).toBe('山西焦煤集团有限责任公司');
     expect(a.quantityTon).toBe(5259.54);
+    expect(a.quantityUnit).toBe('吨');
     expect(a.date).toBe('2024-07-15');
     expect(a.amount).toBeUndefined();
   });

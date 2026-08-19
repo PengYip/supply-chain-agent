@@ -88,6 +88,15 @@ describe('upsertExecutionFlow', () => {
     const untraced = rows.find((r) => r.bindingId === 'BD-2')!;
     expect(untraced.extractionId).toBeNull();
   });
+
+  it('round-trips unit alongside quantity_ton; null when omitted', async () => {
+    await upsertExecutionFlow(ctx, flow({ unit: '吨' }));
+    await upsertExecutionFlow(ctx, flow({ bindingId: 'BD-2' })); // unit omitted -> null
+
+    const rows = await listExecutionFlows(ctx, 'HT-2024-001');
+    expect(rows.find((r) => r.bindingId === 'BD-1')!.unit).toBe('吨');
+    expect(rows.find((r) => r.bindingId === 'BD-2')!.unit).toBeNull();
+  });
 });
 
 describe('retractExecutionFlowsForDocument', () => {

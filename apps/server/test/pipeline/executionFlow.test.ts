@@ -122,6 +122,7 @@ describe('materializeExecutionFlow 物化决策', () => {
         direction: 'out',
         amount: 26000000,
         quantityTon: 50000,
+        unit: '吨',
         docType: '货转单',
         voucherDate: '2026-07-15',
       }),
@@ -149,6 +150,30 @@ describe('materializeExecutionFlow 物化决策', () => {
         amount: 88000,
         docType: '发票',
         voucherDate: '2026-08-05',
+      }),
+      'u1',
+    );
+  });
+
+  it('发票 + 裸 数量 字段 -> quantityTon 有值但 unit 为 null(不带单位语义, 不猜测)', async () => {
+    mocks.loadLatestExtractionByDocId.mockResolvedValue(
+      extractionRow('发票', {
+        买方: '我方贸易有限公司',
+        卖方: '对手方有限公司',
+        金额: 88000,
+        数量: 120,
+        开票日期: '2026-08-05',
+      }),
+    );
+    const id = await materializeExecutionFlow(ctx, baseInput, 'u1', SELF);
+    expect(id).toBe('EX-1');
+    expect(mocks.upsertExecutionFlow).toHaveBeenCalledWith(
+      ctx,
+      expect.objectContaining({
+        flowType: '发票流',
+        direction: 'in',
+        quantityTon: 120,
+        unit: null,
       }),
       'u1',
     );
@@ -318,7 +343,7 @@ describe('buildQueryExecutionFlowsTool', () => {
       {
         flowId: 'EF-1', bindingId: 'BD-1', documentId: 'DOC-1',
         flowType: '资金流', direction: 'out', amount: 1234500, quantityTon: null,
-        voucherDate: '2026-08-01', docType: '付款凭证', extractionId: null,
+        unit: null, voucherDate: '2026-08-01', docType: '付款凭证', extractionId: null,
       },
     ]);
     expect(mocks.summarizeExecutionFlows).toHaveBeenCalledWith(ctx, 'CJXC-001', 'u1');

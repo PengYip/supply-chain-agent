@@ -95,6 +95,8 @@ export interface VoucherAnchors {
   date?: string;
   amount?: number;
   quantityTon?: number;
+  /** 数量单位(如 '吨'), 与 quantityTon 同源。字段名不带单位语义(如裸 '数量')时缺省, 不猜测。 */
+  quantityUnit?: string;
 }
 
 function anchorStr(v: unknown): string | undefined {
@@ -116,15 +118,18 @@ export function extractAnchors(
   fields: Record<string, unknown>,
 ): VoucherAnchors {
   switch (voucherType) {
-    case '货转单':
+    case '货转单': {
+      const qtyTon = anchorNum(fields['交货总量_吨']);
       return {
         contractNo: anchorStr(fields['合同号']),
         buyer: anchorStr(fields['买方']),
         seller: anchorStr(fields['卖方']),
         date: anchorStr(fields['交货日期']) ?? anchorStr(fields['日期']),
         amount: anchorNum(fields['合计含税总价_元']),
-        quantityTon: anchorNum(fields['交货总量_吨']),
+        quantityTon: qtyTon,
+        quantityUnit: qtyTon !== undefined ? '吨' : undefined,
       };
+    }
     case '付款凭证':
       return {
         buyer: anchorStr(fields['付款人名称']),
@@ -132,12 +137,15 @@ export function extractAnchors(
         date: anchorStr(fields['入账日期']),
         amount: anchorNum(fields['金额']),
       };
-    case '化验报告':
+    case '化验报告': {
+      const qtyTon = anchorNum(fields['重量_吨']);
       return {
         buyer: anchorStr(fields['送检单位']) ?? anchorStr(fields['委托方']),
         date: anchorStr(fields['检测日期']),
-        quantityTon: anchorNum(fields['重量_吨']),
+        quantityTon: qtyTon,
+        quantityUnit: qtyTon !== undefined ? '吨' : undefined,
       };
+    }
     default:
       return {};
   }
