@@ -8,8 +8,9 @@ import { join } from 'node:path';
 import { createDb, migrate } from '../../../src/pipeline/db/client.js';
 import { env } from '../../../src/env.js';
 import {
-  buildIngestDocumentTool, buildBindDocumentTool, type VlmDeps,
+  buildIngestDocumentTool, buildBindDocumentTool, processDocument, type VlmDeps,
 } from '../../../src/pipeline/tools/documentEntry.js';
+import { createDocumentStub } from '../../../src/pipeline/db/repositories.js';
 import type { VlmResult } from '../../../src/pipeline/vlmAdapter.js';
 import { buildLedgerEntryFromExtraction } from '../../../src/pipeline/contractLedger.js';
 import { upsertContractLedgerEntry } from '../../../src/pipeline/db/repositories.js';
@@ -379,5 +380,73 @@ describe('Phase B: ingestVoucherImage 绑定建议', () => {
     const b = bindingRow(res.bindingId);
     expect(b.status).toBe('confirmed');
     expect(b.confirmation_source).toBe('human');
+  });
+});
+
+// ---- processDocument 图片凭证 VLM 分支 --------------------------------------
+//
+// upload -> processDocument 路径(ensureDocumentParsed 触发)之前没有图片分流,
+// .jpg stub 走 parseWithOcrRetry -> digitalAdapter 按 utf-8 读图 -> 乱码块 ->
+// 分类器失败 -> parse_status='failed'(Bug Fix-06)。以下用例断言图片 stub 与
+// ingestFile 走同一 VLM 分支, 且失败是 STATE 而非抛异常。
+
+describe('processDocument 图片凭证 VLM 分支', () => {
+  it('jpg stub -> VLM 分支 -> parsed(document/classification/extraction/chunk 落库)', async () => {
+    const f = join(dir, 'proc-hz.jpg');
+    writeFileSync(f, Buffer.from('fake-jpeg-bytes'));
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f, filename: 'x.jpg' });
+
+    const res = await processDocument(ctx, docId, { vlm: fakeVlm(货转单Result) });
+
+    expect(res.parseStatus).toBe('parsed');
+    expect(res.classifiedDocType).toBe('货转单');
+    expect(res.blockCount).toBe(1);
+    expect(res.classificationSource).toBe('classified');
+
+    // 元数据: 占位 stub 被 updateDocumentMeta 换成真实 modality/docType。
+    const doc = ctx.sqlite
+      .prepare('SELECT parse_status AS s, modality AS m FROM documents WHERE id = ?')
+      .get(docId) as { s: string; m: string };
+    expect(doc.s).toBe('parsed');
+    expect(doc.m).toBe('scanned');
+    expect(countRows('classifications')).toBe(1);
+    expect(countRows('extractions')).toBe(1);
+    expect(countRows('doc_chunk')).toBe(1);
+  });
+
+  it('VLM 抛错 -> failed STATE 返回(不抛异常), 不写 classification/extraction', async () => {
+    const f = join(dir, 'proc-fail.jpg');
+    writeFileSync(f, Buffer.from('fake-jpeg-bytes'));
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f, filename: 'x.jpg' });
+
+    await expect(
+      processDocument(ctx, docId, { vlm: fakeVlmThrowing('VLM 未配置，无法解析图片凭证') }),
+    ).resolves.toMatchObject({ parseStatus: 'failed', reason: 'VLM 未配置，无法解析图片凭证' });
+
+    const doc = ctx.sqlite
+      .prepare('SELECT parse_status AS s FROM documents WHERE id = ?')
+      .get(docId) as { s: string };
+    expect(doc.s).toBe('failed');
+    expect(countRows('classifications')).toBe(0);
+    expect(countRows('extractions')).toBe(0);
+  });
+
+  it('ensureDocumentParsed 语义: 重试 failed 的图片 stub -> parsed', async () => {
+    const f = join(dir, 'proc-retry.jpg');
+    writeFileSync(f, Buffer.from('fake-jpeg-bytes'));
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f, filename: 'x.jpg' });
+
+    // 先失败(与上一用例同路径), 再以正常 VLM 重试 —— ensureDocumentParsed
+    // 视 'failed' 非终态会重新触发 processDocument。
+    const first = await processDocument(ctx, docId, { vlm: fakeVlmThrowing('VLM 未配置，无法解析图片凭证') });
+    expect(first.parseStatus).toBe('failed');
+
+    const res = await processDocument(ctx, docId, { vlm: fakeVlm(货转单Result) });
+    expect(res.parseStatus).toBe('parsed');
+    expect(res.blockCount).toBe(1);
+    const doc = ctx.sqlite
+      .prepare('SELECT parse_status AS s FROM documents WHERE id = ?')
+      .get(docId) as { s: string };
+    expect(doc.s).toBe('parsed');
   });
 });

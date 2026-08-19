@@ -199,12 +199,8 @@ interface VoucherIngestInput {
   vlm?: VlmDeps;
 }
 
-/**
- * 图片凭证 VLM 入库。先落占位 document 行(parse_status='parsing')使 VLM 失败
- * 时可追溯(parse_status='failed'), 成功后 updateDocumentMeta 换成真实
- * block_model 并置 'parsed'。返回与 ingestFile 相同的形状。
- */
-async function ingestVoucherImage(input: VoucherIngestInput): Promise<{
+/** runVoucherPipeline / ingestVoucherImage 的返回形状(与 ingestFile 一致)。 */
+interface VoucherPipelineResult {
   docId: string;
   blockCount: number;
   modality: string;
@@ -214,28 +210,27 @@ async function ingestVoucherImage(input: VoucherIngestInput): Promise<{
   tags: string[];
   vectorization: VectorizationStatus;
   bindingProposals: Array<{ contractNo: string; score: number; route: BindingRoute }>;
-}> {
+}
+
+/**
+ * 图片凭证 VLM 流水线核心(可复用, 步骤 2-10): 在 EXISTING docId 上执行
+ * VLM 提取 -> zod 校验 -> 交叉校验 warnings -> 合成 block_model
+ * (updateDocumentMeta) -> 分类(source 'classified') -> 单 chunk + embed ->
+ * 自动标签 -> 向量化状态 -> saveExtraction(字段置信度 + _warnings,
+ * overallConfidence=min, needsReview) -> 绑定建议(fault-tolerant) ->
+ * parse_status='parsed'。调用方负责前置占位/状态(ingestVoucherImage 落占位行
+ * 并置 'parsing'; processDocument 在调用前已置 'parsing')。失败时 parse_status
+ * 置 'failed' 并 rethrow(调用方决定转 STATE)。
+ */
+async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPipelineResult> {
   const { ctx, sourcePath, docId, embedder, userId, vlm } = input;
-  const ext = sourcePath.split('.').pop() ?? '';
-  const mime = mimeForExtension(ext);
-  if (!mime) {
-    throw new Error(`不支持的图片扩展名 .${ext}，仅支持 jpg/jpeg/png`);
-  }
-
-  // 1. 先落占位行(parse_status='parsing'), 使后续失败可追溯。
-  const placeholder: BlockModel = {
-    docId,
-    docType: '其他',
-    modality: 'scanned',
-    blocks: [],
-    sourceUri: sourcePath,
-    createdAt: new Date().toISOString(),
-  };
-  await saveDocument(ctx, placeholder, userId);
-  await setDocumentParseStatus(ctx, docId, 'parsing', userId);
-
   try {
     // 2. VLM 提取(可注入 fake; 缺省真实 extractVoucher, 未配置时抛明确错误)。
+    const ext = sourcePath.split('.').pop() ?? '';
+    const mime = mimeForExtension(ext);
+    if (!mime) {
+      throw new Error(`不支持的图片扩展名 .${ext}，仅支持 jpg/jpeg/png`);
+    }
     const buffer = readFileSync(sourcePath);
     const extract = vlm?.extract ?? extractVoucher;
     const result = await extract(buffer, mime);
@@ -417,6 +412,35 @@ async function ingestVoucherImage(input: VoucherIngestInput): Promise<{
     await setDocumentParseStatus(ctx, docId, 'failed', userId).catch(() => {});
     throw e;
   }
+}
+
+/**
+ * 图片凭证 VLM 入库(ingestFile 层分流入口)。先落占位 document 行
+ * (parse_status='parsing')使 VLM 失败时可追溯(parse_status='failed'), 成功后
+ * updateDocumentMeta 换成真实 block_model 并置 'parsed'。返回与 ingestFile
+ * 相同的形状。
+ */
+async function ingestVoucherImage(input: VoucherIngestInput): Promise<VoucherPipelineResult> {
+  const { ctx, sourcePath, docId, userId } = input;
+  const ext = sourcePath.split('.').pop() ?? '';
+  const mime = mimeForExtension(ext);
+  if (!mime) {
+    throw new Error(`不支持的图片扩展名 .${ext}，仅支持 jpg/jpeg/png`);
+  }
+
+  // 1. 先落占位行(parse_status='parsing'), 使后续失败可追溯。
+  const placeholder: BlockModel = {
+    docId,
+    docType: '其他',
+    modality: 'scanned',
+    blocks: [],
+    sourceUri: sourcePath,
+    createdAt: new Date().toISOString(),
+  };
+  await saveDocument(ctx, placeholder, userId);
+  await setDocumentParseStatus(ctx, docId, 'parsing', userId);
+
+  return runVoucherPipeline(input);
 }
 
 /**
@@ -611,6 +635,8 @@ export interface ProcessDocumentOptions {
   extraction?: ExtractionDeps;
   tagger?: ChunkTagger;
   userId?: string;
+  /** Phase A: 图片凭证 VLM 解析依赖(同 ToolDeps.vlm)。缺省用真实 extractVoucher。 */
+  vlm?: VlmDeps;
 }
 
 export interface ProcessDocumentResult {
@@ -706,6 +732,25 @@ export async function processDocument(
 
   // 2. Mark parsing in progress.
   await setDocumentParseStatus(ctx, docId, 'parsing', opts.userId);
+
+  // Phase A: 图片凭证走 VLM 分支(与 ingestFile 同一分流; digitalAdapter 按
+  // utf-8 读图是乱码, 分类器对乱码块会失败 -> 'failed')。VLM 失败 -> 'failed'
+  // STATE + reason(processDocument 契约: 失败是状态而非异常)。
+  if (isVoucherImage(sourceUri)) {
+    try {
+      const v = await runVoucherPipeline({
+        ctx, sourcePath: sourceUri, docId, embedder: opts.embedder, userId: opts.userId, vlm: opts.vlm,
+      });
+      return {
+        docId, parseStatus: 'parsed' as const, blockCount: v.blockCount,
+        classifiedDocType: v.classifiedDocType, classificationConfidence: v.classificationConfidence,
+        classificationSource: v.classificationSource, tags: v.tags, vectorization: v.vectorization,
+      };
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      return { docId, parseStatus: 'failed' as const, blockCount: 0, reason };
+    }
+  }
 
   // 3. Parse with a one-shot digital->scanned OCR retry. OCR failure -> a
   //    'needs_ocr' STATE (no throw), so upload/parse decoupling holds.
