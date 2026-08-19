@@ -5,6 +5,7 @@ import { validateSpan, type SpanMatchStrength } from './spanValidator.js';
 import { computeFieldConfidence, decisionForField } from './confidence.js';
 import { REQUIRED_CONTRACT_FIELDS } from './schemas/contract.js';
 import type { ProposedRelationship, ProposedEdge } from './db/repositories.js';
+import { REL_ROLE_BY_FIELD, COMMODITY_FIELDS, CONTRACT_FIELDS, EXECUTES_DOCTYPES } from '../domain/tradeSemantics.js';
 
 export interface GroundedField {
   name: string;
@@ -103,15 +104,6 @@ export function attachConfidence(
   });
 }
 
-const REL_ROLE_BY_FIELD: Record<string, string> = {
-  甲方: '买方', 乙方: '卖方', 买方: '买方', 卖方: '卖方',
-  发货人: '发货人', 收货人: '收货人', 承运人: '承运人',
-};
-const COMMODITY_FIELDS = new Set(['标的物', '商品']);
-// Lane A (2a): contract-number fields also lift a Contract proposal so the
-// document can be graph-linked to its contract without an explicit bind call.
-const CONTRACT_FIELDS = new Set(['合同号', '合同编号']);
-
 /** deriveProposedRelationships 的最小字段投影（ReviewSnapshot.fields 与 ExtractedField 均满足）。 */
 export interface RelationshipFieldInput {
   name: string;
@@ -135,9 +127,6 @@ export function deriveProposedRelationships(fields: RelationshipFieldInput[]): P
   }
   return out;
 }
-
-/** 构成合同"执行凭证"的单据类型（design 2026-08-17 §2.2）。 */
-const EXECUTES_DOCTYPES = new Set(['发票', '提单', '装箱单']);
 
 /** deriveProposedEdges 的最小字段投影（ReviewSnapshot.fields 与 ExtractedField 均满足）。 */
 export interface EdgeFieldInput {

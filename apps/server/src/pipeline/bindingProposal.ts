@@ -319,7 +319,7 @@ function firstNum(fields: Record<string, { value: string | number }>, keys: stri
 
 /**
  * 通用文档(发票/提单/装箱单等, 无专用 voucher schema)的抽取字段 -> 绑定锚点。
- * 字段名取自抽取器约定(extraction.ts REL_ROLE_BY_FIELD / KEY_FIELDS):
+ * 字段名取自抽取器约定(domain/tradeSemantics.ts REL_ROLE_BY_FIELD / KEY_FIELDS):
  * 三类图片凭证走 extractAnchors, 不要用本函数替代。
  */
 export function buildAnchorsFromFields(

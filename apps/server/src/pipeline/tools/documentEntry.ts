@@ -22,7 +22,7 @@ import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
 import { runAutoExtraction, buildAutoExtractionDeps, type AutoExtractionDeps } from '../autoExtraction.js';
 import { tagChunks, type ChunkTagger } from '../chunkTagging.js';
-import { getTaxonomy } from '../tag-taxonomy.js';
+import { getTaxonomy, bindingRelationFor } from '../../domain/tradeSemantics.js';
 import { classifyDocument, classifyDocumentWithoutModel, type ClassifierDeps } from '../classifier.js';
 import { deriveAutoTags } from '../tagging.js';
 import { chunkBlockModel } from '../chunking.js';
@@ -187,20 +187,6 @@ function voucherFieldsToText(voucherType: VoucherType, fields: Record<string, un
     }
   }
   return parts.join(' ');
-}
-
-/** 凭证类型 -> binding relation 语义(Phase B)。 */
-function bindingRelationFor(voucherType: VoucherType): string {
-  switch (voucherType) {
-    case '货转单':
-      return '货权转移';
-    case '付款凭证':
-      return '付款';
-    case '化验报告':
-      return '质检';
-    default:
-      return '凭证';
-  }
 }
 
 interface VoucherIngestInput {
