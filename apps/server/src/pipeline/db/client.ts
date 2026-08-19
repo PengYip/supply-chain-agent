@@ -173,6 +173,29 @@ export function migrate(sqlite: Database.Database): void {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_ledger_no_user ON contract_ledger(contract_no, user_id);
+
+    -- Execution flows (六向执行流水): 合同绑定确认后物化的流水明细
+    -- ('资金流' | '货物流' | '发票流' x 'in' | 'out')。UNIQUE(binding_id, user_id)
+    -- 是 upsertExecutionFlow 幂等的兜底 -- 同一绑定重复物化就地更新而非重复行。
+    -- user_id 可空但存储层写侧统一经 effectiveUserId 归一化为 ''(与 bindings 一致)。
+    CREATE TABLE IF NOT EXISTS execution_flows (
+      id TEXT PRIMARY KEY,
+      binding_id TEXT NOT NULL,
+      document_id TEXT NOT NULL,
+      contract_no TEXT NOT NULL,
+      flow_type TEXT NOT NULL,
+      direction TEXT NOT NULL CHECK (direction IN ('in', 'out')),
+      amount REAL,
+      quantity_ton REAL,
+      doc_type TEXT NOT NULL,
+      voucher_date TEXT,
+      confidence REAL NOT NULL DEFAULT 0,
+      created_by TEXT NOT NULL,
+      user_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_flows_binding ON execution_flows(binding_id, user_id);
+    CREATE INDEX IF NOT EXISTS idx_execution_flows_contract ON execution_flows(contract_no, user_id);
   `);
 
   // Phase 2 business-data isolation: add user_id to pre-existing dev databases.
@@ -430,6 +453,27 @@ export async function migratePostgres(pool: Pool): Promise<void> {
        updated_at timestamptz NOT NULL DEFAULT NOW()
      )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_ledger_no_user ON contract_ledger(contract_no, user_id)`,
+    // Execution flows (六向执行流水): mirror of the SQLite execution_flows.
+    // amount/quantity_ton 用 double precision(对应 SQLite REAL), confidence 沿用
+    // numeric(5,4) pg 惯例, created_at timestamptz。UNIQUE 索引支撑 ON CONFLICT upsert。
+    `CREATE TABLE IF NOT EXISTS execution_flows (
+       id TEXT PRIMARY KEY,
+       binding_id TEXT NOT NULL,
+       document_id TEXT NOT NULL,
+       contract_no TEXT NOT NULL,
+       flow_type TEXT NOT NULL,
+       direction TEXT NOT NULL CHECK (direction IN ('in', 'out')),
+       amount double precision,
+       quantity_ton double precision,
+       doc_type TEXT NOT NULL,
+       voucher_date TEXT,
+       confidence numeric(5,4) NOT NULL DEFAULT 0,
+       created_by TEXT NOT NULL,
+       user_id TEXT,
+       created_at timestamptz NOT NULL DEFAULT NOW()
+     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_flows_binding ON execution_flows(binding_id, user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_execution_flows_contract ON execution_flows(contract_no, user_id)`,
     // L4 FTS fix (2026-08-17): drizzle migration 0000 created doc_chunk.fts_vector
     // as a PLAIN tsvector column (no GENERATED), so it stays NULL forever and
     // every FTS query silently returns 0 hits. Recreate it as a GENERATED column

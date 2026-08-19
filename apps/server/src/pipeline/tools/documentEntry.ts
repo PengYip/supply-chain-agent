@@ -38,6 +38,7 @@ import { extractVoucher, mimeForExtension, type VlmResult } from '../vlmAdapter.
 import { VOUCHER_SCHEMAS, validateVoucher, type VoucherType } from '../schemas/vouchers.js';
 import { extractAnchors } from '../schemas/vouchers.js';
 import { generateBindingProposals, type BindingProposal, type BindingRoute } from '../bindingProposal.js';
+import { materializeExecutionFlow } from '../executionFlow.js';
 
 /** Phase A: 图片凭证 VLM 解析依赖(可注入 fake 供测试; 缺省用真实 extractVoucher)。 */
 export interface VlmDeps {
@@ -361,7 +362,7 @@ async function ingestVoucherImage(input: VoucherIngestInput): Promise<{
       const proposals = generateBindingProposals(anchors, ledger);
       for (const p of proposals.filter((x) => x.route !== 'none')) {
         try {
-          await saveBinding(
+          const bindingId = await saveBinding(
             ctx,
             {
               documentId: docId,
@@ -378,6 +379,17 @@ async function ingestVoucherImage(input: VoucherIngestInput): Promise<{
             userId,
           );
           bindingProposals.push({ contractNo: p.contractNo, score: p.score, route: p.route });
+          // 执行流水物化(hook): auto_rule 直连确认(合同号精确命中)后物化; 失败仅告警。
+          if (p.route === 'auto_rule') {
+            try {
+              await materializeExecutionFlow(ctx, {
+                documentId: docId, contractNo: p.contractNo, bindingId,
+                confidence: p.score, createdBy: 'auto_rule',
+              }, userId);
+            } catch (e) {
+              console.warn('[executionFlow] 自动确认绑定物化执行流水失败:', (e as Error).message);
+            }
+          }
         } catch (e) {
           console.warn('[ingestVoucherImage] binding proposal persistence failed:', (e as Error).message);
         }
@@ -1213,6 +1225,15 @@ export function buildBindDocumentTool(deps: ToolDeps) {
       const existing = await findBindingByDocAndContract(deps.ctx, documentId, contractNo, deps.userId);
       if (existing && existing.status === 'proposed') {
         await updateBindingStatus(deps.ctx, existing.id, 'confirmed', 'human', deps.userId);
+        // 执行流水物化(hook): 确认已有 proposed 建议后物化; 失败仅告警, 绝不影响绑定结果。
+        try {
+          await materializeExecutionFlow(deps.ctx, {
+            documentId, contractNo, bindingId: existing.id,
+            confidence: existing.confidence, createdBy: 'trader-agent',
+          }, deps.userId);
+        } catch (e) {
+          console.warn('[executionFlow] 绑定确认物化执行流水失败:', (e as Error).message);
+        }
         const linkRes = linkDocumentToContract(contractNo, documentId);
         return {
           ok: true as const, bindingId: existing.id, contractNo, documentId,
@@ -1229,6 +1250,15 @@ export function buildBindDocumentTool(deps: ToolDeps) {
         },
         deps.userId,
       );
+      // 执行流水物化(hook): 新建 confirmed 绑定后物化; 失败仅告警, 绝不影响绑定结果。
+      try {
+        await materializeExecutionFlow(deps.ctx, {
+          documentId, contractNo, bindingId,
+          confidence, createdBy: 'trader-agent',
+        }, deps.userId);
+      } catch (e) {
+        console.warn('[executionFlow] 绑定确认物化执行流水失败:', (e as Error).message);
+      }
       // T8 deviation (per cross-task directive): bind extends the existing
       // link_document — also reflect the binding in the in-memory contract graph.
       const linkRes = linkDocumentToContract(contractNo, documentId);

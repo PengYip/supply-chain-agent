@@ -30,7 +30,9 @@ import {
   jsonb,
   serial,
   index,
+  uniqueIndex,
   customType,
+  doublePrecision,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
@@ -217,5 +219,35 @@ export const fileFolders = pgTable(
   },
   (t) => ({
     userIdx: index('idx_file_folders_user').on(t.userId),
+  }),
+);
+
+/**
+ * execution_flows: 六向执行流水('资金流' | '货物流' | '发票流' x 'in' | 'out')。
+ * Mirrors SQLite execution_flows. amount/quantity_ton 用 double precision(对应
+ * SQLite REAL); confidence 沿用 numeric(5,4) pg 惯例(与 bindings/extractions 一致);
+ * created_at timestamptz。UNIQUE(binding_id, user_id) 支撑 ON CONFLICT upsert。
+ */
+export const executionFlows = pgTable(
+  'execution_flows',
+  {
+    id: text('id').primaryKey(),
+    bindingId: text('binding_id').notNull(),
+    documentId: text('document_id').notNull(),
+    contractNo: text('contract_no').notNull(),
+    flowType: text('flow_type').notNull(),
+    direction: text('direction').notNull(),
+    amount: doublePrecision('amount'),
+    quantityTon: doublePrecision('quantity_ton'),
+    docType: text('doc_type').notNull(),
+    voucherDate: text('voucher_date'),
+    confidence: numeric('confidence', { precision: 5, scale: 4 }).notNull().default(sql`0`),
+    createdBy: text('created_by').notNull(),
+    userId: text('user_id'),
+    createdAt: nowTs(),
+  },
+  (t) => ({
+    bindingIdx: uniqueIndex('idx_execution_flows_binding').on(t.bindingId, t.userId),
+    contractIdx: index('idx_execution_flows_contract').on(t.contractNo, t.userId),
   }),
 );

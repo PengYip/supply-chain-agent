@@ -6,6 +6,7 @@ import {
   buildTagDocumentTool, buildPresentDocumentReviewTool, buildUpdateDocumentFieldsTool,
   buildListBindingProposalsTool,
 } from '../pipeline/tools/documentEntry.js';
+import { buildQueryExecutionFlowsTool } from '../pipeline/executionFlow.js';
 import { buildRecallDocumentsTool } from '../pipeline/tools/recall.js';
 import { buildExecuteCodeTool } from '../pipeline/tools/executeCode.js';
 import { buildCreateEntityTool, buildLinkEntitiesTool, buildGraphQueryTool, buildGraphFindEntityTool } from '../graph/tools.js';
@@ -74,7 +75,7 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
 // though constructing their instances requires a DbContext (see getToolsForRole).
 // query_contract is listed here too: after the BASE removal above its name would
 // otherwise drop out of listToolNames (it is still always registered for trader).
-const TRADER_CTX_TOOL_NAMES = ['query_contract', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals'] as const;
+const TRADER_CTX_TOOL_NAMES = ['query_contract', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'query_execution_flows'] as const;
 
 export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
   const base: GatedTool[] = (BASE_TOOLS_FOR_ROLE[role] ?? []).map((t) => ({ ...t }));
@@ -93,6 +94,8 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
         { ...buildUpdateDocumentFieldsTool({ ctx, userId }), name: 'update_document_fields', needsApproval: true },
         // list_binding_proposals is L1 (Phase B): 查看待确认的凭证-合同绑定建议。
         { ...buildListBindingProposalsTool({ ctx, userId }), name: 'list_binding_proposals' },
+        // query_execution_flows is L1: 只读查询某合同的执行流水六向汇总与逐笔明细。
+        { ...buildQueryExecutionFlowsTool({ ctx, userId }), name: 'query_execution_flows' },
         // bind_document is L2: caller must attach human approval (needsApproval).
         { ...buildBindDocumentTool({ ctx, userId }), name: 'bind_document', needsApproval: true },
         // inspect_extraction is L1: on-demand evidence drill-down for a single

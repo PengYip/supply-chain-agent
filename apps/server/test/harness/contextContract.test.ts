@@ -33,6 +33,7 @@ const EXPECTED_TOOLS = [
   'present_document_review',
   'update_document_fields',
   'list_binding_proposals',
+  'query_execution_flows',
 ] as const;
 
 describe('tool-context contract registry', () => {

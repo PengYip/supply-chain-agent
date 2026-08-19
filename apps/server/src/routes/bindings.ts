@@ -9,9 +9,11 @@ import {
   listUserDocuments, listBindingsForUser, listBindingProposals, listContractLedgerEntries,
   findBindingById, updateBindingStatus, saveBinding, findBindingByDocAndContract,
   listBindingsForContract, setBindingGraphStatus, getDocumentMeta, type BindingGraphStatus,
+  listExecutionFlows, summarizeExecutionFlows,
 } from '../pipeline/db/repositories.js';
 import { buildBindingCandidates } from '../pipeline/bindingCandidates.js';
 import { syncBindingEdge, removeBindingEdge, type GraphSyncOutcome } from '../pipeline/bindingGraphSync.js';
+import { materializeExecutionFlow, retractExecutionFlow } from '../pipeline/executionFlow.js';
 
 export const bindingsRoute = new Hono<AuthEnv>();
 
@@ -88,6 +90,23 @@ bindingsRoute.get('/contracts', async (c) => {
   });
 });
 
+const flowsQuerySchema = z.object({ contractNo: z.string().min(1, 'contractNo 必填') });
+
+/** GET /flows?contractNo= — 某合同的执行流水六向汇总 + 逐笔明细(只读)。 */
+bindingsRoute.get('/flows', async (c) => {
+  const user = c.get('user')!;
+  const parsed = flowsQuerySchema.safeParse(c.req.query());
+  if (!parsed.success) {
+    return c.json({ error: 'invalid query params', detail: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) }, 400);
+  }
+  const contractNo = parsed.data.contractNo;
+  const [summaries, flows] = await Promise.all([
+    summarizeExecutionFlows(ctx(), contractNo, user.id),
+    listExecutionFlows(ctx(), contractNo, user.id),
+  ]);
+  return c.json({ contractNo, summaries, flows });
+});
+
 // ---- 写端点(spec §5.2) ------------------------------------------------------
 //
 // 图同步永不阻塞业务写: 同步结果持久化到 bindings.graph_status, 前端按角标
@@ -129,6 +148,15 @@ async function confirmOne(db: DbContext, userId: string, bindingId: string) {
   if (row.status !== 'proposed') return { status: 409 as const, body: { error: `binding status is ${row.status}, expected proposed`, bindingId } };
   const updated = await updateBindingStatus(db, bindingId, 'confirmed', 'human', userId);
   if (!updated) return { status: 409 as const, body: { error: 'concurrent state change', bindingId } };
+  // 执行流水物化(hook): 确认成功后用最新抽取行落执行流水; 失败仅告警, 绝不影响确认结果。
+  try {
+    await materializeExecutionFlow(db, {
+      documentId: row.documentId, contractNo: row.contractNo, bindingId: row.id,
+      confidence: row.confidence, createdBy: 'human',
+    }, userId);
+  } catch (e) {
+    console.warn('[executionFlow] 确认绑定物化执行流水失败:', (e as Error).message);
+  }
   const sync = await syncBindingEdgeWithMeta(db, userId, {
     docId: row.documentId, contractNo: row.contractNo, relation: row.relation,
     bindingId: row.id, confidence: row.confidence,
@@ -193,6 +221,15 @@ bindingsRoute.post('/', async (c) => {
     confidence: 1, createdBy: user.id,
     status: 'confirmed', confirmationSource: 'human', proposedBy: 'agent',
   }, user.id);
+  // 执行流水物化(hook): 手动创建 confirmed 绑定后物化; 失败仅告警, 绝不影响创建结果。
+  try {
+    await materializeExecutionFlow(db, {
+      documentId, contractNo, bindingId,
+      confidence: 1, createdBy: user.id,
+    }, user.id);
+  } catch (e) {
+    console.warn('[executionFlow] 手动创建绑定物化执行流水失败:', (e as Error).message);
+  }
   const sync = await syncBindingEdgeWithMeta(db, user.id, { docId: documentId, contractNo, relation, bindingId, confidence: 1 });
   const gs = await graphStatusFor(sync.outcome, sync.reason);
   await setBindingGraphStatus(db, bindingId, gs, user.id);
@@ -209,6 +246,12 @@ bindingsRoute.post('/unbind', async (c) => {
   if (row.status !== 'confirmed') return c.json({ error: `binding status is ${row.status}, expected confirmed` }, 409);
   const ok = await updateBindingStatus(db, row.id, 'rejected', 'human', user.id);
   if (!ok) return c.json({ error: 'concurrent state change' }, 409);
+  // 执行流水撤销(hook): 解绑后撤销该 binding 的执行流水; 失败仅告警, 绝不影响解绑结果。
+  try {
+    await retractExecutionFlow(db, row.id, user.id);
+  } catch (e) {
+    console.warn('[executionFlow] 解绑撤销执行流水失败:', (e as Error).message);
+  }
   // 共享边守卫(spec §5.2): 同 (doc, contract) 还有其他 confirmed 行 -> 不删边。
   const siblings = (await listBindingsForContract(db, row.contractNo))
     .filter((b) => b.documentId === row.documentId && b.id !== row.id && b.status === 'confirmed');

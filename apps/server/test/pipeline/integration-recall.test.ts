@@ -277,7 +277,7 @@ describe('integration: document-entry -> hybrid recall chain', () => {
     // create_entity + link_entities + graph_query + graph_find_entity +
     // present_document_review + update_document_fields + list_binding_proposals
     // = 19 live trader tools.
-    expect(names).toHaveLength(19);
+    expect(names).toHaveLength(20);
     expect(names).toContain('recall_documents');
     expect(names).toContain('ingest_document');
     expect(names).toContain('extract_fields');

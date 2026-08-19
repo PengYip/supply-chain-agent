@@ -48,6 +48,9 @@ import type {
   ExtractionStatus,
   ParseStatus,
   DocumentStubInput,
+  ExecutionFlowInput,
+  ExecutionFlowRow,
+  ExecutionFlowSummary,
 } from './repositories.js';
 
 // Phase 2 business-data isolation: same convention as repositories.ts -- a
@@ -1509,4 +1512,159 @@ export async function findContractLedgerByNoPg(
     needsReview: !!r.needs_review,
     userId: r.user_id,
   };
+}
+
+// ---- Execution flows (六向执行流水, pg twins) --------------------------------
+//
+// Mirror of upsertExecutionFlow / retractExecutionFlowForBinding /
+// listExecutionFlows / summarizeExecutionFlows in repositories.ts. amount /
+// quantity_ton 是 double precision -> node-postgres 返回 number; confidence 是
+// numeric(5,4) -> Number() 转换; created_at 是 timestamptz -> Date, 统一转 ISO
+// 字符串。userId 归一化与 3-way OR 过滤与 SQLite 分支一致。
+
+/** Postgres execution_flows 行 -> ExecutionFlowRow(所有 PG 读取函数共用)。 */
+function executionFlowRowFromPg(r: Record<string, unknown>): ExecutionFlowRow {
+  return {
+    id: String(r.id),
+    bindingId: String(r.binding_id),
+    documentId: String(r.document_id),
+    contractNo: String(r.contract_no),
+    flowType: String(r.flow_type),
+    direction: String(r.direction) as ExecutionFlowRow['direction'],
+    amount: r.amount === null || r.amount === undefined ? null : Number(r.amount),
+    quantityTon: r.quantity_ton === null || r.quantity_ton === undefined ? null : Number(r.quantity_ton),
+    docType: String(r.doc_type),
+    voucherDate: r.voucher_date === null || r.voucher_date === undefined ? null : String(r.voucher_date),
+    confidence: Number(r.confidence),
+    createdBy: String(r.created_by),
+    userId: r.user_id === null || r.user_id === undefined ? null : String(r.user_id),
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+  };
+}
+
+/**
+ * 物化/更新一条执行流水(pg)。唯一键 (binding_id, user_id); UNIQUE 索引支撑
+ * ON CONFLICT, 冲突时更新业务列, created_at 保持首次写入值。返回 flow id。
+ */
+export async function upsertExecutionFlowPg(
+  ctx: PostgresDbContext,
+  input: ExecutionFlowInput,
+  userId?: string,
+): Promise<string> {
+  const id = rid('EF');
+  await ctx.pool.query(
+    `INSERT INTO execution_flows
+       (id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton,
+        doc_type, voucher_date, confidence, created_by, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+     ON CONFLICT (binding_id, user_id) DO UPDATE SET
+       document_id = EXCLUDED.document_id,
+       contract_no = EXCLUDED.contract_no,
+       flow_type = EXCLUDED.flow_type,
+       direction = EXCLUDED.direction,
+       amount = EXCLUDED.amount,
+       quantity_ton = EXCLUDED.quantity_ton,
+       doc_type = EXCLUDED.doc_type,
+       voucher_date = EXCLUDED.voucher_date,
+       confidence = EXCLUDED.confidence,
+       created_by = EXCLUDED.created_by`,
+    [
+      id,
+      input.bindingId,
+      input.documentId,
+      input.contractNo,
+      input.flowType,
+      input.direction,
+      input.amount,
+      input.quantityTon,
+      input.docType,
+      input.voucherDate,
+      input.confidence,
+      input.createdBy,
+      effectiveUserId(userId),
+    ],
+  );
+  return id;
+}
+
+/** unbind 后撤回物化行(pg)。幂等: 删了行返回 true, 行不存在返回 false。 */
+export async function retractExecutionFlowForBindingPg(
+  ctx: PostgresDbContext,
+  bindingId: string,
+  userId?: string,
+): Promise<boolean> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `DELETE FROM execution_flows
+         WHERE binding_id = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)`,
+        [bindingId, uid],
+      )
+    : await ctx.pool.query('DELETE FROM execution_flows WHERE binding_id = $1', [bindingId]);
+  return (res.rowCount ?? 0) > 0;
+}
+
+/** 明细行(pg), 按 created_at 升序。 */
+export async function listExecutionFlowsPg(
+  ctx: PostgresDbContext,
+  contractNo: string,
+  userId?: string,
+): Promise<ExecutionFlowRow[]> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton,
+                doc_type, voucher_date, confidence, created_by, user_id, created_at
+         FROM execution_flows
+         WHERE contract_no = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)
+         ORDER BY created_at ASC`,
+        [contractNo, uid],
+      )
+    : await ctx.pool.query(
+        `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton,
+                doc_type, voucher_date, confidence, created_by, user_id, created_at
+         FROM execution_flows
+         WHERE contract_no = $1
+         ORDER BY created_at ASC`,
+        [contractNo],
+      );
+  return res.rows.map(executionFlowRowFromPg);
+}
+
+/** 六向汇总(pg): GROUP BY flow_type, direction(flow_type, direction 升序输出)。 */
+export async function summarizeExecutionFlowsPg(
+  ctx: PostgresDbContext,
+  contractNo: string,
+  userId?: string,
+): Promise<ExecutionFlowSummary[]> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT flow_type, direction, COUNT(*)::int AS entry_count, SUM(amount) AS total_amount,
+                SUM(quantity_ton) AS total_quantity_ton, MAX(voucher_date) AS last_voucher_date
+         FROM execution_flows
+         WHERE contract_no = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)
+         GROUP BY flow_type, direction
+         ORDER BY flow_type, direction`,
+        [contractNo, uid],
+      )
+    : await ctx.pool.query(
+        `SELECT flow_type, direction, COUNT(*)::int AS entry_count, SUM(amount) AS total_amount,
+                SUM(quantity_ton) AS total_quantity_ton, MAX(voucher_date) AS last_voucher_date
+         FROM execution_flows
+         WHERE contract_no = $1
+         GROUP BY flow_type, direction
+         ORDER BY flow_type, direction`,
+        [contractNo],
+      );
+  return res.rows.map((r) => ({
+    contractNo,
+    flowType: String(r.flow_type),
+    direction: String(r.direction) as ExecutionFlowSummary['direction'],
+    entryCount: Number(r.entry_count),
+    totalAmount: r.total_amount === null || r.total_amount === undefined ? null : Number(r.total_amount),
+    totalQuantityTon:
+      r.total_quantity_ton === null || r.total_quantity_ton === undefined ? null : Number(r.total_quantity_ton),
+    lastVoucherDate: r.last_voucher_date === null || r.last_voucher_date === undefined ? null : String(r.last_voucher_date),
+  }));
 }

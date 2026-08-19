@@ -122,7 +122,7 @@ describe('agent e2e loop (stub model)', () => {
     // create_entity + link_entities + graph_query + graph_find_entity +
     // present_document_review + update_document_fields + list_binding_proposals
     // = 19 live trader tools.
-    expect(capturedNames).toHaveLength(19);
+    expect(capturedNames).toHaveLength(20);
     for (const n of ['ingest_document', 'extract_fields', 'bind_document', 'query_contract', 'escalate_to_human', 'recall_documents']) {
       expect(capturedNames).toContain(n);
     }

@@ -1,4 +1,4 @@
-import { sqliteTable, text, real, integer, index } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, real, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 
 // Phase 2 business-data isolation: every documents/extractions/bindings row is
@@ -127,4 +127,35 @@ export const fileFolders = sqliteTable(
     createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
   },
   (t) => ({ userIdx: index('idx_file_folders_user').on(t.userId) }),
+);
+
+/**
+ * 执行流水(execution_flows): 合同绑定确认后物化的六向流水明细
+ * ('资金流' | '货物流' | '发票流' x 'in' | 'out')。flow_type 词汇由消费层定义,
+ * 存储层只存字符串。唯一键 (binding_id, user_id): 同一绑定重复物化走 upsert
+ * 就地更新, 不产生重复行(与 contract_ledger 同款幂等语义)。user_id 可空,
+ * 存储层写侧统一经 effectiveUserId 归一化为 ''。
+ */
+export const executionFlows = sqliteTable(
+  'execution_flows',
+  {
+    id: text('id').primaryKey(),
+    bindingId: text('binding_id').notNull(),
+    documentId: text('document_id').notNull(),
+    contractNo: text('contract_no').notNull(),
+    flowType: text('flow_type').notNull(),
+    direction: text('direction').notNull(),
+    amount: real('amount'),
+    quantityTon: real('quantity_ton'),
+    docType: text('doc_type').notNull(),
+    voucherDate: text('voucher_date'),
+    confidence: real('confidence').notNull().default(0),
+    createdBy: text('created_by').notNull(),
+    userId: text('user_id'),
+    createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  },
+  (t) => ({
+    bindingIdx: uniqueIndex('idx_execution_flows_binding').on(t.bindingId, t.userId),
+    contractIdx: index('idx_execution_flows_contract').on(t.contractNo, t.userId),
+  }),
 );

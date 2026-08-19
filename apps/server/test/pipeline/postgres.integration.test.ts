@@ -26,6 +26,8 @@ import {
   saveChunks,
   searchChunks,
   getChunkMetaByRowids,
+  upsertExecutionFlow,
+  summarizeExecutionFlows,
 } from '../../src/pipeline/db/repositories.js';
 import { saveChunkVectors, vectorKnn, isVecReady } from '../../src/pipeline/db/vecStore.js';
 import { buildIngestDocumentTool } from '../../src/pipeline/tools/documentEntry.js';
@@ -134,7 +136,7 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
   // Isolation: wipe pipeline tables between tests (dev container only).
   beforeEach(async () => {
     await ctx.pool.query(
-      'TRUNCATE doc_chunk, extractions, bindings, documents RESTART IDENTITY CASCADE',
+      'TRUNCATE doc_chunk, extractions, bindings, documents, execution_flows RESTART IDENTITY CASCADE',
     );
   });
 
@@ -337,5 +339,49 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
     expect(hybridRes.matchCount).toBeGreaterThan(0);
     // hybrid fused at least one vector contribution (pgvector KNN hit).
     expect(hybridRes.matches.some((m) => m.vector_distance !== null)).toBe(true);
+  });
+
+  // ---- execution_flows (六向执行流水) ----------------------------------------
+
+  it('upsertExecutionFlow is idempotent per (binding_id, user_id); summarize aggregates', async () => {
+    const base = {
+      documentId: 'DOC-PG-1',
+      contractNo: 'HT-PG-100',
+      flowType: '资金流',
+      docType: '银行回单',
+      confidence: 0.95,
+      createdBy: 'agent',
+    };
+    await upsertExecutionFlow(ctx, {
+      ...base, bindingId: 'BD-1', direction: 'in', amount: 1000, quantityTon: 10, voucherDate: '2024-01-10',
+    });
+    // Same binding -> update in place, no duplicate row.
+    await upsertExecutionFlow(ctx, {
+      ...base, bindingId: 'BD-1', direction: 'in', amount: 2000, quantityTon: 20, voucherDate: '2024-02-01',
+    });
+    // null amount -> excluded from SUM(amount), counted in entryCount.
+    await upsertExecutionFlow(ctx, {
+      ...base, bindingId: 'BD-2', direction: 'in', amount: null, quantityTon: 30, voucherDate: '2024-03-01',
+    });
+    await upsertExecutionFlow(ctx, {
+      ...base, bindingId: 'BD-3', direction: 'out', amount: 500, quantityTon: 5, voucherDate: '2024-01-15',
+    });
+
+    const count = await ctx.pool.query(
+      'SELECT count(*)::int AS n FROM execution_flows WHERE contract_no = $1',
+      ['HT-PG-100'],
+    );
+    expect(Number(count.rows[0].n)).toBe(3); // BD-1 upserted, not duplicated
+
+    const summary = await summarizeExecutionFlows(ctx, 'HT-PG-100');
+    expect(summary).toHaveLength(2);
+    const inRow = summary.find((s) => s.direction === 'in')!;
+    expect(inRow.entryCount).toBe(2);
+    expect(inRow.totalAmount).toBe(2000); // null excluded
+    expect(inRow.totalQuantityTon).toBe(50); // 20 + 30
+    expect(inRow.lastVoucherDate).toBe('2024-03-01');
+    const outRow = summary.find((s) => s.direction === 'out')!;
+    expect(outRow.entryCount).toBe(1);
+    expect(outRow.totalAmount).toBe(500);
   });
 });

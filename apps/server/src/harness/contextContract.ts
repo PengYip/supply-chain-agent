@@ -179,6 +179,14 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'summary', signal: 'counter',
     persist: 'business', risk: { level: 'L1', injection: 'safe' },
   },
+  query_execution_flows: {
+    // 执行流水六向汇总(只读)。返回存储层物化的汇总数字与流水明细
+    // (amount/quantityTon 为数值或 null, 凭证文本不回流) -> output 'raw' /
+    // injection 'safe'。明细条数有界 -> budget 'summary'。signal 'counter'(读)。
+    // persist 'business' 标记它读取的业务存储。
+    output: 'raw', budget: 'summary', signal: 'counter',
+    persist: 'business', risk: { level: 'L1', injection: 'safe' },
+  },
 };
 
 /** True iff a contract exists for the given tool name. */
