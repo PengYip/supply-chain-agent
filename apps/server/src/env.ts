@@ -68,6 +68,11 @@ const EnvSchema = z.object({
   // Comma-separated list of additional trusted origins for Better Auth.
   // Needed when the app is accessed from a different host/IP than BETTER_AUTH_URL.
   TRUSTED_ORIGINS: z.string().optional(),
+  // 本公司主体名单(逗号分隔): 四流方向判定基准。资金流按付款人/收款人、货物流
+  // 按买方/卖方、发票流按开票方/受票方, 锚点命中名单一侧即判定 收/付(进/销)。
+  // 消费端 split(',') 后交给 domain/flowDirection.parseSelfPartyNames。
+  // 未配置时方向语义关闭(执行流水不物化), 不影响既有链路。
+  SELF_PARTY_NAMES: z.string().optional(),
   // 启动抽取回填(接线闭环): 每次启动重新跑历史上抽取 pending/skipped/failed/NULL
   // 的已解析文档(上限条数), 把合同台账回填齐。0 = 禁用。
   EXTRACTION_BACKFILL_LIMIT: z.coerce.number().int().min(0).default(20),
