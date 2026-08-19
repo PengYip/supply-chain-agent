@@ -29,6 +29,25 @@ function ctx(): DbContext {
   return _ctx;
 }
 
+function insertBeforeLastUserMessage(
+  messages: ModelMessage[],
+  message: ModelMessage,
+): ModelMessage[] {
+  let lastUserIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]!.role === 'user') {
+      lastUserIndex = i;
+      break;
+    }
+  }
+  if (lastUserIndex === -1) return [message, ...messages];
+  return [
+    ...messages.slice(0, lastUserIndex),
+    message,
+    ...messages.slice(lastUserIndex),
+  ];
+}
+
 // AI SDK 6 `useChat` posts UIMessages in the `parts` format
 // ({ id, role, parts: [...] }), NOT the legacy { role, content: string }.
 // Be permissive here and let `convertToModelMessages` do the real validation.
@@ -180,7 +199,7 @@ chatRoute.post('/chat', async (c) => {
         const contextMsg: ModelMessage = {
           role: 'system',
           content:
-            '用户在本次对话中引用了以下文件。系统已自动解析并自动抽取这些文件(结构化字段/关系/标签/向量均已就绪), 无需再次录入。\n' +
+            '用户在下面这条新消息中引用了以下文件。系统已自动解析并自动抽取这些文件(结构化字段/关系/标签/向量均已就绪), 无需再次录入。\n' +
             '规则:\n' +
             '- 已解析(parsed)的文件: 直接调用 present_document_review 向用户呈现复核卡。\n' +
             '- 仅当上下文明确说明抽取缺失/失败时, 才调用 extract_fields 重新抽取。\n' +
@@ -188,7 +207,11 @@ chatRoute.post('/chat', async (c) => {
             '- 若某文件为 needs_ocr, 如实告知用户该文件需 OCR 处理后才能使用。\n' +
             '文件列表:\n' + fileList,
         };
-        streamMessages = [contextMsg, ...baseMessages];
+        // Keep per-turn file context adjacent to the new user message. Placing
+        // it before the entire history made a generic request such as "录入文件"
+        // look like it referred to the most recently discussed old file after
+        // history grew, even though this turn referenced a different document.
+        streamMessages = insertBeforeLastUserMessage(baseMessages, contextMsg);
       }
       await runSession({
         sessionId,

@@ -21,8 +21,16 @@ vi.mock('../../src/harness/runSession.js', () => ({
   ),
 }));
 
+vi.mock('../../src/pipeline/tools/documentEntry.js', () => ({
+  ensureDocumentExtracted: vi.fn(async (docId: string) => ({
+    docId,
+    parseStatus: 'parsed',
+  })),
+  buildIngestDeps: vi.fn(() => ({})),
+}));
+
 const { chatRoute } = await import('../../src/routes/chat.js');
-const { createSession, recordPendingApproval, resolveApproval, loadSession } = await import('../../src/harness/sessionStore.js');
+const { appendMessages, createSession, recordPendingApproval, resolveApproval, loadSession } = await import('../../src/harness/sessionStore.js');
 const { runSession } = await import('../../src/harness/runSession.js');
 
 // chatRoute reads the auth user via c.get('user') (attached by attachSession in
@@ -44,6 +52,12 @@ function appAs(userId: string) {
 const uiMsg = (text: string) => ({
   id: 'm1',
   role: 'user',
+  parts: [{ type: 'text', text }],
+});
+
+const uiMsgWithId = (id: string, text: string) => ({
+  id,
+  role: 'user' as const,
   parts: [{ type: 'text', text }],
 });
 
@@ -156,5 +170,44 @@ describe('POST /api/chat (background runtime)', () => {
     const json = await res.json();
     expect(json.runId).toBeTruthy();
     runResolve.current();
+  });
+
+  it('places the current turn file context after prior history and before the new user message', async () => {
+    const s = createSession('trader', 'u-chat6');
+    appendMessages(s.id, [
+      uiMsgWithId('prior-user', '上一轮文件: DOC-first-turn'),
+      {
+        id: 'prior-assistant',
+        role: 'assistant',
+        parts: [{ type: 'text', text: '上一轮已处理 DOC-first-turn' }],
+      },
+    ]);
+
+    const res = await appAs('u-chat6').request('http://test/api/chat', {
+      method: 'POST',
+      headers: headers(s.id),
+      body: JSON.stringify({
+        messages: [uiMsgWithId('current-user', '录入文件')],
+        role: 'trader',
+        contextFiles: [{ docId: 'DOC-current-turn', filename: 'current.pdf' }],
+      }),
+    });
+    expect(res.status).toBe(200);
+    runResolve.current();
+
+    expect(runSession).toHaveBeenCalled();
+    const calls = (runSession as ReturnType<typeof vi.fn>).mock.calls;
+    const opts = calls[calls.length - 1]![0] as { messages: Array<Record<string, unknown>> };
+    const serialized = opts.messages.map((message) => JSON.stringify(message));
+    const priorIndex = serialized.findIndex((message) => message.includes('DOC-first-turn'));
+    const contextIndex = serialized.findIndex((message) => message.includes('DOC-current-turn'));
+    const currentUserIndex = serialized.findIndex(
+      (message) => message.includes('"role":"user"') && message.includes('录入文件'),
+    );
+
+    expect(priorIndex).toBeGreaterThanOrEqual(0);
+    expect(currentUserIndex).toBeGreaterThanOrEqual(0);
+    expect(contextIndex).toBeGreaterThan(priorIndex);
+    expect(contextIndex).toBeLessThan(currentUserIndex);
   });
 });
