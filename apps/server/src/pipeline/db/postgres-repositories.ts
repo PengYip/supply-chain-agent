@@ -23,7 +23,7 @@ import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.
 import { normalizeCompanyName } from '../../domain/flowDirection.js';
 import { deriveContractType } from '../../domain/contractType.js';
 import type { ContractType } from '../../domain/tradeSemantics.js';
-import { parseGraphStatus, effectiveSelfPartyNamesForDerivation } from './repositories.js';
+import { parseGraphStatus, effectiveSelfPartyNamesForDerivation, normalizeProjectCode } from './repositories.js';
 import type {
   ExtractionInput,
   BindingInput,
@@ -55,6 +55,11 @@ import type {
   ExecutionFlowSummary,
   SelfPartyRow,
   DocumentSourceRow,
+  ProjectRow,
+  MembershipStatus,
+  MembershipProposedBy,
+  ProjectMembershipRow,
+  ProjectMembershipInput,
 } from './repositories.js';
 
 // Phase 2 business-data isolation: same convention as repositories.ts -- a
@@ -1850,4 +1855,219 @@ export async function hasExecutionFlowsForDocumentPg(
       )
     : await ctx.pool.query('SELECT 1 FROM execution_flows WHERE document_id = $1 LIMIT 1', [documentId]);
   return (res.rowCount ?? 0) > 0;
+}
+
+// ---- 项目维度 pg twins(spec 2026-08-20 §4.1) ----------------------------------
+//
+// Mirror of the project/membership fns in repositories.ts. graph_status 为 jsonb:
+// 写侧 JSON.stringify(隐式 cast), 读侧 node-postgres 自动解析为对象。
+
+const PROJECT_COLS_PG = 'code, name, status, user_id, created_at, updated_at';
+const MEMBERSHIP_COLS_PG =
+  'id, contract_no, project_code, role, status, proposed_by, confirmation_source, confidence, created_by, user_id, created_at, graph_status';
+
+function projectRowFromPg(r: Record<string, unknown>): ProjectRow {
+  return {
+    code: String(r.code),
+    name: String(r.name),
+    status: String(r.status),
+    userId: r.user_id === null || r.user_id === undefined ? null : String(r.user_id),
+    createdAt: r.created_at ? String(r.created_at) : '',
+    updatedAt: r.updated_at ? String(r.updated_at) : '',
+  };
+}
+
+function membershipRowFromPg(r: Record<string, unknown>): ProjectMembershipRow {
+  return {
+    id: String(r.id),
+    contractNo: String(r.contract_no),
+    projectCode: String(r.project_code),
+    role: r.role === null || r.role === undefined ? null : String(r.role),
+    status: String(r.status) as MembershipStatus,
+    proposedBy: String(r.proposed_by) as MembershipProposedBy,
+    confirmationSource:
+      r.confirmation_source === null || r.confirmation_source === undefined ? null : String(r.confirmation_source),
+    confidence: Number(r.confidence),
+    createdBy: String(r.created_by),
+    userId: r.user_id === null || r.user_id === undefined ? null : String(r.user_id),
+    createdAt: r.created_at ? String(r.created_at) : '',
+    graphStatus: (r.graph_status as BindingGraphStatus | null) ?? null,
+  };
+}
+
+export async function createProjectPg(
+  ctx: PostgresDbContext,
+  input: { code: string; name: string; userId?: string | null },
+): Promise<ProjectRow | null> {
+  const code = normalizeProjectCode(input.code);
+  const uid = effectiveUserId(input.userId ?? undefined);
+  const name = input.name.trim();
+  if (!code || !name) return null;
+  const exists = await ctx.pool.query('SELECT 1 FROM projects WHERE code = $1 AND user_id = $2', [code, uid]);
+  if ((exists.rowCount ?? 0) > 0) return null;
+  await ctx.pool.query(
+    'INSERT INTO projects (id, code, name, status, user_id) VALUES ($1, $2, $3, $4, $5)',
+    [rid('PRJ'), code, name, 'active', uid],
+  );
+  const row = await ctx.pool.query(
+    `SELECT ${PROJECT_COLS_PG} FROM projects WHERE code = $1 AND user_id = $2`,
+    [code, uid],
+  );
+  return row.rows[0] ? projectRowFromPg(row.rows[0]) : null;
+}
+
+export async function findProjectByCodePg(
+  ctx: PostgresDbContext, code: string, userId?: string,
+): Promise<ProjectRow | null> {
+  const normalized = normalizeProjectCode(code);
+  if (!normalized) return null;
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT ${PROJECT_COLS_PG} FROM projects WHERE code = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)`,
+        [normalized, uid],
+      )
+    : await ctx.pool.query(`SELECT ${PROJECT_COLS_PG} FROM projects WHERE code = $1`, [normalized]);
+  return res.rows[0] ? projectRowFromPg(res.rows[0]) : null;
+}
+
+export async function listProjectsPg(ctx: PostgresDbContext, userId?: string): Promise<ProjectRow[]> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT ${PROJECT_COLS_PG} FROM projects WHERE user_id = $1 OR user_id = '' OR user_id IS NULL ORDER BY code ASC`,
+        [uid],
+      )
+    : await ctx.pool.query(`SELECT ${PROJECT_COLS_PG} FROM projects ORDER BY code ASC`);
+  return res.rows.map(projectRowFromPg);
+}
+
+export async function upsertProjectMembershipPg(
+  ctx: PostgresDbContext,
+  input: ProjectMembershipInput,
+  userId?: string,
+): Promise<string> {
+  const uid = effectiveUserId(userId);
+  const contractNo = normalizeContractNo(input.contractNo);
+  const projectCode = normalizeProjectCode(input.projectCode);
+  const res = await ctx.pool.query(
+    `INSERT INTO project_memberships
+       (id, contract_no, project_code, role, status, proposed_by, confirmation_source, confidence, created_by, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     ON CONFLICT (contract_no, project_code, user_id) DO UPDATE SET
+       role = EXCLUDED.role,
+       status = EXCLUDED.status,
+       proposed_by = EXCLUDED.proposed_by,
+       confirmation_source = EXCLUDED.confirmation_source,
+       confidence = EXCLUDED.confidence,
+       created_by = EXCLUDED.created_by
+     RETURNING id`,
+    [
+      rid('PM'),
+      contractNo,
+      projectCode,
+      input.role ?? null,
+      input.status ?? 'proposed',
+      input.proposedBy ?? 'system',
+      input.confirmationSource ?? null,
+      input.confidence ?? 0,
+      input.createdBy,
+      uid,
+    ],
+  );
+  return String(res.rows[0]!.id);
+}
+
+export async function findMembershipByIdPg(
+  ctx: PostgresDbContext, id: string, userId?: string,
+): Promise<ProjectMembershipRow | null> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT ${MEMBERSHIP_COLS_PG} FROM project_memberships
+         WHERE id = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)`,
+        [id, uid],
+      )
+    : await ctx.pool.query(`SELECT ${MEMBERSHIP_COLS_PG} FROM project_memberships WHERE id = $1`, [id]);
+  return res.rows[0] ? membershipRowFromPg(res.rows[0]) : null;
+}
+
+export async function listMembershipsByProjectPg(
+  ctx: PostgresDbContext,
+  projectCode: string,
+  userId?: string,
+  status?: MembershipStatus,
+): Promise<ProjectMembershipRow[]> {
+  const normalized = normalizeProjectCode(projectCode);
+  const uid = effectiveUserId(userId);
+  const clauses = ['project_code = $1'];
+  const params: unknown[] = [normalized];
+  if (status) {
+    params.push(status);
+    clauses.push(`status = $${params.length}`);
+  }
+  if (uid) {
+    params.push(uid);
+    clauses.push(`(user_id = $${params.length} OR user_id = '' OR user_id IS NULL)`);
+  }
+  const res = await ctx.pool.query(
+    `SELECT ${MEMBERSHIP_COLS_PG} FROM project_memberships WHERE ${clauses.join(' AND ')} ORDER BY created_at ASC`,
+    params,
+  );
+  return res.rows.map(membershipRowFromPg);
+}
+
+export async function listMembershipsByContractPg(
+  ctx: PostgresDbContext, contractNo: string, userId?: string,
+): Promise<ProjectMembershipRow[]> {
+  const normalized = normalizeContractNo(contractNo);
+  if (!normalized) return [];
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT ${MEMBERSHIP_COLS_PG} FROM project_memberships
+         WHERE contract_no = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)
+         ORDER BY created_at ASC`,
+        [normalized, uid],
+      )
+    : await ctx.pool.query(
+        `SELECT ${MEMBERSHIP_COLS_PG} FROM project_memberships WHERE contract_no = $1 ORDER BY created_at ASC`,
+        [normalized],
+      );
+  return res.rows.map(membershipRowFromPg);
+}
+
+export async function updateMembershipStatusPg(
+  ctx: PostgresDbContext,
+  id: string,
+  status: MembershipStatus,
+  confirmationSource: 'auto_rule' | 'human' | null,
+  userId?: string,
+): Promise<ProjectMembershipRow | null> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        "UPDATE project_memberships SET status = $1, confirmation_source = $2 WHERE id = $3 AND (user_id = $4 OR user_id = '' OR user_id IS NULL)",
+        [status, confirmationSource, id, uid],
+      )
+    : await ctx.pool.query(
+        'UPDATE project_memberships SET status = $1, confirmation_source = $2 WHERE id = $3',
+        [status, confirmationSource, id],
+      );
+  if ((res.rowCount ?? 0) === 0) return null;
+  return findMembershipByIdPg(ctx, id, userId);
+}
+
+export async function setMembershipGraphStatusPg(
+  ctx: PostgresDbContext, id: string, gs: BindingGraphStatus, userId?: string,
+): Promise<void> {
+  const uid = effectiveUserId(userId);
+  if (uid) {
+    await ctx.pool.query(
+      "UPDATE project_memberships SET graph_status = $1 WHERE id = $2 AND (user_id = $3 OR user_id = '' OR user_id IS NULL)",
+      [JSON.stringify(gs), id, uid],
+    );
+  } else {
+    await ctx.pool.query('UPDATE project_memberships SET graph_status = $1 WHERE id = $2', [JSON.stringify(gs), id]);
+  }
 }
