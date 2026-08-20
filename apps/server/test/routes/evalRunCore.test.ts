@@ -39,7 +39,7 @@ describe('parseServerEventLine', () => {
 
 describe('EvalRunRegistry', () => {
   it('happy path: events buffered, subscribers notified, done terminal', async () => {
-    const { factory, handles } = fakeFactory((h) => {
+    const { factory, handles: _handles } = fakeFactory((h) => {
       h.send('@@EVT@@{"type":"run_started","runId":"r","total":1}');
       h.send('[eval] human log to ignore');
       h.send('@@EVT@@{"type":"episode_done","scenarioId":"t1","runIndex":1,"verdict":"pass","rubricScore":4,"vetoTriggered":false}');
@@ -80,7 +80,7 @@ describe('EvalRunRegistry', () => {
   });
 
   it('kill -> run_error 用户中止, kill unknown -> false', () => {
-    const { factory, handles } = fakeFactory(() => {});
+    const { factory, handles: _handles } = fakeFactory(() => {});
     const reg = new EvalRunRegistry(factory);
     const res = reg.start({ dataset: 'core', runs: 1, filter: undefined });
     const runId = (res as { runId: string }).runId;

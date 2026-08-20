@@ -5,7 +5,7 @@
 // the anchors, not by verbosity") to counter the known length bias.
 import { generateText, type LanguageModel } from 'ai';
 import { z } from 'zod';
-import type { EpisodeArtifact, JudgeDimensionScore, JudgeOutcome, Rubric, Weight } from './types.js';
+import type { EpisodeArtifact, JudgeDimensionScore, JudgeOutcome, Rubric } from './types.js';
 
 export class JudgeError extends Error {}
 
@@ -19,8 +19,6 @@ const JudgeOutputSchema = z.object({
   vetoRationale: z.string().optional(),
   confidence: z.number().min(0).max(1),
 });
-
-const WEIGHT_FACTOR: Record<Weight, number> = { essential: 1, important: 0.75, optional: 0.5 };
 
 export function buildJudgePrompt(rubric: Rubric, artifact: EpisodeArtifact): { system: string; user: string } {
   const dims = rubric.dimensions

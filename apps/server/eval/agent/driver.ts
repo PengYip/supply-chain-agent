@@ -9,7 +9,7 @@ import { convertToModelMessages, type LanguageModel, type ModelMessage, type UIM
 import { runStream, recordL2PendingFromResponse } from '../../src/harness/agent.js';
 import {
   createSession, loadSession, appendMessages, deleteSession,
-  listPending, getPending, resolveApproval,
+  listPending, resolveApproval,
 } from '../../src/harness/sessionStore.js';
 import { runSessionContext } from '../../src/harness/sessionContext.js';
 import { auditRecorder } from '../../src/harness/auditRecorder.js';
@@ -136,7 +136,6 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
 
   const ctx = opts.deps?.ctx ?? createDb(':memory:');
   if (!opts.deps?.ctx) migrate((ctx as ReturnType<typeof createDb>).sqlite);
-  const deps: HarnessDeps = { ctx, ...(opts.deps ?? {}) } as HarnessDeps;
 
   const sessionId = createSession('trader', 'eval-user').id;
   const transcript: TranscriptEntry[] = [];

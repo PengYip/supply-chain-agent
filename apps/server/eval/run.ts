@@ -23,7 +23,6 @@
 //     needsReview). See task-10-report.md for full analysis.
 
 import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDb, migrate } from '../src/pipeline/db/client.js';
@@ -32,7 +31,6 @@ import { ingestWithDigital } from '../src/pipeline/digitalAdapter.js';
 import { ingestWithMinerU } from '../src/pipeline/mineruAdapter.js';
 import { extractGroundedFields } from '../src/pipeline/extraction.js';
 
-const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 
 // Build the real DeepSeek LanguageModel from env (same factory as the agent harness).

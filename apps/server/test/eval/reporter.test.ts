@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeResults, buildReport, passAtK, passConsecutiveK } from '../../eval/agent/reporter.js';
 import type { EpisodeArtifact, EpisodeScore, Scenario, Verdict } from '../../eval/agent/types.js';
-import { loadByFileUrl } from '../../eval/agent/datasets.js';
 
 const out = join(tmpdir(), `eval-report-test-${Date.now()}`);
 
@@ -37,7 +36,6 @@ describe('pass metrics', () => {
 
 describe('writeResults', () => {
   it('writes episodes.jsonl (one line per episode) and report.md', () => {
-    const scenarios = [loadByFileUrl(new URL('../../eval/agent/datasets/core.yaml', import.meta.url).href)[0]!];
     const { episodesPath, reportPath } = writeResults(out, [artifact(1)], [score(1, 'pass')]);
     expect(existsSync(episodesPath)).toBe(true);
     expect(existsSync(reportPath)).toBe(true);

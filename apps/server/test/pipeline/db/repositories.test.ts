@@ -219,7 +219,7 @@ describe('Phase B: bindings 状态机', () => {
 
   it('saveBinding 写新列(status/confirmation_source/proposed_by/evidence), 旧调用默认 confirmed', async () => {
     // 旧签名(无状态参数) -> status 默认 confirmed。
-    const legacyId = await saveBinding(ctx, {
+    const _legacyId = await saveBinding(ctx, {
       documentId: 'DOC-PB-1', contractNo: 'HT-OLD-001', relation: 'primary',
       sourceRefs: [], confidence: 0.9, createdBy: 'agent',
     });

@@ -1,10 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { randomUUID } from 'node:crypto';
-import type { ModelMessage } from 'ai';
 import { runEpisode } from '../../eval/agent/driver.js';
 import { loadByFileUrl } from '../../eval/agent/datasets.js';
 import { createDb, migrate } from '../../src/pipeline/db/client.js';
-import { listPending } from '../../src/harness/sessionStore.js';
 import type { Scenario } from '../../eval/agent/types.js';
 
 // Fake agent model, scripted BY PROMPT CONTENT (not call count): on the first

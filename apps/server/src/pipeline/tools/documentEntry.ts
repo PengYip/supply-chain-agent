@@ -1,6 +1,5 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 import type { DbContext } from '../db/client.js';
@@ -16,7 +15,7 @@ import {
   getExtractionStatus, loadLatestExtractionByDocId,
   // Phase B bindings state machine.
   listContractLedgerEntries, findBindingByDocAndContract, listBindingProposals,
-  updateBindingStatus, type BindingRow,
+  updateBindingStatus,
 } from '../db/repositories.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
@@ -37,7 +36,7 @@ import { upsertContractLedgerEntry } from '../db/repositories.js';
 import { extractVoucher, mimeForExtension, type VlmResult } from '../vlmAdapter.js';
 import { VOUCHER_SCHEMAS, validateVoucher, type VoucherType } from '../schemas/vouchers.js';
 import { extractAnchors } from '../schemas/vouchers.js';
-import { generateBindingProposals, type BindingProposal, type BindingRoute } from '../bindingProposal.js';
+import { generateBindingProposals, type BindingRoute } from '../bindingProposal.js';
 import { materializeExecutionFlow, refreshExecutionFlowsForDocument } from '../executionFlow.js';
 
 /** Phase A: 图片凭证 VLM 解析依赖(可注入 fake 供测试; 缺省用真实 extractVoucher)。 */
