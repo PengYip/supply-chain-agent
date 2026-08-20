@@ -27,6 +27,16 @@ vi.mock('../../src/pipeline/executionFlow.js', () => ({
   refreshExecutionFlowsForDocument: refreshMock,
 }));
 
+// 桩掉 docType 图同步(F3): 路由测试聚焦 路由/校验/所有权 分支, 图同步由
+// graphCommit.test.ts 覆盖。partial mock 保留 commitDocumentGraph(确认路径用)。
+const { syncMock } = vi.hoisted(() => ({
+  syncMock: vi.fn<(args: unknown[]) => Promise<void>>(async () => {}),
+}));
+vi.mock('../../src/pipeline/graphCommit.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../src/pipeline/graphCommit.js')>();
+  return { ...mod, syncDocumentTypeToGraph: syncMock };
+});
+
 const { reviewRoute } = await import('../../src/routes/review.js');
 
 function appAs(userId: string) {
@@ -64,6 +74,8 @@ describe('PATCH /api/documents/:docId/type', () => {
   beforeEach(() => {
     refreshMock.mockReset();
     refreshMock.mockResolvedValue({ retracted: 0, materialized: 1, skipped: [] });
+    syncMock.mockReset();
+    syncMock.mockResolvedValue(undefined);
   });
 
   it('合法类型修正 -> 200 { ok:true, docType, refreshedFlows, skipped } 且落库', async () => {
@@ -85,6 +97,27 @@ describe('PATCH /api/documents/:docId/type', () => {
     const meta = await getDocumentMeta(ctx, docId, 'u1');
     expect(meta?.docType).toBe('发票');
     expect(refreshMock).toHaveBeenCalledWith(ctx, docId, 'u1');
+    // F3: 图同步以新 docType 调用。
+    expect(syncMock).toHaveBeenCalledWith(docId, '发票');
+  });
+
+  it('图同步失败(best-effort) -> PATCH 仍 200, 不阻断修正', async () => {
+    const ctx = ctxHolder.current!;
+    const docId = await seedDoc(ctx);
+    syncMock.mockRejectedValue(new Error('neo4j down'));
+
+    const res = await appAs('u1').request(`/api/documents/${docId}/type`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ docType: '发票' }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean; docType: string; refreshedFlows: number; skipped: unknown[];
+    };
+    expect(body).toEqual({ ok: true, docType: '发票', refreshedFlows: 1, skipped: [] });
+    // 图同步失败后仍继续执行流水重建。
+    expect(refreshMock).toHaveBeenCalled();
   });
 
   it('PATCH 透传 refresh 的 skipped(方向判不出等跳过原因)', async () => {

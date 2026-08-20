@@ -24,7 +24,7 @@ import {
 } from '../pipeline/db/repositories.js';
 import { ensureDocumentExtracted } from '../pipeline/tools/documentEntry.js';
 import { refreshExecutionFlowsForDocument } from '../pipeline/executionFlow.js';
-import { commitDocumentGraph } from '../pipeline/graphCommit.js';
+import { commitDocumentGraph, syncDocumentTypeToGraph } from '../pipeline/graphCommit.js';
 import { buildIngestDeps } from '../pipeline/ingestModel.js';
 import { DOC_TYPES } from '../pipeline/classifier.js';
 import type { DocType, Modality } from '../pipeline/types.js';
@@ -260,6 +260,13 @@ reviewRoute.patch('/:docId/type', async (c) => {
     const updated = await updateDocumentType(ctx(), docId, docType as DocType, user.id);
     if (!updated) {
       return c.json({ ok: false, error: 'document_not_found' }, 404);
+    }
+    // 轻量图同步(F3): 把新 docType 幂等 MERGE 到 Neo4j Document 节点, 让图视图
+    // 不再显示陈旧类型。best-effort —— 图不可达/未配置时静默跳过, 绝不阻断修正。
+    try {
+      await syncDocumentTypeToGraph(docId, docType);
+    } catch (e) {
+      console.warn('[review] docType 图同步失败:', e instanceof Error ? e.message : String(e));
     }
     // 类型修正后按最新抽取重建执行流水; refreshedFlows 计数是响应契约的一部分,
     // 失败不得告警吞掉(与修正钩子的 warn-only 语义不同)。skipped 透传跳过原因

@@ -7,8 +7,7 @@ import {
 } from './db/repositories.js';
 import { deriveProposedRelationships } from './extraction.js';
 import { normalizeName } from '../graph/normalize.js';
-import { writeDocumentGraph, type GraphWriteResult, type GraphWriterIo, type GraphEdgeInput } from '../graph/graphWriter.js';
-
+import { writeDocumentGraph, defaultGraphWriterIo, type GraphWriteResult, type GraphWriterIo, type GraphEdgeInput } from '../graph/graphWriter.js';
 /** 边的最小投影（喂 writer 前先去重）。 */
 interface EdgeLike {
   type: GraphEdgeInput['type'];
@@ -99,4 +98,27 @@ export async function commitDocumentGraph(
     console.error('[graphCommit] graph_status persistence failed:', e instanceof Error ? e.message : String(e));
   }
   return status;
+}
+
+/**
+ * docType 修正后的轻量图同步（F3）：PATCH /api/documents/:docId/type 改库后，
+ * 把新 docType 幂等 MERGE 到 Neo4j Document 节点（name=docId），让 /api/graph/query
+ * 消费的节点 props.docType 不再陈旧。只更新单节点属性，不重派生子图、不写
+ * graph_status（比 commitDocumentGraph 轻得多）。
+ *
+ * 永不抛出：图不可达/未配置（NEO4J_PASSWORD 未设）时静默跳过，绝不阻断 docType
+ * 修正主流程。io 可注入（单测无需 Neo4j），缺省用真实 writer io。
+ */
+export async function syncDocumentTypeToGraph(
+  docId: string,
+  docType: string,
+  io: GraphWriterIo = defaultGraphWriterIo,
+): Promise<void> {
+  // 图未配置 -> 跳过（与 writeDocumentGraph 同门禁，非错误）。
+  if (!process.env.NEO4J_PASSWORD) return;
+  await io.createEntity({
+    kind: 'Document',
+    name: docId,
+    props: { docId, docType },
+  });
 }

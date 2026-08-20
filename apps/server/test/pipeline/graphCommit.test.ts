@@ -3,7 +3,7 @@ import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.
 import {
   createDocumentStub, saveExtraction, setReviewStatus, getReviewSnapshot, updateExtractionFields,
 } from '../../src/pipeline/db/repositories.js';
-import { commitDocumentGraph } from '../../src/pipeline/graphCommit.js';
+import { commitDocumentGraph, syncDocumentTypeToGraph } from '../../src/pipeline/graphCommit.js';
 import type { GraphWriterIo } from '../../src/graph/graphWriter.js';
 
 let ctx: DbContext;
@@ -167,6 +167,48 @@ describe('commitDocumentGraph', () => {
       expect(errSpy).toHaveBeenCalled();
     } finally {
       errSpy.mockRestore();
+    }
+  });
+});
+
+describe('syncDocumentTypeToGraph (F3)', () => {
+  // 与 commitDocumentGraph 同门禁: 需要 NEO4J_PASSWORD 打开 writer 的 gate。
+  let prevPassword: string | undefined;
+  beforeAll(() => {
+    prevPassword = process.env.NEO4J_PASSWORD;
+    process.env.NEO4J_PASSWORD = 'graphwriter-test-dummy';
+  });
+  afterAll(() => {
+    if (prevPassword !== undefined) process.env.NEO4J_PASSWORD = prevPassword;
+    else delete process.env.NEO4J_PASSWORD;
+  });
+
+  it('调用 createEntity 写入 Document 节点 props {docId, docType}', async () => {
+    const calls: Array<{ kind: string; name: string; props?: Record<string, unknown> }> = [];
+    const io: GraphWriterIo = {
+      createEntity: async ({ kind, name, props }) => {
+        calls.push({ kind, name, props });
+        return { elementId: `el-${kind}-${name}`, kind, name, props: props ?? {}, created: true };
+      },
+      mergeEdge: async () => ({}),
+    };
+    await syncDocumentTypeToGraph('DOC-1', '发票', io);
+    expect(calls).toEqual([
+      { kind: 'Document', name: 'DOC-1', props: { docId: 'DOC-1', docType: '发票' } },
+    ]);
+  });
+
+  it('NEO4J_PASSWORD 未设 -> 跳过, 不调用 io', async () => {
+    const prev = process.env.NEO4J_PASSWORD;
+    delete process.env.NEO4J_PASSWORD;
+    try {
+      const io: GraphWriterIo = {
+        createEntity: async () => { throw new Error('should not be called'); },
+        mergeEdge: async () => ({}),
+      };
+      await expect(syncDocumentTypeToGraph('DOC-1', '发票', io)).resolves.toBeUndefined();
+    } finally {
+      if (prev !== undefined) process.env.NEO4J_PASSWORD = prev;
     }
   });
 });
