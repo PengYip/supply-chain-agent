@@ -16,6 +16,7 @@ import {
   type OverviewDoc,
   type ProposalItem,
 } from '../../hooks/useBindings';
+import { formatFlowSkipLines } from '../../lib/flowSkip';
 import { prettyDocName } from '../graph/kinds';
 import type { GraphFocusTarget } from '../graph/focus';
 import { DocListPanel } from './DocListPanel';
@@ -205,12 +206,16 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
 
   /* ---------- toast / pending 基础设施 ---------- */
 
-  const pushToast = useCallback((kind: 'success' | 'error', text: string) => {
+  const pushToast = useCallback((kind: 'success' | 'error', text: string, duration = 3000) => {
     const id = ++toastIdRef.current;
     setToasts((prev) => [...prev.slice(-2), { id, kind, text }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 3000);
+    // 多行结果(如跳过原因清单)给更长停留时间, 便于读完。
+    setTimeout(
+      () => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+      },
+      text.includes('\n') ? Math.max(duration, 6000) : duration,
+    );
   }, []);
 
   const markPending = useCallback((key: string, on: boolean) => {
@@ -291,10 +296,14 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
         docs.map((d) => (d.docId === docId ? { ...d, docType: res.docType || nextType } : d)),
       );
       const flows = Number.isFinite(res.refreshedFlows) ? res.refreshedFlows : 0;
-      pushToast(
-        'success',
-        flows > 0 ? `文档类型已改为「${nextType}」，已刷新 ${flows} 条关联流水` : `文档类型已改为「${nextType}」`,
-      );
+      // 成功行 + 跳过原因明细(有跳过时才列出), 一条 toast 讲清「改成了什么、哪些没生成、为什么」。
+      const lines = [
+        flows > 0
+          ? `文档类型已改为「${nextType}」，已刷新 ${flows} 条关联流水`
+          : `文档类型已改为「${nextType}」`,
+        ...formatFlowSkipLines(res.skipped),
+      ];
+      pushToast('success', lines.join('\n'));
       b.refreshAll(docId);
     } catch (e) {
       const code = e instanceof Error ? e.message : '';
@@ -769,7 +778,7 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
               ) : (
                 <CheckCircle2 className="mt-px h-4 w-4 shrink-0 text-success" aria-hidden />
               )}
-              <span className="text-[12px] leading-5 text-textDark">{t.text}</span>
+              <span className="whitespace-pre-line text-[12px] leading-5 text-textDark">{t.text}</span>
             </div>
           </div>
         ))}

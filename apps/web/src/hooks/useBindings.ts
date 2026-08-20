@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { normalizeFlowSkips } from '../lib/flowSkip';
 
 /* ---------- 契约(与 server routes/bindings.ts 一致) ---------- */
 
@@ -456,13 +457,19 @@ export function useBindings() {
     [],
   );
 
-  /** 修正文档类型(PATCH /api/documents/:docId/type), 成功返回回显 docType 与刷新的流水条数。 */
+  /** 修正文档类型(PATCH /api/documents/:docId/type), 成功返回回显 docType、刷新的流水条数
+   *  与跳过明细(旧后端不带 skipped -> 空数组)。 */
   const correctDocType = useCallback(
     (docId: string, docType: string) =>
-      patchJson<{ ok: boolean; docType: string; refreshedFlows: number }>(
-        `/api/documents/${encodeURIComponent(docId)}/type`,
-        { docType },
-      ),
+      patchJson<{
+        ok: boolean;
+        docType: string;
+        refreshedFlows: number;
+        skipped?: unknown;
+      }>(`/api/documents/${encodeURIComponent(docId)}/type`, { docType }).then((data) => ({
+        ...data,
+        skipped: normalizeFlowSkips(data.skipped),
+      })),
     [],
   );
 

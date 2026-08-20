@@ -23,8 +23,12 @@ import {
   hasExecutionFlowsForDocument,
   getDocumentMeta,
 } from '../pipeline/db/repositories.js';
-import { getEffectiveSelfPartyNames, refreshExecutionFlowsForDocument } from '../pipeline/executionFlow.js';
-import { buildSelfPartyCandidatesForUser } from '../pipeline/selfPartyCandidates.js';
+import { getEffectiveSelfPartyNames, refreshExecutionFlowsForDocument, type RefreshSkipEntry } from '../pipeline/executionFlow.js';
+import {
+  buildSelfPartyCandidatesForUser,
+  findSelfPartyConflictsForUser,
+  FLOW_DOCTYPES,
+} from '../pipeline/selfPartyCandidates.js';
 import { normalizeCompanyName, parseSelfPartyNames } from '../domain/flowDirection.js';
 import { env } from '../env.js';
 
@@ -35,7 +39,7 @@ partiesRoute.use('*', async (c, next) => {
   await next();
 });
 
-/** GET / — parties(DB + env) + envOnly + candidates。 */
+/** GET / — parties(DB + env) + envOnly + candidates + conflicts。 */
 partiesRoute.get('/', async (c) => {
   const user = c.get('user')!;
   const ctx = getDbContext();
@@ -50,8 +54,11 @@ partiesRoute.get('/', async (c) => {
     ...dbRows.map((r) => ({ name: r.name, source: 'db' as const, createdAt: r.createdAt })),
     ...envOnly.map((n) => ({ name: n, source: 'env' as const, createdAt: null })),
   ];
-  const candidates = await buildSelfPartyCandidatesForUser(ctx, user.id, effective);
-  return c.json({ parties, envOnly, candidates });
+  const [candidates, conflicts] = await Promise.all([
+    buildSelfPartyCandidatesForUser(ctx, user.id, effective),
+    findSelfPartyConflictsForUser(ctx, user.id, effective),
+  ]);
+  return c.json({ parties, envOnly, candidates, conflicts });
 });
 
 const partyAddSchema = z.object({ name: z.string().min(1) });
@@ -68,10 +75,10 @@ partiesRoute.post('/', async (c) => {
   const ctx = getDbContext();
   const added = await addSelfParty(ctx, name, user.id);
   if (!added) {
-    return c.json({ ok: true, added: false, refreshedFlows: 0, failed: 0 });
+    return c.json({ ok: true, added: false, refreshedFlows: 0, failed: 0, skipped: [] });
   }
-  const { refreshedFlows, failed } = await backfillFlows(ctx, user.id);
-  return c.json({ ok: true, added: true, refreshedFlows, failed });
+  const { refreshedFlows, failed, skipped } = await backfillFlows(ctx, user.id);
+  return c.json({ ok: true, added: true, refreshedFlows, failed, skipped });
 });
 
 /** DELETE /:name — URL-encoded 原始名精确删除; 不追溯撤销已物化流水。 */
@@ -81,32 +88,35 @@ partiesRoute.delete('/:name', async (c) => {
   return c.json({ ok: true, removed });
 });
 
-// 六向流水白名单(与 FLOW_TYPE_BY_DOC_TYPE 语义一致; 此处为回填的 docType 前置,
-// 不修改执行流水模块的映射或方向语义)。
-const FLOW_DOCTYPES = new Set(['发票', '货转单', '付款凭证']);
+// 六向流水白名单(与 executionFlow.FLOW_TYPE_BY_DOC_TYPE 语义一致; 此处为回填的
+// docType 前置, 不修改执行流水模块的映射或方向语义)。SSOT 在 selfPartyCandidates。
 
 /**
  * 回填: 对每个"持有 confirmed 绑定 + 白名单 docType + 尚无流水"的文档执行
  * refreshExecutionFlowsForDocument。refreshedFlows = 成功刷新的文档数,
  * failed = 抛出异常被按文档捕获的文档数(单文档失败不中断其余)。
+ * skipped = 仅收集实际刷新文档的跳过原因(白名单/无流水前置过滤掉的文档不产生
+ * 跳过条目 —— 它们本就不在回填范围内)。
  */
 async function backfillFlows(
   ctx: DbContext,
   userId: string,
-): Promise<{ refreshedFlows: number; failed: number }> {
+): Promise<{ refreshedFlows: number; failed: number; skipped: RefreshSkipEntry[] }> {
   const docIds = await listDocumentIdsWithConfirmedBindings(ctx, userId);
   let refreshedFlows = 0;
   let failed = 0;
+  const skipped: RefreshSkipEntry[] = [];
   for (const docId of docIds) {
     try {
       const meta = await getDocumentMeta(ctx, docId, userId);
       if (!meta || !meta.docType || !FLOW_DOCTYPES.has(meta.docType)) continue;
       if (await hasExecutionFlowsForDocument(ctx, docId, userId)) continue;
-      await refreshExecutionFlowsForDocument(ctx, docId, userId);
+      const res = await refreshExecutionFlowsForDocument(ctx, docId, userId);
       refreshedFlows += 1;
+      skipped.push(...res.skipped);
     } catch {
       failed += 1;
     }
   }
-  return { refreshedFlows, failed };
+  return { refreshedFlows, failed, skipped };
 }

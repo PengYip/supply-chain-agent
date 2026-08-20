@@ -23,6 +23,7 @@ import {
   summarizeExecutionFlows,
   listExecutionFlows,
   listSelfParties,
+  type ExtractionRow,
 } from './db/repositories.js';
 import { extractAnchors, type VoucherType } from './schemas/vouchers.js';
 import { buildAnchorsFromFields } from './bindingProposal.js';
@@ -153,18 +154,79 @@ export async function materializeExecutionFlow(
  * (applyDocumentCorrections)或重抽取后由调用方触发; 白名单外/方向判不出
  * 的绑定重物化自然落空 -> 旧流水被清掉, 流水表始终反映最新抽取, 不漂移。
  * 单条失败仅告警, 不中断其余绑定(旁路语义与物化一致)。
+ *
+ * F2 跳过原因: 返回 skipped 数组解释"为什么没有物化"(前端据此提示用户,
+ * 例如名单双侧命中导致方向判不出)。物化语义不变 —— materializeExecutionFlow
+ * 保持安静 null 契约; 原因通过 introspection 计算(单次加载抽取 + 名单,
+ * 白名单/方向判定与物化同源), 不把状态穿进 materialize。
  */
+export type SkipReason =
+  | 'direction-undeterminable'
+  | 'not-whitelisted'
+  | 'no-confirmed-binding';
+
+export interface RefreshSkipEntry {
+  bindingId: string | null;
+  contractNo: string | null;
+  reason: SkipReason;
+}
+
+export interface RefreshResult {
+  retracted: number;
+  materialized: number;
+  skipped: RefreshSkipEntry[];
+}
+
 export async function refreshExecutionFlowsForDocument(
   ctx: DbContext,
   documentId: string,
   userId?: string,
   selfPartyNames?: string[],
-): Promise<{ retracted: number; materialized: number }> {
+): Promise<RefreshResult> {
   const retracted = await retractExecutionFlowsForDocument(ctx, documentId, userId);
   const bindings = await listConfirmedBindingsForDocument(ctx, documentId, userId);
+  const skipped: RefreshSkipEntry[] = [];
+  if (bindings.length === 0) {
+    return {
+      retracted,
+      materialized: 0,
+      skipped: [{ bindingId: null, contractNo: null, reason: 'no-confirmed-binding' }],
+    };
+  }
+
+  // 跳过原因 introspection(不改变物化语义): 单次加载抽取 + 名单, 白名单/方向
+  // 判定与 materializeExecutionFlow 同源。物化内部仍会再加载一次抽取(双加载
+  // 可接受, 保持非侵入)。introspection 失败(抽取加载抛错) -> 原因未知, 不记录
+  // 跳过原因, 仅按原路径物化。无抽取行 -> 无法确认白名单成员 -> not-whitelisted。
+  let extraction: ExtractionRow | null = null;
+  let introspectionOk = true;
+  try {
+    extraction = await loadLatestExtractionByDocId(ctx, documentId, userId);
+  } catch {
+    introspectionOk = false;
+  }
+  const names = selfPartyNames ?? (await getEffectiveSelfPartyNames(ctx));
+  const flowType = extraction ? FLOW_TYPE_BY_DOC_TYPE[extraction.docType] : undefined;
+  const anchors = extraction
+    ? extraction.docType === '发票'
+      ? buildAnchorsFromFields(extraction.docType, extraction.fields)
+      : extractAnchors(extraction.docType as VoucherType, unwrapFieldValues(extraction.fields))
+    : undefined;
+  const side = anchors ? resolveSelfSide(names, anchors) : null;
+
   let materialized = 0;
   for (const b of bindings) {
     try {
+      if (introspectionOk) {
+        if (!flowType) {
+          skipped.push({ bindingId: b.id, contractNo: b.contractNo, reason: 'not-whitelisted' });
+          continue;
+        }
+        if (!side) {
+          skipped.push({ bindingId: b.id, contractNo: b.contractNo, reason: 'direction-undeterminable' });
+          continue;
+        }
+      }
       const flowId = await materializeExecutionFlow(
         ctx,
         {
@@ -182,7 +244,7 @@ export async function refreshExecutionFlowsForDocument(
       console.warn('[executionFlow] 重建流水失败(跳过该绑定):', b.id, (e as Error).message);
     }
   }
-  return { retracted, materialized };
+  return { retracted, materialized, skipped };
 }
 
 /** 解绑/拒绝时撤销该 binding 的执行流水(转调存储层)。 */

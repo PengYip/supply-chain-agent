@@ -262,9 +262,10 @@ reviewRoute.patch('/:docId/type', async (c) => {
       return c.json({ ok: false, error: 'document_not_found' }, 404);
     }
     // 类型修正后按最新抽取重建执行流水; refreshedFlows 计数是响应契约的一部分,
-    // 失败不得告警吞掉(与修正钩子的 warn-only 语义不同)。
-    const { materialized } = await refreshExecutionFlowsForDocument(ctx(), docId, user.id);
-    return c.json({ ok: true, docType, refreshedFlows: materialized });
+    // 失败不得告警吞掉(与修正钩子的 warn-only 语义不同)。skipped 透传跳过原因
+    // (F2: 白名单外 / 方向判不出 / 无 confirmed 绑定)。
+    const { materialized, skipped } = await refreshExecutionFlowsForDocument(ctx(), docId, user.id);
+    return c.json({ ok: true, docType, refreshedFlows: materialized, skipped });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[review] docType change failed:', msg);

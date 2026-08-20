@@ -19,8 +19,8 @@ vi.mock('../../src/pipeline/db/dbBackend.js', async (importOriginal) => {
 // 桩掉执行流水重建: 路由测试聚焦 路由/校验/所有权 分支, 重建逻辑由
 // executionFlow 测试覆盖(与本仓其他路由测试 mock 存储层的做法一致)。
 const { refreshMock } = vi.hoisted(() => ({
-  refreshMock: vi.fn<(args: unknown[]) => Promise<{ retracted: number; materialized: number }>>(
-    async () => ({ retracted: 0, materialized: 1 }),
+  refreshMock: vi.fn<(args: unknown[]) => Promise<{ retracted: number; materialized: number; skipped: unknown[] }>>(
+    async () => ({ retracted: 0, materialized: 1, skipped: [] }),
   ),
 }));
 vi.mock('../../src/pipeline/executionFlow.js', () => ({
@@ -63,10 +63,10 @@ describe('PATCH /api/documents/:docId/type', () => {
   });
   beforeEach(() => {
     refreshMock.mockReset();
-    refreshMock.mockResolvedValue({ retracted: 0, materialized: 1 });
+    refreshMock.mockResolvedValue({ retracted: 0, materialized: 1, skipped: [] });
   });
 
-  it('合法类型修正 -> 200 { ok:true, docType, refreshedFlows } 且落库', async () => {
+  it('合法类型修正 -> 200 { ok:true, docType, refreshedFlows, skipped } 且落库', async () => {
     const ctx = ctxHolder.current!;
     const docId = await seedDoc(ctx);
 
@@ -76,13 +76,37 @@ describe('PATCH /api/documents/:docId/type', () => {
       body: JSON.stringify({ docType: '发票' }),
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; docType: string; refreshedFlows: number };
-    expect(body).toEqual({ ok: true, docType: '发票', refreshedFlows: 1 });
+    const body = (await res.json()) as {
+      ok: boolean; docType: string; refreshedFlows: number; skipped: unknown[];
+    };
+    expect(body).toEqual({ ok: true, docType: '发票', refreshedFlows: 1, skipped: [] });
 
     // 文档行与 extraction 行都已级联更新。
     const meta = await getDocumentMeta(ctx, docId, 'u1');
     expect(meta?.docType).toBe('发票');
     expect(refreshMock).toHaveBeenCalledWith(ctx, docId, 'u1');
+  });
+
+  it('PATCH 透传 refresh 的 skipped(方向判不出等跳过原因)', async () => {
+    const ctx = ctxHolder.current!;
+    const docId = await seedDoc(ctx);
+    refreshMock.mockResolvedValue({
+      retracted: 0,
+      materialized: 0,
+      skipped: [{ bindingId: 'BD-1', contractNo: 'HT-1', reason: 'direction-undeterminable' }],
+    });
+
+    const res = await appAs('u1').request(`/api/documents/${docId}/type`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ docType: '发票' }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; refreshedFlows: number; skipped: unknown[] };
+    expect(body.refreshedFlows).toBe(0);
+    expect(body.skipped).toEqual([
+      { bindingId: 'BD-1', contractNo: 'HT-1', reason: 'direction-undeterminable' },
+    ]);
   });
 
   it('非法类型 -> 400 invalid_doc_type', async () => {

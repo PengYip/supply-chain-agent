@@ -56,7 +56,7 @@ describe('docType 修正 -> 执行流水级联(executionFlowTypeCascade)', () =>
     // 金额/数量/单位取自最新抽取的发票字段。
     expect(await updateDocumentType(ctx, docId, '发票', 'u1')).toBe(true);
     const first = await refreshExecutionFlowsForDocument(ctx, docId, 'u1', SELF);
-    expect(first).toEqual({ retracted: 0, materialized: 1 });
+    expect(first).toEqual({ retracted: 0, materialized: 1, skipped: [] });
 
     const flows = await listExecutionFlows(ctx, CONTRACT_NO, 'u1');
     expect(flows).toHaveLength(1);
@@ -71,7 +71,11 @@ describe('docType 修正 -> 执行流水级联(executionFlowTypeCascade)', () =>
     // 改回 其他 -> 重建后白名单外, 流水清空(0 行)。
     expect(await updateDocumentType(ctx, docId, '其他', 'u1')).toBe(true);
     const second = await refreshExecutionFlowsForDocument(ctx, docId, 'u1', SELF);
-    expect(second).toEqual({ retracted: 1, materialized: 0 });
+    expect(second).toEqual({
+      retracted: 1,
+      materialized: 0,
+      skipped: [{ bindingId: expect.any(String), contractNo: CONTRACT_NO, reason: 'not-whitelisted' }],
+    });
     expect(await listExecutionFlows(ctx, CONTRACT_NO, 'u1')).toHaveLength(0);
   });
 

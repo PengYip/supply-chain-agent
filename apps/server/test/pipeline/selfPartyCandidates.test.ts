@@ -1,11 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildSelfPartyCandidates,
+  findSelfPartyConflicts,
   type CandidateSnapshot,
+  type ConflictSnapshot,
 } from '../../src/pipeline/selfPartyCandidates.js';
 
 // buildSelfPartyCandidates 纯函数候选汇总: 从凭证抽取字段(买方/卖方别名)确定性
 // 汇总候选公司名, 剔除有效名单(归一化比较), 排序 docCount 降序再 name 升序, 上限 20。
+// F1: 候选附带 buyerCount/sellerCount(买方类/卖方类字段值出现文档数, 双侧命中计两侧)。
+// F2: findSelfPartyConflicts 检测名单同时命中凭证双侧的冲突(方向判不出的根因)。
 function snap(
   docId: string,
   docType: string,
@@ -120,5 +124,90 @@ describe('buildSelfPartyCandidates(纯函数候选汇总)', () => {
     expect(
       buildSelfPartyCandidates([snap('D1', '发票', '2026-01-01', { 备注: '无' })], []),
     ).toEqual([]);
+  });
+
+  it('buyerCount/sellerCount: 买方 2 份文档 + 卖方 1 份文档 -> 2/1', () => {
+    const snapshots = [
+      snap('D1', '发票', '2026-01-01', { 购买方名称: '浙江浙能富兴燃料有限公司' }),
+      snap('D2', '发票', '2026-01-02', { 购买方名称: '浙江浙能富兴燃料有限公司' }),
+      snap('D3', '货转单', '2026-01-03', { 转让方: '浙江浙能富兴燃料有限公司' }),
+    ];
+    const out = buildSelfPartyCandidates(snapshots, []);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.name).toBe('浙江浙能富兴燃料有限公司');
+    expect(out[0]!.docCount).toBe(3);
+    expect(out[0]!.buyerCount).toBe(2);
+    expect(out[0]!.sellerCount).toBe(1);
+  });
+
+  it('buyerCount/sellerCount: 同一文档双侧命中 -> 两侧各计 1', () => {
+    const snapshots = [
+      snap('D1', '发票', '2026-01-01', {
+        购买方名称: '浙江浙能富兴燃料有限公司',
+        销售方名称: '浙江浙能富兴燃料有限公司',
+      }),
+    ];
+    const out = buildSelfPartyCandidates(snapshots, []);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.docCount).toBe(2); // 买卖两侧各自独立计入 docCount
+    expect(out[0]!.buyerCount).toBe(1);
+    expect(out[0]!.sellerCount).toBe(1);
+  });
+});
+
+describe('findSelfPartyConflicts(纯函数冲突检测)', () => {
+  function conf(docId: string, docType: string, anchors: { buyer?: string; seller?: string }): ConflictSnapshot {
+    return { docId, docType, anchors };
+  }
+
+  it('名单同时命中 buyer 与 seller -> 产出冲突行(原始值展示)', () => {
+    const out = findSelfPartyConflicts(
+      [conf('D1', '发票', { buyer: '浙江浙能富兴燃料有限公司', seller: '厦门海投供应链有限公司' })],
+      ['浙江浙能富兴燃料有限公司', '厦门海投供应链有限公司'],
+    );
+    expect(out).toEqual([
+      {
+        documentId: 'D1',
+        docType: '发票',
+        buyer: '浙江浙能富兴燃料有限公司',
+        seller: '厦门海投供应链有限公司',
+      },
+    ]);
+  });
+
+  it('仅单侧命中 -> 无冲突行', () => {
+    const out = findSelfPartyConflicts(
+      [conf('D1', '发票', { buyer: '浙江浙能富兴燃料有限公司', seller: '厦门海投供应链有限公司' })],
+      ['浙江浙能富兴燃料有限公司'],
+    );
+    expect(out).toEqual([]);
+  });
+
+  it('归一化比较: 全角括号变体同样命中', () => {
+    const out = findSelfPartyConflicts(
+      [conf('D1', '发票', { buyer: '华能（上海）', seller: '厦门海投供应链有限公司' })],
+      ['华能上海', '厦门海投供应链有限公司'],
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]!.buyer).toBe('华能（上海）');
+  });
+
+  it('白名单外 docType(合同/其他) -> 不扫描', () => {
+    const out = findSelfPartyConflicts(
+      [
+        conf('D1', '合同', { buyer: '浙江浙能富兴燃料有限公司', seller: '厦门海投供应链有限公司' }),
+        conf('D2', '其他', { buyer: '浙江浙能富兴燃料有限公司', seller: '厦门海投供应链有限公司' }),
+      ],
+      ['浙江浙能富兴燃料有限公司', '厦门海投供应链有限公司'],
+    );
+    expect(out).toEqual([]);
+  });
+
+  it('缺 buyer 或 seller 锚点 -> 无冲突行', () => {
+    const out = findSelfPartyConflicts(
+      [conf('D1', '发票', { buyer: '浙江浙能富兴燃料有限公司' })],
+      ['浙江浙能富兴燃料有限公司', '厦门海投供应链有限公司'],
+    );
+    expect(out).toEqual([]);
   });
 });

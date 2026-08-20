@@ -266,7 +266,7 @@ describe('refreshExecutionFlowsForDocument 修正后重建', () => {
       }),
     );
     const out = await refreshExecutionFlowsForDocument(ctx, 'DOC-1', 'u1', SELF);
-    expect(out).toEqual({ retracted: 2, materialized: 2 });
+    expect(out).toEqual({ retracted: 2, materialized: 2, skipped: [] });
     expect(mocks.retractExecutionFlowsForDocument).toHaveBeenCalledWith(ctx, 'DOC-1', 'u1');
     expect(mocks.listConfirmedBindingsForDocument).toHaveBeenCalledWith(ctx, 'DOC-1', 'u1');
     expect(mocks.upsertExecutionFlow).toHaveBeenCalledTimes(2);
@@ -292,8 +292,17 @@ describe('refreshExecutionFlowsForDocument 修正后重建', () => {
       { id: 'BD-1', contractNo: 'CJXC-001', confidence: 0.9 },
       { id: 'BD-2', contractNo: 'CJXC-002', confidence: 0.8 },
     ]);
-    // 第一条绑定的抽取行加载失败, 第二条正常。
+    // 第一次 loadLatestExtractionByDocId 是 refresh 的 introspection(成功);
+    // 第二次是 BD-1 物化内部加载(抛错 -> 该绑定跳过); 第三次是 BD-2 物化加载(成功)。
     mocks.loadLatestExtractionByDocId
+      .mockResolvedValueOnce(
+        extractionRow('发票', {
+          买方: '我方贸易有限公司',
+          卖方: '对手方有限公司',
+          金额: 88000,
+          开票日期: '2026-08-05',
+        }),
+      )
       .mockRejectedValueOnce(new Error('db boom'))
       .mockResolvedValue(
         extractionRow('发票', {
@@ -304,7 +313,7 @@ describe('refreshExecutionFlowsForDocument 修正后重建', () => {
         }),
       );
     const out = await refreshExecutionFlowsForDocument(ctx, 'DOC-1', 'u1', SELF);
-    expect(out).toEqual({ retracted: 2, materialized: 1 });
+    expect(out).toEqual({ retracted: 2, materialized: 1, skipped: [] });
     expect(mocks.upsertExecutionFlow).toHaveBeenCalledTimes(1);
     expect(mocks.upsertExecutionFlow).toHaveBeenCalledWith(
       ctx,
@@ -317,7 +326,11 @@ describe('refreshExecutionFlowsForDocument 修正后重建', () => {
     mocks.retractExecutionFlowsForDocument.mockResolvedValue(1);
     mocks.listConfirmedBindingsForDocument.mockResolvedValue([]);
     const out = await refreshExecutionFlowsForDocument(ctx, 'DOC-1', 'u1', SELF);
-    expect(out).toEqual({ retracted: 1, materialized: 0 });
+    expect(out).toEqual({
+      retracted: 1,
+      materialized: 0,
+      skipped: [{ bindingId: null, contractNo: null, reason: 'no-confirmed-binding' }],
+    });
     expect(mocks.upsertExecutionFlow).not.toHaveBeenCalled();
   });
 });

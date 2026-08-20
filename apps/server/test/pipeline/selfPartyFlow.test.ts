@@ -9,7 +9,7 @@ import {
   addSelfParty,
   listExecutionFlows,
 } from '../../src/pipeline/db/repositories.js';
-import { materializeExecutionFlow } from '../../src/pipeline/executionFlow.js';
+import { materializeExecutionFlow, refreshExecutionFlowsForDocument } from '../../src/pipeline/executionFlow.js';
 
 // 自主体名单 -> 执行流水物化(真 sqlite, 不 mock 存储层): 名单未配置时物化落空,
 // addSelfParty 后默认名单(getEffectiveSelfPartyNames)生效, 回填路由触发重建。
@@ -130,5 +130,92 @@ describe('自主体名单 -> 执行流水物化(真 sqlite)', () => {
     expect(flows[0]!.direction).toBe('in');
     expect(flows[0]!.amount).toBeCloseTo(1128515.08, 2);
     expect(flows[0]!.documentId).toBe(docId);
+  });
+});
+describe('refreshExecutionFlowsForDocument 跳过原因(F2)', () => {
+  let ctx: ReturnType<typeof createDb>;
+  beforeEach(() => {
+    ctx = createDb(':memory:');
+    migrate(ctx.sqlite);
+  });
+
+  it('无 confirmed 绑定 -> skipped=[{bindingId:null, contractNo:null, reason:no-confirmed-binding}]', async () => {
+    const { docId } = await createDocumentStub(ctx, {
+      sourceUri: 'file:///inv.pdf', docType: '发票', userId: 'u1',
+    });
+    await saveExtraction(ctx, {
+      documentId: docId, docType: '发票',
+      fields: invoiceFields(),
+      fieldMeta: {}, overallConfidence: 1, needsReview: false,
+    }, 'u1');
+    const res = await refreshExecutionFlowsForDocument(ctx, docId, 'u1', [SELF_NAME]);
+    expect(res).toEqual({
+      retracted: 0,
+      materialized: 0,
+      skipped: [{ bindingId: null, contractNo: null, reason: 'no-confirmed-binding' }],
+    });
+  });
+
+  it('docType=其他(白名单外) + confirmed 绑定 -> skipped=[not-whitelisted], 无流水行', async () => {
+    const { docId } = await createDocumentStub(ctx, {
+      sourceUri: 'file:///inv.pdf', docType: '其他', userId: 'u1',
+    });
+    await saveExtraction(ctx, {
+      documentId: docId, docType: '其他',
+      fields: invoiceFields(),
+      fieldMeta: {}, overallConfidence: 1, needsReview: false,
+    }, 'u1');
+    await saveBinding(ctx, {
+      documentId: docId, contractNo: CONTRACT_NO, relation: '收票',
+      sourceRefs: [], confidence: 1, createdBy: 'u1',
+    }, 'u1');
+    const res = await refreshExecutionFlowsForDocument(ctx, docId, 'u1', [SELF_NAME]);
+    expect(res.materialized).toBe(0);
+    expect(res.skipped).toEqual([
+      { bindingId: expect.any(String), contractNo: CONTRACT_NO, reason: 'not-whitelisted' },
+    ]);
+    expect(await listExecutionFlows(ctx, CONTRACT_NO, 'u1')).toHaveLength(0);
+  });
+
+  it('名单双侧命中(buyer+seller 都在名单) -> skipped=[direction-undeterminable], 流水行保持 0(事故现场)', async () => {
+    const { docId } = await createDocumentStub(ctx, {
+      sourceUri: 'file:///inv.pdf', docType: '发票', userId: 'u1',
+    });
+    // 发票: 购买方=本公司, 销售方=厦门海投(用户误把对手方也加进名单)。
+    await saveExtraction(ctx, {
+      documentId: docId, docType: '发票',
+      fields: {
+        购买方名称: { value: SELF_NAME, sourceSpans: [] },
+        销售方名称: { value: '厦门海投供应链有限公司', sourceSpans: [] },
+        价税合计小写_元: { value: '1128515.08', sourceSpans: [] },
+        数量: { value: '3819.65', sourceSpans: [] },
+        单位: { value: '吨', sourceSpans: [] },
+      },
+      fieldMeta: {}, overallConfidence: 1, needsReview: false,
+    }, 'u1');
+    await saveBinding(ctx, {
+      documentId: docId, contractNo: CONTRACT_NO, relation: '收票',
+      sourceRefs: [], confidence: 1, createdBy: 'u1',
+    }, 'u1');
+    // 名单同时含 本公司 与 厦门海投 -> resolveSelfSide 双侧命中返回 null。
+    const res = await refreshExecutionFlowsForDocument(
+      ctx, docId, 'u1', [SELF_NAME, '厦门海投供应链有限公司'],
+    );
+    expect(res.materialized).toBe(0);
+    expect(res.skipped).toEqual([
+      { bindingId: expect.any(String), contractNo: CONTRACT_NO, reason: 'direction-undeterminable' },
+    ]);
+    // 事故现场: 流水行保持 0。
+    expect(await listExecutionFlows(ctx, CONTRACT_NO, 'u1')).toHaveLength(0);
+  });
+
+  it('名单为空 -> skipped=[direction-undeterminable], 流水行保持 0', async () => {
+    const docId = await seedInvoiceDoc(ctx);
+    const res = await refreshExecutionFlowsForDocument(ctx, docId, 'u1', []);
+    expect(res.materialized).toBe(0);
+    expect(res.skipped).toEqual([
+      { bindingId: expect.any(String), contractNo: CONTRACT_NO, reason: 'direction-undeterminable' },
+    ]);
+    expect(await listExecutionFlows(ctx, CONTRACT_NO, 'u1')).toHaveLength(0);
   });
 });

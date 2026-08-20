@@ -142,7 +142,7 @@ function App() {
           className={clsx('w-9 h-9 rounded-lg flex items-center justify-center', view === 'flows' ? 'bg-deepSea text-white' : 'text-textGray hover:bg-bgGray')}>
           <ArrowLeftRight className="h-5 w-5" aria-hidden />
         </button>
-        <button type="button" title="主体名单" aria-label="主体名单" onClick={() => setView('parties')}
+        <button type="button" title="己方主体名单" aria-label="己方主体名单" onClick={() => setView('parties')}
           className={clsx('w-9 h-9 rounded-lg flex items-center justify-center', view === 'parties' ? 'bg-deepSea text-white' : 'text-textGray hover:bg-bgGray')}>
           <Building2 className="h-5 w-5" aria-hidden />
         </button>
