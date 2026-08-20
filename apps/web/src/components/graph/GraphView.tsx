@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
-import { AlertTriangle, ChevronLeft, ChevronRight, Network, RefreshCw, type LucideIcon } from 'lucide-react';
+import { AlertTriangle, Network, RefreshCw } from 'lucide-react';
 import { useGraph, type GraphDirection, type GraphDocument, type GraphEdge, type GraphNode, type InspectTarget } from '../../hooks/useGraph';
+import { PanelRail } from '../shell/PanelRail';
 import { DocumentListPanel } from './DocumentListPanel';
 import { GraphCanvas } from './GraphCanvas';
 import { DetailPanel } from './DetailPanel';
@@ -24,52 +25,6 @@ interface CenterState {
   label: string;
   /** 中心是否来自左侧文档列表（用于展示「返回文档」入口） */
   fromDocument: boolean;
-}
-
-/** 面板折叠把手：贴在面板画布侧边缘的窄竖条。折叠后仅剩本条，画布占满剩余空间。 */
-function PanelRail({
-  collapsed,
-  side,
-  label,
-  onToggle,
-}: {
-  collapsed: boolean;
-  side: 'left' | 'right';
-  label: string;
-  onToggle: () => void;
-}) {
-  // 箭头指向状态变化方向：展开态指向收起方向，折叠态指向展开方向
-  const Chevron: LucideIcon = collapsed
-    ? side === 'left'
-      ? ChevronRight
-      : ChevronLeft
-    : side === 'left'
-      ? ChevronLeft
-      : ChevronRight;
-  const action = collapsed ? `展开${label}面板` : `收起${label}面板`;
-  return (
-    <div
-      className={clsx(
-        'flex w-7 shrink-0 flex-col items-center bg-white',
-        side === 'left' ? 'border-r border-borderGray' : 'border-l border-borderGray',
-      )}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        title={action}
-        aria-label={action}
-        className="mt-1 flex h-7 w-7 items-center justify-center rounded-md text-textGray transition-colors hover:bg-bgGray hover:text-deepSea"
-      >
-        <Chevron className="h-4 w-4" aria-hidden />
-      </button>
-      {collapsed && (
-        <div className="flex flex-1 items-center justify-center pt-2 text-[11px] tracking-[0.3em] text-textGray [writing-mode:vertical-rl]">
-          {label}
-        </div>
-      )}
-    </div>
-  );
 }
 
 export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
@@ -182,15 +137,8 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
   return (
     <DocMetaProvider value={docMetaResolver}>
     <div className="flex h-full flex-col bg-bgGray">
-      {/* 顶部工具条 */}
-      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-borderGray bg-white px-4">
-        <div className="flex items-center gap-2">
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-deepSea">
-            <Network className="h-4 w-4 text-white" aria-hidden />
-          </span>
-          <span className="text-[15px] font-semibold text-textDark">文档图谱</span>
-        </div>
-
+      {/* 二级工具条（视图标题由 AppTopbar 承担） */}
+      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-borderGray bg-white px-4">
         {center && (
           <div className="flex min-w-0 items-center gap-2 rounded-md bg-bgGray px-2.5 py-1">
             <span className="shrink-0 text-[11px] text-textGray">当前中心</span>

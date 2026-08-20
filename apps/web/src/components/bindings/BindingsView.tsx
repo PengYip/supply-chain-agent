@@ -3,12 +3,8 @@ import clsx from 'clsx';
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
-  Link2,
   RefreshCw,
   X,
-  type LucideIcon,
 } from 'lucide-react';
 import {
   useBindings,
@@ -19,6 +15,7 @@ import {
 import { formatFlowSkipLines } from '../../lib/flowSkip';
 import { prettyDocName } from '../graph/kinds';
 import type { GraphFocusTarget } from '../graph/focus';
+import { PanelRail } from '../shell/PanelRail';
 import { DocListPanel } from './DocListPanel';
 import { CandidatePanel } from './CandidatePanel';
 import { DetailPanel } from './DetailPanel';
@@ -68,51 +65,6 @@ const DOC_TYPE_ERROR_TEXT: Record<string, string> = {
   invalid_body: '请求参数错误',
   document_not_found: '文档不存在或已删除',
 };
-
-/** 面板折叠把手(样式与 graph/GraphView.tsx 一致)。 */
-function PanelRail({
-  collapsed,
-  side,
-  label,
-  onToggle,
-}: {
-  collapsed: boolean;
-  side: 'left' | 'right';
-  label: string;
-  onToggle: () => void;
-}) {
-  const Chevron: LucideIcon = collapsed
-    ? side === 'left'
-      ? ChevronRight
-      : ChevronLeft
-    : side === 'left'
-      ? ChevronLeft
-      : ChevronRight;
-  const action = collapsed ? `展开${label}面板` : `收起${label}面板`;
-  return (
-    <div
-      className={clsx(
-        'flex w-7 shrink-0 flex-col items-center bg-white',
-        side === 'left' ? 'border-r border-borderGray' : 'border-l border-borderGray',
-      )}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        title={action}
-        aria-label={action}
-        className="mt-1 flex h-7 w-7 items-center justify-center rounded-md text-textGray transition-colors hover:bg-bgGray hover:text-deepSea"
-      >
-        <Chevron className="h-4 w-4" aria-hidden />
-      </button>
-      {collapsed && (
-        <div className="flex flex-1 items-center justify-center pt-2 text-[11px] tracking-[0.3em] text-textGray [writing-mode:vertical-rl]">
-          {label}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: GraphFocusTarget) => void }) {
   const b = useBindings();
@@ -601,15 +553,8 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
 
   return (
     <div className="flex h-full flex-col bg-bgGray">
-      {/* 顶部工具条 */}
-      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-borderGray bg-white px-4">
-        <div className="flex items-center gap-2">
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-deepSea">
-            <Link2 className="h-4 w-4 text-white" aria-hidden />
-          </span>
-          <span className="text-[15px] font-semibold text-textDark">绑定工作台</span>
-        </div>
-
+      {/* 二级工具条（视图标题由 AppTopbar 承担） */}
+      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-borderGray bg-white px-4">
         {selected && (
           <div className="flex min-w-0 items-center gap-2 rounded-md bg-bgGray px-2.5 py-1">
             <span className="shrink-0 text-[11px] text-textGray">当前文档</span>

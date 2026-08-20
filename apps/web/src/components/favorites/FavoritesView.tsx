@@ -8,6 +8,7 @@ import {
   type SessionFavoriteEntry,
 } from '../../api/favorites'
 import { authClient } from '../../lib/auth'
+import { PageHeader } from '../shell/PageHeader'
 
 /** 对话收藏反馈面板: MVP 多人试用期的反馈收件箱。
  *  - 普通用户：看到自己的收藏 + 备注，可补写/修改备注、取消收藏、跳回会话。
@@ -120,36 +121,31 @@ export const FavoritesView: React.FC<{
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-bgGray h-full">
-      {/* Top strip */}
-      <div className="h-14 bg-white border-b border-borderGray flex items-center justify-between px-4 shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-amber/10 flex items-center justify-center shrink-0">
-            <Star className="w-4 h-4 text-amber" fill="currentColor" />
-          </div>
-          <div className="min-w-0">
-            <div className="text-sm font-medium text-textDark truncate">收藏与反馈</div>
-            <div className="text-xs text-textGray">
+      {/* 二级工具条（视图标题由 AppTopbar 承担） */}
+      <PageHeader
+        actions={
+          <>
+            <span className="text-xs text-textGray">
               {scopeAll ? '全员收藏的会话与反馈备注（按更新时间倒序）' : '我收藏的会话与反馈备注'}
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {isAdmin && (
-            <div className="flex items-center gap-1.5">
-              {scopeTab('全员反馈', scopeAll, () => setScopeAll(true))}
-              {scopeTab('我的收藏', !scopeAll, () => setScopeAll(false))}
-            </div>
-          )}
-          <button
-            type="button"
-            title="刷新"
-            onClick={() => void refresh()}
-            className="p-1.5 rounded-lg hover:bg-bgGray text-textGray hover:text-textDark"
-          >
-            <RefreshCw className={clsx('w-4 h-4', loading && 'animate-spin')} />
-          </button>
-        </div>
-      </div>
+            </span>
+            {isAdmin && (
+              <div className="flex items-center gap-1.5">
+                {scopeTab('全员反馈', scopeAll, () => setScopeAll(true))}
+                {scopeTab('我的收藏', !scopeAll, () => setScopeAll(false))}
+              </div>
+            )}
+            <button
+              type="button"
+              title="刷新"
+              aria-label="刷新"
+              onClick={() => void refresh()}
+              className="p-1.5 rounded-lg hover:bg-bgGray text-textGray hover:text-textDark"
+            >
+              <RefreshCw className={clsx('w-4 h-4', loading && 'animate-spin')} />
+            </button>
+          </>
+        }
+      />
 
       {/* List */}
       <div className="flex-1 overflow-auto p-4">

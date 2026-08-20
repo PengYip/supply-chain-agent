@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
-import { AlertTriangle, Building2, CheckCircle2, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import {
   useParties,
   type AddPartyResult,
@@ -9,6 +9,7 @@ import {
   type SelfParty,
 } from '../../hooks/useParties';
 import { formatFlowSkipLines } from '../../lib/flowSkip';
+import { PageHeader } from '../shell/PageHeader';
 
 const inputCls =
   'h-8 w-full min-w-0 rounded-md border border-borderGray bg-white px-2.5 text-[12px] text-textDark focus:border-deepSea focus:outline-none';
@@ -396,34 +397,27 @@ export function SelfPartyPanel() {
 
   return (
     <div className="flex h-full flex-col bg-bgGray">
-      {/* 顶部工具条(样式与 BindingsView 一致) */}
-      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-borderGray bg-white px-4">
-        <div className="flex items-center gap-2">
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-deepSea">
-            <Building2 className="h-4 w-4 text-white" aria-hidden />
-          </span>
-          <div>
-            <div className="text-[15px] font-semibold leading-5 text-textDark">己方主体名单</div>
-            <div className="text-[11px] leading-4 text-textGray">仅添加你自己的公司</div>
-          </div>
-        </div>
-        <div className="ml-auto flex items-center gap-2.5">
-          <span className="flex items-center gap-1.5 rounded-md bg-bgGray px-2.5 py-1 text-[11px] text-textGray">
-            已配置 <span className="font-semibold tabular-nums text-textDark">{parties.length}</span>
-          </span>
-          <span className="flex items-center gap-1.5 rounded-md bg-bgGray px-2.5 py-1 text-[11px] text-textGray">
-            候选 <span className="font-semibold tabular-nums text-textDark">{visibleCandidates.length}</span>
-          </span>
-          <button
-            type="button"
-            onClick={() => void p.refresh()}
-            className="flex h-7 items-center gap-1 rounded-md border border-borderGray bg-white px-2.5 text-[12px] text-textDark hover:bg-bgGray"
-          >
-            <RefreshCw className={clsx('h-3.5 w-3.5', p.loading && 'animate-spin')} aria-hidden />
-            刷新
-          </button>
-        </div>
-      </div>
+      {/* 二级工具条（视图标题与提示语由 AppTopbar 承担） */}
+      <PageHeader
+        actions={
+          <>
+            <span className="flex items-center gap-1.5 rounded-md bg-bgGray px-2.5 py-1 text-[11px] text-textGray">
+              已配置 <span className="font-semibold tabular-nums text-textDark">{parties.length}</span>
+            </span>
+            <span className="flex items-center gap-1.5 rounded-md bg-bgGray px-2.5 py-1 text-[11px] text-textGray">
+              候选 <span className="font-semibold tabular-nums text-textDark">{visibleCandidates.length}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => void p.refresh()}
+              className="flex h-7 items-center gap-1 rounded-md border border-borderGray bg-white px-2.5 text-[12px] text-textDark hover:bg-bgGray"
+            >
+              <RefreshCw className={clsx('h-3.5 w-3.5', p.loading && 'animate-spin')} aria-hidden />
+              刷新
+            </button>
+          </>
+        }
+      />
 
       {/* 主体区: 冲突红条(可选) + 双栏(左列已配置名单, 右列候选建议); 窄窗口自动堆叠 */}
       <div className="min-h-0 flex-1 overflow-y-auto p-4">

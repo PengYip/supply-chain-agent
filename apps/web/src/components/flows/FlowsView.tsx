@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { fetchFlowContracts, type FlowContractOption } from '../../api/flows';
+import { PageHeader } from '../shell/PageHeader';
 import { ExecutionFlowPanel } from './ExecutionFlowPanel';
 import { FilePreviewModal } from '../FilePreviewModal';
 import type { FileEntry } from '../../hooks/useFiles';
@@ -36,25 +37,23 @@ export function FlowsView({ onOpenParties }: { onOpenParties?: () => void }) {
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-bgGray">
-      <div className="flex items-center gap-3 shrink-0 border-b border-borderGray bg-white px-4 py-3">
-        <div className="min-w-0">
-          <div className="text-[15px] font-semibold text-textDark">执行流水</div>
-          <div className="mt-0.5 text-[11px] text-textGray">按合同查看四流合一执行情况</div>
-        </div>
-        <select
-          value={selectedNo}
-          onChange={(e) => setSelectedNo(e.target.value)}
-          aria-label="选择合同"
-          className="ml-auto h-8 w-64 shrink-0 rounded-md border border-borderGray bg-white px-2.5 text-[12px] text-textDark focus:border-deepSea focus:outline-none"
-        >
-          <option value="">选择合同…</option>
-          {contracts.map((c) => (
-            <option key={c.contractNo} value={c.contractNo}>
-              {c.displayContractNo ?? c.contractNo}
-            </option>
-          ))}
-        </select>
-      </div>
+      <PageHeader
+        actions={
+          <select
+            value={selectedNo}
+            onChange={(e) => setSelectedNo(e.target.value)}
+            aria-label="选择合同"
+            className="h-8 w-64 rounded-md border border-borderGray bg-white px-2.5 text-[12px] text-textDark focus:border-deepSea focus:outline-none"
+          >
+            <option value="">选择合同…</option>
+            {contracts.map((c) => (
+              <option key={c.contractNo} value={c.contractNo}>
+                {c.displayContractNo ?? c.contractNo}
+              </option>
+            ))}
+          </select>
+        }
+      />
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {phase === 'loading' && (

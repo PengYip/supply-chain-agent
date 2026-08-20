@@ -623,18 +623,8 @@ export const RealChatView: React.FC<{
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-bgGray h-full">
-      {/* Top strip */}
-      <div className="h-14 bg-white border-b border-borderGray flex items-center justify-between px-4 shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-deepSea/10 flex items-center justify-center shrink-0">
-            <Sparkles className="w-4 h-4 text-deepSea" />
-          </div>
-          <div className="min-w-0">
-            <div className="text-sm font-medium text-textDark truncate">真实模式</div>
-            <div className="text-xs text-textGray">DeepSeek + 真实工具调用</div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
+      {/* 视图内状态条（标题由 AppTopbar 承担）：会话状态 + 收藏入口 */}
+      <div className="h-12 bg-white border-b border-borderGray flex items-center justify-end gap-2 px-4 shrink-0">
           <span className={clsx(
             'text-xs px-2 py-1 rounded-full border',
             status === 'idle' ? 'bg-success/10 text-success border-success/20'
@@ -711,7 +701,6 @@ export const RealChatView: React.FC<{
               )}
             </div>
           )}
-        </div>
       </div>
 
       {/* Agent status strip (real mode only) */}

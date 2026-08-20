@@ -18,7 +18,7 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="flex h-14 shrink-0 items-center gap-3 border-b border-borderGray bg-white px-4">
+    <div className="flex h-12 shrink-0 items-center gap-3 border-b border-borderGray bg-white px-4">
       {title && (
         <div className="flex min-w-0 items-center gap-2.5">
           {Icon && <Icon className="h-5 w-5 shrink-0 text-deepSea" aria-hidden />}
