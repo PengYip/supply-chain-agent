@@ -3,8 +3,9 @@ import { Hono } from 'hono';
 import type { AuthEnv } from '../../src/lib/auth-middleware.js';
 import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.js';
 import {
-  createProject, upsertProjectMembership,
+  createProject, upsertProjectMembership, upsertContractLedgerEntry,
 } from '../../src/pipeline/db/repositories.js';
+import { buildLedgerEntryFromExtraction } from '../../src/pipeline/contractLedger.js';
 
 // 项目维度 API(Task 9, spec 2026-08-20 §6.1): projects / project_memberships 的
 // CRUD + 确认/拒绝。确认时图投影(故障隔离), NEO4J_PASSWORD 未设 -> skipped 落
@@ -158,6 +159,45 @@ describe('POST /api/projects/:code/memberships (人工指派)', () => {
       body: JSON.stringify({ contractNo: '   ', role: '采购' }),
     });
     expect(noContract.status).toBe(400);
+  });
+});
+
+describe('GET /api/projects/:code/rollup', () => {
+  it('200 带指标; 项目不存在 -> 404', async () => {
+    await createProject(ctx, { code: 'PRJ-1', name: '一', userId: 'u1' });
+    await upsertContractLedgerEntry(ctx, buildLedgerEntryFromExtraction({
+      documentId: 'DOC-S1',
+      docType: '合同',
+      fields: {
+        合同号: { value: 'HT-S1', sourceSpans: [] },
+        金额: { value: 100, sourceSpans: [] },
+      },
+      fieldMeta: {
+        合同号: { strength: 'exact', confidence: 0.95 },
+        金额: { strength: 'exact', confidence: 0.9 },
+      },
+    })!);
+    await upsertProjectMembership(ctx, {
+      contractNo: 'HT-S1', projectCode: 'PRJ-1', role: '销售', status: 'confirmed',
+      proposedBy: 'human', confirmationSource: 'human', createdBy: 'u1',
+    }, 'u1');
+
+    const res = await appAs('u1').request('/api/projects/prj-1/rollup');
+    expect(res.status).toBe(200);
+    const data = await res.json() as {
+      rollup: {
+        project: { code: string };
+        metrics: { salesAmount: number; grossMargin: number };
+        contracts: Array<{ contractNo: string }>;
+      };
+    };
+    expect(data.rollup.project.code).toBe('PRJ-1');
+    expect(data.rollup.metrics.salesAmount).toBe(100);
+    expect(data.rollup.metrics.grossMargin).toBe(100);
+    expect(data.rollup.contracts[0]?.contractNo).toBe('HT-S1');
+
+    const notFound = await appAs('u1').request('/api/projects/PRJ-404/rollup');
+    expect(notFound.status).toBe(404);
   });
 });
 

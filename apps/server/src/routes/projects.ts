@@ -12,6 +12,7 @@ import {
 } from '../pipeline/db/repositories.js';
 import { syncProjectMembershipGraph } from '../pipeline/projectGraphSync.js';
 import { normalizeContractNo } from '../pipeline/contractLedger.js';
+import { rollupProject } from '../pipeline/projectRollup.js';
 import { TRADE_VOCAB } from '../domain/tradeSemantics.js';
 
 export const projectsRoute = new Hono<AuthEnv>();
@@ -54,6 +55,14 @@ projectsRoute.post('/', async (c) => {
   const project = await createProject(ctx(), { code, name: parsed.data.name.trim(), userId: user?.id });
   if (!project) return c.json({ ok: false, error: 'project_exists' }, 409);
   return c.json({ ok: true, project }, 201);
+});
+
+/** GET /api/projects/:code/rollup —— 项目统计汇总(spec §5)。 */
+projectsRoute.get('/:code/rollup', async (c) => {
+  const user = c.get('user');
+  const rollup = await rollupProject(ctx(), c.req.param('code'), user?.id);
+  if (!rollup) return c.json({ ok: false, error: 'project_not_found' }, 404);
+  return c.json({ ok: true, rollup });
 });
 
 /** GET /api/projects/:code/memberships —— 项目归属列表(?status= 过滤)。 */
