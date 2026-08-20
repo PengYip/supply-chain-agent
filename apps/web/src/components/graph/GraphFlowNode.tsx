@@ -12,6 +12,16 @@ export type ScaFlowNode = Node<ScaNodeData, 'sca'>;
 
 const HANDLE_SIDES = [Position.Top, Position.Right, Position.Bottom, Position.Left] as const;
 
+/** 合同类型徽章文本: Contract 实体, 或合同类 Document, 且 props 带 contractType
+ *  (spec 2026-08-20; 图提交时写入) 时返回类型文本, 否则 null。 */
+function contractTypeBadge(graph: GraphNode): string | null {
+  const ct = graph.props?.contractType;
+  if (typeof ct !== 'string' || ct.length === 0) return null;
+  if (graph.kind === 'Contract') return ct;
+  if (graph.kind === 'Document' && graph.props?.docType === '合同') return ct;
+  return null;
+}
+
 /** 四边各挂一组 source/target 隐藏锚点，连线走向在布局阶段按相对方位计算。 */
 export function AllSideHandles() {
   return (
@@ -56,6 +66,7 @@ function DocumentCard({
   const style = kindStyle(graph.kind);
   const name = nodeDisplayName(graph, docMeta);
   const docType = docTypeName(graph, docMeta) || '文档';
+  const contractType = contractTypeBadge(graph);
   return (
     <div
       className={clsx(
@@ -80,6 +91,13 @@ function DocumentCard({
         )}
       </div>
       <div className="mt-1 line-clamp-2 break-all text-[13px] font-medium leading-4 text-ink">{name}</div>
+      {contractType && (
+        <div className="mt-1">
+          <span className="inline-flex rounded border border-primary/20 bg-primary/10 px-1.5 py-px text-[10px] leading-4 text-primary-500">
+            {contractType}
+          </span>
+        </div>
+      )}
       <AllSideHandles />
     </div>
   );
@@ -90,6 +108,7 @@ function EntityCard({ graph, isCenter }: { graph: GraphNode; isCenter: boolean }
   const style = kindStyle(graph.kind);
   const Icon = KIND_ICONS[graph.kind] ?? FileText;
   const name = nodeDisplayName(graph);
+  const contractType = contractTypeBadge(graph);
   return (
     <div
       className={clsx('rounded-md px-3 py-2', isCenter ? 'w-44' : 'w-40')}
@@ -112,6 +131,13 @@ function EntityCard({ graph, isCenter }: { graph: GraphNode; isCenter: boolean }
           <span className="ml-auto shrink-0 rounded bg-white/20 px-1.5 py-px text-[10px] leading-4 text-white">中心</span>
         )}
       </div>
+      {contractType && (
+        <div className="mt-1">
+          <span className="inline-flex rounded bg-white/20 px-1.5 py-px text-[10px] leading-4 text-white">
+            {contractType}
+          </span>
+        </div>
+      )}
       <div className="mt-1 line-clamp-2 break-all text-[13px] font-medium leading-4 text-white">{name}</div>
       <AllSideHandles />
     </div>

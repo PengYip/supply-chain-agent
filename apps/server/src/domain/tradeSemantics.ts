@@ -13,6 +13,9 @@
 import type { DocType } from '../pipeline/types.js';
 import type { VoucherType } from '../pipeline/schemas/vouchers.js';
 
+/** 合同类型受控词表(主体视角): 采购=主体买进, 销售=主体卖出(spec §3.1)。 */
+export type ContractType = '采购' | '销售' | '物流' | '租赁' | '服务' | '其他';
+
 /** 领域词汇表: pipeline 内核消费的全部贸易业务语义入口。 */
 export interface TradeVocabulary {
   /** 字段名 -> Party 角色(甲方/乙方/买方/卖方/发货人/...)。 */
@@ -27,6 +30,20 @@ export interface TradeVocabulary {
   readonly bindingRelationByVoucherType: Readonly<Record<VoucherType, string>>;
   /** 未知凭证类型的 relation 兜底。 */
   readonly bindingRelationFallback: string;
+  /** 合同类型受控值全集(枚举校验用)。 */
+  readonly contractTypes: readonly ContractType[];
+  /** 文档写法 -> 受控值。'购销合同'/'买卖合同' 有意不映射: 无方向语义, 宁可空着走侧别兜底。 */
+  readonly contractTypeByAlias: Readonly<Record<string, ContractType>>;
+  /** 标题关键词。键序即优先级: 物流/租赁/服务(非方向)在前, 采购/销售(方向)兜底。 */
+  readonly contractTypeKeywords: Readonly<
+    Record<Exclude<ContractType, '其他'>, readonly string[]>
+  >;
+  /** 主体侧别 -> 合同类型(确定性锚点)。 */
+  readonly contractTypeBySide: Readonly<Record<'buyer' | 'seller', '采购' | '销售'>>;
+  /** 项目标识字段名(合同/单据上)。 */
+  readonly projectFields: ReadonlySet<string>;
+  /** 合同类型 -> 对手方参与项目角色(派生 participates 边用)。 */
+  readonly participatesRoleByContractType: Readonly<Record<'采购' | '销售', '供应商' | '客户'>>;
 }
 
 /** 供应链贸易默认词汇表(L1 行业共性, 缓慢演进)。 */
@@ -47,6 +64,24 @@ export const TRADE_VOCAB: TradeVocabulary = {
     其他: '凭证',
   },
   bindingRelationFallback: '凭证',
+  contractTypes: ['采购', '销售', '物流', '租赁', '服务', '其他'],
+  contractTypeByAlias: {
+    采购合同: '采购', 购买合同: '采购', 采购协议: '采购',
+    销售合同: '销售', 出售合同: '销售', 销售协议: '销售',
+    物流合同: '物流', 运输合同: '物流', 货运合同: '物流', 物流协议: '物流',
+    租赁合同: '租赁', 租赁协议: '租赁',
+    服务合同: '服务', 服务协议: '服务', 技术服务合同: '服务', 咨询合同: '服务',
+  },
+  contractTypeKeywords: {
+    物流: ['物流', '运输', '货运'],
+    租赁: ['租赁', '租用'],
+    服务: ['服务', '咨询'],
+    采购: ['采购'],
+    销售: ['销售'],
+  },
+  contractTypeBySide: { buyer: '采购', seller: '销售' },
+  projectFields: new Set(['项目编号', '项目号', '项目名称', '项目', '工程名称']),
+  participatesRoleByContractType: { 采购: '供应商', 销售: '客户' },
 };
 
 /** 凭证类型 -> binding relation 语义(纯函数, 可被自定义词汇表覆盖)。 */

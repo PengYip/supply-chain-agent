@@ -15,6 +15,7 @@ import { BindingsView } from './components/bindings/BindingsView';
 import { FlowsView } from './components/flows/FlowsView';
 import { SelfPartyPanel } from './components/parties/SelfPartyPanel';
 import { FavoritesView } from './components/favorites/FavoritesView';
+import { ProjectsView } from './components/projects/ProjectsView';
 import type { GraphFocus, GraphFocusTarget } from './components/graph/focus';
 
 function App() {
@@ -168,6 +169,8 @@ function App() {
         <FavoritesView onOpenSession={(id) => navigate('chat', { session: id })} />
       ) : view === 'graph' ? (
         <GraphView focus={graphFocus} />
+      ) : view === 'projects' ? (
+        <ProjectsView />
       ) : view === 'eval' ? (
         <EvalWorkbenchView />
       ) : null}

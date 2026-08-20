@@ -65,6 +65,7 @@ registerPermission('graph_find_entity', 'L1'); // 2026-08-17: 按名查图实体
 registerPermission('graph_query', 'L1'); // 2026-08-18: 图遍历是只读查询（READ session），与 graph_find_entity 同级
 registerPermission('list_binding_proposals', 'L1'); // Phase B: 待确认的凭证-合同绑定建议（只读）
 registerPermission('query_execution_flows', 'L1'); // 执行流水六向汇总与逐笔明细（只读）
+registerPermission('project_rollup', 'L1'); // 项目维度统计汇总（只读关系库，不依赖图）
 // L2 write confirm
 registerPermission('advance_contract_stage', 'L2');
 registerPermission('bind_document', 'L2'); // T9: bind document to contract

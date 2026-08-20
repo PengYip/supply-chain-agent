@@ -6,7 +6,10 @@ import type { SpanMatchStrength } from '../spanValidator.js';
 import { normalizeContractNo } from '../contractLedger.js';
 import type { ContractLedgerEntry } from '../contractLedger.js';
 import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.js';
-import { normalizeCompanyName } from '../../domain/flowDirection.js';
+import { normalizeCompanyName, parseSelfPartyNames } from '../../domain/flowDirection.js';
+import { deriveContractType, type ContractTypeDerivation } from '../../domain/contractType.js';
+import type { ContractType } from '../../domain/tradeSemantics.js';
+import { env } from '../../env.js';
 // Postgres impls. Static import: pg is a declared dep on both backends now; the
 // functions are only CALLED on the postgres branch (lazy Pool connect), so the
 // import cost is one module load. Type-only for the input/output types below.
@@ -82,6 +85,16 @@ import {
   listDocumentIdsWithConfirmedBindingsPg,
   hasExecutionFlowsForDocumentPg,
   getDocumentSourcesByIdsPg,
+  // 项目维度(spec 2026-08-20): pg twins for projects / project_memberships.
+  createProjectPg,
+  findProjectByCodePg,
+  listProjectsPg,
+  upsertProjectMembershipPg,
+  findMembershipByIdPg,
+  listMembershipsByProjectPg,
+  listMembershipsByContractPg,
+  updateMembershipStatusPg,
+  setMembershipGraphStatusPg,
 } from './postgres-repositories.js';
 
 // Phase 2 business-data isolation: a normalized userId is '' / undefined when the
@@ -247,7 +260,7 @@ export type ParseStatus = 'uploaded' | 'parsing' | 'parsed' | 'needs_ocr' | 'fai
 export type ExtractionStatus = 'pending' | 'running' | 'ok' | 'skipped' | 'failed';
 
 export interface ProposedRelationship {
-  kind: 'Party' | 'Commodity' | 'Contract';
+  kind: 'Party' | 'Commodity' | 'Contract' | 'Project';
   role?: string; // Party only: 买方|卖方
   name: string;
   sourceSpan?: unknown;
@@ -261,7 +274,7 @@ export interface ProposedRelationship {
  */
 export interface ProposedEdge {
   type: 'party' | 'commodity' | 'references' | 'executes';
-  dstKind: 'Party' | 'Commodity' | 'Contract';
+  dstKind: 'Party' | 'Commodity' | 'Contract' | 'Project';
   dstName: string;
   /** party 边专用：买方|卖方|发货人|收货人|承运人 */
   role?: string;
@@ -327,11 +340,27 @@ export interface ReviewSnapshot {
   vectorization: DocumentVectorization;
   /** 确定性 Document->实体边提议（design 2026-08-17 §3.2），快照读取时同规则派生。 */
   proposedEdges: ProposedEdge[];
+  /** 合同类型派生结果（spec 2026-08-20 §3.2），与台账/图提交同规则；非合同为 null。 */
+  contractType: ContractTypeDerivation | null;
   /** 确认时 Neo4j 写入结果；未确认或从未写入时为 null。 */
   graphStatus: DocumentGraphStatus | null;
 }
 
 const rid = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
+/** 快照侧派生用有效主体名单: env ∪ self_parties。与 executionFlow
+ * 的 getEffectiveSelfPartyNames 同语义, 本地实现以免环(executionFlow 依赖本文件)。
+ * 导出供 postgres-repositories 的 pg 快照分支复用。 */
+export async function effectiveSelfPartyNamesForDerivation(ctx: DbContext): Promise<string[]> {
+  const rows = await listSelfParties(ctx);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const n of [...parseSelfPartyNames(env.SELF_PARTY_NAMES), ...rows.map((r) => r.name)]) {
+    const key = normalizeCompanyName(n);
+    if (key && !seen.has(key)) { seen.add(key); out.push(n); }
+  }
+  return out;
+}
 
 // All repository fns are ASYNC on BOTH backends. The SQLite branch just wraps its
 // existing sync better-sqlite3 call in `async` (returns a Promise) -- runtime
@@ -1399,6 +1428,17 @@ export async function getReviewSnapshot(
   // the review card and what commitDocumentGraph writes to Neo4j.
   const proposedRelationships: ProposedRelationship[] = deriveProposedRelationships(fields);
 
+  // 合同类型派生(spec 2026-08-20 §3.2): 与台账写回/图提交同一纯函数, 快照侧
+  // 就地计算; 无识别结果时挂 null(非合同/全无信号 -> 复核卡不渲染该区)。
+  // 人工在复核卡改「合同类型」字段 -> applyDocumentCorrections 以
+  // confidence 1.0 落 fields -> 派生 source 自动变 'field', 无需额外代码。
+  const contractDerivation = deriveContractType({
+    docType: doc.doc_type,
+    fields,
+    selfPartyNames: await effectiveSelfPartyNamesForDerivation(ctx),
+  });
+  const contractType = contractDerivation.contractType ? contractDerivation : null;
+
   return {
     docId,
     docType: doc.doc_type,
@@ -1412,6 +1452,7 @@ export async function getReviewSnapshot(
     proposedRelationships,
     vectorization,
     proposedEdges: deriveProposedEdges(doc.doc_type, fields),
+    contractType,
     graphStatus,
   };
 }
@@ -1788,8 +1829,8 @@ export async function upsertContractLedgerEntry(
     .prepare(
       `INSERT INTO contract_ledger
          (id, contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
-          overall_confidence, needs_review, user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          overall_confidence, needs_review, user_id, contract_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(contract_no, user_id) DO UPDATE SET
          display_contract_no = excluded.display_contract_no,
          doc_type = excluded.doc_type,
@@ -1799,6 +1840,7 @@ export async function upsertContractLedgerEntry(
          field_meta = excluded.field_meta,
          overall_confidence = excluded.overall_confidence,
          needs_review = excluded.needs_review,
+         contract_type = excluded.contract_type,
          updated_at = datetime('now')`,
     )
     .run(
@@ -1813,6 +1855,7 @@ export async function upsertContractLedgerEntry(
       entry.overallConfidence,
       entry.needsReview ? 1 : 0,
       entry.userId,
+      entry.contractType,
     );
 }
 
@@ -1837,7 +1880,7 @@ export async function findContractLedgerByNo(
     ? ctx.sqlite
         .prepare(
           `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
-                  overall_confidence, needs_review, user_id
+                  overall_confidence, needs_review, user_id, contract_type
            FROM contract_ledger
            WHERE contract_no = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)`,
         )
@@ -1845,7 +1888,7 @@ export async function findContractLedgerByNo(
     : ctx.sqlite
         .prepare(
           `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
-                  overall_confidence, needs_review, user_id
+                  overall_confidence, needs_review, user_id, contract_type
            FROM contract_ledger
            WHERE contract_no = ?`,
         )
@@ -1861,6 +1904,7 @@ export async function findContractLedgerByNo(
         overall_confidence: number;
         needs_review: number;
         user_id: string;
+        contract_type: string | null;
       }
     | undefined;
   if (!row) return null;
@@ -1870,6 +1914,7 @@ export async function findContractLedgerByNo(
     docType: row.doc_type,
     documentId: row.document_id,
     title: row.title,
+    contractType: (row.contract_type as ContractType | null) ?? null,
     fields: JSON.parse(row.fields) as ContractLedgerEntry['fields'],
     fieldMeta: JSON.parse(row.field_meta) as ContractLedgerEntry['fieldMeta'],
     overallConfidence: row.overall_confidence,
@@ -1892,7 +1937,7 @@ export async function listContractLedgerEntries(
     ? (ctx.sqlite
         .prepare(
           `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
-                  overall_confidence, needs_review, user_id
+                  overall_confidence, needs_review, user_id, contract_type
            FROM contract_ledger
            WHERE user_id = ? OR user_id = '' OR user_id IS NULL
            ORDER BY updated_at DESC`,
@@ -1908,11 +1953,12 @@ export async function listContractLedgerEntries(
         overall_confidence: number;
         needs_review: number;
         user_id: string;
+        contract_type: string | null;
       }>)
     : (ctx.sqlite
         .prepare(
           `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
-                  overall_confidence, needs_review, user_id
+                  overall_confidence, needs_review, user_id, contract_type
            FROM contract_ledger
            ORDER BY updated_at DESC`,
         )
@@ -1927,6 +1973,7 @@ export async function listContractLedgerEntries(
         overall_confidence: number;
         needs_review: number;
         user_id: string;
+        contract_type: string | null;
       }>);
   return rows.map((row) => ({
     contractNo: row.contract_no,
@@ -1934,6 +1981,7 @@ export async function listContractLedgerEntries(
     docType: row.doc_type,
     documentId: row.document_id,
     title: row.title,
+    contractType: (row.contract_type as ContractType | null) ?? null,
     fields: JSON.parse(row.fields) as ContractLedgerEntry['fields'],
     fieldMeta: JSON.parse(row.field_meta) as ContractLedgerEntry['fieldMeta'],
     overallConfidence: row.overall_confidence,
@@ -2358,4 +2406,301 @@ export async function hasExecutionFlowsForDocument(
         .get(documentId, uid)
     : ctx.sqlite.prepare('SELECT 1 FROM execution_flows WHERE document_id = ? LIMIT 1').get(documentId);
   return !!row;
+}
+
+// ---- 项目维度(spec 2026-08-20 §4.1) -------------------------------------------
+//
+// projects / project_memberships 是关系库 SSOT(Neo4j 图只是投影)。contractNo 存
+// normalizeContractNo 后的值(与 contract_ledger 同键, 报表连接键); projectCode 存
+// normalizeProjectCode 归一大写。用户作用域与 3-way OR 过滤照 contract_ledger 写法;
+// 写侧 user_id 统一经 effectiveUserId 归一('' = 未登录态), 保证唯一索引生效。
+
+export interface ProjectRow {
+  code: string;            // 归一大写
+  name: string;
+  status: string;          // 'active' | 'archived'
+  userId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type MembershipStatus = 'proposed' | 'confirmed' | 'rejected';
+export type MembershipProposedBy = 'system' | 'agent' | 'human';
+
+export interface ProjectMembershipRow {
+  id: string;
+  contractNo: string;      // normalizeContractNo 后(报表连接键, spec §4.1)
+  projectCode: string;     // 归一大写
+  role: string | null;     // 合同类型
+  status: MembershipStatus;
+  proposedBy: MembershipProposedBy;
+  confirmationSource: string | null;
+  confidence: number;
+  createdBy: string;
+  userId: string | null;
+  createdAt: string;
+  graphStatus: BindingGraphStatus | null;
+}
+
+export interface ProjectMembershipInput {
+  contractNo: string;
+  projectCode: string;
+  role?: string | null;
+  status?: MembershipStatus;                       // 默认 'proposed'
+  proposedBy?: MembershipProposedBy;               // 默认 'system'
+  confirmationSource?: 'auto_rule' | 'human' | null;
+  confidence?: number;                             // 默认 0
+  createdBy: string;
+}
+
+/** 项目编号归一: trim + 大写(与合同号归一分开, 项目编号是人工编码)。 */
+export function normalizeProjectCode(raw: string): string {
+  return raw.trim().toUpperCase();
+}
+
+function projectRowFrom(r: {
+  code: string; name: string; status: string; user_id: string | null;
+  created_at: string | null; updated_at: string | null;
+}): ProjectRow {
+  return {
+    code: r.code,
+    name: r.name,
+    status: r.status,
+    userId: r.user_id ?? null,
+    createdAt: r.created_at ?? '',
+    updatedAt: r.updated_at ?? '',
+  };
+}
+
+const MEMBERSHIP_COLS = 'id, contract_no, project_code, role, status, proposed_by, confirmation_source, confidence, created_by, user_id, created_at, graph_status';
+
+function membershipRowFrom(r: {
+  id: string; contract_no: string; project_code: string; role: string | null;
+  status: string; proposed_by: string; confirmation_source: string | null;
+  confidence: number | string; created_by: string; user_id: string | null;
+  created_at: string | null; graph_status: string | null;
+}): ProjectMembershipRow {
+  return {
+    id: r.id,
+    contractNo: r.contract_no,
+    projectCode: r.project_code,
+    role: r.role ?? null,
+    status: r.status as MembershipStatus,
+    proposedBy: r.proposed_by as MembershipProposedBy,
+    confirmationSource: r.confirmation_source ?? null,
+    confidence: Number(r.confidence),
+    createdBy: r.created_by,
+    userId: r.user_id ?? null,
+    createdAt: r.created_at ?? '',
+    graphStatus: r.graph_status ? (JSON.parse(r.graph_status) as BindingGraphStatus) : null,
+  };
+}
+
+/** 新建项目。code 先 normalizeProjectCode; 已存在(同 code+user)返回 null(幂等)。 */
+export async function createProject(
+  ctx: DbContext,
+  input: { code: string; name: string; userId?: string | null },
+): Promise<ProjectRow | null> {
+  if (ctx.backend === 'postgres') return createProjectPg(ctx, input);
+  const code = normalizeProjectCode(input.code);
+  const uid = effectiveUserId(input.userId ?? undefined);
+  const name = input.name.trim();
+  if (!code || !name) return null;
+  const exists = ctx.sqlite
+    .prepare('SELECT 1 FROM projects WHERE code = ? AND user_id = ?')
+    .get(code, uid);
+  if (exists) return null;
+  ctx.sqlite
+    .prepare('INSERT INTO projects (id, code, name, status, user_id) VALUES (?, ?, ?, ?, ?)')
+    .run(rid('PRJ'), code, name, 'active', uid);
+  const row = ctx.sqlite
+    .prepare('SELECT code, name, status, user_id, created_at, updated_at FROM projects WHERE code = ? AND user_id = ?')
+    .get(code, uid) as Parameters<typeof projectRowFrom>[0];
+  return projectRowFrom(row);
+}
+
+/** 按 code 查项目(归一大写; 3-way OR 可见过滤)。 */
+export async function findProjectByCode(
+  ctx: DbContext, code: string, userId?: string,
+): Promise<ProjectRow | null> {
+  if (ctx.backend === 'postgres') return findProjectByCodePg(ctx, code, userId);
+  const normalized = normalizeProjectCode(code);
+  if (!normalized) return null;
+  const uid = effectiveUserId(userId);
+  const row = (uid
+    ? ctx.sqlite
+        .prepare(
+          "SELECT code, name, status, user_id, created_at, updated_at FROM projects WHERE code = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)",
+        )
+        .get(normalized, uid)
+    : ctx.sqlite
+        .prepare('SELECT code, name, status, user_id, created_at, updated_at FROM projects WHERE code = ?')
+        .get(normalized)) as Parameters<typeof projectRowFrom>[0] | undefined;
+  return row ? projectRowFrom(row) : null;
+}
+
+/** 全量项目列表(3-way OR 可见过滤), 按 code 升序。 */
+export async function listProjects(ctx: DbContext, userId?: string): Promise<ProjectRow[]> {
+  if (ctx.backend === 'postgres') return listProjectsPg(ctx, userId);
+  const uid = effectiveUserId(userId);
+  const rows = (uid
+    ? ctx.sqlite
+        .prepare(
+          "SELECT code, name, status, user_id, created_at, updated_at FROM projects WHERE user_id = ? OR user_id = '' OR user_id IS NULL ORDER BY code ASC",
+        )
+        .all(uid)
+    : ctx.sqlite
+        .prepare('SELECT code, name, status, user_id, created_at, updated_at FROM projects ORDER BY code ASC')
+        .all()) as Array<Parameters<typeof projectRowFrom>[0]>;
+  return rows.map(projectRowFrom);
+}
+
+/**
+ * 归属 upsert: 唯一键 (contract_no, project_code, user_id) 冲突时 UPDATE
+ * role/status/proposed_by/confirmation_source/confidence/created_by, 返回 id。
+ * contractNo/projectCode 均先归一。
+ */
+export async function upsertProjectMembership(
+  ctx: DbContext,
+  input: ProjectMembershipInput,
+  userId?: string,
+): Promise<string> {
+  if (ctx.backend === 'postgres') return upsertProjectMembershipPg(ctx, input, userId);
+  const uid = effectiveUserId(userId);
+  const contractNo = normalizeContractNo(input.contractNo);
+  const projectCode = normalizeProjectCode(input.projectCode);
+  const row = ctx.sqlite
+    .prepare(
+      `INSERT INTO project_memberships
+         (id, contract_no, project_code, role, status, proposed_by, confirmation_source, confidence, created_by, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(contract_no, project_code, user_id) DO UPDATE SET
+         role = excluded.role,
+         status = excluded.status,
+         proposed_by = excluded.proposed_by,
+         confirmation_source = excluded.confirmation_source,
+         confidence = excluded.confidence,
+         created_by = excluded.created_by
+       RETURNING id`,
+    )
+    .get(
+      rid('PM'),
+      contractNo,
+      projectCode,
+      input.role ?? null,
+      input.status ?? 'proposed',
+      input.proposedBy ?? 'system',
+      input.confirmationSource ?? null,
+      input.confidence ?? 0,
+      input.createdBy,
+      uid,
+    ) as { id: string };
+  return row.id;
+}
+
+/** 按 id 查归属(3-way OR 可见过滤)。 */
+export async function findMembershipById(
+  ctx: DbContext, id: string, userId?: string,
+): Promise<ProjectMembershipRow | null> {
+  if (ctx.backend === 'postgres') return findMembershipByIdPg(ctx, id, userId);
+  const uid = effectiveUserId(userId);
+  const row = (uid
+    ? ctx.sqlite
+        .prepare(
+          `SELECT ${MEMBERSHIP_COLS} FROM project_memberships
+           WHERE id = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)`,
+        )
+        .get(id, uid)
+    : ctx.sqlite
+        .prepare(`SELECT ${MEMBERSHIP_COLS} FROM project_memberships WHERE id = ?`)
+        .get(id)) as Parameters<typeof membershipRowFrom>[0] | undefined;
+  return row ? membershipRowFrom(row) : null;
+}
+
+/** 项目下的归属列表(归一大写; status 可选过滤), created_at 升序。 */
+export async function listMembershipsByProject(
+  ctx: DbContext,
+  projectCode: string,
+  userId?: string,
+  status?: MembershipStatus,
+): Promise<ProjectMembershipRow[]> {
+  if (ctx.backend === 'postgres') return listMembershipsByProjectPg(ctx, projectCode, userId, status);
+  const normalized = normalizeProjectCode(projectCode);
+  const uid = effectiveUserId(userId);
+  const statusClause = status ? ' AND status = @status' : '';
+  const userClause = uid ? " AND (user_id = @uid OR user_id = '' OR user_id IS NULL)" : '';
+  const rows = ctx.sqlite
+    .prepare(
+      `SELECT ${MEMBERSHIP_COLS} FROM project_memberships
+       WHERE project_code = @code${statusClause}${userClause}
+       ORDER BY created_at ASC`,
+    )
+    .all({ code: normalized, ...(status ? { status } : {}), ...(uid ? { uid } : {}) }) as Array<
+    Parameters<typeof membershipRowFrom>[0]
+  >;
+  return rows.map(membershipRowFrom);
+}
+
+/** 合同的归属列表(contractNo 归一; 3-way OR 可见过滤)。 */
+export async function listMembershipsByContract(
+  ctx: DbContext, contractNo: string, userId?: string,
+): Promise<ProjectMembershipRow[]> {
+  if (ctx.backend === 'postgres') return listMembershipsByContractPg(ctx, contractNo, userId);
+  const normalized = normalizeContractNo(contractNo);
+  if (!normalized) return [];
+  const uid = effectiveUserId(userId);
+  const rows = (uid
+    ? ctx.sqlite
+        .prepare(
+          `SELECT ${MEMBERSHIP_COLS} FROM project_memberships
+           WHERE contract_no = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)
+           ORDER BY created_at ASC`,
+        )
+        .all(normalized, uid)
+    : ctx.sqlite
+        .prepare(
+          `SELECT ${MEMBERSHIP_COLS} FROM project_memberships WHERE contract_no = ? ORDER BY created_at ASC`,
+        )
+        .all(normalized)) as Array<Parameters<typeof membershipRowFrom>[0]>;
+  return rows.map(membershipRowFrom);
+}
+
+/** 状态迁移(proposed->confirmed/rejected 等)。未知 id 返回 null。 */
+export async function updateMembershipStatus(
+  ctx: DbContext,
+  id: string,
+  status: MembershipStatus,
+  confirmationSource: 'auto_rule' | 'human' | null,
+  userId?: string,
+): Promise<ProjectMembershipRow | null> {
+  if (ctx.backend === 'postgres') return updateMembershipStatusPg(ctx, id, status, confirmationSource, userId);
+  const uid = effectiveUserId(userId);
+  const res = (uid
+    ? ctx.sqlite
+        .prepare(
+          "UPDATE project_memberships SET status = ?, confirmation_source = ? WHERE id = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)",
+        )
+        .run(status, confirmationSource, id, uid)
+    : ctx.sqlite
+        .prepare('UPDATE project_memberships SET status = ?, confirmation_source = ? WHERE id = ?')
+        .run(status, confirmationSource, id)) as { changes: number };
+  if (res.changes === 0) return null;
+  return findMembershipById(ctx, id, userId);
+}
+
+/** 归属图同步结果落库(JSON)。 */
+export async function setMembershipGraphStatus(
+  ctx: DbContext, id: string, gs: BindingGraphStatus, userId?: string,
+): Promise<void> {
+  if (ctx.backend === 'postgres') return setMembershipGraphStatusPg(ctx, id, gs, userId);
+  const uid = effectiveUserId(userId);
+  if (uid) {
+    ctx.sqlite
+      .prepare(
+        "UPDATE project_memberships SET graph_status = ? WHERE id = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)",
+      )
+      .run(JSON.stringify(gs), id, uid);
+  } else {
+    ctx.sqlite.prepare('UPDATE project_memberships SET graph_status = ? WHERE id = ?').run(JSON.stringify(gs), id);
+  }
 }

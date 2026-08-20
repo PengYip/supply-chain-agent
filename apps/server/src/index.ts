@@ -18,6 +18,7 @@ import { filesRoute } from './routes/files.js';
 import { graphRoute } from './routes/graph.js';
 import { bindingsRoute } from './routes/bindings.js';
 import { partiesRoute } from './routes/parties.js';
+import { projectsRoute } from './routes/projects.js';
 import { reviewRoute } from './routes/review.js';
 import { createEvalResultsRoute } from './routes/evalResults.js';
 import { evalRunRoute } from './routes/evalRun.js';
@@ -104,6 +105,7 @@ app.use('/api/eval/*', requireAuth);
 app.use('/api/graph/*', requireAuth);
 app.use('/api/bindings/*', requireAuth);
 app.use('/api/parties/*', requireAuth);
+app.use('/api/projects/*', requireAuth);
 
 app.route('/api', chatRoute);
 app.route('/api', approvalCallback);
@@ -130,6 +132,9 @@ app.route('/api/bindings', bindingsRoute);
 
 // Self-party list management (Task A): DB-backed 自主体名单 + candidates + backfill.
 app.route('/api/parties', partiesRoute);
+
+// 项目维度工作台(spec 2026-08-20 §6.1): projects + memberships CRUD + 确认/拒绝。
+app.route('/api/projects', projectsRoute);
 
 // Eval results viewer (read-only): scan/aggregate CLI-written results dirs.
 app.route('/api/eval', createEvalResultsRoute());

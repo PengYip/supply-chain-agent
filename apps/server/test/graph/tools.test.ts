@@ -35,6 +35,10 @@ describe('graph tool schemas', () => {
     expect((t.inputSchema as any).safeParse({ kind: 'Bogus', name: 'x' }).success).toBe(false);
     expect((t.inputSchema as any).safeParse({}).success).toBe(false);
   });
+  it('graph_find_entity kind 枚举含 Project(项目实体, spec 2026-08-20)', () => {
+    const t = buildGraphFindEntityTool();
+    expect((t.inputSchema as any).safeParse({ kind: 'Project', name: 'PRJ-2026-001', exact: true }).success).toBe(true);
+  });
 });
 
 describe('graph tool contracts are registered', () => {

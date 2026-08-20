@@ -34,4 +34,28 @@ describe('deriveProposedEdges', () => {
   it('无可关联字段返回 []', () => {
     expect(deriveProposedEdges('发票', [f('金额', '1000')])).toEqual([]);
   });
+
+  it('项目字段派生 references->Project 边（spec 2026-08-20）', () => {
+    const edges = deriveProposedEdges('合同', [f('项目编号', 'PRJ-2026-001', 0.95)]);
+    expect(edges).toContainEqual({ type: 'references', dstKind: 'Project', dstName: 'PRJ-2026-001', confidence: 0.95 });
+  });
+
+  it('同时含项目编号与项目名称: 边只出一条, dstName 取编号值', () => {
+    const edges = deriveProposedEdges('合同', [
+      f('项目编号', 'PRJ-2026-001', 0.9), f('项目名称', '曹妃甸项目', 0.95),
+    ]);
+    const projectEdges = edges.filter((e) => e.dstKind === 'Project');
+    expect(projectEdges).toHaveLength(1);
+    expect(projectEdges[0]).toEqual({ type: 'references', dstKind: 'Project', dstName: 'PRJ-2026-001', confidence: 0.9 });
+  });
+
+  it('只含项目名称: dstName 取名称值; 同类多条取 confidence 最高者', () => {
+    const edges = deriveProposedEdges('合同', [
+      f('项目名称', '曹妃甸项目', 0.8), f('工程名称', '另一个工程', 0.95),
+    ]);
+    const projectEdges = edges.filter((e) => e.dstKind === 'Project');
+    expect(projectEdges).toHaveLength(1);
+    expect(projectEdges[0]?.dstName).toBe('另一个工程');
+    expect(projectEdges[0]?.confidence).toBe(0.95);
+  });
 });

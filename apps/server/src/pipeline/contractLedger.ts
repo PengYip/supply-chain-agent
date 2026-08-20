@@ -4,6 +4,7 @@
 // layer (db/repositories.ts) owns the rows.
 import type { SourceSpan } from './types.js';
 import type { SpanMatchStrength } from './spanValidator.js';
+import type { ContractType } from '../domain/tradeSemantics.js';
 
 export interface ContractLedgerEntry {
   /** Normalized contract number (unique-key component). Non-empty. */
@@ -16,6 +17,8 @@ export interface ContractLedgerEntry {
   documentId: string;
   /** fields['合同名称'] or fields['标的物'] string value, else ''. */
   title: string;
+  /** 主体视角合同类型(采购/销售/...), deriveContractType 派生; null = 未识别。 */
+  contractType: ContractType | null;
   fields: Record<string, { value: string | number; sourceSpans: SourceSpan[] }>;
   fieldMeta: Record<string, { strength: SpanMatchStrength; confidence: number }>;
   /** Mean of fieldMeta confidences (0 when no fields). */
@@ -62,6 +65,7 @@ export function buildLedgerEntryFromExtraction(args: {
   fields: Record<string, { value: string | number; sourceSpans: SourceSpan[] }>;
   fieldMeta: Record<string, { strength: SpanMatchStrength; confidence: number }>;
   userId?: string;
+  contractType?: ContractType | null;
 }): ContractLedgerEntry | null {
   const contractNoField = ['合同号', '合同编号']
     .filter((name) => args.fields[name] !== undefined)
@@ -85,6 +89,7 @@ export function buildLedgerEntryFromExtraction(args: {
     docType: args.docType,
     documentId: args.documentId,
     title,
+    contractType: args.contractType ?? null,
     fields: args.fields,
     fieldMeta: args.fieldMeta,
     overallConfidence: confidences.length

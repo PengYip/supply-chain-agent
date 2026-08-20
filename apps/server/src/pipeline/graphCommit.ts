@@ -68,6 +68,7 @@ export async function commitDocumentGraph(
         docId,
         docType: snapshot.docType,
         sourceUri,
+        contractType: snapshot.contractType?.contractType ?? null,
         entities: deriveProposedRelationships(snapshot.fields).map((r) => ({
           kind: r.kind, name: r.name, role: r.role, confidence: r.confidence,
         })),

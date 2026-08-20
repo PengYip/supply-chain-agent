@@ -68,7 +68,7 @@ describe('GET /api/bindings/candidates', () => {
     });
     const entry: ContractLedgerEntry = {
       contractNo: 'HT-X', displayContractNo: 'HT-X', docType: '合同', documentId: docId,
-      title: 'T', fields: {}, fieldMeta: {}, overallConfidence: 1, needsReview: false, userId: 'u1',
+      title: 'T', contractType: null, fields: {}, fieldMeta: {}, overallConfidence: 1, needsReview: false, userId: 'u1',
     };
     await upsertContractLedgerEntry(ctx, entry, 'u1');
     const res = await appAs('u1').request(`/api/bindings/candidates?documentId=${docId}`);

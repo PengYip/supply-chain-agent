@@ -1,12 +1,13 @@
-import { Building2, FileSignature, FileText, Package, type LucideIcon } from 'lucide-react';
+import { Building2, FileSignature, FileText, FolderKanban, Package, type LucideIcon } from 'lucide-react';
 import type { GraphNode } from '../../hooks/useGraph';
 
-/** 四类节点的图标（主/迷你画布节点共用）。 */
+/** 五类节点的图标（主/迷你画布节点共用）。 */
 export const KIND_ICONS: Record<string, LucideIcon> = {
   Document: FileText,
   Party: Building2,
   Commodity: Package,
   Contract: FileSignature,
+  Project: FolderKanban,
 };
 
 /** 四类节点的配色与文案：全部取自现有自定义色板，融入 primary 主色系。 */
@@ -26,6 +27,7 @@ export const KIND_STYLES: Record<string, KindStyle> = {
   Party: { color: '#4A6D8C', softBg: '#EBF1F5', softBorder: '#CFDCE6', label: '交易方' },
   Commodity: { color: '#D97706', softBg: '#FBF0DE', softBorder: '#F0D9B0', label: '商品' },
   Contract: { color: '#15803D', softBg: '#E9F4EC', softBorder: '#CBE5D3', label: '合同' },
+  Project: { color: '#6D5FC3', softBg: '#EEEBF8', softBorder: '#D8D0F0', label: '项目' },
 };
 
 const FALLBACK_STYLE: KindStyle = { color: '#6B7280', softBg: '#F3F4F6', softBorder: '#E5E7EB', label: '节点' };
@@ -48,6 +50,9 @@ export const EDGE_LABELS: Record<string, string> = {
   references: '引用',
   executes: '履行',
   binds: '绑定',
+  part_of: '归属',
+  counterparty: '对手方',
+  participates: '参与',
 };
 
 /** 边样式覆盖: binds(人工确认的绑定)与抽取级提及边视觉区分。 */

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from 'vites
 import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.js';
 import {
   createDocumentStub, saveExtraction, setReviewStatus, getReviewSnapshot, updateExtractionFields,
+  addSelfParty,
 } from '../../src/pipeline/db/repositories.js';
 import { commitDocumentGraph, syncDocumentTypeToGraph } from '../../src/pipeline/graphCommit.js';
 import type { GraphWriterIo } from '../../src/graph/graphWriter.js';
@@ -74,6 +75,41 @@ describe('commitDocumentGraph', () => {
     expect(status.status).toBe('failed');
     expect(status.reason).toBe('document_or_extraction_not_found');
     expect(status.entities).toBeUndefined();
+  });
+
+  it('图提交时 Document 与 Contract 实体 props 带合同类型(快照派生)', async () => {
+    await addSelfParty(ctx, '我方贸易', 'user-1');
+    const { docId } = await createDocumentStub(ctx, { sourceUri: 'file:///c.pdf', docType: '合同' });
+    await saveExtraction(ctx, {
+      documentId: docId, docType: '合同',
+      fields: {
+        合同号: { value: 'HT-9', sourceSpans: [] },
+        甲方: { value: '我方贸易', sourceSpans: [] },
+        乙方: { value: '某供应商', sourceSpans: [] },
+      },
+      fieldMeta: {
+        合同号: { strength: 'exact', confidence: 0.95 },
+        甲方: { strength: 'exact', confidence: 0.9 },
+        乙方: { strength: 'exact', confidence: 0.9 },
+      },
+      overallConfidence: 0.9, needsReview: false,
+    });
+    await setReviewStatus(ctx, docId, 'confirmed');
+    const created: Array<{ kind: string; props: Record<string, unknown> }> = [];
+    const io: GraphWriterIo = {
+      createEntity: async ({ kind, name, props }) => {
+        created.push({ kind, props: props ?? {} });
+        return { elementId: `el-${kind}-${name}`, kind, name, props: props ?? {}, created: true };
+      },
+      mergeEdge: async () => ({}),
+    };
+    const status = await commitDocumentGraph(ctx, docId, 'user-1', io);
+    expect(status.status).toBe('ok');
+    // 甲方=主体 -> 采购; 快照派生的 contractType 进入 Document 与 Contract props。
+    const docNode = created.find((c) => c.kind === 'Document');
+    const contractNode = created.find((c) => c.kind === 'Contract');
+    expect(docNode?.props.contractType).toBe('采购');
+    expect(contractNode?.props.contractType).toBe('采购');
   });
 
   it('图 io 出错不抛异常，failed 状态仍持久化', async () => {

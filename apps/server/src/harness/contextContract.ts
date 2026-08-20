@@ -187,6 +187,14 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'summary', signal: 'counter',
     persist: 'business', risk: { level: 'L1', injection: 'safe' },
   },
+  project_rollup: {
+    // 项目维度统计汇总(只读关系库: memberships + 台账 + 执行流水, 不依赖图)。
+    // 返回聚合数字与合同摘要(数值/短字符串, 无文档原文) -> output 'raw' /
+    // injection 'safe'。合同面 + 指标 + 校验的结构化摘要 -> budget 'summary'。
+    // signal 'counter'(读)。persist 'business' 标记它读取的业务存储。
+    output: 'raw', budget: 'summary', signal: 'counter',
+    persist: 'business', risk: { level: 'L1', injection: 'safe' },
+  },
 };
 
 /** True iff a contract exists for the given tool name. */
