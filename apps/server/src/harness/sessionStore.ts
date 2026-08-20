@@ -213,11 +213,17 @@ const stmtInsertSession = db.prepare(
 const stmtGetSession = db.prepare('SELECT * FROM sessions WHERE id = ?');
 const stmtListSessionsForUser = db.prepare(`
   SELECT s.id, s.role, s.created_at, s.metadata_json, s.status,
-         CASE WHEN f.session_id IS NULL THEN 0 ELSE 1 END AS favorited
+         CASE WHEN f.session_id IS NULL THEN 0 ELSE 1 END AS favorited,
+         (SELECT COUNT(*) FROM session_messages m WHERE m.session_id = s.id) AS message_count
   FROM sessions s
   LEFT JOIN session_favorites f ON f.session_id = s.id AND f.user_id = ?
   WHERE s.user_id = ?
   ORDER BY s.created_at DESC
+`);
+const stmtListEmptySessionsForUser = db.prepare(`
+  SELECT s.id FROM sessions s
+  WHERE s.user_id = ?
+    AND NOT EXISTS (SELECT 1 FROM session_messages m WHERE m.session_id = s.id)
 `);
 const stmtTouchSession = db.prepare(
   'UPDATE sessions SET updated_at = ? WHERE id = ?',
@@ -350,7 +356,7 @@ export function setSessionTitle(sessionId: string, title: string): void {
  *  second round-trip. */
 export function listSessionsForUser(
   userId: string,
-): Array<{ id: string; role: Role; createdAt: string; title?: string; status: SessionStatus; favorited: boolean }> {
+): Array<{ id: string; role: Role; createdAt: string; title?: string; status: SessionStatus; favorited: boolean; messageCount: number }> {
   const rows = stmtListSessionsForUser.all(userId, userId) as Array<{
     id: string;
     role: Role;
@@ -358,6 +364,7 @@ export function listSessionsForUser(
     metadata_json: string | null;
     status: SessionStatus;
     favorited: 0 | 1;
+    message_count: number;
   }>;
   return rows.map((r) => ({
     id: r.id,
@@ -366,7 +373,18 @@ export function listSessionsForUser(
     title: parseTitle(r.metadata_json),
     status: r.status,
     favorited: r.favorited === 1,
+    messageCount: r.message_count,
   }));
+}
+
+/** Delete the user's zero-message sessions (an empty session holds nothing of
+ *  value) and return how many were removed. Reuses deleteSession so the
+ *  dependent-row cascade (favorites etc.) applies. Called on session create so
+ *  abandoned empty sessions never accumulate. */
+export function purgeEmptySessionsForUser(userId: string): number {
+  const rows = stmtListEmptySessionsForUser.all(userId) as Array<{ id: string }>;
+  for (const r of rows) deleteSession(r.id);
+  return rows.length;
 }
 
 /**

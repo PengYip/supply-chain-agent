@@ -10,6 +10,8 @@ interface SessionSidebarProps {
   loading: boolean
   createSession: (role?: string) => Promise<Session | null>
   deleteSession: (id: string) => Promise<void>
+  /** 拉取最新会话列表（返回新鲜数据）。新建守卫需要权威的 messageCount。 */
+  refresh: () => Promise<Session[]>
   /** 对话收藏: star a session (upsert, note editable later in the favorites panel). */
   favoriteSession: (id: string, note?: string | null) => Promise<void>
   unfavoriteSession: (id: string) => Promise<void>
@@ -30,12 +32,20 @@ function relativeTime(iso: string): string {
 
 /** 会话面板：作为 ChatWorkspace 的左侧可折叠面板（容器负责宽度过渡）。
  *  本组件固定 256px 宽，避免折叠动画期间内容被挤压重排。 */
-export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, createSession, deleteSession, favoriteSession, unfavoriteSession }: SessionSidebarProps) {
+export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, createSession, deleteSession, refresh, favoriteSession, unfavoriteSession }: SessionSidebarProps) {
   // 全部 / 已收藏 filter over the server-joined favorited flag.
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false)
-  const visible = showFavoritesOnly ? sessions.filter((s) => s.favorited) : sessions
+  // 空会话不进入列表（服务端在下次新建时也会清理）；当前活跃的空会话保留
+  // 展示，否则正在使用的会话会凭空消失。
+  const listed = sessions.filter((s) => s.id === activeSessionId || (s.messageCount ?? 0) > 0)
+  const visible = showFavoritesOnly ? listed.filter((s) => s.favorited) : listed
 
+  // 重复点击新建：若当前会话存在且还没有任何消息，直接复用它（一次不刷
+  // 新的判断可能拿到过期计数，故先取权威列表再决策）。
   const handleNew = async () => {
+    const fresh = await refresh()
+    const active = fresh.find((s) => s.id === activeSessionId)
+    if (active && (active.messageCount ?? 0) === 0) return
     const s: Session | null = await createSession('trader')
     if (s) onSelect(s.id)
   }
@@ -71,8 +81,8 @@ export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, c
         <div className="mt-2 flex gap-0.5 rounded-lg bg-surface p-1">
           {(
             [
-              { label: `全部 (${sessions.length})`, active: !showFavoritesOnly, onClick: () => setShowFavoritesOnly(false) },
-              { label: `已收藏 (${sessions.filter((s) => s.favorited).length})`, active: showFavoritesOnly, onClick: () => setShowFavoritesOnly(true) },
+              { label: `全部 (${listed.length})`, active: !showFavoritesOnly, onClick: () => setShowFavoritesOnly(false) },
+              { label: `已收藏 (${listed.filter((s) => s.favorited).length})`, active: showFavoritesOnly, onClick: () => setShowFavoritesOnly(true) },
             ] as const
           ).map((tab) => (
             <button

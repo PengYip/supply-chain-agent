@@ -17,6 +17,7 @@ import {
   listSessionsForUser,
   listSessionEventsSince,
   loadSession,
+  purgeEmptySessionsForUser,
   sessionBelongsTo,
 } from '../harness/sessionStore.js';
 import { subscribe, type SessionEvent } from '../harness/sessionEvents.js';
@@ -36,7 +37,7 @@ sessionsRoute.get('/', requireRole('admin', 'trader', 'viewer'), (c) => {
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const rows = listSessionsForUser(user.id);
   return c.json({
-    sessions: rows.map((r) => ({ id: r.id, role: r.role, createdAt: r.createdAt, title: r.title, status: r.status, favorited: r.favorited })),
+    sessions: rows.map((r) => ({ id: r.id, role: r.role, createdAt: r.createdAt, title: r.title, status: r.status, favorited: r.favorited, messageCount: r.messageCount })),
   });
 });
 
@@ -55,6 +56,10 @@ sessionsRoute.post('/', requireRole('admin', 'trader'), async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'invalid body', detail: parsed.error.flatten() }, 400);
   }
+  // A new session implies the previous one is done: drop the user's leftover
+  // zero-message sessions so empties never accumulate (the sidebar hides them
+  // anyway; this keeps the DB honest).
+  purgeEmptySessionsForUser(user.id);
   const info = createSession(parsed.data.role as Role, user.id);
   return c.json({ id: info.id, role: info.role }, 201);
 });

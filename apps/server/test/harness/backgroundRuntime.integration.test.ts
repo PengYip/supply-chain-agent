@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Hono } from 'hono';
-import type { ModelMessage } from 'ai';
+import type { ModelMessage, UIMessage } from 'ai';
 import { startSessionRun, isRunning, abortSessionRun } from '../../src/harness/runManager.js';
 import { runSession } from '../../src/harness/runSession.js';
 import { subscribe } from '../../src/harness/sessionEvents.js';
@@ -8,6 +8,7 @@ import {
   getSessionStatus,
   createSession,
   loadSession,
+  appendMessages,
   setSessionFavorite,
   setSessionStatus,
 } from '../../src/harness/sessionStore.js';
@@ -139,5 +140,36 @@ describe('background runtime integration (full chain)', () => {
     const row = json.sessions.find((r: { id: string }) => r.id === s.id);
     expect(row).toBeTruthy();
     expect(row.favorited).toBe(true);
+  });
+
+  // 空会话治理: creating a new session purges the user's zero-message
+  // leftovers; list rows carry messageCount so the sidebar can hide empties.
+  it('POST /api/sessions purges empty leftovers; GET rows carry messageCount', async () => {
+    const emptyOld = createSession('trader', 'u-purge2');
+    const used = createSession('trader', 'u-purge2');
+    appendMessages(used.id, [
+      { id: 'm1', role: 'user', parts: [{ type: 'text', text: '查合同' }] } as UIMessage,
+    ]);
+
+    const app = new Hono<AuthEnv>();
+    app.use('*', async (c, next) => {
+      c.set('user', { id: 'u-purge2', email: 't@t', role: 'trader' } as any);
+      await next();
+    });
+    app.route('/api/sessions', sessionsRoute);
+
+    const created = await app.request('http://test/api/sessions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(created.status).toBe(201);
+
+    const res = await app.request('http://test/api/sessions');
+    const json = await res.json();
+    const ids = json.sessions.map((r: { id: string }) => r.id);
+    expect(ids).not.toContain(emptyOld.id);
+    expect(ids).toContain(used.id);
+    expect(json.sessions.find((r: { id: string }) => r.id === used.id).messageCount).toBe(1);
   });
 });

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import clsx from 'clsx';
 import { useSessions } from '../../hooks/useSessions';
 import { SessionSidebar } from '../SessionSidebar';
@@ -23,6 +23,10 @@ export function ChatWorkspace({
 }) {
   // 面板折叠（默认展开，不持久化），与图谱/绑定面板同一交互语言
   const [collapsed, setCollapsed] = useState(false);
+  // 切换会话即刷新列表：离开刚用过的会话后其 messageCount/标题即时更新，
+  // 「空会话不展示」的过滤不会误伤已产生消息的会话。
+  const { refresh } = sessionsApi;
+  useEffect(() => { void refresh(); }, [activeSessionId, refresh]);
 
   return (
     <div className="flex h-full min-w-0">
@@ -39,6 +43,7 @@ export function ChatWorkspace({
           loading={sessionsApi.loading}
           createSession={sessionsApi.createSession}
           deleteSession={sessionsApi.deleteSession}
+          refresh={sessionsApi.refresh}
           favoriteSession={sessionsApi.favoriteSession}
           unfavoriteSession={sessionsApi.unfavoriteSession}
         />
