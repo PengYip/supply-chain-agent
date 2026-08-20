@@ -182,6 +182,7 @@ export function migrate(sqlite: Database.Database): void {
       overall_confidence REAL NOT NULL,
       needs_review INTEGER NOT NULL DEFAULT 0,
       user_id TEXT NOT NULL DEFAULT '',
+      contract_type TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -337,6 +338,18 @@ export function migrate(sqlite: Database.Database): void {
     }
   }
 
+  // 合同类型维度(主体视角: 采购/销售/物流/租赁/服务/其他, spec 2026-08-20 §3):
+  // deriveContractType 在录入写回时派生落库; NULL = 未识别。存量 dev 库补列,
+  // 同 guarded ALTER 模式(CREATE TABLE IF NOT EXISTS 不加列)。
+  {
+    const have = new Set(
+      (sqlite.prepare('PRAGMA table_info(contract_ledger)').all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!have.has('contract_type')) {
+      try { sqlite.exec('ALTER TABLE contract_ledger ADD COLUMN contract_type TEXT'); } catch { /* concurrent */ }
+    }
+  }
+
   // Backfill created_at (+ user_id) on classifications/document_tags/extractions
   // for old prod DBs whose tables predate these columns. CREATE TABLE IF NOT
   // EXISTS adds no columns to an existing table, and these previously had no
@@ -481,10 +494,13 @@ export async function migratePostgres(pool: Pool): Promise<void> {
        overall_confidence numeric(5,4) NOT NULL,
        needs_review boolean NOT NULL DEFAULT false,
        user_id TEXT NOT NULL DEFAULT '',
+       contract_type TEXT,
        created_at timestamptz NOT NULL DEFAULT NOW(),
        updated_at timestamptz NOT NULL DEFAULT NOW()
      )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_ledger_no_user ON contract_ledger(contract_no, user_id)`,
+    // 合同类型维度(spec 2026-08-20 §3): 存量库补列(SQLite 侧同款 guarded ALTER)。
+    `ALTER TABLE contract_ledger ADD COLUMN IF NOT EXISTS contract_type TEXT`,
     // Execution flows (六向执行流水): mirror of the SQLite execution_flows.
     // amount/quantity_ton 用 double precision(对应 SQLite REAL), confidence 沿用
     // numeric(5,4) pg 惯例, created_at timestamptz。UNIQUE 索引支撑 ON CONFLICT upsert。

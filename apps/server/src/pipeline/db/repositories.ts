@@ -7,6 +7,7 @@ import { normalizeContractNo } from '../contractLedger.js';
 import type { ContractLedgerEntry } from '../contractLedger.js';
 import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.js';
 import { normalizeCompanyName } from '../../domain/flowDirection.js';
+import type { ContractType } from '../../domain/tradeSemantics.js';
 // Postgres impls. Static import: pg is a declared dep on both backends now; the
 // functions are only CALLED on the postgres branch (lazy Pool connect), so the
 // import cost is one module load. Type-only for the input/output types below.
@@ -1788,8 +1789,8 @@ export async function upsertContractLedgerEntry(
     .prepare(
       `INSERT INTO contract_ledger
          (id, contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
-          overall_confidence, needs_review, user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          overall_confidence, needs_review, user_id, contract_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(contract_no, user_id) DO UPDATE SET
          display_contract_no = excluded.display_contract_no,
          doc_type = excluded.doc_type,
@@ -1799,6 +1800,7 @@ export async function upsertContractLedgerEntry(
          field_meta = excluded.field_meta,
          overall_confidence = excluded.overall_confidence,
          needs_review = excluded.needs_review,
+         contract_type = excluded.contract_type,
          updated_at = datetime('now')`,
     )
     .run(
@@ -1813,6 +1815,7 @@ export async function upsertContractLedgerEntry(
       entry.overallConfidence,
       entry.needsReview ? 1 : 0,
       entry.userId,
+      entry.contractType,
     );
 }
 
@@ -1837,7 +1840,7 @@ export async function findContractLedgerByNo(
     ? ctx.sqlite
         .prepare(
           `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
-                  overall_confidence, needs_review, user_id
+                  overall_confidence, needs_review, user_id, contract_type
            FROM contract_ledger
            WHERE contract_no = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)`,
         )
@@ -1845,7 +1848,7 @@ export async function findContractLedgerByNo(
     : ctx.sqlite
         .prepare(
           `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
-                  overall_confidence, needs_review, user_id
+                  overall_confidence, needs_review, user_id, contract_type
            FROM contract_ledger
            WHERE contract_no = ?`,
         )
@@ -1861,6 +1864,7 @@ export async function findContractLedgerByNo(
         overall_confidence: number;
         needs_review: number;
         user_id: string;
+        contract_type: string | null;
       }
     | undefined;
   if (!row) return null;
@@ -1870,6 +1874,7 @@ export async function findContractLedgerByNo(
     docType: row.doc_type,
     documentId: row.document_id,
     title: row.title,
+    contractType: (row.contract_type as ContractType | null) ?? null,
     fields: JSON.parse(row.fields) as ContractLedgerEntry['fields'],
     fieldMeta: JSON.parse(row.field_meta) as ContractLedgerEntry['fieldMeta'],
     overallConfidence: row.overall_confidence,
@@ -1892,7 +1897,7 @@ export async function listContractLedgerEntries(
     ? (ctx.sqlite
         .prepare(
           `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
-                  overall_confidence, needs_review, user_id
+                  overall_confidence, needs_review, user_id, contract_type
            FROM contract_ledger
            WHERE user_id = ? OR user_id = '' OR user_id IS NULL
            ORDER BY updated_at DESC`,
@@ -1908,11 +1913,12 @@ export async function listContractLedgerEntries(
         overall_confidence: number;
         needs_review: number;
         user_id: string;
+        contract_type: string | null;
       }>)
     : (ctx.sqlite
         .prepare(
           `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
-                  overall_confidence, needs_review, user_id
+                  overall_confidence, needs_review, user_id, contract_type
            FROM contract_ledger
            ORDER BY updated_at DESC`,
         )
@@ -1927,6 +1933,7 @@ export async function listContractLedgerEntries(
         overall_confidence: number;
         needs_review: number;
         user_id: string;
+        contract_type: string | null;
       }>);
   return rows.map((row) => ({
     contractNo: row.contract_no,
@@ -1934,6 +1941,7 @@ export async function listContractLedgerEntries(
     docType: row.doc_type,
     documentId: row.document_id,
     title: row.title,
+    contractType: (row.contract_type as ContractType | null) ?? null,
     fields: JSON.parse(row.fields) as ContractLedgerEntry['fields'],
     fieldMeta: JSON.parse(row.field_meta) as ContractLedgerEntry['fieldMeta'],
     overallConfidence: row.overall_confidence,

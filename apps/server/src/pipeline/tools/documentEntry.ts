@@ -37,7 +37,9 @@ import { extractVoucher, mimeForExtension, type VlmResult } from '../vlmAdapter.
 import { VOUCHER_SCHEMAS, validateVoucher, type VoucherType } from '../schemas/vouchers.js';
 import { extractAnchors } from '../schemas/vouchers.js';
 import { generateBindingProposals, type BindingRoute } from '../bindingProposal.js';
-import { materializeExecutionFlow, refreshExecutionFlowsForDocument } from '../executionFlow.js';
+import { materializeExecutionFlow, refreshExecutionFlowsForDocument, getEffectiveSelfPartyNames } from '../executionFlow.js';
+import { deriveContractType, type ContractTypeDerivation } from '../../domain/contractType.js';
+import type { ContractType } from '../../domain/tradeSemantics.js';
 
 /** Phase A: 图片凭证 VLM 解析依赖(可注入 fake 供测试; 缺省用真实 extractVoucher)。 */
 export interface VlmDeps {
@@ -101,6 +103,21 @@ function ensureFk(ctx: DbContext): void {
 // writeContractLedger 永不抛出, 任何失败只 console.error, 绝不把已完成的
 // save/抽取结果翻成失败。
 
+/** 录入侧合同类型派生(纯函数 + 有效主体名单; 名单读取失败按空名单降级)。 */
+async function deriveContractTypeForDoc(args: {
+  ctx: DbContext;
+  docType: string;
+  fields: Record<string, { value: string | number; confidence?: number }>;
+}): Promise<ContractTypeDerivation> {
+  let names: string[] = [];
+  try { names = await getEffectiveSelfPartyNames(args.ctx); } catch { names = []; }
+  return deriveContractType({
+    docType: args.docType,
+    fields: Object.entries(args.fields).map(([name, f]) => ({ name, value: f.value })),
+    selfPartyNames: names,
+  });
+}
+
 /**
  * Fault-isolated ledger write-back. buildLedgerEntryFromExtraction 返回 null
  * (无有效合同号, 如发票/提单) 时静默跳过; 其余路径的失败也只记日志。
@@ -112,6 +129,7 @@ async function writeContractLedger(args: {
   fields: Record<string, { value: string | number; sourceSpans: SourceSpan[] }>;
   fieldMeta: Record<string, { strength: SpanMatchStrength; confidence: number }>;
   userId?: string;
+  contractType?: ContractType | null;
 }): Promise<void> {
   try {
     const entry = buildLedgerEntryFromExtraction({
@@ -120,6 +138,7 @@ async function writeContractLedger(args: {
       fields: args.fields,
       fieldMeta: args.fieldMeta,
       userId: args.userId,
+      contractType: args.contractType,
     });
     if (!entry) return; // 无有效合同号 -> 不回写台账
     await upsertContractLedgerEntry(args.ctx, entry, args.userId);
@@ -141,6 +160,11 @@ export function buildLedgerWritingDeps(
     ...baseDeps,
     save: async (args) => {
       await baseDeps.save(args);
+      const derivation = await deriveContractTypeForDoc({
+        ctx: opts.ctx,
+        docType: opts.docType,
+        fields: args.fields,
+      });
       await writeContractLedger({
         ctx: opts.ctx,
         docId: args.docId,
@@ -148,6 +172,7 @@ export function buildLedgerWritingDeps(
         fields: args.fields,
         fieldMeta: args.fieldMeta,
         userId: args.userId,
+        contractType: derivation.contractType,
       });
     },
   };
@@ -1104,6 +1129,12 @@ export function buildExtractFieldsTool(deps: ToolDeps) {
         deps.userId,
       );
       // 接线闭环: 手动抽取成功后同样回写合同台账(旁路 byproduct, 永不抛出)。
+      // 合同类型与自动抽取路径同一派生规则(deriveContractTypeForDoc)。
+      const manualDerivation = await deriveContractTypeForDoc({
+        ctx: deps.ctx,
+        docType: docType as DocType,
+        fields,
+      });
       await writeContractLedger({
         ctx: deps.ctx,
         docId,
@@ -1111,6 +1142,7 @@ export function buildExtractFieldsTool(deps: ToolDeps) {
         fields,
         fieldMeta,
         userId: deps.userId,
+        contractType: manualDerivation.contractType,
       });
       // Bounded summary for the model trajectory. Full evidence (citedText,
       // sourceSpans) stays persisted via saveExtraction and is retrievable on

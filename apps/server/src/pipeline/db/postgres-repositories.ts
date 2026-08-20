@@ -21,6 +21,7 @@ import { normalizeContractNo } from '../contractLedger.js';
 import type { ContractLedgerEntry } from '../contractLedger.js';
 import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.js';
 import { normalizeCompanyName } from '../../domain/flowDirection.js';
+import type { ContractType } from '../../domain/tradeSemantics.js';
 import { parseGraphStatus } from './repositories.js';
 import type {
   ExtractionInput,
@@ -322,7 +323,7 @@ export async function listContractLedgerEntriesPg(
   const res = uid
     ? await ctx.pool.query(
         `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
-                overall_confidence, needs_review, user_id
+                overall_confidence, needs_review, user_id, contract_type
          FROM contract_ledger
          WHERE user_id = $1 OR user_id = '' OR user_id IS NULL
          ORDER BY updated_at DESC`,
@@ -330,7 +331,7 @@ export async function listContractLedgerEntriesPg(
       )
     : await ctx.pool.query(
         `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
-                overall_confidence, needs_review, user_id
+                overall_confidence, needs_review, user_id, contract_type
          FROM contract_ledger
          ORDER BY updated_at DESC`,
       );
@@ -340,6 +341,7 @@ export async function listContractLedgerEntriesPg(
     docType: r.doc_type,
     documentId: r.document_id,
     title: r.title,
+    contractType: (r.contract_type as ContractType | null) ?? null,
     fields: r.fields as ContractLedgerEntry['fields'],
     fieldMeta: r.field_meta as ContractLedgerEntry['fieldMeta'],
     overallConfidence: Number(r.overall_confidence),
@@ -1458,8 +1460,8 @@ export async function upsertContractLedgerEntryPg(
   await ctx.pool.query(
     `INSERT INTO contract_ledger
        (id, contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
-        overall_confidence, needs_review, user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        overall_confidence, needs_review, user_id, contract_type)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      ON CONFLICT (contract_no, user_id) DO UPDATE SET
        display_contract_no = EXCLUDED.display_contract_no,
        doc_type = EXCLUDED.doc_type,
@@ -1469,6 +1471,7 @@ export async function upsertContractLedgerEntryPg(
        field_meta = EXCLUDED.field_meta,
        overall_confidence = EXCLUDED.overall_confidence,
        needs_review = EXCLUDED.needs_review,
+       contract_type = EXCLUDED.contract_type,
        updated_at = NOW()`,
     [
       id,
@@ -1482,6 +1485,7 @@ export async function upsertContractLedgerEntryPg(
       entry.overallConfidence,
       entry.needsReview,
       entry.userId,
+      entry.contractType,
     ],
   );
 }
@@ -1503,14 +1507,14 @@ export async function findContractLedgerByNoPg(
   const res = uid
     ? await ctx.pool.query(
         `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
-                overall_confidence, needs_review, user_id
+                overall_confidence, needs_review, user_id, contract_type
          FROM contract_ledger
          WHERE contract_no = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)`,
         [normalized, uid],
       )
     : await ctx.pool.query(
         `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
-                overall_confidence, needs_review, user_id
+                overall_confidence, needs_review, user_id, contract_type
          FROM contract_ledger
          WHERE contract_no = $1`,
         [normalized],
@@ -1527,6 +1531,7 @@ export async function findContractLedgerByNoPg(
     overall_confidence: string | number;
     needs_review: boolean;
     user_id: string;
+    contract_type: string | null;
   };
   return {
     contractNo: r.contract_no,
@@ -1534,6 +1539,7 @@ export async function findContractLedgerByNoPg(
     docType: r.doc_type,
     documentId: r.document_id,
     title: r.title,
+    contractType: (r.contract_type as ContractType | null) ?? null,
     // jsonb auto-parsed to objects by node-postgres on read.
     fields: r.fields,
     fieldMeta: r.field_meta,

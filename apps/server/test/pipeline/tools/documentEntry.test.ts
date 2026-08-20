@@ -132,6 +132,54 @@ describe('document-entry tools', () => {
     expect(out).toHaveProperty('missingRequired');
   });
 
+  it('extract_fields 回写台账时派生 contract_type 落库(主体是卖方 -> 销售)', async () => {
+    const { addSelfParty } = await import('../../../src/pipeline/db/repositories.js');
+    await addSelfParty(ctx, '我方贸易', 'u1');
+
+    const f = join(dir, 'sale.txt');
+    writeFileSync(f, '合同号：HT-T2-001\n买方：某钢厂\n卖方：我方贸易\n', 'utf-8');
+    const ingest = buildIngestDocumentTool({ ctx });
+    const ing: any = await ingest.execute(
+      { sourceUri: f, docType: '合同', modality: 'digital' },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+
+    // Stub model returning 合同号 + 买方/卖方(主体名单命中卖方 -> contractType 销售)。
+    const saleModel = {
+      ...stubModel,
+      async doGenerate() {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({
+                fields: {
+                  合同号: { value: 'HT-T2-001', sourceSpans: [{ blockId: 'b0', start: 4, end: 14 }] },
+                  买方: { value: '某钢厂', sourceSpans: [{ blockId: 'b1', start: 3, end: 6 }] },
+                  卖方: { value: '我方贸易', sourceSpans: [{ blockId: 'b2', start: 3, end: 7 }] },
+                },
+                llmConsistency: 0.95,
+              }),
+            },
+          ],
+          finishReason: 'stop' as const,
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          warnings: [] as unknown[],
+        };
+      },
+    } as any;
+    const extract = buildExtractFieldsTool({ ctx, extraction: { model: saleModel } as any });
+    await extract.execute(
+      { docId: ing.docId, docType: '合同' },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+
+    const row = ctx.sqlite
+      .prepare('SELECT contract_type FROM contract_ledger WHERE contract_no = ?')
+      .get('HT-T2-001') as { contract_type: string | null };
+    expect(row.contract_type).toBe('销售');
+  });
+
   it('inspect_extraction returns persisted-field evidence on demand', async () => {
     // Seed an extraction row directly so the test does not depend on the LLM.
     const { saveExtraction } = await import('../../../src/pipeline/db/repositories.js');
