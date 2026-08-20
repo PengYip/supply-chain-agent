@@ -82,6 +82,7 @@ export const FavoritesView: React.FC<{
   }
 
   const saveNote = async (sessionId: string) => {
+    if (busyId === sessionId) return
     setBusyId(sessionId)
     try {
       await setFavorite(sessionId, noteDraft)
@@ -95,6 +96,7 @@ export const FavoritesView: React.FC<{
   }
 
   const unfavorite = async (sessionId: string) => {
+    if (busyId === sessionId) return
     setBusyId(sessionId)
     try {
       await clearFavorite(sessionId)

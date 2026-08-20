@@ -189,74 +189,91 @@ export function useSessionMessages(
     return () => closePipeline()
   }, [closePipeline, sessionId])
 
+  // Double-send guard: status is SSE-driven (server push, ~100-500ms of
+  // latency), so the composer's isBusy lags behind the actual POST. A
+  // synchronous ref swallows the second Enter before any state settles.
+  // lastSidRef closes the gap between lazy-create and the sessionId prop
+  // arriving via navigation (onSessionCreated → App state → props round-trip)
+  // so a fast second send reuses the session instead of creating another.
+  const sendingRef = useRef(false)
+  const lastSidRef = useRef<string | null>(null)
+  useEffect(() => { lastSidRef.current = sessionId }, [sessionId])
+
   const sendMessage = useCallback(
     async (text: string, sendOpts?: SendMessageOptions): Promise<{ ok?: true; runId?: string; error?: string }> => {
-      // No session selected (welcome screen): create one first so typing
-      // directly into the composer keeps working like the old useChat path.
-      let sid = sessionId
-      if (!sid) {
+      if (sendingRef.current) return { error: 'session_busy' }
+      sendingRef.current = true
+      try {
+        // No session selected (welcome screen): create one first so typing
+        // directly into the composer keeps working like the old useChat path.
+        let sid = sessionId ?? lastSidRef.current
+        if (!sid) {
+          try {
+            const created = await fetch('/api/sessions', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ role: 'trader' }),
+            })
+            if (!created.ok) return { error: 'failed to create session' }
+            const s = (await created.json()) as { id?: string }
+            if (!s.id) return { error: 'failed to create session' }
+            sid = s.id
+            lastSidRef.current = sid
+            onSessionCreatedRef.current?.(sid)
+          } catch (err) {
+            return { error: err instanceof Error ? err.message : String(err) }
+          }
+        }
+        // 附件以 data-attachment parts 内嵌：服务端原样持久化 UIMessage，
+        // convertToModelMessages 静默丢弃 data-*，历史刷新后卡片可复现。
+        const attachmentParts = (sendOpts?.contextFiles ?? []).map(toAttachmentPart)
+        const userMsg = {
+          id: generateId(),
+          role: 'user',
+          parts: [...attachmentParts, { type: 'text', text }],
+          createdAt: new Date().toISOString(),
+        } as unknown as UIMessage
+
+        // Optimistic append.
+        setMessages((prev) => [...prev, userMsg])
+
         try {
-          const created = await fetch('/api/sessions', {
+          const res = await fetch('/api/chat', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ role: 'trader' }),
+            headers: { 'Content-Type': 'application/json', 'x-session-id': sid },
+            body: JSON.stringify({
+              messages: [userMsg],
+              role: 'trader',
+              contextFiles: (sendOpts?.contextFiles ?? []).map((f) => ({ docId: f.docId, filename: f.filename })),
+            }),
           })
-          if (!created.ok) return { error: 'failed to create session' }
-          const s = (await created.json()) as { id?: string }
-          if (!s.id) return { error: 'failed to create session' }
-          sid = s.id
-          onSessionCreatedRef.current?.(sid)
+
+          if (res.status === 409) {
+            // Busy / L2-approval-pending: roll back the optimistic message.
+            setMessages((prev) => prev.filter((m) => m.id !== userMsg.id))
+            const j = (await res.json().catch(() => ({}))) as { error?: string }
+            if (j.error === 'approval_pending') {
+              // An L2 approval card is pending: the server rejects chat until it
+              // is resolved (approving stale cards / chatting past a hanging
+              // tool_call would otherwise reach the provider without a
+              // tool-result and brick the session).
+              return { error: '存在未确认的 L2 写操作，请先处理上方的操作确认卡片' }
+            }
+            return { error: 'session_busy' }
+          }
+          if (!res.ok) {
+            setMessages((prev) => prev.filter((m) => m.id !== userMsg.id))
+            const j = (await res.json().catch(() => ({}))) as { error?: string }
+            return { error: j.error ?? `request failed (${res.status})` }
+          }
+          const data = (await res.json()) as { runId?: string }
+          return { ok: true, runId: data.runId }
         } catch (err) {
+          setMessages((prev) => prev.filter((m) => m.id !== userMsg.id))
           return { error: err instanceof Error ? err.message : String(err) }
         }
-      }
-      // 附件以 data-attachment parts 内嵌：服务端原样持久化 UIMessage，
-      // convertToModelMessages 静默丢弃 data-*，历史刷新后卡片可复现。
-      const attachmentParts = (sendOpts?.contextFiles ?? []).map(toAttachmentPart)
-      const userMsg = {
-        id: generateId(),
-        role: 'user',
-        parts: [...attachmentParts, { type: 'text', text }],
-        createdAt: new Date().toISOString(),
-      } as unknown as UIMessage
-
-      // Optimistic append.
-      setMessages((prev) => [...prev, userMsg])
-
-      try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-session-id': sid },
-          body: JSON.stringify({
-            messages: [userMsg],
-            role: 'trader',
-            contextFiles: (sendOpts?.contextFiles ?? []).map((f) => ({ docId: f.docId, filename: f.filename })),
-          }),
-        })
-
-        if (res.status === 409) {
-          // Busy / L2-approval-pending: roll back the optimistic message.
-          setMessages((prev) => prev.filter((m) => m.id !== userMsg.id))
-          const j = (await res.json().catch(() => ({}))) as { error?: string }
-          if (j.error === 'approval_pending') {
-            // An L2 approval card is pending: the server rejects chat until it
-            // is resolved (approving stale cards / chatting past a hanging
-            // tool_call would otherwise reach the provider without a
-            // tool-result and brick the session).
-            return { error: '存在未确认的 L2 写操作，请先处理上方的操作确认卡片' }
-          }
-          return { error: 'session_busy' }
-        }
-        if (!res.ok) {
-          setMessages((prev) => prev.filter((m) => m.id !== userMsg.id))
-          const j = (await res.json().catch(() => ({}))) as { error?: string }
-          return { error: j.error ?? `request failed (${res.status})` }
-        }
-        const data = (await res.json()) as { runId?: string }
-        return { ok: true, runId: data.runId }
-      } catch (err) {
-        setMessages((prev) => prev.filter((m) => m.id !== userMsg.id))
-        return { error: err instanceof Error ? err.message : String(err) }
+      } finally {
+        sendingRef.current = false
       }
     },
     [sessionId],
