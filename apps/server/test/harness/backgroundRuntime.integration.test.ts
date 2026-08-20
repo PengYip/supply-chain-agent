@@ -8,6 +8,7 @@ import {
   getSessionStatus,
   createSession,
   loadSession,
+  setSessionFavorite,
   setSessionStatus,
 } from '../../src/harness/sessionStore.js';
 import { sessionsRoute } from '../../src/routes/sessions.js';
@@ -116,5 +117,27 @@ describe('background runtime integration (full chain)', () => {
     const row = json.sessions.find((r: { id: string }) => r.id === s.id);
     expect(row).toBeTruthy();
     expect(row.status).toBe('busy');
+  });
+
+  // Regression: the route once stripped `favorited` from listSessionsForUser
+  // rows, so the sidebar star and the 已收藏 count never updated after a
+  // favorite even though the favorite itself succeeded.
+  it('GET /api/sessions returns favorited flag for the listing user', async () => {
+    const s = createSession('trader', 'u-favlist');
+    setSessionFavorite(s.id, 'u-favlist', 't@t', null);
+
+    const app = new Hono<AuthEnv>();
+    app.use('*', async (c, next) => {
+      c.set('user', { id: 'u-favlist', email: 't@t', role: 'trader' } as any);
+      await next();
+    });
+    app.route('/api/sessions', sessionsRoute);
+
+    const res = await app.request('http://test/api/sessions');
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    const row = json.sessions.find((r: { id: string }) => r.id === s.id);
+    expect(row).toBeTruthy();
+    expect(row.favorited).toBe(true);
   });
 });
