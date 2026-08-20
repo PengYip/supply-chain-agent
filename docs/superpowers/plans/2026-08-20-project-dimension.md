@@ -1330,16 +1330,17 @@ export function buildProjectRollupTool(deps?: { ctx?: DbContext; userId?: string
 
 （执行者按任务完成后填写：偏离计划的改动及原因、发现并修复的问题、遗留 followup）
 
-- Task 1:
-- Task 2:
-- Task 3:
-- Task 4:
-- Task 5:
-- Task 6:
-- Task 7:
-- Task 8:
-- Task 9:
-- Task 10:
-- Task 11:
-- Task 12:
-- Task 13:
+- Task 1: 环境修复（非代码）：worktree 根 node_modules 缺 better-sqlite3（drizzle 从根解析不到，44 个测试文件 import 即挂）。根因 lock 解析为根 12.11.1 + 嵌套 11.10.0 双落点但磁盘只有手工嵌套副本；离线无法装 12.x，把已编译 11.10.0 复制到根（满足 peer >=7）。未改 package.json/lock。
+- Task 2: 手动 extract_fields 路径同样接入 deriveContractTypeForDoc（计划只写 buildLedgerWritingDeps save 包装），两个录入入口语义一致；手动路径的 derivation 复用同一 helper。SQLite 读回 contract_type 加 as ContractType | null 收窄。guarded-ALTER 块置于模板字符串外（bindings graph_status 块后）。
+- Task 3: 快照外层 null 语义——派生无结果（非合同/全无信号）时 ReviewSnapshot.contractType 挂 null 而非 {contractType:null,...} 对象，与 Task 4 复核卡「null 不渲染」措辞对齐。effectiveSelfPartyNamesForDerivation 导出供 PG 快照分支复用（避免环）。
+- Task 4: 无偏离。快照类型镜像加可选 contractType 字段；GraphFlowNode 两族节点卡加类型徽章（Contract 实体 / docType=合同的 Document，props.contractType 存在时）。
+- Task 5: 实体提议与边提议策略不同——实体侧保留全部项目字段候选（写入按归一化名 MERGE 去重），边侧才做编号优先折叠；与计划字面一致，测试覆盖补充了该差异。graphWriter 用例的“红”由 tsc 类型联合把关（运行时本就透传字符串 kind）。
+- Task 6: createProject 存在性检查用精确 (code, user_id)（读侧 3-way OR 会让他人项目挡创建，与唯一索引矛盾）；归属写侧 user_id 统一 effectiveUserId 归一存 ''（NULL 会让唯一索引幂等失效，与 contract_ledger 同约定）。PG 孪生经 repositories 静态 import 块分发。
+- Task 7: ContractLedgerEntry 类型实际在 contractLedger.ts（计划写在 repositories），导入路径修正。测试用例覆盖计划全部要点（skipped/ok/台账缺失/物流角色/remove 只删 part_of/io 抛错不上抛）。
+- Task 8: 两个录入入口都接 writeProjectProposals（与 Task 2 适配一致）；传入字段合并 fieldMeta confidence（save 包装的 fields 本身不带 confidence，直传会使提议 confidence 退化为 0）。projectName 语义对齐计划代码：无名称字段取编号字段原始写法（非大写后值）。计划导入的 TRADE_VOCAB 未使用，移除。
+- Task 9: 路由 ctx 改每请求 getDbContext()（弃计划中的模块级 _ctx 单例——测试间缓存第一个 in-memory ctx 致后续用例查空库；生产下 getDbContext 自身是单例，语义不变）。测试显式删除并恢复 NEO4J_PASSWORD（本地 .env 带该变量且 vitest 注入，使图门禁走到真实连接）。
+- Task 10: SYSTEM_PROMPT 项目段按计划直接写入 project_rollup 完整描述（含“工具未注册/notFound 时如实告知”回退）。kinds.ts 加 Project 图标（FolderKanban）/紫系样式/三条边标签。
+- Task 11: summarizeExecutionFlows 与 ExecutionFlowSummary 实际从 repositories.ts 导出（计划写在 executionFlow.ts），导入源适配；direction 'in'|'out' 与计划假设一致。totalAmount/totalQuantityTon 可能为 null，聚合按 ?? 0 处理（SUM 对全 NULL 组返回 null 的既有语义）。
+- Task 12: 工具数量断言 +1 共三处（e2e-loop 20->21、integration-recall 20->21、contextContract EXPECTED_TOOLS 加名）；permissionGate L1 + contextContract 条目照 query_execution_flows 模式。rollup 端点挂在 /:code/memberships 之前。
+- Task 13: 无偏离。api/projects.ts fetch 包装照 review.ts（错误码中文映射）；useProjects 写操作后 refreshAll 统一刷新列表计数+选中明细；ProjectsView 双栏复用既有卡片/表格/徽章 token；App.tsx 照 BindingsView 挂载方式加「项目」入口（FolderKanban 图标）。
+- 遗留 followup: (1) PG 集成测试默认 skip，新表/新列的 PG 路径靠 tsc 类型对齐 + SQL 孪生审读保证；(2) 派生边（counterparty/participates）不追删，靠下一次任一归属确认按最新 SSOT 重 MERGE 收敛（spec §8 已知简化）；(3) 图谱 GraphFlowNode 的项目徽章依赖 props.contractType，仅确认后图提交/归属同步写入的节点可见。
