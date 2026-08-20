@@ -35,6 +35,10 @@ function relativeTime(iso: string): string {
 export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, createSession, deleteSession, refresh, favoriteSession, unfavoriteSession }: SessionSidebarProps) {
   // 全部 / 已收藏 filter over the server-joined favorited flag.
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false)
+  // 防抖：请求在途时吞掉重复点击（连点新建不应发出第二个 POST，连点星标
+  // 不应发出第二组 favorite+refresh）。
+  const [newBusy, setNewBusy] = useState(false)
+  const [favBusyId, setFavBusyId] = useState<string | null>(null)
   // 空会话不进入列表（服务端在下次新建时也会清理）；当前活跃的空会话保留
   // 展示，否则正在使用的会话会凭空消失。
   const listed = sessions.filter((s) => s.id === activeSessionId || (s.messageCount ?? 0) > 0)
@@ -43,11 +47,17 @@ export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, c
   // 重复点击新建：若当前会话存在且还没有任何消息，直接复用它（一次不刷
   // 新的判断可能拿到过期计数，故先取权威列表再决策）。
   const handleNew = async () => {
-    const fresh = await refresh()
-    const active = fresh.find((s) => s.id === activeSessionId)
-    if (active && (active.messageCount ?? 0) === 0) return
-    const s: Session | null = await createSession('trader')
-    if (s) onSelect(s.id)
+    if (newBusy) return
+    setNewBusy(true)
+    try {
+      const fresh = await refresh()
+      const active = fresh.find((s) => s.id === activeSessionId)
+      if (active && (active.messageCount ?? 0) === 0) return
+      const s: Session | null = await createSession('trader')
+      if (s) onSelect(s.id)
+    } finally {
+      setNewBusy(false)
+    }
   }
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
@@ -58,13 +68,19 @@ export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, c
 
   const handleToggleFavorite = async (e: React.MouseEvent, s: Session) => {
     e.stopPropagation()
-    if (s.favorited) {
-      await unfavoriteSession(s.id)
-    } else {
-      // Favorite immediately (no note) — feedback note is edited afterwards in
-      // the favorites panel / chat header; a blocking prompt here would get in
-      // the way of quick starring.
-      await favoriteSession(s.id)
+    if (favBusyId === s.id) return
+    setFavBusyId(s.id)
+    try {
+      if (s.favorited) {
+        await unfavoriteSession(s.id)
+      } else {
+        // Favorite immediately (no note) — feedback note is edited afterwards in
+        // the favorites panel / chat header; a blocking prompt here would get in
+        // the way of quick starring.
+        await favoriteSession(s.id)
+      }
+    } finally {
+      setFavBusyId(null)
     }
   }
 
@@ -74,9 +90,10 @@ export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, c
         <button
           type="button"
           onClick={handleNew}
-          className="w-full rounded-lg bg-primary px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90"
+          disabled={newBusy}
+          className="w-full rounded-lg bg-primary px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          新建会话
+          {newBusy ? '创建中...' : '新建会话'}
         </button>
         <div className="mt-2 flex gap-0.5 rounded-lg bg-surface p-1">
           {(
@@ -126,6 +143,7 @@ export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, c
                     className={clsx(
                       'shrink-0 cursor-pointer leading-none transition-colors',
                       s.favorited ? 'text-warning hover:text-warning/80' : 'text-line hover:text-warning',
+                      favBusyId === s.id && 'cursor-wait opacity-50',
                     )}
                   >
                     <Star size={14} fill={s.favorited ? 'currentColor' : 'none'} strokeWidth={1.5} />

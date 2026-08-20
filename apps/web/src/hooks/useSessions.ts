@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { setFavorite, clearFavorite } from '../api/favorites';
 
 export type SessionStatus = 'idle' | 'busy' | 'interrupted';
@@ -42,20 +42,33 @@ export function useSessions() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  // In-flight dedupe: a second call while the POST is pending resolves to the
+  // SAME promise (not a second request) — double-click on 新建会话 can never
+  // create two sessions.
+  const creatingRef = useRef<Promise<Session | null> | null>(null);
   const createSession = useCallback(async (role = 'trader'): Promise<Session | null> => {
-    const res = await fetch('/api/sessions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role }),
-    });
-    if (res.ok) {
-      const session: Session = await res.json();
-      // The POST endpoint returns only {id, role}; re-fetch the full list so
-      // the new session appears with complete fields (createdAt/title).
-      await refresh();
-      return session;
+    if (creatingRef.current) return creatingRef.current;
+    const p = (async () => {
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role }),
+      });
+      if (res.ok) {
+        const session: Session = await res.json();
+        // The POST endpoint returns only {id, role}; re-fetch the full list so
+        // the new session appears with complete fields (createdAt/title).
+        await refresh();
+        return session;
+      }
+      return null;
+    })();
+    creatingRef.current = p;
+    try {
+      return await p;
+    } finally {
+      creatingRef.current = null;
     }
-    return null;
   }, [refresh]);
 
   const deleteSession = useCallback(async (id: string) => {

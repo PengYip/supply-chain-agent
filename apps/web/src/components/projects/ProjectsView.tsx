@@ -98,6 +98,7 @@ export function ProjectsView() {
   };
 
   const handleMembershipAction = async (id: string, action: 'confirm' | 'reject') => {
+    if (confirmingId) return;
     setConfirmingId(id);
     setActionError(null);
     try {

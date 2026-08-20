@@ -495,6 +495,7 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
   const handleRetrySync = async (binding: BindingListItem) => {
     if (!selected) return;
     const key = `retry:${binding.bindingId}`;
+    if (pending.has(key)) return;
     markPending(key, true);
     try {
       await b.createBinding({

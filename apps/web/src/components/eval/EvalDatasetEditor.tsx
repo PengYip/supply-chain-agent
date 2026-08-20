@@ -139,6 +139,7 @@ export function EvalDatasetEditor({ onRunFromDataset }: { onRunFromDataset: (nam
   }
 
   const handleDelete = async (name: string) => {
+    if (busy) return
     if (!window.confirm(`确定删除数据集 ${name}? 该操作不可撤销。`)) return
     setBusy(true)
     setSaveError(null)
