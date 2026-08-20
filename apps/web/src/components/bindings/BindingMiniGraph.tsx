@@ -151,14 +151,14 @@ function MiniDocumentNode({ graph, isCenter, isBound, docMeta }: Omit<MiniNodeDa
         >
           <KIND_ICONS.Document className="h-2 w-2" aria-hidden />
         </span>
-        <span className="min-w-0 max-w-[68px] shrink truncate rounded border border-[#D8E2EB] bg-[#EEF2F6] px-1 py-px text-[9px] leading-4 text-steelBlue">
+        <span className="min-w-0 max-w-[68px] shrink truncate rounded border border-primary/20 bg-primary/10 px-1 py-px text-[9px] leading-4 text-primary-500">
           {docType}
         </span>
         {isBound && (
-          <span className="ml-auto shrink-0 rounded bg-deepSea px-1 py-px text-[9px] leading-4 text-white">绑定</span>
+          <span className="ml-auto shrink-0 rounded bg-primary px-1 py-px text-[9px] leading-4 text-white">绑定</span>
         )}
       </div>
-      <div className="mt-0.5 line-clamp-2 break-all text-[11px] leading-4 text-textDark">{name}</div>
+      <div className="mt-0.5 line-clamp-2 break-all text-[11px] leading-4 text-ink">{name}</div>
       <AllSideHandles />
     </div>
   );
@@ -395,29 +395,29 @@ export function BindingMiniGraph({ docId, contractNo, bindingId, docMeta = null,
   const ready = state.phase === 'ready' ? state : null;
 
   return (
-    <div className="mt-2.5 animate-fade-in overflow-hidden rounded-md border border-borderGray bg-white">
-      <div className="flex items-center gap-1.5 border-b border-borderGray bg-bgGray px-2.5 py-1.5">
-        <Network className="h-3.5 w-3.5 shrink-0 text-deepSea" aria-hidden />
-        <span className="text-[11px] font-medium text-textDark">图谱邻域 · 深度 1</span>
+    <div className="mt-2.5 animate-fade-in overflow-hidden rounded-md border border-line bg-white">
+      <div className="flex items-center gap-1.5 border-b border-line bg-surface px-2.5 py-1.5">
+        <Network className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
+        <span className="text-[11px] font-medium text-ink">图谱邻域 · 深度 1</span>
         {ready && (
-          <span className="ml-auto text-[10px] tabular-nums text-textGray">
+          <span className="ml-auto text-[10px] tabular-nums text-ink-soft">
             节点 {ready.nodes.length} · 关系 {ready.edges.length}
           </span>
         )}
       </div>
 
-      <div className="relative h-60 bg-[#f8fafc]">
+      <div className="relative h-60 bg-surface">
         {state.phase === 'loading' && (
           <div className="flex h-full flex-col items-center justify-center gap-2">
-            <span className="h-6 w-6 animate-spin rounded-full border-2 border-borderGray border-t-deepSea" />
-            <span className="text-[11px] text-textGray">图谱加载中</span>
+            <span className="h-6 w-6 animate-spin rounded-full border-2 border-line border-t-primary" />
+            <span className="text-[11px] text-ink-soft">图谱加载中</span>
           </div>
         )}
         {state.phase === 'notSynced' && (
           <div className="flex h-full flex-col items-center justify-center px-4 text-center">
-            <Network className="h-7 w-7 text-borderGray" aria-hidden />
-            <div className="mt-2 text-[12px] leading-5 text-textDark">该绑定尚未同步到图谱</div>
-            <div className="mt-0.5 text-[11px] leading-4 text-textGray">
+            <Network className="h-7 w-7 text-line" aria-hidden />
+            <div className="mt-2 text-[12px] leading-5 text-ink">该绑定尚未同步到图谱</div>
+            <div className="mt-0.5 text-[11px] leading-4 text-ink-soft">
               重新确认或重试同步后，这里会展示该合同的关联
             </div>
           </div>
@@ -429,7 +429,7 @@ export function BindingMiniGraph({ docId, contractNo, bindingId, docMeta = null,
             <button
               type="button"
               onClick={() => void load()}
-              className="mt-3 flex items-center gap-1 rounded-md border border-borderGray bg-white px-2.5 py-1 text-[11px] text-textDark transition-colors hover:bg-bgGray"
+              className="mt-3 flex items-center gap-1 rounded-md border border-line bg-white px-2.5 py-1 text-[11px] text-ink transition-colors hover:bg-surface"
             >
               <RefreshCw className="h-3 w-3" aria-hidden />
               重试
@@ -442,11 +442,11 @@ export function BindingMiniGraph({ docId, contractNo, bindingId, docMeta = null,
       </div>
 
       {ready && onOpenInGraph && (
-        <div className="border-t border-borderGray bg-white px-2 py-1.5">
+        <div className="border-t border-line bg-white px-2 py-1.5">
           <button
             type="button"
             onClick={() => onOpenInGraph({ elementId: ready.contract.elementId, label: contractNo })}
-            className="flex h-7 w-full items-center justify-center gap-1.5 rounded-md bg-deepSea text-[11px] font-medium text-white transition-colors hover:bg-[#164a76]"
+            className="flex h-7 w-full items-center justify-center gap-1.5 rounded-md bg-primary text-[11px] font-medium text-white transition-colors hover:bg-primary-800"
           >
             <Network className="h-3.5 w-3.5" aria-hidden />
             在完整图谱中查看

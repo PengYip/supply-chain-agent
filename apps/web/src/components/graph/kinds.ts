@@ -10,7 +10,7 @@ export const KIND_ICONS: Record<string, LucideIcon> = {
   Project: FolderKanban,
 };
 
-/** 四类节点的配色与文案：全部取自现有自定义色板，融入 deepSea 主色系。 */
+/** 四类节点的配色与文案：全部取自现有自定义色板，融入 primary 主色系。 */
 export interface KindStyle {
   /** 主色（图标/圆点/小地图） */
   color: string;

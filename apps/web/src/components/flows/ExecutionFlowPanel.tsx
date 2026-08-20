@@ -34,33 +34,33 @@ type Phase = 'idle' | 'loading' | 'ready' | 'error';
 function SummaryCard({ summary, groupFlows }: { summary: FlowSummary; groupFlows: ExecutionFlowItem[] }) {
   const isIn = summary.direction === 'in';
   const badgeCls = isIn
-    ? 'border-[#CBE5D3] bg-[#E9F4EC] text-[#15803D]'
-    : 'border-[#CFDCE6] bg-[#EBF1F5] text-steelBlue';
+    ? 'border-success/25 bg-success/10 text-success'
+    : 'border-primary/20 bg-primary/10 text-primary-500';
   return (
-    <div className="rounded-md border border-borderGray px-3 py-2.5">
+    <div className="rounded-md border border-line px-3 py-2.5">
       <div className="flex items-center gap-1.5">
         <span className={clsx('shrink-0 rounded border px-1.5 py-px text-[10px]', badgeCls)}>
           {flowDirectionLabel(summary.flowType, summary.direction)}
         </span>
-        <span className="ml-auto shrink-0 text-[11px] tabular-nums text-textGray">{summary.entryCount} 笔</span>
+        <span className="ml-auto shrink-0 text-[11px] tabular-nums text-ink-soft">{summary.entryCount} 笔</span>
       </div>
       <div className="mt-2">
-        <div className="text-[11px] text-textGray">金额合计</div>
-        <div className="mt-0.5 truncate text-[13px] font-semibold tabular-nums text-textDark">
+        <div className="text-[11px] text-ink-soft">金额合计</div>
+        <div className="mt-0.5 truncate text-[13px] font-semibold tabular-nums text-ink">
           {formatFlowAmount(summary.totalAmount)}
         </div>
       </div>
       {summary.totalQuantityTon !== null && (
         <div className="mt-1.5">
-          <div className="text-[11px] text-textGray">数量合计</div>
-          <div className="mt-0.5 truncate text-[13px] font-semibold tabular-nums text-textDark">
+          <div className="text-[11px] text-ink-soft">数量合计</div>
+          <div className="mt-0.5 truncate text-[13px] font-semibold tabular-nums text-ink">
             {formatFlowQuantity(summary.totalQuantityTon, pickRepresentativeUnit(groupFlows))}
           </div>
         </div>
       )}
       <div className="mt-1.5 flex items-center justify-between gap-1">
-        <span className="shrink-0 text-[11px] text-textGray">最近凭证</span>
-        <span className="min-w-0 truncate text-[11px] tabular-nums text-textDark">{flowText(summary.lastVoucherDate)}</span>
+        <span className="shrink-0 text-[11px] text-ink-soft">最近凭证</span>
+        <span className="min-w-0 truncate text-[11px] tabular-nums text-ink">{flowText(summary.lastVoucherDate)}</span>
       </div>
     </div>
   );
@@ -78,8 +78,8 @@ function FlowRow({
 }) {
   const isIn = flow.direction === 'in';
   const badgeCls = isIn
-    ? 'border-[#CBE5D3] bg-[#E9F4EC] text-[#15803D]'
-    : 'border-[#CFDCE6] bg-[#EBF1F5] text-steelBlue';
+    ? 'border-success/25 bg-success/10 text-success'
+    : 'border-primary/20 bg-primary/10 text-primary-500';
   // 溯源展示: 优先文件名(prettyDocName 剥 uuid/users_ 前缀), 缺省降级 documentId 截断。
   const displayName = flow.documentFileName ? prettyDocName(flow.documentFileName) : null;
   const traceLabel = displayName
@@ -92,18 +92,18 @@ function FlowRow({
     .filter(Boolean)
     .join('\n');
   return (
-    <div className="grid grid-cols-[64px_1fr_1fr_92px_1fr_140px] items-center border-b border-borderGray/60 last:border-b-0">
+    <div className="grid grid-cols-[64px_1fr_1fr_92px_1fr_140px] items-center border-b border-line/60 last:border-b-0">
       <div className="px-2 py-1.5">
         <span className={clsx('rounded border px-1.5 py-px text-[10px]', badgeCls)}>
           {flowDirectionLabel(flow.flowType, flow.direction)}
         </span>
       </div>
-      <div className="px-2 py-1.5 text-right text-[12px] tabular-nums text-textDark">{formatFlowAmount(flow.amount)}</div>
-      <div className="px-2 py-1.5 text-right text-[12px] tabular-nums text-textDark">
+      <div className="px-2 py-1.5 text-right text-[12px] tabular-nums text-ink">{formatFlowAmount(flow.amount)}</div>
+      <div className="px-2 py-1.5 text-right text-[12px] tabular-nums text-ink">
         {formatFlowQuantity(flow.quantityTon, flow.unit)}
       </div>
-      <div className="px-2 py-1.5 text-[12px] tabular-nums text-textDark">{flowText(flow.voucherDate)}</div>
-      <div className="break-all px-2 py-1.5 text-[12px] leading-4 text-textDark">{flowText(flow.docType)}</div>
+      <div className="px-2 py-1.5 text-[12px] tabular-nums text-ink">{flowText(flow.voucherDate)}</div>
+      <div className="break-all px-2 py-1.5 text-[12px] leading-4 text-ink">{flowText(flow.docType)}</div>
       <div className="px-2 py-1.5">
         {flow.documentId ? (
           onPreviewFile && flow.documentMinioKey ? (
@@ -121,7 +121,7 @@ function FlowRow({
                 })
               }
               title={traceTitle}
-              className="block max-w-full truncate text-left text-[11px] text-deepSea transition-colors hover:underline"
+              className="block max-w-full truncate text-left text-[11px] text-primary transition-colors hover:underline"
             >
               {traceLabel}
             </button>
@@ -130,17 +130,17 @@ function FlowRow({
               type="button"
               onClick={() => onLocateDocument(flow.documentId)}
               title={traceTitle}
-              className="text-[11px] text-deepSea transition-colors hover:underline"
+              className="text-[11px] text-primary transition-colors hover:underline"
             >
               定位凭证
             </button>
           ) : (
-            <span className="cursor-default block truncate text-[11px] text-textGray" title={traceTitle}>
+            <span className="cursor-default block truncate text-[11px] text-ink-soft" title={traceTitle}>
               {traceLabel}
             </span>
           )
         ) : (
-          <span className="text-[12px] text-borderGray">—</span>
+          <span className="text-[12px] text-line">—</span>
         )}
       </div>
     </div>
@@ -202,10 +202,10 @@ export function ExecutionFlowPanel({
   const partiesMissing = data?.selfPartiesConfigured === false;
 
   return (
-    <div className="mt-2.5 animate-fade-in overflow-hidden rounded-md border border-borderGray bg-white">
-      <div className="flex items-center gap-1.5 border-b border-borderGray bg-bgGray px-2.5 py-1.5">
-        <span className="shrink-0 text-[11px] font-medium text-textDark">执行流水</span>
-        <span className="min-w-0 truncate font-mono text-[10px] text-textGray" title={headerNo}>
+    <div className="mt-2.5 animate-fade-in overflow-hidden rounded-md border border-line bg-white">
+      <div className="flex items-center gap-1.5 border-b border-line bg-surface px-2.5 py-1.5">
+        <span className="shrink-0 text-[11px] font-medium text-ink">执行流水</span>
+        <span className="min-w-0 truncate font-mono text-[10px] text-ink-soft" title={headerNo}>
           {headerNo}
         </span>
         <button
@@ -214,7 +214,7 @@ export function ExecutionFlowPanel({
           title={collapsed ? '展开执行流水' : '收起执行流水'}
           aria-label={collapsed ? '展开执行流水' : '收起执行流水'}
           aria-expanded={!collapsed}
-          className="ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-textGray transition-colors hover:bg-white hover:text-deepSea"
+          className="ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink-soft transition-colors hover:bg-white hover:text-primary"
         >
           {collapsed ? (
             <ChevronDown className="h-3.5 w-3.5" aria-hidden />
@@ -228,9 +228,9 @@ export function ExecutionFlowPanel({
         <div className="max-h-[42vh] overflow-y-auto p-2.5">
           {(phase === 'idle' || phase === 'loading') && (
             <div className="space-y-2">
-              <div className="h-14 animate-pulse rounded-lg bg-bgGray" />
-              <div className="h-14 animate-pulse rounded-lg bg-bgGray" />
-              <div className="pt-1 text-center text-[12px] text-textGray">执行流水加载中</div>
+              <div className="h-14 animate-pulse rounded-lg bg-surface" />
+              <div className="h-14 animate-pulse rounded-lg bg-surface" />
+              <div className="pt-1 text-center text-[12px] text-ink-soft">执行流水加载中</div>
             </div>
           )}
 
@@ -241,7 +241,7 @@ export function ExecutionFlowPanel({
               <button
                 type="button"
                 onClick={() => void load()}
-                className="mt-3 flex items-center gap-1 rounded-md border border-borderGray bg-white px-2.5 py-1 text-[11px] text-textDark transition-colors hover:bg-bgGray"
+                className="mt-3 flex items-center gap-1 rounded-md border border-line bg-white px-2.5 py-1 text-[11px] text-ink transition-colors hover:bg-surface"
               >
                 <RefreshCw className="h-3 w-3" aria-hidden />
                 重试
@@ -253,15 +253,15 @@ export function ExecutionFlowPanel({
             <div className="flex flex-col items-center px-5 py-10 text-center">
               {partiesMissing ? (
                 <>
-                  <div className="text-[13px] font-medium text-textDark">主体名单未配置，流水方向无法判定</div>
-                  <div className="mt-1.5 max-w-[320px] text-[12px] leading-5 text-textGray">
+                  <div className="text-[13px] font-medium text-ink">主体名单未配置，流水方向无法判定</div>
+                  <div className="mt-1.5 max-w-[320px] text-[12px] leading-5 text-ink-soft">
                     到主体名单面板确认主体后，此处将自动回填执行流水
                   </div>
                   {onOpenParties && (
                     <button
                       type="button"
                       onClick={onOpenParties}
-                      className="mt-3 flex h-7 items-center gap-1.5 rounded-md bg-deepSea px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-[#164a76]"
+                      className="mt-3 flex h-7 items-center gap-1.5 rounded-md bg-primary px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-primary-800"
                     >
                       <Building2 className="h-3.5 w-3.5" aria-hidden />
                       前往主体名单
@@ -269,7 +269,7 @@ export function ExecutionFlowPanel({
                   )}
                 </>
               ) : (
-                <div className="text-[13px] font-medium text-textDark">该合同暂无执行流水</div>
+                <div className="text-[13px] font-medium text-ink">该合同暂无执行流水</div>
               )}
             </div>
           )}
@@ -278,7 +278,7 @@ export function ExecutionFlowPanel({
             <>
               {sortedSummaries.length > 0 && (
                 <div>
-                  <div className="text-[11px] font-medium tracking-wide text-textGray">六向汇总</div>
+                  <div className="text-[11px] font-medium tracking-wide text-ink-soft">六向汇总</div>
                   <div className="mt-1.5 grid grid-cols-2 gap-2 lg:grid-cols-3 2xl:grid-cols-6">
                     {sortedSummaries.map((s) => (
                       <SummaryCard
@@ -292,9 +292,9 @@ export function ExecutionFlowPanel({
               )}
 
               <div className="mt-2.5">
-                <div className="text-[11px] font-medium tracking-wide text-textGray">逐笔明细</div>
-                <div className="mt-1.5 overflow-hidden rounded-md border border-borderGray">
-                  <div className="grid grid-cols-[64px_1fr_1fr_92px_1fr_140px] border-b border-borderGray bg-bgGray text-[10px] font-medium text-textGray">
+                <div className="text-[11px] font-medium tracking-wide text-ink-soft">逐笔明细</div>
+                <div className="mt-1.5 overflow-hidden rounded-md border border-line">
+                  <div className="grid grid-cols-[64px_1fr_1fr_92px_1fr_140px] border-b border-line bg-surface text-[10px] font-medium text-ink-soft">
                     <div className="px-2 py-1.5">流向</div>
                     <div className="px-2 py-1.5 text-right">金额</div>
                     <div className="px-2 py-1.5 text-right">数量</div>

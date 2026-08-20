@@ -136,7 +136,7 @@ const SectionLabel: React.FC<{ icon: React.ReactNode; children: React.ReactNode 
   icon,
   children,
 }) => (
-  <div className="flex items-center gap-1.5 text-textGray mb-1.5">
+  <div className="flex items-center gap-1.5 text-ink-soft mb-1.5">
     {icon}
     <span className="text-[11px] font-medium tracking-wide">{children}</span>
   </div>
@@ -146,10 +146,10 @@ const ReviewStatusBadge: React.FC<{ status: DocumentReviewPayload['reviewStatus'
   status,
 }) => {
   const map = {
-    pending: { label: '待复核', cls: 'bg-amber/10 text-amber border-amber/30', Icon: AlertTriangle },
+    pending: { label: '待复核', cls: 'bg-warning/10 text-warning border-warning/30', Icon: AlertTriangle },
     corrected: {
       label: '已更正',
-      cls: 'bg-steelBlue/10 text-steelBlue border-steelBlue/30',
+      cls: 'bg-primary-500/10 text-primary-500 border-primary-500/30',
       Icon: CheckCircle2,
     },
     confirmed: {
@@ -174,7 +174,7 @@ const ReviewStatusBadge: React.FC<{ status: DocumentReviewPayload['reviewStatus'
 }
 
 const FlagBadge: React.FC = () => (
-  <span className="inline-flex items-center gap-0.5 text-[10px] text-amber bg-amber/10 border border-amber/30 rounded px-1 py-0.5 shrink-0">
+  <span className="inline-flex items-center gap-0.5 text-[10px] text-warning bg-warning/10 border border-warning/30 rounded px-1 py-0.5 shrink-0">
     <AlertTriangle className="w-2.5 h-2.5" />
     建议复核
   </span>
@@ -185,13 +185,13 @@ const VectorizationStatus: React.FC<{ v: DocumentReviewPayload['vectorization'] 
     ok: { label: '已入库', cls: 'bg-success/10 text-success border-success/30', Icon: CheckCircle2 },
     skipped: {
       label: '已跳过',
-      cls: 'bg-amber/10 text-amber border-amber/30',
+      cls: 'bg-warning/10 text-warning border-warning/30',
       Icon: MinusCircle,
     },
     failed: { label: '失败', cls: 'bg-danger/10 text-danger border-danger/30', Icon: AlertCircle },
     unknown: {
       label: '未知',
-      cls: 'bg-bgGray text-textGray border-borderGray',
+      cls: 'bg-surface text-ink-soft border-line',
       Icon: AlertCircle,
     },
   } as const
@@ -209,17 +209,17 @@ const VectorizationStatus: React.FC<{ v: DocumentReviewPayload['vectorization'] 
           <Icon className="w-3 h-3" />
           {entry.label}
         </span>
-        <span className="text-textGray">
-          模式 <span className="font-mono text-steelBlue">{v?.mode || '--'}</span>
+        <span className="text-ink-soft">
+          模式 <span className="font-mono text-primary-500">{v?.mode || '--'}</span>
         </span>
-        <span className="text-textGray">
-          分块 <span className="font-mono text-steelBlue">
+        <span className="text-ink-soft">
+          分块 <span className="font-mono text-primary-500">
             {typeof v?.chunkCount === 'number' ? v.chunkCount : 0}
           </span>
         </span>
       </div>
       {v?.reason && (
-        <div className="text-[11px] text-textGray italic mt-1 line-clamp-2">{v.reason}</div>
+        <div className="text-[11px] text-ink-soft italic mt-1 line-clamp-2">{v.reason}</div>
       )}
     </div>
   )
@@ -228,9 +228,9 @@ const VectorizationStatus: React.FC<{ v: DocumentReviewPayload['vectorization'] 
 const GraphStatusView: React.FC<{ g: NonNullable<DocumentReviewPayload['graphStatus']> }> = ({ g }) => {
   const map = {
     ok: { label: '已入库', cls: 'bg-success/10 text-success border-success/30', Icon: CheckCircle2 },
-    partial: { label: '部分入库', cls: 'bg-amber/10 text-amber border-amber/30', Icon: AlertTriangle },
+    partial: { label: '部分入库', cls: 'bg-warning/10 text-warning border-warning/30', Icon: AlertTriangle },
     failed: { label: '失败', cls: 'bg-danger/10 text-danger border-danger/30', Icon: AlertCircle },
-    skipped: { label: '未配置', cls: 'bg-bgGray text-textGray border-borderGray', Icon: MinusCircle },
+    skipped: { label: '未配置', cls: 'bg-surface text-ink-soft border-line', Icon: MinusCircle },
   } as const
   const entry = map[g?.status] || map.skipped
   const { Icon } = entry
@@ -246,11 +246,11 @@ const GraphStatusView: React.FC<{ g: NonNullable<DocumentReviewPayload['graphSta
           <Icon className="w-3 h-3" />
           {entry.label}
         </span>
-        <span className="text-textGray">
-          节点 <span className="font-mono text-steelBlue">{g?.nodeCount ?? 0}</span>
+        <span className="text-ink-soft">
+          节点 <span className="font-mono text-primary-500">{g?.nodeCount ?? 0}</span>
         </span>
-        <span className="text-textGray">
-          边 <span className="font-mono text-steelBlue">{g?.edgeCount ?? 0}</span>
+        <span className="text-ink-soft">
+          边 <span className="font-mono text-primary-500">{g?.edgeCount ?? 0}</span>
         </span>
       </div>
       {/* 确认时实际写入 Neo4j 的实体清单 chips；旧数据无 entities 时不渲染。 */}
@@ -259,25 +259,25 @@ const GraphStatusView: React.FC<{ g: NonNullable<DocumentReviewPayload['graphSta
           {(g.entities ?? []).map((e, i) => (
             <span
               key={`${e.kind}-${e.name}-${i}`}
-              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border bg-bgGray/50 text-textDark border-borderGray/50"
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border bg-surface/50 text-ink border-line/50"
             >
-              <span className="font-mono text-steelBlue">{e.kind}</span>
+              <span className="font-mono text-primary-500">{e.kind}</span>
               <span className="font-medium">{e.name}</span>
               {typeof e.role === 'string' && e.role.length > 0 && (
-                <span className="text-textGray">({e.role})</span>
+                <span className="text-ink-soft">({e.role})</span>
               )}
             </span>
           ))}
         </div>
       )}
       {g?.reason && (
-        <div className="text-[11px] text-textGray italic mt-1 line-clamp-2">{g.reason}</div>
+        <div className="text-[11px] text-ink-soft italic mt-1 line-clamp-2">{g.reason}</div>
       )}
       {/* partial/failed 时 writeDocumentGraph 只填 failures 不设 reason：列表展示前 3 条。 */}
       {(g?.failures?.length ?? 0) > 0 && (
         <ul className="mt-1 space-y-0.5">
           {(g.failures ?? []).slice(0, 3).map((f, i) => (
-            <li key={i} className="text-[11px] text-textGray italic line-clamp-1">
+            <li key={i} className="text-[11px] text-ink-soft italic line-clamp-1">
               {typeof f === 'string' ? f : ''}
             </li>
           ))}
@@ -320,7 +320,7 @@ const ChunkTagSection: React.FC<{ details: DocumentReviewPayload['chunkTagDetail
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="flex w-full items-center gap-1.5 text-textGray mb-1.5 cursor-pointer select-none"
+        className="flex w-full items-center gap-1.5 text-ink-soft mb-1.5 cursor-pointer select-none"
       >
         <Layers className="w-3 h-3 shrink-0" />
         <span className="text-[11px] font-medium tracking-wide">
@@ -335,21 +335,21 @@ const ChunkTagSection: React.FC<{ details: DocumentReviewPayload['chunkTagDetail
           {entries.map((d, i) => (
             <div key={`${d.tag}-${i}`} className="space-y-1">
               <div className="flex items-center gap-1.5">
-                <span className="inline-flex items-center text-[11px] px-2 py-0.5 rounded border bg-bgGray/50 text-textDark border-borderGray/50">
+                <span className="inline-flex items-center text-[11px] px-2 py-0.5 rounded border bg-surface/50 text-ink border-line/50">
                   {d.tag}
                 </span>
-                <span className="text-[10px] text-textGray">{d.chunks.length} 段</span>
+                <span className="text-[10px] text-ink-soft">{d.chunks.length} 段</span>
               </div>
               <div className="space-y-1">
                 {d.chunks.map((c, j) => (
                   <div
                     key={`${c.chunkIndex}-${j}`}
-                    className="flex items-start gap-2 px-2 py-1.5 rounded border bg-bgGray/50 border-borderGray/50"
+                    className="flex items-start gap-2 px-2 py-1.5 rounded border bg-surface/50 border-line/50"
                   >
-                    <span className="font-mono text-[10px] text-textGray shrink-0 mt-0.5">
+                    <span className="font-mono text-[10px] text-ink-soft shrink-0 mt-0.5">
                       #{typeof c.chunkIndex === 'number' ? c.chunkIndex : '--'}
                     </span>
-                    <span className="flex-1 min-w-0 text-[11px] text-textDark leading-relaxed whitespace-pre-wrap break-words max-h-36 overflow-y-auto">
+                    <span className="flex-1 min-w-0 text-[11px] text-ink leading-relaxed whitespace-pre-wrap break-words max-h-36 overflow-y-auto">
                       {typeof c.text === 'string' ? c.text : ''}
                     </span>
                   </div>
@@ -456,21 +456,21 @@ export const DocumentReviewCard: React.FC<{
   }
 
   return (
-    <div className="rounded-lg border border-borderGray bg-white p-3 mt-2">
+    <div className="rounded-lg border border-line bg-white p-3 mt-2">
       {/* Header: title + review status badge */}
       <div className="flex items-start gap-2.5 mb-3">
-        <div className="w-6 h-6 rounded-full bg-deepSea/10 flex items-center justify-center shrink-0">
-          <FileText className="w-3.5 h-3.5 text-deepSea" />
+        <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+          <FileText className="w-3.5 h-3.5 text-primary" />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
-            <div className="text-sm font-medium text-textDark truncate">
+            <div className="text-sm font-medium text-ink truncate">
               单据复核 · {docType || '--'}
             </div>
             <ReviewStatusBadge status={reviewStatus} />
           </div>
-          <div className="text-[11px] text-textGray mt-0.5">
-            综合置信度 <span className="font-mono text-steelBlue">{pct(overallConfidence)}</span>
+          <div className="text-[11px] text-ink-soft mt-0.5">
+            综合置信度 <span className="font-mono text-primary-500">{pct(overallConfidence)}</span>
           </div>
         </div>
       </div>
@@ -480,11 +480,11 @@ export const DocumentReviewCard: React.FC<{
         <div>
           <SectionLabel icon={<FileText className="w-3 h-3" />}>业务类型</SectionLabel>
           <div className="flex items-center gap-2 flex-wrap text-xs">
-            <span className="text-textDark font-medium">{docType || '--'}</span>
-            <span className="text-textGray">·</span>
-            <span className="text-textGray">
+            <span className="text-ink font-medium">{docType || '--'}</span>
+            <span className="text-ink-soft">·</span>
+            <span className="text-ink-soft">
               分类置信度{' '}
-              <span className={clsx('font-mono', classificationLow ? 'text-amber' : 'text-steelBlue')}>
+              <span className={clsx('font-mono', classificationLow ? 'text-warning' : 'text-primary-500')}>
                 {pct(classificationConfidence)}
               </span>
             </span>
@@ -498,18 +498,18 @@ export const DocumentReviewCard: React.FC<{
           <div>
             <SectionLabel icon={<Bookmark className="w-3 h-3" />}>合同类型</SectionLabel>
             <div className="flex items-center gap-2 flex-wrap text-xs">
-              <span className="inline-flex items-center text-[11px] px-2 py-0.5 rounded border bg-bgGray/50 text-textDark border-borderGray/50">
+              <span className="inline-flex items-center text-[11px] px-2 py-0.5 rounded border bg-surface/50 text-ink border-line/50">
                 {contractType.contractType}
               </span>
-              <span className="text-textGray">
+              <span className="text-ink-soft">
                 来源{' '}
-                <span className="font-mono text-steelBlue">
+                <span className="font-mono text-primary-500">
                   {CONTRACT_TYPE_SOURCE_LABEL[contractType.source ?? ''] ?? '未识别'}
                 </span>
               </span>
             </div>
             {contractType.conflict && (
-              <div className="mt-1.5 flex items-start gap-1.5 text-xs text-amber bg-amber/5 border border-amber/30 rounded px-2 py-1.5">
+              <div className="mt-1.5 flex items-start gap-1.5 text-xs text-warning bg-warning/5 border border-warning/30 rounded px-2 py-1.5">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                 <span className="leading-relaxed">合同类型与主体方向不一致，请人工确认</span>
               </div>
@@ -522,7 +522,7 @@ export const DocumentReviewCard: React.FC<{
         <div>
           <SectionLabel icon={<ListChecks className="w-3 h-3" />}>结构化字段</SectionLabel>
           {fields.length === 0 ? (
-            <div className="text-xs text-textGray italic">暂无</div>
+            <div className="text-xs text-ink-soft italic">暂无</div>
           ) : (
             <div className="space-y-1">
               {fields.map((f, i) => {
@@ -537,13 +537,13 @@ export const DocumentReviewCard: React.FC<{
                     className={clsx(
                       'flex items-center gap-2 text-xs px-2 py-1.5 rounded border transition-colors',
                       changed
-                        ? 'bg-steelBlue/5 border-steelBlue/40'
+                        ? 'bg-primary-500/5 border-primary-500/40'
                         : flagged
-                          ? 'bg-amber/5 border-amber/30'
-                          : 'bg-bgGray/50 border-borderGray/50',
+                          ? 'bg-warning/5 border-warning/30'
+                          : 'bg-surface/50 border-line/50',
                     )}
                   >
-                    <span className="text-textGray shrink-0 w-24 truncate">{f.name}</span>
+                    <span className="text-ink-soft shrink-0 w-24 truncate">{f.name}</span>
                     {editable ? (
                       <input
                         type="text"
@@ -553,22 +553,22 @@ export const DocumentReviewCard: React.FC<{
                         autoComplete="off"
                         className={clsx(
                           'flex-1 min-w-0 bg-transparent font-mono outline-none rounded px-1 -mx-1 transition-colors',
-                          'placeholder:text-textGray/50',
+                          'placeholder:text-ink-soft/50',
                           changed
-                            ? 'text-steelBlue'
-                            : 'text-textDark focus:bg-white focus:ring-1 focus:ring-steelBlue/40',
+                            ? 'text-primary-500'
+                            : 'text-ink focus:bg-white focus:ring-1 focus:ring-primary-500/40',
                         )}
                       />
                     ) : (
-                      <span className="text-textDark flex-1 min-w-0 truncate font-mono">
+                      <span className="text-ink flex-1 min-w-0 truncate font-mono">
                         {String(f.value ?? '--')}
                       </span>
                     )}
-                    <span className="text-textGray text-[11px] font-mono shrink-0">
+                    <span className="text-ink-soft text-[11px] font-mono shrink-0">
                       {pct(f.confidence)}
                     </span>
                     {changed ? (
-                      <span className="inline-flex items-center gap-0.5 text-[10px] text-steelBlue bg-steelBlue/10 border border-steelBlue/30 rounded px-1 py-0.5 shrink-0">
+                      <span className="inline-flex items-center gap-0.5 text-[10px] text-primary-500 bg-primary-500/10 border border-primary-500/30 rounded px-1 py-0.5 shrink-0">
                         <Check className="w-2.5 h-2.5" />
                         已改
                       </span>
@@ -586,7 +586,7 @@ export const DocumentReviewCard: React.FC<{
         <div>
           <SectionLabel icon={<Link2 className="w-3 h-3" />}>待确认关系</SectionLabel>
           {proposedRelationships.length === 0 ? (
-            <div className="text-xs text-textGray italic">暂无</div>
+            <div className="text-xs text-ink-soft italic">暂无</div>
           ) : (
             <div className="flex flex-wrap gap-1.5">
               {proposedRelationships.map((r, i) => {
@@ -599,13 +599,13 @@ export const DocumentReviewCard: React.FC<{
                     className={clsx(
                       'inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border',
                       low
-                        ? 'bg-amber/5 text-textDark border-amber/30'
-                        : 'bg-bgGray/50 text-textDark border-borderGray/50',
+                        ? 'bg-warning/5 text-ink border-warning/30'
+                        : 'bg-surface/50 text-ink border-line/50',
                     )}
                   >
-                    <span className="text-textGray">{role}</span>
+                    <span className="text-ink-soft">{role}</span>
                     <span className="font-medium">{r.name}</span>
-                    <span className={clsx('font-mono', low ? 'text-amber' : 'text-steelBlue')}>
+                    <span className={clsx('font-mono', low ? 'text-warning' : 'text-primary-500')}>
                       {pct(r.confidence)}
                     </span>
                   </span>
@@ -618,14 +618,14 @@ export const DocumentReviewCard: React.FC<{
               {(proposedEdges ?? []).map((e, i) => (
                 <span
                   key={`${e.type}-${e.dstName}-${i}`}
-                  className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border bg-bgGray/50 text-textDark border-borderGray/50"
+                  className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border bg-surface/50 text-ink border-line/50"
                 >
-                  <span className="text-textGray">
+                  <span className="text-ink-soft">
                     {EDGE_TYPE_LABEL[e.type] || e.type}
                     {e.role ? `(${e.role})` : ''}
                   </span>
                   <span className="font-medium">{e.dstName}</span>
-                  <span className="font-mono text-steelBlue">{pct(e.confidence)}</span>
+                  <span className="font-mono text-primary-500">{pct(e.confidence)}</span>
                 </span>
               ))}
             </div>
@@ -636,13 +636,13 @@ export const DocumentReviewCard: React.FC<{
         <div>
           <SectionLabel icon={<Tag className="w-3 h-3" />}>文本TAG</SectionLabel>
           {tags.length === 0 ? (
-            <div className="text-xs text-textGray italic">暂无</div>
+            <div className="text-xs text-ink-soft italic">暂无</div>
           ) : (
             <div className="flex flex-wrap gap-1.5">
               {tags.map((t, i) => (
                 <span
                   key={`${t}-${i}`}
-                  className="inline-flex items-center text-[11px] px-2 py-0.5 rounded border bg-bgGray/50 text-textDark border-borderGray/50"
+                  className="inline-flex items-center text-[11px] px-2 py-0.5 rounded border bg-surface/50 text-ink border-line/50"
                 >
                   {t}
                 </span>
@@ -674,7 +674,7 @@ export const DocumentReviewCard: React.FC<{
       {/* Action bar — only while pending. Once the user has acted (corrected /
           confirmed) the card is read-only. */}
       {editable && (
-        <div className="mt-3 pt-3 border-t border-borderGray">
+        <div className="mt-3 pt-3 border-t border-line">
           {error && (
             <div className="mb-2 flex items-start gap-1.5 text-xs text-danger bg-danger/5 border border-danger/30 rounded px-2 py-1.5">
               <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
@@ -687,7 +687,7 @@ export const DocumentReviewCard: React.FC<{
               onClick={() => void handleSubmitCorrections()}
               disabled={busy || !hasChanges}
               title={hasChanges ? '' : '修改任意字段后即可提交更正'}
-              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-steelBlue text-white text-xs font-medium hover:bg-steelBlue/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-primary-500 text-white text-xs font-medium hover:bg-primary-500/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {submitting === 'corrections' ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -710,7 +710,7 @@ export const DocumentReviewCard: React.FC<{
               确认无误
             </button>
             {busy && (
-              <span className="text-[11px] text-textGray">处理中...</span>
+              <span className="text-[11px] text-ink-soft">处理中...</span>
             )}
           </div>
         </div>

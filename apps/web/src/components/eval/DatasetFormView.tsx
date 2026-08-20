@@ -9,9 +9,9 @@ import {
   parseDatasetYaml, getIn, setIn, appendListItem, removeListItem, docToText, getAnchorKeyPath,
 } from './yamlFormBridge'
 
-const inputCls = 'rounded border border-borderGray bg-white px-2 py-1 text-sm text-textDark disabled:opacity-50 disabled:bg-bgGray'
-const textareaCls = 'w-full rounded border border-borderGray bg-white px-2 py-1 text-sm text-textDark disabled:opacity-50 disabled:bg-bgGray'
-const btnCls = 'inline-flex items-center gap-1 rounded border border-borderGray bg-white px-2 py-1 text-xs text-textGray hover:text-deepSea disabled:opacity-50'
+const inputCls = 'rounded border border-line bg-white px-2 py-1 text-sm text-ink disabled:opacity-50 disabled:bg-surface'
+const textareaCls = 'w-full rounded border border-line bg-white px-2 py-1 text-sm text-ink disabled:opacity-50 disabled:bg-surface'
+const btnCls = 'inline-flex items-center gap-1 rounded border border-line bg-white px-2 py-1 text-xs text-ink-soft hover:text-primary disabled:opacity-50'
 
 // ---- 读取助手: yaml v2 的 getIn 对集合路径返回 YAMLSeq/YAMLMap 节点, 需 toJS(doc) 转普通数组 ----
 function readList(doc: Document, path: (string | number)[]): unknown[] {
@@ -90,14 +90,14 @@ function TagGroup({ doc, path, readOnly, onChange, label, placeholder }: {
   }
   return (
     <div>
-      <div className="text-xs text-textGray mb-1">{label}</div>
+      <div className="text-xs text-ink-soft mb-1">{label}</div>
       <div className="flex flex-wrap gap-1.5 mb-1.5">
         {items.map((it, i) => (
-          <span key={i} className="inline-flex items-center gap-1 rounded bg-bgGray border border-borderGray px-1.5 py-0.5 text-xs text-textDark">
+          <span key={i} className="inline-flex items-center gap-1 rounded bg-surface border border-line px-1.5 py-0.5 text-xs text-ink">
             {String(it)}
             {!readOnly && (
               <button type="button" aria-label="移除" onClick={() => { removeListItem(doc, path, i); onChange() }}
-                className="text-textGray hover:text-danger">
+                className="text-ink-soft hover:text-danger">
                 <X className="h-3 w-3" aria-hidden />
               </button>
             )}
@@ -136,7 +136,7 @@ function StringListField({ doc, path, readOnly, onChange, label, placeholder }: 
   }
   return (
     <div>
-      <div className="text-xs text-textGray mb-1">{label}</div>
+      <div className="text-xs text-ink-soft mb-1">{label}</div>
       <div className="space-y-1.5">
         {items.map((it, i) => (
           <div key={i} className="flex items-center gap-1.5">
@@ -145,7 +145,7 @@ function StringListField({ doc, path, readOnly, onChange, label, placeholder }: 
               placeholder={placeholder} className={clsx(inputCls, 'flex-1')} />
             {!readOnly && (
               <button type="button" aria-label="删除" onClick={() => { removeListItem(doc, path, i); onChange() }}
-                className="text-textGray hover:text-danger">
+                className="text-ink-soft hover:text-danger">
                 <X className="h-3.5 w-3.5" aria-hidden />
               </button>
             )}
@@ -176,9 +176,9 @@ function RowsTable({ doc, path, readOnly, onChange, columns, newRow }: {
   const rows = readList(doc, path)
   return (
     <div>
-      <div className="rounded border border-borderGray overflow-x-auto mb-1.5">
+      <div className="rounded border border-line overflow-x-auto mb-1.5">
         <table className="w-full text-xs">
-          <thead className="bg-bgGray text-left text-textGray">
+          <thead className="bg-surface text-left text-ink-soft">
             <tr>
               {columns.map((c) => <th key={c.key} className="px-2 py-1 font-medium">{c.label}</th>)}
               {!readOnly && <th className="px-2 py-1 w-8" />}
@@ -186,7 +186,7 @@ function RowsTable({ doc, path, readOnly, onChange, columns, newRow }: {
           </thead>
           <tbody>
             {rows.map((_, r) => (
-              <tr key={r} className="border-t border-borderGray">
+              <tr key={r} className="border-t border-line">
                 {columns.map((c) => (
                   <td key={c.key} className="px-2 py-1">
                     {c.options ? (
@@ -209,7 +209,7 @@ function RowsTable({ doc, path, readOnly, onChange, columns, newRow }: {
                 {!readOnly && (
                   <td className="px-2 py-1">
                     <button type="button" aria-label="删除行" onClick={() => { removeListItem(doc, path, r); onChange() }}
-                      className="text-textGray hover:text-danger">
+                      className="text-ink-soft hover:text-danger">
                       <X className="h-3.5 w-3.5" aria-hidden />
                     </button>
                   </td>
@@ -234,7 +234,7 @@ function BasicSection({ doc, index, readOnly, onChange }: { doc: Document; index
   const base = ['scenarios', index] as (string | number)[]
   return (
     <section className="space-y-3">
-      <div className="text-xs font-medium text-textGray">基本</div>
+      <div className="text-xs font-medium text-ink-soft">基本</div>
       <div className="flex items-center gap-2 flex-wrap">
         <input value={readStr(doc, [...base, 'id'])} disabled={readOnly}
           onChange={(e) => { setIn(doc, [...base, 'id'], e.target.value); onChange() }}
@@ -247,7 +247,7 @@ function BasicSection({ doc, index, readOnly, onChange }: { doc: Document; index
           <option value="2">Tier 2</option>
           <option value="3">Tier 3</option>
         </select>
-        <label className="flex items-center gap-1.5 text-xs text-textGray">
+        <label className="flex items-center gap-1.5 text-xs text-ink-soft">
           maxTurns
           <CoerceNumberInput value={readNumStr(doc, [...base, 'maxTurns'])} min={1}
             onCommit={(n) => { setIn(doc, [...base, 'maxTurns'], n); onChange() }}
@@ -263,21 +263,21 @@ function PersonaSection({ doc, index, readOnly, onChange }: { doc: Document; ind
   const base = ['scenarios', index, 'persona'] as (string | number)[]
   return (
     <section className="space-y-3">
-      <div className="text-xs font-medium text-textGray">Persona</div>
+      <div className="text-xs font-medium text-ink-soft">Persona</div>
       <StringListField doc={doc} path={[...base, 'facts']} readOnly={readOnly} onChange={onChange} label="facts" />
       <div>
-        <div className="text-xs text-textGray mb-1">disclosure</div>
+        <div className="text-xs text-ink-soft mb-1">disclosure</div>
         <textarea rows={3} value={readStr(doc, [...base, 'disclosure'])} disabled={readOnly}
           onChange={(e) => { setIn(doc, [...base, 'disclosure'], e.target.value); onChange() }}
           className={textareaCls} />
       </div>
       <div>
-        <div className="text-xs text-textGray mb-1">goal</div>
+        <div className="text-xs text-ink-soft mb-1">goal</div>
         <textarea rows={4} value={readStr(doc, [...base, 'goal'])} disabled={readOnly}
           onChange={(e) => { setIn(doc, [...base, 'goal'], e.target.value); onChange() }}
           className={textareaCls} />
       </div>
-      <label className="flex items-center gap-1.5 text-xs text-textGray">
+      <label className="flex items-center gap-1.5 text-xs text-ink-soft">
         patience
         <CoerceNumberInput value={readNumStr(doc, [...base, 'patience'])} min={1}
           onCommit={(n) => { setIn(doc, [...base, 'patience'], n); onChange() }}
@@ -291,8 +291,8 @@ function ApprovalSection({ doc, index, readOnly, onChange }: { doc: Document; in
   const base = ['scenarios', index, 'approvalPolicy'] as (string | number)[]
   return (
     <section className="space-y-3">
-      <div className="text-xs font-medium text-textGray">审批策略</div>
-      <label className="flex items-center gap-1.5 text-xs text-textGray">
+      <div className="text-xs font-medium text-ink-soft">审批策略</div>
+      <label className="flex items-center gap-1.5 text-xs text-ink-soft">
         default
         <select value={readStr(doc, [...base, 'default'], 'approve')} disabled={readOnly}
           onChange={(e) => { setIn(doc, [...base, 'default'], e.target.value); onChange() }}
@@ -302,7 +302,7 @@ function ApprovalSection({ doc, index, readOnly, onChange }: { doc: Document; in
         </select>
       </label>
       <div>
-        <div className="text-xs text-textGray mb-1">rules</div>
+        <div className="text-xs text-ink-soft mb-1">rules</div>
         <RowsTable
           doc={doc}
           path={[...base, 'rules']}
@@ -326,21 +326,21 @@ function VerifiersSection({ doc, index, readOnly, onChange }: { doc: Document; i
   const base = ['scenarios', index, 'verifiers'] as (string | number)[]
   return (
     <section className="space-y-3">
-      <div className="text-xs font-medium text-textGray">Verifiers</div>
+      <div className="text-xs font-medium text-ink-soft">Verifiers</div>
       <div>
-        <div className="text-xs text-textGray mb-1">payments</div>
+        <div className="text-xs text-ink-soft mb-1">payments</div>
         <RowsTable doc={doc} path={[...base, 'payments']} readOnly={readOnly} onChange={onChange}
           columns={[{ key: 'contractNo', label: 'contractNo' }, { key: 'amount', label: 'amount', number: true }]}
           newRow={{ contractNo: '', amount: 0 }} />
       </div>
       <div>
-        <div className="text-xs text-textGray mb-1">paymentsAbsent</div>
+        <div className="text-xs text-ink-soft mb-1">paymentsAbsent</div>
         <RowsTable doc={doc} path={[...base, 'paymentsAbsent']} readOnly={readOnly} onChange={onChange}
           columns={[{ key: 'contractNo', label: 'contractNo' }]}
           newRow={{ contractNo: '' }} />
       </div>
       <div>
-        <div className="text-xs text-textGray mb-1">contractLinked</div>
+        <div className="text-xs text-ink-soft mb-1">contractLinked</div>
         <RowsTable doc={doc} path={[...base, 'contractLinked']} readOnly={readOnly} onChange={onChange}
           columns={[{ key: 'contractNo', label: 'contractNo' }, { key: 'documentId', label: 'documentId' }]}
           newRow={{ contractNo: '', documentId: '' }} />
@@ -358,13 +358,13 @@ function RubricSection({ doc, index, readOnly, onChange }: { doc: Document; inde
   const hasVeto = getIn(doc, [...vetoPath, 'hallucination']) !== undefined
   return (
     <section className="space-y-3">
-      <div className="text-xs font-medium text-textGray">Rubric</div>
+      <div className="text-xs font-medium text-ink-soft">Rubric</div>
       <div className="space-y-2.5">
         {dims.map((_, d) => {
           const base = ['scenarios', index, 'rubric', 'dimensions', d] as (string | number)[]
           const scoring = [...base, 'scoring'] as (string | number)[]
           return (
-            <div key={d} className="rounded-lg border border-borderGray bg-bgGray/40 p-3 space-y-2.5">
+            <div key={d} className="rounded-lg border border-line bg-surface/40 p-3 space-y-2.5">
               <div className="flex items-center gap-2">
                 <input value={readStr(doc, [...base, 'name'])} disabled={readOnly}
                   onChange={(e) => { setIn(doc, [...base, 'name'], e.target.value); onChange() }}
@@ -383,7 +383,7 @@ function RubricSection({ doc, index, readOnly, onChange }: { doc: Document; inde
                   const anchorPath = getAnchorKeyPath(doc, scoring, key)
                   return (
                     <div key={key}>
-                      <div className="text-xs text-textGray mb-1">{label}</div>
+                      <div className="text-xs text-ink-soft mb-1">{label}</div>
                       <textarea rows={3} value={readStr(doc, anchorPath)} disabled={readOnly}
                         onChange={(e) => { setIn(doc, anchorPath, e.target.value); onChange() }}
                         className={textareaCls} />
@@ -394,11 +394,11 @@ function RubricSection({ doc, index, readOnly, onChange }: { doc: Document; inde
             </div>
           )
         })}
-        {dims.length === 0 && <div className="text-xs text-textGray">无维度。</div>}
+        {dims.length === 0 && <div className="text-xs text-ink-soft">无维度。</div>}
       </div>
       {hasVeto && (
         <div>
-          <div className="text-xs text-textGray mb-1">veto.hallucination</div>
+          <div className="text-xs text-ink-soft mb-1">veto.hallucination</div>
           <textarea rows={3} value={readStr(doc, [...vetoPath, 'hallucination'])} disabled={readOnly}
             onChange={(e) => { setIn(doc, [...vetoPath, 'hallucination'], e.target.value); onChange() }}
             className={textareaCls} />
@@ -416,17 +416,17 @@ function ScenarioCard({ doc, index, readOnly, onChange }: { doc: Document; index
   const tier = getIn(doc, ['scenarios', index, 'tier'])
   const commit = () => onChange()
   return (
-    <div className="rounded-lg border border-borderGray bg-white">
+    <div className="rounded-lg border border-line bg-white">
       <button type="button" onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-bgGray/60">
-        <span className="font-mono text-sm text-textDark flex-1 truncate">{id || `场景 ${index + 1}`}</span>
+        className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-surface/60">
+        <span className="font-mono text-sm text-ink flex-1 truncate">{id || `场景 ${index + 1}`}</span>
         {typeof tier === 'number' && (
-          <span className="rounded bg-deepSea/10 text-deepSea border border-deepSea/20 px-1.5 py-0.5 text-xs">T{tier}</span>
+          <span className="rounded bg-primary/10 text-primary border border-primary/20 px-1.5 py-0.5 text-xs">T{tier}</span>
         )}
-        {open ? <ChevronDown className="h-4 w-4 text-textGray shrink-0" aria-hidden /> : <ChevronRight className="h-4 w-4 text-textGray shrink-0" aria-hidden />}
+        {open ? <ChevronDown className="h-4 w-4 text-ink-soft shrink-0" aria-hidden /> : <ChevronRight className="h-4 w-4 text-ink-soft shrink-0" aria-hidden />}
       </button>
       {open && (
-        <div className="px-4 py-3 border-t border-borderGray space-y-5">
+        <div className="px-4 py-3 border-t border-line space-y-5">
           <BasicSection doc={doc} index={index} readOnly={readOnly} onChange={commit} />
           <PersonaSection doc={doc} index={index} readOnly={readOnly} onChange={commit} />
           <ApprovalSection doc={doc} index={index} readOnly={readOnly} onChange={commit} />
@@ -461,7 +461,7 @@ export function DatasetFormView({ text, onChangeText, readOnly }: {
       {Array.from({ length: count }, (_, i) => (
         <ScenarioCard key={i} doc={doc} index={i} readOnly={readOnly} onChange={commit} />
       ))}
-      {count === 0 && <div className="text-sm text-textGray">数据集暂无场景。</div>}
+      {count === 0 && <div className="text-sm text-ink-soft">数据集暂无场景。</div>}
     </div>
   )
 }

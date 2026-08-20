@@ -48,16 +48,16 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onAuthed }) => {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-bgGray px-4">
+    <div className="min-h-screen flex items-center justify-center bg-surface px-4">
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-sm bg-white rounded-2xl border border-borderGray p-6 space-y-4"
+        className="w-full max-w-sm bg-white rounded-2xl border border-line p-6 space-y-4"
       >
         <div className="text-center">
-          <h1 className="text-lg font-semibold text-textDark">
+          <h1 className="text-lg font-semibold text-ink">
             {mode === 'signin' ? '登录' : '注册'}
           </h1>
-          <p className="text-xs text-textGray mt-1">供应链贸易执行助理</p>
+          <p className="text-xs text-ink-soft mt-1">供应链贸易执行助理</p>
         </div>
 
         {mode === 'signup' && (
@@ -66,7 +66,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onAuthed }) => {
             placeholder="姓名"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="w-full px-3 py-2 rounded-lg border border-borderGray text-sm focus:outline-none"
+            className="w-full px-3 py-2 rounded-lg border border-line text-sm focus:outline-none"
           />
         )}
 
@@ -76,7 +76,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onAuthed }) => {
           placeholder="邮箱"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="w-full px-3 py-2 rounded-lg border border-borderGray text-sm focus:outline-none"
+          className="w-full px-3 py-2 rounded-lg border border-line text-sm focus:outline-none"
         />
 
         <input
@@ -85,7 +85,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onAuthed }) => {
           placeholder="密码"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="w-full px-3 py-2 rounded-lg border border-borderGray text-sm focus:outline-none"
+          className="w-full px-3 py-2 rounded-lg border border-line text-sm focus:outline-none"
         />
 
         {mode === 'signup' && (
@@ -95,7 +95,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onAuthed }) => {
             placeholder="确认密码"
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
-            className="w-full px-3 py-2 rounded-lg border border-borderGray text-sm focus:outline-none"
+            className="w-full px-3 py-2 rounded-lg border border-line text-sm focus:outline-none"
           />
         )}
 
@@ -108,7 +108,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onAuthed }) => {
         <button
           type="submit"
           disabled={loading}
-          className="w-full py-2 rounded-lg bg-deepSea text-white text-sm font-medium disabled:opacity-50"
+          className="w-full py-2 rounded-lg bg-primary text-white text-sm font-medium disabled:opacity-50"
         >
           {loading ? '...' : mode === 'signin' ? '登录' : '注册'}
         </button>
@@ -119,7 +119,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onAuthed }) => {
             setMode(mode === 'signin' ? 'signup' : 'signin');
             setError(null);
           }}
-          className="w-full text-xs text-textGray hover:text-textDark"
+          className="w-full text-xs text-ink-soft hover:text-ink"
         >
           {mode === 'signin' ? '没有账号？去注册' : '已有账号？去登录'}
         </button>

@@ -9,12 +9,12 @@ import remarkGfm from 'remark-gfm'
 // Markdown 渲染与 RealMessageItem.MarkdownContent 同构 (该组件未导出, 类名对齐)。
 const MarkdownContent: React.FC<{ children: string }> = ({ children }) => {
   return (
-    <div className="text-sm leading-relaxed text-textDark">
+    <div className="text-sm leading-relaxed text-ink">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
           p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-          strong: ({ children }) => <strong className="font-bold text-textDark">{children}</strong>,
+          strong: ({ children }) => <strong className="font-bold text-ink">{children}</strong>,
           ul: ({ children }) => <ul className="list-disc pl-5 mb-2">{children}</ul>,
           ol: ({ children }) => <ol className="list-decimal pl-5 mb-2">{children}</ol>,
           li: ({ children }) => <li className="mb-0.5">{children}</li>,
@@ -22,17 +22,17 @@ const MarkdownContent: React.FC<{ children: string }> = ({ children }) => {
             const isBlock = className?.includes('language-')
             if (isBlock) {
               return (
-                <pre className="bg-bgGray rounded p-2 overflow-auto mb-2">
-                  <code className="font-mono text-xs text-textDark bg-transparent">{children}</code>
+                <pre className="bg-surface rounded p-2 overflow-auto mb-2">
+                  <code className="font-mono text-xs text-ink bg-transparent">{children}</code>
                 </pre>
               )
             }
-            return <code className="font-mono text-xs bg-bgGray px-1 py-0.5 rounded text-textDark">{children}</code>
+            return <code className="font-mono text-xs bg-surface px-1 py-0.5 rounded text-ink">{children}</code>
           },
-          table: ({ children }) => <table className="w-full text-xs border-collapse border border-borderGray mb-2">{children}</table>,
-          thead: ({ children }) => <thead className="bg-bgGray">{children}</thead>,
-          th: ({ children }) => <th className="border border-borderGray px-2 py-1 text-left font-medium">{children}</th>,
-          td: ({ children }) => <td className="border border-borderGray px-2 py-1">{children}</td>,
+          table: ({ children }) => <table className="w-full text-xs border-collapse border border-line mb-2">{children}</table>,
+          thead: ({ children }) => <thead className="bg-surface">{children}</thead>,
+          th: ({ children }) => <th className="border border-line px-2 py-1 text-left font-medium">{children}</th>,
+          td: ({ children }) => <td className="border border-line px-2 py-1">{children}</td>,
         }}
       >
         {children}
@@ -56,14 +56,14 @@ function formatMs(ms: number): string {
 
 export function TranscriptBubble({ role, text }: { role: 'user' | 'assistant' | 'system' | 'system-note'; text: string }) {
   if (role === 'system' || role === 'system-note') {
-    return <div className="text-center text-xs text-textGray bg-bgGray rounded px-3 py-1.5">{text}</div>
+    return <div className="text-center text-xs text-ink-soft bg-surface rounded px-3 py-1.5">{text}</div>
   }
   const isUser = role === 'user'
   return (
     <div className={clsx('flex', isUser ? 'justify-end' : 'justify-start')}>
       <div className={clsx(
         'max-w-[85%] rounded-lg px-3.5 py-2',
-        isUser ? 'bg-deepSea text-white' : 'bg-bgGray text-textDark',
+        isUser ? 'bg-primary text-white' : 'bg-surface text-ink',
       )}>
         {isUser ? <div className="text-sm whitespace-pre-wrap">{text}</div> : <MarkdownContent>{text}</MarkdownContent>}
       </div>
@@ -80,17 +80,17 @@ export function ToolCallCard({ toolName, durationMs, input, result, defaultOpen 
 }) {
   return (
     <details className="px-4 py-2" open={defaultOpen}>
-      <summary className="cursor-pointer text-sm text-textDark flex items-center gap-2">
+      <summary className="cursor-pointer text-sm text-ink flex items-center gap-2">
         <span className="font-mono text-xs">{toolName}</span>
-        {durationMs != null && <span className="text-xs text-textGray tabular-nums">{formatMs(durationMs)}</span>}
+        {durationMs != null && <span className="text-xs text-ink-soft tabular-nums">{formatMs(durationMs)}</span>}
       </summary>
       {(input !== undefined || result !== undefined) && (
         <div className="mt-2 space-y-1 text-xs">
           {input !== undefined && (
-            <div><span className="text-textGray">输入: </span><code className="font-mono bg-bgGray rounded px-1">{summarize(input)}</code></div>
+            <div><span className="text-ink-soft">输入: </span><code className="font-mono bg-surface rounded px-1">{summarize(input)}</code></div>
           )}
           {result !== undefined && (
-            <div><span className="text-textGray">结果: </span><code className="font-mono bg-bgGray rounded px-1">{summarize(result)}</code></div>
+            <div><span className="text-ink-soft">结果: </span><code className="font-mono bg-surface rounded px-1">{summarize(result)}</code></div>
           )}
         </div>
       )}
@@ -108,14 +108,14 @@ export function ApprovalCard({ toolName, level, decision, matchedRule, reason }:
   return (
     <div className="px-4 py-2.5 text-sm">
       <div className="flex items-center gap-2 flex-wrap">
-        {level && <span className="rounded bg-amber/10 text-amber border border-amber/25 px-1.5 py-0.5 text-xs">{level}</span>}
-        <span className="font-mono text-xs text-textDark">{toolName}</span>
+        {level && <span className="rounded bg-warning/10 text-warning border border-warning/25 px-1.5 py-0.5 text-xs">{level}</span>}
+        <span className="font-mono text-xs text-ink">{toolName}</span>
         <span className={clsx('text-xs', decision === 'approved' ? 'text-success' : 'text-danger')}>
           {decision === 'approved' ? '已批准' : '已拒绝'}
         </span>
       </div>
       {(reason !== undefined || matchedRule) && (
-        <div className="mt-1 text-xs text-textGray">{reason ?? ''}{matchedRule ? ` (规则: ${matchedRule})` : ''}</div>
+        <div className="mt-1 text-xs text-ink-soft">{reason ?? ''}{matchedRule ? ` (规则: ${matchedRule})` : ''}</div>
       )}
     </div>
   )

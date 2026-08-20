@@ -3,12 +3,8 @@ import clsx from 'clsx';
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
-  Link2,
   RefreshCw,
   X,
-  type LucideIcon,
 } from 'lucide-react';
 import {
   useBindings,
@@ -19,6 +15,7 @@ import {
 import { formatFlowSkipLines } from '../../lib/flowSkip';
 import { prettyDocName } from '../graph/kinds';
 import type { GraphFocusTarget } from '../graph/focus';
+import { PanelRail } from '../shell/PanelRail';
 import { DocListPanel } from './DocListPanel';
 import { CandidatePanel } from './CandidatePanel';
 import { DetailPanel } from './DetailPanel';
@@ -68,51 +65,6 @@ const DOC_TYPE_ERROR_TEXT: Record<string, string> = {
   invalid_body: '请求参数错误',
   document_not_found: '文档不存在或已删除',
 };
-
-/** 面板折叠把手(样式与 graph/GraphView.tsx 一致)。 */
-function PanelRail({
-  collapsed,
-  side,
-  label,
-  onToggle,
-}: {
-  collapsed: boolean;
-  side: 'left' | 'right';
-  label: string;
-  onToggle: () => void;
-}) {
-  const Chevron: LucideIcon = collapsed
-    ? side === 'left'
-      ? ChevronRight
-      : ChevronLeft
-    : side === 'left'
-      ? ChevronLeft
-      : ChevronRight;
-  const action = collapsed ? `展开${label}面板` : `收起${label}面板`;
-  return (
-    <div
-      className={clsx(
-        'flex w-7 shrink-0 flex-col items-center bg-white',
-        side === 'left' ? 'border-r border-borderGray' : 'border-l border-borderGray',
-      )}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        title={action}
-        aria-label={action}
-        className="mt-1 flex h-7 w-7 items-center justify-center rounded-md text-textGray transition-colors hover:bg-bgGray hover:text-deepSea"
-      >
-        <Chevron className="h-4 w-4" aria-hidden />
-      </button>
-      {collapsed && (
-        <div className="flex flex-1 items-center justify-center pt-2 text-[11px] tracking-[0.3em] text-textGray [writing-mode:vertical-rl]">
-          {label}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: GraphFocusTarget) => void }) {
   const b = useBindings();
@@ -600,20 +552,13 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
   /* ---------- 渲染 ---------- */
 
   return (
-    <div className="flex h-full flex-col bg-bgGray">
-      {/* 顶部工具条 */}
-      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-borderGray bg-white px-4">
-        <div className="flex items-center gap-2">
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-deepSea">
-            <Link2 className="h-4 w-4 text-white" aria-hidden />
-          </span>
-          <span className="text-[15px] font-semibold text-textDark">绑定工作台</span>
-        </div>
-
+    <div className="flex h-full flex-col bg-surface">
+      {/* 二级工具条（视图标题由 AppTopbar 承担） */}
+      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-white px-4">
         {selected && (
-          <div className="flex min-w-0 items-center gap-2 rounded-md bg-bgGray px-2.5 py-1">
-            <span className="shrink-0 text-[11px] text-textGray">当前文档</span>
-            <span className="max-w-[220px] truncate text-[12px] font-medium text-textDark" title={selected.fileName}>
+          <div className="flex min-w-0 items-center gap-2 rounded-md bg-surface px-2.5 py-1">
+            <span className="shrink-0 text-[11px] text-ink-soft">当前文档</span>
+            <span className="max-w-[220px] truncate text-[12px] font-medium text-ink" title={selected.fileName}>
               {docName}
             </span>
             <button
@@ -621,7 +566,7 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
               onClick={handleClearDoc}
               title="取消选择"
               aria-label="取消选择"
-              className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-textGray transition-colors hover:text-danger"
+              className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ink-soft transition-colors hover:text-danger"
             >
               <X className="h-3.5 w-3.5" aria-hidden />
             </button>
@@ -629,13 +574,13 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
         )}
 
         <div className="ml-auto flex items-center gap-2.5">
-          <span className="flex items-center gap-1.5 rounded-md bg-bgGray px-2.5 py-1 text-[11px] text-textGray">
-            未绑定 <span className="font-semibold tabular-nums text-textDark">{unboundCount}</span>
+          <span className="flex items-center gap-1.5 rounded-md bg-surface px-2.5 py-1 text-[11px] text-ink-soft">
+            未绑定 <span className="font-semibold tabular-nums text-ink">{unboundCount}</span>
           </span>
           <span
             className={clsx(
               'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px]',
-              proposals.length > 0 ? 'bg-[#FBF0DE] text-amber' : 'bg-bgGray text-textGray',
+              proposals.length > 0 ? 'bg-warning/15 text-warning' : 'bg-surface text-ink-soft',
             )}
           >
             待确认建议 <span className="font-semibold tabular-nums">{proposals.length}</span>
@@ -643,7 +588,7 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
           <button
             type="button"
             onClick={handleRefresh}
-            className="flex h-7 items-center gap-1 rounded-md border border-borderGray bg-white px-2.5 text-[12px] text-textDark hover:bg-bgGray"
+            className="flex h-7 items-center gap-1 rounded-md border border-line bg-white px-2.5 text-[12px] text-ink hover:bg-surface"
           >
             <RefreshCw className={clsx('h-3.5 w-3.5', busy && 'animate-spin')} aria-hidden />
             刷新
@@ -728,18 +673,18 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
       {/* 二次确认弹窗 */}
       {confirmReq && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4">
-          <div className="w-full max-w-sm animate-fade-in rounded-lg border border-borderGray bg-white p-5 shadow-card">
+          <div className="w-full max-w-sm animate-fade-in rounded-lg border border-line bg-white p-5 shadow-card">
             <div className="flex items-center gap-2">
               {confirmReq.danger && <AlertTriangle className="h-4 w-4 shrink-0 text-danger" aria-hidden />}
-              <div className="text-[14px] font-semibold text-textDark">{confirmReq.title}</div>
+              <div className="text-[14px] font-semibold text-ink">{confirmReq.title}</div>
             </div>
-            <div className="mt-2 whitespace-pre-line text-[12px] leading-5 text-textGray">{confirmReq.body}</div>
+            <div className="mt-2 whitespace-pre-line text-[12px] leading-5 text-ink-soft">{confirmReq.body}</div>
             <div className="mt-5 flex items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={closeConfirm}
                 disabled={confirmBusy}
-                className="h-8 rounded-md border border-borderGray bg-white px-3 text-[12px] text-textGray hover:bg-bgGray disabled:opacity-50"
+                className="h-8 rounded-md border border-line bg-white px-3 text-[12px] text-ink-soft hover:bg-surface disabled:opacity-50"
               >
                 取消
               </button>
@@ -749,7 +694,7 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
                 disabled={confirmBusy}
                 className={clsx(
                   'flex h-8 items-center gap-1.5 rounded-md px-3 text-[12px] font-medium text-white disabled:opacity-50',
-                  confirmReq.danger ? 'bg-danger hover:bg-[#991B1B]' : 'bg-deepSea hover:bg-[#164a76]',
+                  confirmReq.danger ? 'bg-danger hover:brightness-90' : 'bg-primary hover:bg-primary-800',
                 )}
               >
                 {confirmBusy && (
@@ -768,7 +713,7 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
           <div
             key={t.id}
             className={clsx(
-              'animate-fade-in rounded-md border border-borderGray border-l-4 bg-white px-3.5 py-2.5 shadow-card',
+              'animate-fade-in rounded-md border border-line border-l-4 bg-white px-3.5 py-2.5 shadow-card',
               t.kind === 'error' ? 'border-l-danger' : 'border-l-success',
             )}
           >
@@ -778,7 +723,7 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
               ) : (
                 <CheckCircle2 className="mt-px h-4 w-4 shrink-0 text-success" aria-hidden />
               )}
-              <span className="whitespace-pre-line text-[12px] leading-5 text-textDark">{t.text}</span>
+              <span className="whitespace-pre-line text-[12px] leading-5 text-ink">{t.text}</span>
             </div>
           </div>
         ))}

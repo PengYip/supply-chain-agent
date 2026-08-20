@@ -59,43 +59,43 @@ export const HumanAgentStatusBar: React.FC<HumanAgentStatusBarProps> = ({ sessio
       className={clsx(
         'h-8 flex items-center gap-3 px-4 text-[11px] border-b shrink-0 select-none',
         pending > 0
-          ? 'bg-amber/5 border-amber/30'
-          : 'bg-bgGray border-borderGray',
+          ? 'bg-warning/5 border-warning/30'
+          : 'bg-surface border-line',
       )}
       role="status"
       aria-live="polite"
     >
-      <span className="flex items-center gap-1 text-textGray shrink-0">
-        <Activity className={clsx('w-3 h-3', hasActivity && 'text-steelBlue')} />
-        <span className="font-medium text-textDark">Agent 状态</span>
+      <span className="flex items-center gap-1 text-ink-soft shrink-0">
+        <Activity className={clsx('w-3 h-3', hasActivity && 'text-primary-500')} />
+        <span className="font-medium text-ink">Agent 状态</span>
       </span>
 
-      <span className="w-px h-3 bg-borderGray shrink-0" />
+      <span className="w-px h-3 bg-line shrink-0" />
 
       {leftLabel ? (
-        <span className="text-textGray truncate">{leftLabel}</span>
+        <span className="text-ink-soft truncate">{leftLabel}</span>
       ) : data ? (
         <>
           <Metric label="工具调用" value={String(data.totalCalls)} />
 
-          <span className="w-px h-3 bg-borderGray shrink-0" />
+          <span className="w-px h-3 bg-line shrink-0" />
 
-          <span className="flex items-center gap-2 text-textGray">
+          <span className="flex items-center gap-2 text-ink-soft">
             {SIGNAL_LABELS.map((s) => (
               <span key={s.key} className="flex items-center gap-0.5">
-                <span className="text-textGray/70">{s.label}</span>
-                <span className="font-medium text-textDark">{data.bySignal[s.key]}</span>
+                <span className="text-ink-soft/70">{s.label}</span>
+                <span className="font-medium text-ink">{data.bySignal[s.key]}</span>
               </span>
             ))}
           </span>
 
-          <span className="w-px h-3 bg-borderGray shrink-0" />
+          <span className="w-px h-3 bg-line shrink-0" />
 
-          <span className="flex items-center gap-1 text-textGray min-w-0">
+          <span className="flex items-center gap-1 text-ink-soft min-w-0">
             <Clock className="w-3 h-3 shrink-0" />
             <span className="truncate">
-              <span className="font-medium text-textDark">{data.lastToolName ?? '—'}</span>
-              <span className="text-textGray/70 ml-1">{formatRelative(data.lastToolAt)}</span>
+              <span className="font-medium text-ink">{data.lastToolName ?? '—'}</span>
+              <span className="text-ink-soft/70 ml-1">{formatRelative(data.lastToolAt)}</span>
             </span>
           </span>
 
@@ -104,8 +104,8 @@ export const HumanAgentStatusBar: React.FC<HumanAgentStatusBarProps> = ({ sessio
               className={clsx(
                 'flex items-center gap-1 px-2 py-0.5 rounded-full border',
                 pending > 0
-                  ? 'bg-amber/10 text-amber border-amber/40 font-medium'
-                  : 'bg-white text-textGray border-borderGray',
+                  ? 'bg-warning/10 text-warning border-warning/40 font-medium'
+                  : 'bg-white text-ink-soft border-line',
               )}
               title={pending > 0 ? '有待处理的 L2/L3 审批' : '无待审批'}
             >
@@ -126,9 +126,9 @@ interface MetricProps {
 }
 
 const Metric: React.FC<MetricProps> = ({ label, value }) => (
-  <span className="flex items-center gap-1 text-textGray shrink-0">
-    <span className="text-textGray/70">{label}</span>
-    <span className="font-semibold text-deepSea">{value}</span>
+  <span className="flex items-center gap-1 text-ink-soft shrink-0">
+    <span className="text-ink-soft/70">{label}</span>
+    <span className="font-semibold text-primary">{value}</span>
   </span>
 )
 

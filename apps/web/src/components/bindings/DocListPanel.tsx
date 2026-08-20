@@ -24,10 +24,10 @@ interface DocListPanelProps {
 
 function GroupHeader({ label, count, hint }: { label: string; count: number; hint?: string }) {
   return (
-    <div className="sticky top-0 z-10 flex items-baseline gap-1.5 border-b border-borderGray bg-white/95 px-4 py-1.5 backdrop-blur-sm">
-      <span className="text-[11px] font-medium tracking-wide text-textGray">{label}</span>
-      <span className="text-[11px] font-semibold tabular-nums text-textDark">{count}</span>
-      {hint && <span className="ml-auto text-[10px] text-textGray">{hint}</span>}
+    <div className="sticky top-0 z-10 flex items-baseline gap-1.5 border-b border-line bg-white/95 px-4 py-1.5 backdrop-blur-sm">
+      <span className="text-[11px] font-medium tracking-wide text-ink-soft">{label}</span>
+      <span className="text-[11px] font-semibold tabular-nums text-ink">{count}</span>
+      {hint && <span className="ml-auto text-[10px] text-ink-soft">{hint}</span>}
     </div>
   );
 }
@@ -52,17 +52,17 @@ function DocRow({
       onClick={onSelect}
       title={doc.fileName}
       className={clsx(
-        'block w-full border-b border-borderGray/60 px-3 py-2.5 text-left transition-colors',
-        selected ? 'bg-[#E8EEF4]' : 'hover:bg-bgGray',
+        'block w-full border-b border-line/60 px-3 py-2.5 text-left transition-colors',
+        selected ? 'bg-primary/10' : 'hover:bg-surface',
       )}
       style={selected ? { boxShadow: 'inset 2px 0 0 #0F3A5C' } : undefined}
     >
       <div className="flex items-center gap-1.5">
-        <span className="max-w-[110px] shrink-0 truncate rounded border border-[#D8E2EB] bg-[#EEF2F6] px-1.5 py-px text-[10px] text-steelBlue">
+        <span className="max-w-[110px] shrink-0 truncate rounded border border-primary/20 bg-primary/10 px-1.5 py-px text-[10px] text-primary-500">
           {doc.docType || '文档'}
         </span>
         {!bound && pendingCount > 0 && (
-          <span className="shrink-0 rounded border border-[#F0D9B0] bg-[#FBF0DE] px-1.5 py-px text-[10px] text-amber">
+          <span className="shrink-0 rounded border border-warning/35 bg-warning/15 px-1.5 py-px text-[10px] text-warning">
             建议 {pendingCount}
           </span>
         )}
@@ -78,9 +78,9 @@ function DocRow({
             {doc.bindings.length} 项绑定{pendingCount > 0 ? ` · ${pendingCount} 待确认` : ''}
           </span>
         )}
-        {date && <span className="ml-auto shrink-0 text-[11px] text-textGray">{date}</span>}
+        {date && <span className="ml-auto shrink-0 text-[11px] text-ink-soft">{date}</span>}
       </div>
-      <div className="mt-1 line-clamp-1 text-[13px] leading-5 text-textDark">{name}</div>
+      <div className="mt-1 line-clamp-1 text-[13px] leading-5 text-ink">{name}</div>
     </button>
   );
 }
@@ -91,22 +91,22 @@ export function DocListPanel({ docs, loading, error, selectedDocId, onSelect, on
   const bound = docs.filter((d) => d.bindings.some((b) => b.status === 'confirmed'));
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-borderGray bg-white">
-      <div className="shrink-0 border-b border-borderGray px-4 py-3">
+    <aside className="flex w-64 shrink-0 flex-col border-r border-line bg-white">
+      <div className="shrink-0 border-b border-line px-4 py-3">
         <div className="flex items-center gap-2">
-          <span className="text-[15px] font-semibold text-textDark">文档</span>
-          <span className="text-[11px] text-textGray">共 {docs.length} 个</span>
+          <span className="text-[15px] font-semibold text-ink">文档</span>
+          <span className="text-[11px] text-ink-soft">共 {docs.length} 个</span>
         </div>
-        <div className="mt-0.5 text-[11px] text-textGray">按绑定状态分组，未绑定在前</div>
+        <div className="mt-0.5 text-[11px] text-ink-soft">按绑定状态分组，未绑定在前</div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {loading ? (
           <div className="space-y-2 p-3">
             {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="h-14 animate-pulse rounded-lg bg-bgGray" />
+              <div key={i} className="h-14 animate-pulse rounded-lg bg-surface" />
             ))}
-            <div className="pt-1 text-center text-[12px] text-textGray">文档列表加载中</div>
+            <div className="pt-1 text-center text-[12px] text-ink-soft">文档列表加载中</div>
           </div>
         ) : error ? (
           <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
@@ -114,7 +114,7 @@ export function DocListPanel({ docs, loading, error, selectedDocId, onSelect, on
             <button
               type="button"
               onClick={onRetry}
-              className="flex items-center gap-1 rounded-md border border-borderGray px-2.5 py-1 text-[12px] text-textDark hover:bg-bgGray"
+              className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-[12px] text-ink hover:bg-surface"
             >
               <RefreshCw className="h-3 w-3" aria-hidden />
               重试
@@ -122,9 +122,9 @@ export function DocListPanel({ docs, loading, error, selectedDocId, onSelect, on
           </div>
         ) : docs.length === 0 ? (
           <div className="flex flex-col items-center px-5 py-12 text-center">
-            <FileStack className="h-9 w-9 text-borderGray" aria-hidden />
-            <div className="mt-3 text-[13px] font-medium text-textDark">暂无文档</div>
-            <div className="mt-1 text-[12px] leading-5 text-textGray">上传文档后即可在这里查看绑定状态</div>
+            <FileStack className="h-9 w-9 text-line" aria-hidden />
+            <div className="mt-3 text-[13px] font-medium text-ink">暂无文档</div>
+            <div className="mt-1 text-[12px] leading-5 text-ink-soft">上传文档后即可在这里查看绑定状态</div>
           </div>
         ) : (
           <>

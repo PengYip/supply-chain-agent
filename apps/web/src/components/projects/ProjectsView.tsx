@@ -27,9 +27,9 @@ const fmtAmount = (n: number | null): string =>
 
 function StatusBadge({ status }: { status: ProjectMembership['status'] }) {
   const map: Record<ProjectMembership['status'], { label: string; cls: string }> = {
-    proposed: { label: '待确认', cls: 'bg-amber/10 text-amber border-amber/30' },
+    proposed: { label: '待确认', cls: 'bg-warning/10 text-warning border-warning/30' },
     confirmed: { label: '已确认', cls: 'bg-success/10 text-success border-success/30' },
-    rejected: { label: '已拒绝', cls: 'bg-bgGray text-textGray border-borderGray' },
+    rejected: { label: '已拒绝', cls: 'bg-surface text-ink-soft border-line' },
   };
   const entry = map[status];
   return (
@@ -42,9 +42,9 @@ function StatusBadge({ status }: { status: ProjectMembership['status'] }) {
 /** 指标卡一格。 */
 function MetricCell({ label, value, emphasis }: { label: string; value: string; emphasis?: boolean }) {
   return (
-    <div className={clsx('rounded-lg border px-3 py-2.5', emphasis ? 'bg-deepSea/5 border-deepSea/30' : 'bg-white border-borderGray')}>
-      <div className="text-[11px] text-textGray">{label}</div>
-      <div className={clsx('mt-1 font-mono text-sm tabular-nums', emphasis ? 'text-deepSea font-semibold' : 'text-textDark')}>
+    <div className={clsx('rounded-lg border px-3 py-2.5', emphasis ? 'bg-primary/5 border-primary/30' : 'bg-white border-line')}>
+      <div className="text-[11px] text-ink-soft">{label}</div>
+      <div className={clsx('mt-1 font-mono text-sm tabular-nums', emphasis ? 'text-primary font-semibold' : 'text-ink')}>
         {value}
       </div>
     </div>
@@ -114,25 +114,25 @@ export function ProjectsView() {
   const selected = projects.find((p) => p.code === selectedCode) ?? null;
 
   return (
-    <div className="flex h-full min-w-0 bg-bgGray/40">
+    <div className="flex h-full min-w-0 bg-surface/40">
       {/* 左栏: 项目列表 + 新建 */}
-      <aside className="w-72 shrink-0 flex flex-col border-r border-borderGray bg-white">
-        <div className="shrink-0 border-b border-borderGray px-4 py-3 flex items-center gap-2">
-          <FolderKanban className="h-4 w-4 text-deepSea" aria-hidden />
-          <span className="text-[15px] font-semibold text-textDark">项目</span>
+      <aside className="w-72 shrink-0 flex flex-col border-r border-line bg-white">
+        <div className="shrink-0 border-b border-line px-4 py-3 flex items-center gap-2">
+          <FolderKanban className="h-4 w-4 text-primary" aria-hidden />
+          <span className="text-[15px] font-semibold text-ink">项目</span>
           <button
             type="button"
             title="刷新"
             aria-label="刷新"
             onClick={() => void refreshAll()}
-            className="ml-auto w-7 h-7 rounded-md flex items-center justify-center text-textGray hover:bg-bgGray"
+            className="ml-auto w-7 h-7 rounded-md flex items-center justify-center text-ink-soft hover:bg-surface"
           >
             <RefreshCw className="h-3.5 w-3.5" aria-hidden />
           </button>
         </div>
 
         {/* 新建表单 */}
-        <div className="shrink-0 px-3 py-2.5 border-b border-borderGray space-y-1.5">
+        <div className="shrink-0 px-3 py-2.5 border-b border-line space-y-1.5">
           <div className="flex gap-1.5">
             <input
               type="text"
@@ -140,7 +140,7 @@ export function ProjectsView() {
               onChange={(e) => setNewCode(e.target.value)}
               placeholder="编号 如 PRJ-2026-001"
               spellCheck={false}
-              className="min-w-0 flex-1 rounded-md border border-borderGray px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-steelBlue/40"
+              className="min-w-0 flex-1 rounded-md border border-line px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary-500/40"
             />
             <input
               type="text"
@@ -148,14 +148,14 @@ export function ProjectsView() {
               onChange={(e) => setNewName(e.target.value)}
               placeholder="名称"
               spellCheck={false}
-              className="min-w-0 flex-1 rounded-md border border-borderGray px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-steelBlue/40"
+              className="min-w-0 flex-1 rounded-md border border-line px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary-500/40"
             />
           </div>
           <button
             type="button"
             onClick={() => void handleCreate()}
             disabled={creating || !newCode.trim() || !newName.trim()}
-            className="w-full inline-flex items-center justify-center gap-1 rounded-md bg-steelBlue text-white text-xs font-medium px-3 py-1.5 hover:bg-steelBlue/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="w-full inline-flex items-center justify-center gap-1 rounded-md bg-primary-500 text-white text-xs font-medium px-3 py-1.5 hover:bg-primary-500/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Plus className="h-3.5 w-3.5" aria-hidden />}
             新建项目
@@ -165,9 +165,9 @@ export function ProjectsView() {
         {/* 列表 */}
         <div className="min-h-0 flex-1 overflow-y-auto">
           {loading && projects.length === 0 ? (
-            <div className="px-4 py-10 text-center text-xs text-textGray">加载中...</div>
+            <div className="px-4 py-10 text-center text-xs text-ink-soft">加载中...</div>
           ) : projects.length === 0 ? (
-            <div className="px-4 py-10 text-center text-xs text-textGray">暂无项目，先在上方新建</div>
+            <div className="px-4 py-10 text-center text-xs text-ink-soft">暂无项目，先在上方新建</div>
           ) : (
             projects.map((p) => (
               <button
@@ -175,22 +175,22 @@ export function ProjectsView() {
                 type="button"
                 onClick={() => selectProject(p.code)}
                 className={clsx(
-                  'w-full text-left px-4 py-2.5 border-b border-borderGray/60 transition-colors',
-                  p.code === selectedCode ? 'bg-deepSea/5' : 'hover:bg-bgGray/60',
+                  'w-full text-left px-4 py-2.5 border-b border-line/60 transition-colors',
+                  p.code === selectedCode ? 'bg-primary/5' : 'hover:bg-surface/60',
                 )}
               >
                 <div className="flex items-center gap-2">
-                  <span className={clsx('font-mono text-xs truncate', p.code === selectedCode ? 'text-deepSea font-semibold' : 'text-textDark')}>
+                  <span className={clsx('font-mono text-xs truncate', p.code === selectedCode ? 'text-primary font-semibold' : 'text-ink')}>
                     {p.code}
                   </span>
                   {p.proposedCount > 0 && (
-                    <span className="shrink-0 inline-flex items-center rounded-full bg-amber/15 text-amber text-[10px] font-medium px-1.5 leading-4">
+                    <span className="shrink-0 inline-flex items-center rounded-full bg-warning/15 text-warning text-[10px] font-medium px-1.5 leading-4">
                       {p.proposedCount} 待确认
                     </span>
                   )}
                 </div>
-                <div className="mt-0.5 text-[11px] text-textGray truncate">{p.name || '—'}</div>
-                <div className="mt-0.5 text-[11px] text-textGray">合同 {p.membershipCount}</div>
+                <div className="mt-0.5 text-[11px] text-ink-soft truncate">{p.name || '—'}</div>
+                <div className="mt-0.5 text-[11px] text-ink-soft">合同 {p.membershipCount}</div>
               </button>
             ))
           )}
@@ -200,16 +200,16 @@ export function ProjectsView() {
       {/* 右栏: 选中项目 */}
       <div className="min-w-0 flex-1 overflow-y-auto">
         {!selected ? (
-          <div className="h-full flex items-center justify-center text-sm text-textGray">
+          <div className="h-full flex items-center justify-center text-sm text-ink-soft">
             选择左侧项目查看统计
           </div>
         ) : (
           <div className="px-5 py-4 space-y-4 max-w-5xl">
             {/* 标题 */}
             <div className="flex items-center gap-2">
-              <span className="font-mono text-sm font-semibold text-deepSea">{selected.code}</span>
-              <span className="text-sm text-textDark truncate">{selected.name}</span>
-              {detailLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-textGray" aria-hidden />}
+              <span className="font-mono text-sm font-semibold text-primary">{selected.code}</span>
+              <span className="text-sm text-ink truncate">{selected.name}</span>
+              {detailLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-ink-soft" aria-hidden />}
             </div>
 
             {(error || actionError) && (
@@ -232,16 +232,16 @@ export function ProjectsView() {
                 </div>
 
                 {/* 合同面表格 */}
-                <div className="rounded-lg border border-borderGray bg-white overflow-hidden">
-                  <div className="px-3 py-2 border-b border-borderGray text-[13px] font-medium text-textDark">
+                <div className="rounded-lg border border-line bg-white overflow-hidden">
+                  <div className="px-3 py-2 border-b border-line text-[13px] font-medium text-ink">
                     合同面（{rollup.contracts.length}）
                   </div>
                   {rollup.contracts.length === 0 ? (
-                    <div className="px-3 py-6 text-center text-xs text-textGray">暂无已确认归属的合同</div>
+                    <div className="px-3 py-6 text-center text-xs text-ink-soft">暂无已确认归属的合同</div>
                   ) : (
                     <table className="w-full text-xs">
                       <thead>
-                        <tr className="text-textGray border-b border-borderGray/60">
+                        <tr className="text-ink-soft border-b border-line/60">
                           <th className="text-left font-normal px-3 py-1.5">合同号</th>
                           <th className="text-left font-normal px-3 py-1.5">类型</th>
                           <th className="text-left font-normal px-3 py-1.5">对手方</th>
@@ -251,16 +251,16 @@ export function ProjectsView() {
                       </thead>
                       <tbody>
                         {rollup.contracts.map((c) => (
-                          <tr key={c.contractNo} className="border-b border-borderGray/40 last:border-0">
-                            <td className="px-3 py-1.5 font-mono text-textDark">{c.displayContractNo}</td>
+                          <tr key={c.contractNo} className="border-b border-line/40 last:border-0">
+                            <td className="px-3 py-1.5 font-mono text-ink">{c.displayContractNo}</td>
                             <td className="px-3 py-1.5">
-                              <span className="inline-flex items-center text-[11px] px-2 py-0.5 rounded border bg-bgGray/50 text-textDark border-borderGray/50">
+                              <span className="inline-flex items-center text-[11px] px-2 py-0.5 rounded border bg-surface/50 text-ink border-line/50">
                                 {c.role}
                               </span>
                             </td>
-                            <td className="px-3 py-1.5 text-textDark">{c.counterparty ?? '—'}</td>
-                            <td className="px-3 py-1.5 text-right font-mono tabular-nums text-textDark">{fmtAmount(c.amount)}</td>
-                            <td className="px-3 py-1.5 text-textGray">{c.currency ?? '—'}</td>
+                            <td className="px-3 py-1.5 text-ink">{c.counterparty ?? '—'}</td>
+                            <td className="px-3 py-1.5 text-right font-mono tabular-nums text-ink">{fmtAmount(c.amount)}</td>
+                            <td className="px-3 py-1.5 text-ink-soft">{c.currency ?? '—'}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -277,8 +277,8 @@ export function ProjectsView() {
                         className={clsx(
                           'flex items-start gap-1.5 text-xs rounded px-2 py-1.5 border',
                           chk.level === 'warn'
-                            ? 'text-amber bg-amber/5 border-amber/30'
-                            : 'text-textGray bg-bgGray/50 border-borderGray',
+                            ? 'text-warning bg-warning/5 border-warning/30'
+                            : 'text-ink-soft bg-surface/50 border-line',
                         )}
                       >
                         {chk.level === 'warn' ? (
@@ -293,33 +293,33 @@ export function ProjectsView() {
                 )}
 
                 {/* 六向流水小表 */}
-                <div className="rounded-lg border border-borderGray bg-white overflow-hidden">
-                  <div className="px-3 py-2 border-b border-borderGray text-[13px] font-medium text-textDark">
+                <div className="rounded-lg border border-line bg-white overflow-hidden">
+                  <div className="px-3 py-2 border-b border-line text-[13px] font-medium text-ink">
                     六向执行流水
                   </div>
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="text-textGray border-b border-borderGray/60">
+                      <tr className="text-ink-soft border-b border-line/60">
                         <th className="text-left font-normal px-3 py-1.5">流</th>
                         <th className="text-right font-normal px-3 py-1.5">进</th>
                         <th className="text-right font-normal px-3 py-1.5">出</th>
                       </tr>
                     </thead>
                     <tbody>
-                      <tr className="border-b border-borderGray/40">
-                        <td className="px-3 py-1.5 text-textDark">资金流</td>
+                      <tr className="border-b border-line/40">
+                        <td className="px-3 py-1.5 text-ink">资金流</td>
                         <td className="px-3 py-1.5 text-right font-mono tabular-nums text-success">{fmtAmount(rollup.flows.资金流.in)}</td>
-                        <td className="px-3 py-1.5 text-right font-mono tabular-nums text-textDark">{fmtAmount(rollup.flows.资金流.out)}</td>
+                        <td className="px-3 py-1.5 text-right font-mono tabular-nums text-ink">{fmtAmount(rollup.flows.资金流.out)}</td>
                       </tr>
-                      <tr className="border-b border-borderGray/40">
-                        <td className="px-3 py-1.5 text-textDark">发票流</td>
-                        <td className="px-3 py-1.5 text-right font-mono tabular-nums text-textDark">{fmtAmount(rollup.flows.发票流.in)}</td>
-                        <td className="px-3 py-1.5 text-right font-mono tabular-nums text-textDark">{fmtAmount(rollup.flows.发票流.out)}</td>
+                      <tr className="border-b border-line/40">
+                        <td className="px-3 py-1.5 text-ink">发票流</td>
+                        <td className="px-3 py-1.5 text-right font-mono tabular-nums text-ink">{fmtAmount(rollup.flows.发票流.in)}</td>
+                        <td className="px-3 py-1.5 text-right font-mono tabular-nums text-ink">{fmtAmount(rollup.flows.发票流.out)}</td>
                       </tr>
                       <tr>
-                        <td className="px-3 py-1.5 text-textDark">货物流（吨）</td>
-                        <td className="px-3 py-1.5 text-right font-mono tabular-nums text-textDark">{fmtAmount(rollup.flows.货物流.inTon)}</td>
-                        <td className="px-3 py-1.5 text-right font-mono tabular-nums text-textDark">{fmtAmount(rollup.flows.货物流.outTon)}</td>
+                        <td className="px-3 py-1.5 text-ink">货物流（吨）</td>
+                        <td className="px-3 py-1.5 text-right font-mono tabular-nums text-ink">{fmtAmount(rollup.flows.货物流.inTon)}</td>
+                        <td className="px-3 py-1.5 text-right font-mono tabular-nums text-ink">{fmtAmount(rollup.flows.货物流.outTon)}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -328,18 +328,18 @@ export function ProjectsView() {
             )}
 
             {/* 待确认归属 */}
-            <div className="rounded-lg border border-borderGray bg-white overflow-hidden">
-              <div className="px-3 py-2 border-b border-borderGray text-[13px] font-medium text-textDark">
+            <div className="rounded-lg border border-line bg-white overflow-hidden">
+              <div className="px-3 py-2 border-b border-line text-[13px] font-medium text-ink">
                 待确认归属（{pending.length}）
               </div>
               {pending.length === 0 ? (
-                <div className="px-3 py-4 text-center text-xs text-textGray">暂无待确认归属</div>
+                <div className="px-3 py-4 text-center text-xs text-ink-soft">暂无待确认归属</div>
               ) : (
-                <div className="divide-y divide-borderGray/40">
+                <div className="divide-y divide-line/40">
                   {pending.map((m) => (
                     <div key={m.id} className="flex items-center gap-2 px-3 py-2">
-                      <span className="font-mono text-xs text-textDark">{m.contractNo}</span>
-                      <span className="inline-flex items-center text-[11px] px-2 py-0.5 rounded border bg-bgGray/50 text-textDark border-borderGray/50">
+                      <span className="font-mono text-xs text-ink">{m.contractNo}</span>
+                      <span className="inline-flex items-center text-[11px] px-2 py-0.5 rounded border bg-surface/50 text-ink border-line/50">
                         {m.role ?? '未分类'}
                       </span>
                       <div className="ml-auto flex items-center gap-1.5">
@@ -356,7 +356,7 @@ export function ProjectsView() {
                           type="button"
                           onClick={() => void handleMembershipAction(m.id, 'reject')}
                           disabled={confirmingId === m.id}
-                          className="inline-flex items-center gap-1 rounded border border-borderGray text-textGray text-[11px] font-medium px-2 py-1 hover:bg-bgGray disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          className="inline-flex items-center gap-1 rounded border border-line text-ink-soft text-[11px] font-medium px-2 py-1 hover:bg-surface disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                         >
                           <X className="h-3 w-3" aria-hidden />
                           拒绝
@@ -369,8 +369,8 @@ export function ProjectsView() {
             </div>
 
             {/* 人工指派表单 */}
-            <div className="rounded-lg border border-borderGray bg-white px-3 py-2.5">
-              <div className="text-[13px] font-medium text-textDark mb-2">人工指派归属</div>
+            <div className="rounded-lg border border-line bg-white px-3 py-2.5">
+              <div className="text-[13px] font-medium text-ink mb-2">人工指派归属</div>
               <div className="flex flex-wrap items-center gap-2">
                 <input
                   type="text"
@@ -378,12 +378,12 @@ export function ProjectsView() {
                   onChange={(e) => setAssignNo(e.target.value)}
                   placeholder="合同号"
                   spellCheck={false}
-                  className="min-w-40 rounded-md border border-borderGray px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-steelBlue/40"
+                  className="min-w-40 rounded-md border border-line px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary-500/40"
                 />
                 <select
                   value={assignRole}
                   onChange={(e) => setAssignRole(e.target.value)}
-                  className="rounded-md border border-borderGray px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-steelBlue/40 bg-white"
+                  className="rounded-md border border-line px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary-500/40 bg-white"
                 >
                   {CONTRACT_TYPES.map((t) => (
                     <option key={t} value={t}>{t}</option>
@@ -393,7 +393,7 @@ export function ProjectsView() {
                   type="button"
                   onClick={() => void handleAssign()}
                   disabled={assigning || !assignNo.trim()}
-                  className="inline-flex items-center gap-1 rounded-md bg-steelBlue text-white text-xs font-medium px-3 py-1.5 hover:bg-steelBlue/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  className="inline-flex items-center gap-1 rounded-md bg-primary-500 text-white text-xs font-medium px-3 py-1.5 hover:bg-primary-500/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   {assigning ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Plus className="h-3.5 w-3.5" aria-hidden />}
                   指派
@@ -403,18 +403,18 @@ export function ProjectsView() {
 
             {/* 全部归属(含已确认/已拒绝, 状态可见) */}
             {memberships.length > 0 && (
-              <div className="rounded-lg border border-borderGray bg-white overflow-hidden">
-                <div className="px-3 py-2 border-b border-borderGray text-[13px] font-medium text-textDark">
+              <div className="rounded-lg border border-line bg-white overflow-hidden">
+                <div className="px-3 py-2 border-b border-line text-[13px] font-medium text-ink">
                   全部归属（{memberships.length}）
                 </div>
-                <div className="divide-y divide-borderGray/40">
+                <div className="divide-y divide-line/40">
                   {memberships.map((m) => (
                     <div key={m.id} className="flex items-center gap-2 px-3 py-2 text-xs">
-                      <span className="font-mono text-textDark">{m.contractNo}</span>
-                      <span className="inline-flex items-center text-[11px] px-2 py-0.5 rounded border bg-bgGray/50 text-textDark border-borderGray/50">
+                      <span className="font-mono text-ink">{m.contractNo}</span>
+                      <span className="inline-flex items-center text-[11px] px-2 py-0.5 rounded border bg-surface/50 text-ink border-line/50">
                         {m.role ?? '未分类'}
                       </span>
-                      <span className="ml-auto text-[11px] text-textGray font-mono">
+                      <span className="ml-auto text-[11px] text-ink-soft font-mono">
                         置信 {Math.round(m.confidence * 100)}%
                       </span>
                       <StatusBadge status={m.status} />

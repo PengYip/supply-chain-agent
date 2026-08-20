@@ -10,8 +10,8 @@ function verdictClass(verdict: string, veto: boolean): string {
     case 'fail': return 'bg-danger/10 text-danger border-danger/25'
     case 'needs_human_review': return 'bg-warning/10 text-warning border-warning/30'
     case 'sim_error':
-    case 'judge_error': return 'bg-bgGray text-textGray border-borderGray'
-    default: return 'bg-bgGray text-textGray border-borderGray'
+    case 'judge_error': return 'bg-surface text-ink-soft border-line'
+    default: return 'bg-surface text-ink-soft border-line'
   }
 }
 
