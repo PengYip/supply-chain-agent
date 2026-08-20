@@ -20,21 +20,14 @@ import clsx from 'clsx'
 
 /** Per-file parse status segment shown inside a context chip. Extends the
  *  existing chip (no restyle): spinner+解析中 in flight, green check+已解析,
- *  amber 需OCR, red 解析失败. needs_ocr keeps the file referenced; no
+ *  warning 需OCR, red 解析失败. needs_ocr keeps the file referenced; no
  *  auto-retry in v1. */
 function ContextChipStatus({ state }: { state?: DocParseState }) {
   if (!state) return null
-  const base: React.CSSProperties = {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 3,
-    fontSize: 11,
-    lineHeight: 1,
-    whiteSpace: 'nowrap',
-  }
+  const base = 'inline-flex items-center gap-[3px] text-[11px] leading-none whitespace-nowrap'
   if (state === 'parsing') {
     return (
-      <span style={{ ...base, color: '#6b7280' }}>
+      <span className={clsx(base, 'text-ink-soft')}>
         <Loader2 size={11} className="animate-spin" />
         解析中
       </span>
@@ -42,17 +35,17 @@ function ContextChipStatus({ state }: { state?: DocParseState }) {
   }
   if (state === 'parsed') {
     return (
-      <span style={{ ...base, color: '#16a34a' }}>
+      <span className={clsx(base, 'text-success')}>
         <Check size={11} />
         已解析
       </span>
     )
   }
   if (state === 'needs_ocr') {
-    return <span style={{ ...base, color: '#d97706' }}>需OCR</span>
+    return <span className={clsx(base, 'text-warning')}>需OCR</span>
   }
   return (
-    <span style={{ ...base, color: '#dc2626' }}>
+    <span className={clsx(base, 'text-danger')}>
       <AlertCircle size={11} />
       解析失败
     </span>
@@ -63,7 +56,7 @@ function ContextChipStatus({ state }: { state?: DocParseState }) {
  *  的处理选项 + 可选补充意见，单次提交。选项与意见构成一条原子化的人工
  *  判断：提交前可完整核对，补充意见原文作为 reason 传给 Agent。
  *  「暂不处理」是本地逃生口：仅隐藏本卡，不回调后端，工单保持 pending。
- *  视觉上是 L2 SoftGateCard 的姊妹卡（同布局语法），配色用 deepSea 区分
+ *  视觉上是 L2 SoftGateCard 的姊妹卡（同布局语法），配色用 primary 区分
  *  「人工复核」与 L2 的琥珀色「操作确认」。 */
 const HumanReviewCard: React.FC<{
   ticketId: string
@@ -98,20 +91,20 @@ const HumanReviewCard: React.FC<{
   // 推荐项排在首位（高风险时「驳回」在前）。
   const options = recommended === 'deny' ? [baseOptions[1], baseOptions[0]] : baseOptions
   return (
-    <div className="mb-3 rounded-lg border border-deepSea/30 bg-deepSea/5 p-3">
+    <div className="mb-3 rounded-lg border border-primary/30 bg-primary/5 p-3">
       {/* 头部：图标 + 标题 + 工单号 + 分类/严重度徽章 */}
       <div className="flex items-start gap-2.5">
-        <div className="w-6 h-6 rounded-full bg-deepSea/10 flex items-center justify-center shrink-0">
-          <ShieldCheck className="w-3.5 h-3.5 text-deepSea" />
+        <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+          <ShieldCheck className="w-3.5 h-3.5 text-primary" />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-medium text-textDark">人工复核</span>
-            <span className="text-[11px] font-mono text-steelBlue bg-white rounded px-1.5 py-0.5 border border-borderGray">
+            <span className="text-sm font-medium text-ink">人工复核</span>
+            <span className="text-[11px] font-mono text-primary-500 bg-white rounded px-1.5 py-0.5 border border-line">
               {ticketId}
             </span>
             {category && (
-              <span className="text-[11px] leading-none rounded-full px-2 py-1 bg-white text-deepSea border border-deepSea/20">
+              <span className="text-[11px] leading-none rounded-full px-2 py-1 bg-white text-primary border border-primary/20">
                 {escalateCategoryLabel(category)}
               </span>
             )}
@@ -122,7 +115,7 @@ const HumanReviewCard: React.FC<{
             )}
           </div>
           {issueText && (
-            <p className="text-[13px] text-textDark leading-relaxed mt-1.5 break-words">{issueText}</p>
+            <p className="text-[13px] text-ink leading-relaxed mt-1.5 break-words">{issueText}</p>
           )}
         </div>
       </div>
@@ -140,29 +133,29 @@ const HumanReviewCard: React.FC<{
               className={clsx(
                 'w-full text-left rounded-lg border px-3 py-2 flex items-start gap-2.5 transition-colors',
                 selected
-                  ? 'border-deepSea bg-white ring-1 ring-deepSea/30'
-                  : 'border-borderGray bg-white/70 hover:border-steelBlue',
+                  ? 'border-primary bg-white ring-1 ring-primary/30'
+                  : 'border-line bg-white/70 hover:border-primary-500',
                 loading && 'cursor-not-allowed opacity-70',
               )}
             >
               <span
                 className={clsx(
                   'w-3.5 h-3.5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center',
-                  selected ? 'border-deepSea' : 'border-borderGray',
+                  selected ? 'border-primary' : 'border-line',
                 )}
               >
-                {selected && <span className="w-1.5 h-1.5 rounded-full bg-deepSea" />}
+                {selected && <span className="w-1.5 h-1.5 rounded-full bg-primary" />}
               </span>
               <span className="min-w-0">
                 <span className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-[13px] font-medium text-textDark">{opt.label}</span>
+                  <span className="text-[13px] font-medium text-ink">{opt.label}</span>
                   {opt.value === recommended && (
-                    <span className="text-[10px] leading-none rounded-full px-1.5 py-0.5 bg-deepSea/5 text-deepSea border border-deepSea/20">
+                    <span className="text-[10px] leading-none rounded-full px-1.5 py-0.5 bg-primary/5 text-primary border border-primary/20">
                       推荐
                     </span>
                   )}
                 </span>
-                <span className="block text-[11px] text-textGray leading-relaxed mt-0.5">{opt.description}</span>
+                <span className="block text-[11px] text-ink-soft leading-relaxed mt-0.5">{opt.description}</span>
               </span>
             </button>
           )
@@ -171,7 +164,7 @@ const HumanReviewCard: React.FC<{
 
       {/* 补充意见：原文作为人工判断依据（reason）注入 Agent 恢复指令 */}
       <div className="mt-3">
-        <div className="text-[11px] text-textGray mb-1">
+        <div className="text-[11px] text-ink-soft mb-1">
           补充意见（可选）— 会作为人工判断依据直接传给 Agent
         </div>
         <textarea
@@ -180,7 +173,7 @@ const HumanReviewCard: React.FC<{
           disabled={loading}
           rows={2}
           placeholder="例如：平仓基准价 P=812 元/吨，硫分 0.8%，请按此计算"
-          className="w-full rounded-lg border border-borderGray bg-white p-2 text-xs text-textDark placeholder:text-textGray focus:outline-none focus:border-steelBlue resize-none disabled:opacity-70"
+          className="w-full rounded-lg border border-line bg-white p-2 text-xs text-ink placeholder:text-ink-soft focus:outline-none focus:border-primary-500 resize-none disabled:opacity-70"
         />
       </div>
 
@@ -193,14 +186,14 @@ const HumanReviewCard: React.FC<{
 
       <div className="mt-3 flex items-center gap-3">
         <div className="flex-1 min-w-0">
-          {!choice && !loading && <span className="text-[11px] text-textGray">请选择一种处理方式</span>}
+          {!choice && !loading && <span className="text-[11px] text-ink-soft">请选择一种处理方式</span>}
         </div>
         <button
           type="button"
           onClick={onDismiss}
           disabled={loading}
           className={clsx(
-            'shrink-0 text-[11px] text-textGray hover:text-textDark transition-colors',
+            'shrink-0 text-[11px] text-ink-soft hover:text-ink transition-colors',
             loading && 'cursor-not-allowed opacity-50',
           )}
         >
@@ -213,8 +206,8 @@ const HumanReviewCard: React.FC<{
           className={clsx(
             'shrink-0 inline-flex items-center gap-1 px-3.5 py-1.5 rounded-md text-xs font-medium transition-colors',
             !choice || loading
-              ? 'bg-borderGray text-textGray cursor-not-allowed'
-              : 'bg-deepSea text-white hover:bg-deepSea/90',
+              ? 'bg-line text-ink-soft cursor-not-allowed'
+              : 'bg-primary text-white hover:bg-primary/90',
           )}
         >
           {loading ? (
@@ -622,15 +615,15 @@ export const RealChatView: React.FC<{
   }
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 bg-bgGray h-full">
+    <div className="flex-1 flex flex-col min-w-0 bg-surface h-full">
       {/* 视图内状态条（标题由 AppTopbar 承担）：会话状态 + 收藏入口 */}
-      <div className="h-12 bg-white border-b border-borderGray flex items-center justify-end gap-2 px-4 shrink-0">
+      <div className="h-12 bg-white border-b border-line flex items-center justify-end gap-2 px-4 shrink-0">
           <span className={clsx(
             'text-xs px-2 py-1 rounded-full border',
             status === 'idle' ? 'bg-success/10 text-success border-success/20'
-            : status === 'interrupted' ? 'bg-amber/10 text-amber border-amber/20'
+            : status === 'interrupted' ? 'bg-warning/10 text-warning border-warning/20'
             : error ? 'bg-danger/10 text-danger border-danger/20'
-            : 'bg-amber/10 text-amber border-amber/20'
+            : 'bg-warning/10 text-warning border-warning/20'
           )}>
             {status === 'busy' ? '生成中'
             : status === 'interrupted' ? '已中断'
@@ -648,23 +641,23 @@ export const RealChatView: React.FC<{
                 className={clsx(
                   'p-1.5 rounded-lg transition-colors',
                   favProbe?.favorited
-                    ? 'text-amber hover:bg-amber/10'
-                    : 'text-textGray hover:text-textDark hover:bg-bgGray',
+                    ? 'text-warning hover:bg-warning/10'
+                    : 'text-ink-soft hover:text-ink hover:bg-surface',
                 )}
               >
                 <Star className="w-4 h-4" fill={favProbe?.favorited ? 'currentColor' : 'none'} />
               </button>
               {favMenuOpen && favProbe?.favorited && (
-                <div className="absolute right-0 top-full mt-2 w-72 rounded-lg border border-borderGray bg-white p-3 shadow-lg z-30">
-                  <div className="text-xs font-medium text-textDark mb-1.5">反馈备注（可选）</div>
-                  <div className="text-[11px] text-textGray mb-2">记录这条对话的价值或问题，汇总在收藏页供产品迭代参考。</div>
+                <div className="absolute right-0 top-full mt-2 w-72 rounded-lg border border-line bg-white p-3 shadow-lg z-30">
+                  <div className="text-xs font-medium text-ink mb-1.5">反馈备注（可选）</div>
+                  <div className="text-[11px] text-ink-soft mb-2">记录这条对话的价值或问题，汇总在收藏页供产品迭代参考。</div>
                   <textarea
                     value={favNoteDraft}
                     onChange={(e) => setFavNoteDraft(e.target.value)}
                     disabled={favBusy}
                     rows={3}
                     placeholder="例如：三单匹配对账结果准确，但发票金额识别有误"
-                    className="w-full rounded-lg border border-borderGray bg-white p-2 text-xs text-textDark placeholder:text-textGray focus:outline-none focus:border-steelBlue resize-none disabled:opacity-70"
+                    className="w-full rounded-lg border border-line bg-white p-2 text-xs text-ink placeholder:text-ink-soft focus:outline-none focus:border-primary-500 resize-none disabled:opacity-70"
                   />
                   <div className="mt-2 flex items-center justify-between">
                     <button
@@ -680,7 +673,7 @@ export const RealChatView: React.FC<{
                         type="button"
                         onClick={() => setFavMenuOpen(false)}
                         disabled={favBusy}
-                        className="px-2.5 py-1 rounded-md text-[11px] text-textGray hover:text-textDark transition-colors"
+                        className="px-2.5 py-1 rounded-md text-[11px] text-ink-soft hover:text-ink transition-colors"
                       >
                         收起
                       </button>
@@ -690,7 +683,7 @@ export const RealChatView: React.FC<{
                         disabled={favBusy}
                         className={clsx(
                           'px-3 py-1 rounded-md text-[11px] font-medium text-white transition-colors',
-                          favBusy ? 'bg-borderGray cursor-not-allowed' : 'bg-deepSea hover:bg-deepSea/90',
+                          favBusy ? 'bg-line cursor-not-allowed' : 'bg-primary hover:bg-primary/90',
                         )}
                       >
                         {favBusy ? '保存中...' : '保存备注'}
@@ -711,11 +704,11 @@ export const RealChatView: React.FC<{
         <div className="max-w-3xl mx-auto space-y-5">
           {renderItems.length === 0 && (
             <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-12">
-              <div className="w-12 h-12 rounded-2xl bg-deepSea/10 flex items-center justify-center mb-4">
-                <Sparkles className="w-6 h-6 text-deepSea" />
+              <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
+                <Sparkles className="w-6 h-6 text-primary" />
               </div>
-              <h3 className="text-base font-medium text-textDark mb-2">真实 DeepSeek 工具调用</h3>
-              <p className="text-sm text-textGray mb-6 max-w-md">
+              <h3 className="text-base font-medium text-ink mb-2">真实 DeepSeek 工具调用</h3>
+              <p className="text-sm text-ink-soft mb-6 max-w-md">
                 下方输入查询，AI 将自动调用后端真实工具（query_contract / query_orders / cross_check），所有数字来自工具返回，不编造。
               </p>
               <div className="flex flex-wrap justify-center gap-2">
@@ -729,7 +722,7 @@ export const RealChatView: React.FC<{
                   <button
                     key={prompt}
                     onClick={() => setInput(prompt)}
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-full border border-borderGray bg-white text-sm text-textGray hover:border-amber hover:text-amber transition-colors"
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-full border border-line bg-white text-sm text-ink-soft hover:border-warning hover:text-warning transition-colors"
                   >
                     {prompt}
                   </button>
@@ -752,7 +745,7 @@ export const RealChatView: React.FC<{
       </div>
 
       {/* Composer */}
-      <div className="bg-white border-t border-borderGray p-4">
+      <div className="bg-white border-t border-line p-4">
         <div className="max-w-3xl mx-auto">
           {pendingL3 && callbackState !== 'success' && !isDismissed && (
             <HumanReviewCard
@@ -771,15 +764,15 @@ export const RealChatView: React.FC<{
             />
           )}
           {pendingL3 && callbackState !== 'success' && isDismissed && (
-            <div className="mb-3 rounded-lg border border-borderGray bg-white px-3 py-2 flex items-center gap-2 text-[11px] text-textGray">
-              <ShieldCheck className="w-3.5 h-3.5 text-steelBlue shrink-0" />
+            <div className="mb-3 rounded-lg border border-line bg-white px-3 py-2 flex items-center gap-2 text-[11px] text-ink-soft">
+              <ShieldCheck className="w-3.5 h-3.5 text-primary-500 shrink-0" />
               <span className="break-all">
                 有 1 条待复核工单 <span className="font-mono">{pendingL3.ticketId}</span>
               </span>
               <button
                 type="button"
                 onClick={handleReopenReview}
-                className="ml-auto shrink-0 text-steelBlue hover:text-deepSea transition-colors"
+                className="ml-auto shrink-0 text-primary-500 hover:text-primary transition-colors"
               >
                 重新打开
               </button>
@@ -790,7 +783,7 @@ export const RealChatView: React.FC<{
               'mb-3 rounded-lg border px-3 py-2 text-xs flex items-center gap-1.5',
               lastApprovalApproved
                 ? 'border-success/20 bg-success/5 text-success'
-                : 'border-borderGray bg-bgGray text-textGray',
+                : 'border-line bg-surface text-ink-soft',
             )}>
               <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
               {lastApprovalKind === 'L3'
@@ -805,12 +798,12 @@ export const RealChatView: React.FC<{
             </div>
           )}
           {contextFiles.length > 0 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '4px 8px', borderBottom: '1px solid #eee', marginBottom: 8 }}>
+            <div className="mb-2 flex flex-wrap gap-1 border-b border-line px-2 py-1">
               {contextFiles.map((f) => (
-                <span key={f.key} style={{ background: '#e3f2fd', border: '1px solid #90caf9', borderRadius: 3, padding: '2px 6px', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span key={f.key} className="inline-flex items-center gap-1 rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-xs">
                   {f.filename}
                   <ContextChipStatus state={docParseStates[f.docId]} />
-                  <span onClick={() => removeFromConversation(f.key)} style={{ cursor: 'pointer', color: '#666' }}>x</span>
+                  <button type="button" onClick={() => removeFromConversation(f.key)} className="cursor-pointer text-ink-soft hover:text-ink">x</button>
                 </span>
               ))}
             </div>
@@ -828,7 +821,7 @@ export const RealChatView: React.FC<{
               title="上传文件"
               onClick={() => fileInputRef.current?.click()}
               disabled={uploadState === 'uploading'}
-              className="h-10 w-10 shrink-0 rounded-lg border border-borderGray flex items-center justify-center text-textGray hover:text-textDark hover:bg-bgGray disabled:opacity-50"
+              className="h-10 w-10 shrink-0 rounded-lg border border-line flex items-center justify-center text-ink-soft hover:text-ink hover:bg-surface disabled:opacity-50"
             >
               {uploadState === 'uploading' ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -847,7 +840,7 @@ export const RealChatView: React.FC<{
               }}
               placeholder="试试：查一下合同 HT-2024-001 的执行情况"
               rows={1}
-              className="flex-1 min-h-[44px] max-h-[120px] p-2.5 rounded-lg border border-borderGray text-sm text-textDark placeholder:text-textGray focus:outline-none focus:border-steelBlue resize-none"
+              className="flex-1 min-h-[44px] max-h-[120px] p-2.5 rounded-lg border border-line text-sm text-ink placeholder:text-ink-soft focus:outline-none focus:border-primary-500 resize-none"
             />
             <button
               type="submit"
@@ -855,14 +848,14 @@ export const RealChatView: React.FC<{
               className={clsx(
                 'h-10 px-3 rounded-lg flex items-center justify-center transition-colors',
                 input.trim() && !isStreaming
-                  ? 'bg-deepSea text-white hover:bg-opacity-90'
-                  : 'bg-borderGray text-textGray cursor-not-allowed'
+                  ? 'bg-primary text-white hover:bg-opacity-90'
+                  : 'bg-line text-ink-soft cursor-not-allowed'
               )}
             >
               <Send className="w-4 h-4" />
             </button>
           </form>
-          <div className="mt-2 text-[11px] text-textGray">
+          <div className="mt-2 text-[11px] text-ink-soft">
             L2 写操作（如 bind_document 绑定单据）需你确认后执行；付款/退款等资金操作不在系统内执行，需要人工处理时会生成人工工单转人工复核。
           </div>
           {uploadMsg && (

@@ -87,13 +87,13 @@ export const escalateCategoryLabel = (category: EscalateCategory): string => ESC
 export const severityLabel = (severity: EscalateSeverity): string =>
   severity === 'high' ? '高风险' : severity === 'medium' ? '中风险' : '低风险'
 
-/** L3 卡片共用的严重度徽标配色：high=danger / medium=amber / low=中性。 */
+/** L3 卡片共用的严重度徽标配色：high=danger / medium=warning / low=中性。 */
 export const severityBadgeClass = (severity: EscalateSeverity): string =>
   severity === 'high'
     ? 'bg-danger/10 text-danger border-danger/20'
     : severity === 'medium'
-      ? 'bg-amber/10 text-amber border-amber/20'
-      : 'bg-white text-textGray border-borderGray'
+      ? 'bg-warning/10 text-warning border-warning/20'
+      : 'bg-white text-ink-soft border-line'
 
 // 按 parts 原始顺序交错的渲染段。文本段与工具段保持模型产出的时间顺序，
 // 避免把工具调用统一挤到末尾（agent loop 通常是：先调工具→后总结文本）。

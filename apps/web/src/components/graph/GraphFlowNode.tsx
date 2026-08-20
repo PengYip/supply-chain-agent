@@ -43,7 +43,7 @@ export function AllSideHandles() {
  *  - 实体（Party/Commodity/Contract）：类别色实底 + 白字，圆角更硬，读起来是结构化对象。
  *  中心态统一放大一档并加深投影，家族区分不因中心强调而丢失。 */
 
-/** 文档节点卡：纸片感。业务类型徽章与左栏文档列表的类型标签同款（steelBlue 浅底描边）。 */
+/** 文档节点卡：纸片感。业务类型徽章与左栏文档列表的类型标签同款（primary-500 浅底描边）。 */
 function DocumentCard({
   graph,
   isCenter,
@@ -72,14 +72,14 @@ function DocumentCard({
         <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded" style={{ background: style.softBg, color: style.color }}>
           <FileText className="h-2.5 w-2.5" aria-hidden />
         </span>
-        <span className="min-w-0 max-w-[104px] shrink truncate rounded border border-[#D8E2EB] bg-[#EEF2F6] px-1.5 py-px text-[10px] leading-4 text-steelBlue">
+        <span className="min-w-0 max-w-[104px] shrink truncate rounded border border-primary/20 bg-primary/10 px-1.5 py-px text-[10px] leading-4 text-primary-500">
           {docType}
         </span>
         {isCenter && (
-          <span className="ml-auto shrink-0 rounded bg-deepSea px-1.5 py-px text-[10px] leading-4 text-white">中心</span>
+          <span className="ml-auto shrink-0 rounded bg-primary px-1.5 py-px text-[10px] leading-4 text-white">中心</span>
         )}
       </div>
-      <div className="mt-1 line-clamp-2 break-all text-[13px] font-medium leading-4 text-textDark">{name}</div>
+      <div className="mt-1 line-clamp-2 break-all text-[13px] font-medium leading-4 text-ink">{name}</div>
       <AllSideHandles />
     </div>
   );

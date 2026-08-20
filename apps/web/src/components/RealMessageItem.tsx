@@ -81,12 +81,12 @@ const formatResult = (result: unknown): string => {
 
 const MarkdownContent: React.FC<{ children: string }> = ({ children }) => {
   return (
-    <div className="text-sm leading-relaxed text-textDark markdown-body">
+    <div className="text-sm leading-relaxed text-ink markdown-body">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
           p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-          strong: ({ children }) => <strong className="font-bold text-textDark">{children}</strong>,
+          strong: ({ children }) => <strong className="font-bold text-ink">{children}</strong>,
           ul: ({ children }) => <ul className="list-disc pl-5 mb-2">{children}</ul>,
           ol: ({ children }) => <ol className="list-decimal pl-5 mb-2">{children}</ol>,
           li: ({ children }) => <li className="mb-0.5">{children}</li>,
@@ -94,20 +94,20 @@ const MarkdownContent: React.FC<{ children: string }> = ({ children }) => {
             const isBlock = className?.includes('language-')
             if (isBlock) {
               return (
-                <pre className="bg-bgGray rounded p-2 overflow-auto mb-2">
-                  <code className="font-mono text-xs text-textDark bg-transparent">{children}</code>
+                <pre className="bg-surface rounded p-2 overflow-auto mb-2">
+                  <code className="font-mono text-xs text-ink bg-transparent">{children}</code>
                 </pre>
               )
             }
-            return <code className="font-mono text-xs bg-bgGray px-1 py-0.5 rounded text-textDark">{children}</code>
+            return <code className="font-mono text-xs bg-surface px-1 py-0.5 rounded text-ink">{children}</code>
           },
-          table: ({ children }) => <table className="w-full text-xs border-collapse border border-borderGray mb-2">{children}</table>,
-          thead: ({ children }) => <thead className="bg-bgGray">{children}</thead>,
-          th: ({ children }) => <th className="border border-borderGray px-2 py-1 text-left font-medium">{children}</th>,
-          td: ({ children }) => <td className="border border-borderGray px-2 py-1">{children}</td>,
-          a: ({ children, href }) => <a href={href} className="text-deepSea hover:underline">{children}</a>,
-          hr: () => <hr className="my-3 border-borderGray" />,
-          blockquote: ({ children }) => <blockquote className="border-l-2 border-steelBlue pl-3 italic text-textGray mb-2">{children}</blockquote>,
+          table: ({ children }) => <table className="w-full text-xs border-collapse border border-line mb-2">{children}</table>,
+          thead: ({ children }) => <thead className="bg-surface">{children}</thead>,
+          th: ({ children }) => <th className="border border-line px-2 py-1 text-left font-medium">{children}</th>,
+          td: ({ children }) => <td className="border border-line px-2 py-1">{children}</td>,
+          a: ({ children, href }) => <a href={href} className="text-primary hover:underline">{children}</a>,
+          hr: () => <hr className="my-3 border-line" />,
+          blockquote: ({ children }) => <blockquote className="border-l-2 border-primary-500 pl-3 italic text-ink-soft mb-2">{children}</blockquote>,
         }}
       >
         {children}
@@ -126,21 +126,21 @@ const BlockedCard: React.FC<{ toolName: string; args: unknown; blocked: NonNulla
 }) => {
   const esc = toolName === 'escalate_to_human' ? parseEscalateArgs(args) : null
   return (
-    <div className="rounded-lg border border-deepSea/20 bg-white p-3 mt-2">
+    <div className="rounded-lg border border-primary/20 bg-white p-3 mt-2">
       <div className="flex items-start gap-2.5">
-        <div className="w-6 h-6 rounded-full bg-deepSea/10 flex items-center justify-center shrink-0">
-          <ShieldAlert className="w-3.5 h-3.5 text-deepSea" />
+        <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+          <ShieldAlert className="w-3.5 h-3.5 text-primary" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-textDark truncate">
+          <div className="text-sm font-medium text-ink truncate">
             {esc ? '人工复核工单' : '操作已阻断'} · {toolName}
           </div>
           <div className="mt-1.5 flex items-center flex-wrap gap-1.5">
-            <span className="text-[11px] font-mono text-steelBlue bg-bgGray rounded px-1.5 py-0.5 border border-borderGray">
+            <span className="text-[11px] font-mono text-primary-500 bg-surface rounded px-1.5 py-0.5 border border-line">
               {blocked.ticketId}
             </span>
             {esc?.category && (
-              <span className="text-[11px] leading-none rounded-full px-2 py-1 bg-white text-deepSea border border-deepSea/20">
+              <span className="text-[11px] leading-none rounded-full px-2 py-1 bg-white text-primary border border-primary/20">
                 {escalateCategoryLabel(esc.category)}
               </span>
             )}
@@ -151,20 +151,20 @@ const BlockedCard: React.FC<{ toolName: string; args: unknown; blocked: NonNulla
             )}
           </div>
           {!esc && formatArgs(args) && (
-            <div className="mt-1.5 text-[11px] font-mono text-steelBlue bg-bgGray/50 rounded px-1.5 py-0.5 border border-borderGray/50 inline-block truncate max-w-full">
+            <div className="mt-1.5 text-[11px] font-mono text-primary-500 bg-surface/50 rounded px-1.5 py-0.5 border border-line/50 inline-block truncate max-w-full">
               {formatArgs(args)}
             </div>
           )}
-          {esc && <p className="text-xs text-textDark leading-relaxed mt-2 break-words">{esc.issue}</p>}
+          {esc && <p className="text-xs text-ink leading-relaxed mt-2 break-words">{esc.issue}</p>}
           {blocked.message && (
-            <p className={clsx('leading-relaxed mt-1.5 break-words', esc ? 'text-[11px] text-textGray' : 'text-xs text-textDark')}>
+            <p className={clsx('leading-relaxed mt-1.5 break-words', esc ? 'text-[11px] text-ink-soft' : 'text-xs text-ink')}>
               {blocked.message}
             </p>
           )}
-          <div className="text-[11px] text-textGray mt-2">已阻断，等待人工复核</div>
+          <div className="text-[11px] text-ink-soft mt-2">已阻断，等待人工复核</div>
         </div>
       </div>
-      <div className="mt-2.5 pt-2 border-t border-borderGray/60 flex items-center gap-1 text-[11px] text-textGray">
+      <div className="mt-2.5 pt-2 border-t border-line/60 flex items-center gap-1 text-[11px] text-ink-soft">
         <ArrowDown className="w-3 h-3 shrink-0" />
         在下方复核卡中选择处理方式
       </div>
@@ -194,21 +194,21 @@ const SoftGateCard: React.FC<{
   }
 
   return (
-    <div className="rounded-lg border border-amber/30 bg-amber/5 p-3 mt-2">
+    <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 mt-2">
       <div className="flex items-start gap-2.5 mb-2.5">
-        <div className="w-6 h-6 rounded-full bg-amber/15 flex items-center justify-center shrink-0">
-          <ShieldAlert className="w-3.5 h-3.5 text-amber" />
+        <div className="w-6 h-6 rounded-full bg-warning/15 flex items-center justify-center shrink-0">
+          <ShieldAlert className="w-3.5 h-3.5 text-warning" />
         </div>
         <div className="min-w-0">
-          <div className="text-sm font-medium text-textDark truncate">操作确认 · {toolName}</div>
+          <div className="text-sm font-medium text-ink truncate">操作确认 · {toolName}</div>
           {formatArgs(args) && (
-            <div className="text-[11px] font-mono text-steelBlue bg-white/50 rounded px-1.5 py-0.5 border border-borderGray/50 inline-block mt-1 truncate max-w-full">
+            <div className="text-[11px] font-mono text-primary-500 bg-white/50 rounded px-1.5 py-0.5 border border-line/50 inline-block mt-1 truncate max-w-full">
               {formatArgs(args)}
             </div>
           )}
         </div>
       </div>
-      <p className="text-xs text-textGray mb-3 leading-relaxed">
+      <p className="text-xs text-ink-soft mb-3 leading-relaxed">
         该操作属于 L2 写操作，执行后不可自动撤销。确认继续吗？
       </p>
       {state === 'idle' && (
@@ -224,7 +224,7 @@ const SoftGateCard: React.FC<{
           <button
             type="button"
             onClick={handleDeny}
-            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-white border border-borderGray text-textGray text-xs font-medium hover:text-textDark hover:border-textGray transition-colors"
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-white border border-line text-ink-soft text-xs font-medium hover:text-ink hover:border-ink-soft transition-colors"
           >
             <X className="w-3.5 h-3.5" />
             取消
@@ -232,7 +232,7 @@ const SoftGateCard: React.FC<{
         </div>
       )}
       {state === 'busy' && (
-        <div className="flex items-center gap-1.5 text-xs text-textGray">
+        <div className="flex items-center gap-1.5 text-xs text-ink-soft">
           <Loader2 className="w-3.5 h-3.5 animate-spin" />
           处理中...
         </div>
@@ -244,7 +244,7 @@ const SoftGateCard: React.FC<{
         </div>
       )}
       {state === 'denied' && (
-        <div className="flex items-center gap-1.5 text-xs text-textGray">
+        <div className="flex items-center gap-1.5 text-xs text-ink-soft">
           <X className="w-3.5 h-3.5" />
           已取消
         </div>
@@ -279,8 +279,8 @@ const ToolResultBox: React.FC<{ result: unknown }> = ({ result }) => {
   }, [expanded, text])
 
   return (
-    <div className="mt-1.5 text-xs text-textDark bg-bgGray rounded px-2 py-1.5 border border-borderGray/50 flex items-start gap-1.5">
-      <Database className="w-3 h-3 text-steelBlue shrink-0 mt-0.5" />
+    <div className="mt-1.5 text-xs text-ink bg-surface rounded px-2 py-1.5 border border-line/50 flex items-start gap-1.5">
+      <Database className="w-3 h-3 text-primary-500 shrink-0 mt-0.5" />
       <div className="min-w-0 flex-1">
         <span
           ref={textRef}
@@ -295,7 +295,7 @@ const ToolResultBox: React.FC<{ result: unknown }> = ({ result }) => {
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
-            className="mt-1 text-[11px] text-steelBlue hover:text-deepSea transition-colors"
+            className="mt-1 text-[11px] text-primary-500 hover:text-primary transition-colors"
           >
             {expanded ? '收起' : '展开'}
           </button>
@@ -318,7 +318,7 @@ const RealToolStep: React.FC<{ step: ToolCallStep }> = ({ step }) => {
         <div
           className={clsx(
             'w-5 h-5 rounded-full flex items-center justify-center border-2 border-white',
-            isCompleted ? 'bg-success text-white' : 'bg-white text-textGray border-borderGray'
+            isCompleted ? 'bg-success text-white' : 'bg-white text-ink-soft border-line'
           )}
         >
           {isCompleted ? <CheckCircle2 className="w-3 h-3" /> : <Loader2 className="w-3 h-3 animate-spin" />}
@@ -326,8 +326,8 @@ const RealToolStep: React.FC<{ step: ToolCallStep }> = ({ step }) => {
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-medium text-textDark">{step.toolName}</span>
-          <span className="text-[11px] font-mono text-steelBlue bg-white/50 rounded px-1.5 py-0.5 border border-borderGray/50 truncate max-w-full">
+          <span className="text-sm font-medium text-ink">{step.toolName}</span>
+          <span className="text-[11px] font-mono text-primary-500 bg-white/50 rounded px-1.5 py-0.5 border border-line/50 truncate max-w-full">
             {formatArgs(step.args)}
           </span>
         </div>
@@ -343,7 +343,7 @@ const RealToolStep: React.FC<{ step: ToolCallStep }> = ({ step }) => {
               )
             )}
             {!isCompleted && (
-              <div className="mt-1 text-[11px] text-textGray flex items-center gap-1">
+              <div className="mt-1 text-[11px] text-ink-soft flex items-center gap-1">
                 <Loader2 className="w-3 h-3 animate-spin" /> 等待工具返回...
               </div>
             )}
@@ -403,13 +403,13 @@ export const RealMessageItem: React.FC<{
       if (seg.kind === 'text') {
         const isLastText = idx === lastTextSegmentIdx
         return (
-          <div key={`t-${idx}`} className="text-textDark">
+          <div key={`t-${idx}`} className="text-ink">
             <MarkdownContent>{seg.text}</MarkdownContent>
             {isStreaming && !isUser && isLastText && (
               <span className="inline-flex ml-1 gap-0.5 align-middle">
-                <span className="w-1 h-1 rounded-full bg-textGray animate-pulse-dot" style={{ animationDelay: '0ms' }} />
-                <span className="w-1 h-1 rounded-full bg-textGray animate-pulse-dot" style={{ animationDelay: '200ms' }} />
-                <span className="w-1 h-1 rounded-full bg-textGray animate-pulse-dot" style={{ animationDelay: '400ms' }} />
+                <span className="w-1 h-1 rounded-full bg-ink-soft animate-pulse-dot" style={{ animationDelay: '0ms' }} />
+                <span className="w-1 h-1 rounded-full bg-ink-soft animate-pulse-dot" style={{ animationDelay: '200ms' }} />
+                <span className="w-1 h-1 rounded-full bg-ink-soft animate-pulse-dot" style={{ animationDelay: '400ms' }} />
               </span>
             )}
           </div>
@@ -435,12 +435,12 @@ export const RealMessageItem: React.FC<{
 
       // tool-group：连续工具调用归一组，保持时间顺序（夹在前后文本段之间）
       return (
-        <div key={`g-${idx}`} className="rounded-lg border border-borderGray bg-bgGray/50 overflow-hidden mt-2">
-          <div className="px-3 py-2 border-b border-borderGray bg-deepSea/5 flex items-center gap-2">
-            <Wrench className="w-4 h-4 text-steelBlue" />
-            <span className="text-xs font-medium text-textDark">工具调用</span>
+        <div key={`g-${idx}`} className="rounded-lg border border-line bg-surface/50 overflow-hidden mt-2">
+          <div className="px-3 py-2 border-b border-line bg-primary/5 flex items-center gap-2">
+            <Wrench className="w-4 h-4 text-primary-500" />
+            <span className="text-xs font-medium text-ink">工具调用</span>
           </div>
-          <div className="px-3 divide-y divide-borderGray/50">
+          <div className="px-3 divide-y divide-line/50">
             {seg.steps.map((step) => (
               <RealToolStep key={step.toolCallId} step={step} />
             ))}
@@ -455,7 +455,7 @@ export const RealMessageItem: React.FC<{
       <div
         className={clsx(
           'w-8 h-8 rounded-lg flex items-center justify-center shrink-0',
-          isUser ? 'bg-steelBlue text-white' : 'bg-deepSea text-white'
+          isUser ? 'bg-primary-500 text-white' : 'bg-primary text-white'
         )}
       >
         {isUser ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
@@ -468,7 +468,7 @@ export const RealMessageItem: React.FC<{
           <div
             className={clsx(
               'group rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm',
-              isUser ? 'bg-steelBlue text-white rounded-tr-sm' : 'bg-white border border-borderGray text-textDark rounded-tl-sm',
+              isUser ? 'bg-primary-500 text-white rounded-tr-sm' : 'bg-white border border-line text-ink rounded-tl-sm',
             )}
           >
             <div className="space-y-2">{renderSegments(contentSegments)}</div>
@@ -478,7 +478,7 @@ export const RealMessageItem: React.FC<{
         <div
           className={clsx(
             'group max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm',
-            isUser ? 'bg-steelBlue text-white rounded-tr-sm' : 'bg-white border border-borderGray text-textDark rounded-tl-sm',
+            isUser ? 'bg-primary-500 text-white rounded-tr-sm' : 'bg-white border border-line text-ink rounded-tl-sm',
           )}
         >
           <div className="space-y-2">{renderSegments(item.segments)}</div>
@@ -499,7 +499,7 @@ export const RealMessageItem: React.FC<{
                 }}
                 title="复制"
                 className={clsx(
-                  'transition text-[11px] text-textGray hover:text-textDark',
+                  'transition text-[11px] text-ink-soft hover:text-ink',
                   copiedId === item.id
                     ? 'opacity-100'
                     : 'opacity-0 group-hover:opacity-100',

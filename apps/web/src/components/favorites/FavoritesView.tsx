@@ -112,7 +112,7 @@ export const FavoritesView: React.FC<{
       onClick={onClick}
       className={clsx(
         'px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
-        active ? 'bg-deepSea text-white' : 'bg-white border border-borderGray text-textGray hover:text-textDark',
+        active ? 'bg-primary text-white' : 'bg-white border border-line text-ink-soft hover:text-ink',
       )}
     >
       {label}
@@ -120,12 +120,12 @@ export const FavoritesView: React.FC<{
   )
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 bg-bgGray h-full">
+    <div className="flex-1 flex flex-col min-w-0 bg-surface h-full">
       {/* 二级工具条（视图标题由 AppTopbar 承担） */}
       <PageHeader
         actions={
           <>
-            <span className="text-xs text-textGray">
+            <span className="text-xs text-ink-soft">
               {scopeAll ? '全员收藏的会话与反馈备注（按更新时间倒序）' : '我收藏的会话与反馈备注'}
             </span>
             {isAdmin && (
@@ -139,7 +139,7 @@ export const FavoritesView: React.FC<{
               title="刷新"
               aria-label="刷新"
               onClick={() => void refresh()}
-              className="p-1.5 rounded-lg hover:bg-bgGray text-textGray hover:text-textDark"
+              className="p-1.5 rounded-lg hover:bg-surface text-ink-soft hover:text-ink"
             >
               <RefreshCw className={clsx('w-4 h-4', loading && 'animate-spin')} />
             </button>
@@ -157,17 +157,17 @@ export const FavoritesView: React.FC<{
             </div>
           )}
           {loading ? (
-            <div className="flex items-center justify-center gap-2 text-sm text-textGray py-12">
+            <div className="flex items-center justify-center gap-2 text-sm text-ink-soft py-12">
               <Loader2 className="w-4 h-4 animate-spin" />
               加载中...
             </div>
           ) : favorites.length === 0 ? (
             <div className="flex flex-col items-center justify-center text-center px-6 py-12">
-              <div className="w-12 h-12 rounded-2xl bg-amber/10 flex items-center justify-center mb-4">
-                <Star className="w-6 h-6 text-amber" />
+              <div className="w-12 h-12 rounded-2xl bg-warning/10 flex items-center justify-center mb-4">
+                <Star className="w-6 h-6 text-warning" />
               </div>
-              <h3 className="text-base font-medium text-textDark mb-2">暂无收藏</h3>
-              <p className="text-sm text-textGray max-w-md">
+              <h3 className="text-base font-medium text-ink mb-2">暂无收藏</h3>
+              <p className="text-sm text-ink-soft max-w-md">
                 在对话中点击标题栏的星标即可收藏会话，并可附一条反馈备注；产品团队会在这里汇总大家的反馈。
               </p>
             </div>
@@ -178,11 +178,11 @@ export const FavoritesView: React.FC<{
               return (
                 <div
                   key={`${row.sessionId}:${row.userId}`}
-                  className="rounded-lg border border-borderGray bg-white p-3"
+                  className="rounded-lg border border-line bg-white p-3"
                 >
                   <div className="flex items-start gap-2.5">
-                    <div className="w-6 h-6 rounded-full bg-amber/10 flex items-center justify-center shrink-0 mt-0.5">
-                      <Star className="w-3.5 h-3.5 text-amber" fill="currentColor" />
+                    <div className="w-6 h-6 rounded-full bg-warning/10 flex items-center justify-center shrink-0 mt-0.5">
+                      <Star className="w-3.5 h-3.5 text-warning" fill="currentColor" />
                     </div>
                     <div className="min-w-0 flex-1">
                       {/* Header: title (click -> open chat) + attribution */}
@@ -190,21 +190,21 @@ export const FavoritesView: React.FC<{
                         <button
                           type="button"
                           onClick={() => onOpenSession(row.sessionId)}
-                          className="text-sm font-medium text-deepSea hover:underline truncate max-w-full inline-flex items-center gap-1.5"
+                          className="text-sm font-medium text-primary hover:underline truncate max-w-full inline-flex items-center gap-1.5"
                         >
                           <MessageSquare className="w-3.5 h-3.5 shrink-0" />
                           <span className="truncate">{row.title ?? '未命名会话'}</span>
                         </button>
                         {row.status === 'busy' && (
-                          <span className="text-[11px] leading-none text-steelBlue bg-bgGray border border-borderGray rounded-full px-2 py-1">
+                          <span className="text-[11px] leading-none text-primary-500 bg-surface border border-line rounded-full px-2 py-1">
                             运行中
                           </span>
                         )}
                       </div>
-                      <div className="mt-1 flex items-center gap-2 text-[11px] text-textGray flex-wrap">
+                      <div className="mt-1 flex items-center gap-2 text-[11px] text-ink-soft flex-wrap">
                         {scopeAll && (
                           <span className="inline-flex items-center gap-1">
-                            <span className="w-4 h-4 rounded-full bg-deepSea/10 text-deepSea flex items-center justify-center text-[9px] font-medium shrink-0">
+                            <span className="w-4 h-4 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[9px] font-medium shrink-0">
                               {(row.userEmail ?? row.userId).charAt(0).toUpperCase()}
                             </span>
                             <span className="truncate max-w-40">{row.userEmail ?? row.userId}</span>
@@ -222,14 +222,14 @@ export const FavoritesView: React.FC<{
                             disabled={busyId === row.sessionId}
                             rows={3}
                             placeholder="这条对话哪里有价值 / 有什么问题？"
-                            className="w-full rounded-lg border border-borderGray bg-white p-2 text-xs text-textDark placeholder:text-textGray focus:outline-none focus:border-steelBlue resize-none disabled:opacity-70"
+                            className="w-full rounded-lg border border-line bg-white p-2 text-xs text-ink placeholder:text-ink-soft focus:outline-none focus:border-primary-500 resize-none disabled:opacity-70"
                           />
                           <div className="mt-1.5 flex items-center justify-end gap-2">
                             <button
                               type="button"
                               onClick={() => setEditingId(null)}
                               disabled={busyId === row.sessionId}
-                              className="px-2.5 py-1 rounded-md text-[11px] text-textGray hover:text-textDark"
+                              className="px-2.5 py-1 rounded-md text-[11px] text-ink-soft hover:text-ink"
                             >
                               取消
                             </button>
@@ -240,8 +240,8 @@ export const FavoritesView: React.FC<{
                               className={clsx(
                                 'px-3 py-1 rounded-md text-[11px] font-medium text-white',
                                 busyId === row.sessionId
-                                  ? 'bg-borderGray cursor-not-allowed'
-                                  : 'bg-deepSea hover:bg-deepSea/90',
+                                  ? 'bg-line cursor-not-allowed'
+                                  : 'bg-primary hover:bg-primary/90',
                               )}
                             >
                               {busyId === row.sessionId ? '保存中...' : '保存备注'}
@@ -253,7 +253,7 @@ export const FavoritesView: React.FC<{
                           <p
                             className={clsx(
                               'text-xs leading-relaxed break-words',
-                              row.note ? 'text-textDark bg-bgGray/60 rounded px-2 py-1.5 border border-borderGray/50 flex-1' : 'text-textGray italic',
+                              row.note ? 'text-ink bg-surface/60 rounded px-2 py-1.5 border border-line/50 flex-1' : 'text-ink-soft italic',
                             )}
                           >
                             {row.note ?? '未填写反馈备注'}
@@ -262,7 +262,7 @@ export const FavoritesView: React.FC<{
                             <button
                               type="button"
                               onClick={() => startEdit(row)}
-                              className="shrink-0 text-[11px] text-steelBlue hover:text-deepSea transition-colors mt-1.5"
+                              className="shrink-0 text-[11px] text-primary-500 hover:text-primary transition-colors mt-1.5"
                             >
                               {row.note ? '编辑' : '写反馈'}
                             </button>
@@ -272,11 +272,11 @@ export const FavoritesView: React.FC<{
 
                       {/* Footer actions (own rows only) */}
                       {own && !editing && (
-                        <div className="mt-2 pt-2 border-t border-borderGray/60 flex items-center justify-between">
+                        <div className="mt-2 pt-2 border-t border-line/60 flex items-center justify-between">
                           <button
                             type="button"
                             onClick={() => onOpenSession(row.sessionId)}
-                            className="text-[11px] text-steelBlue hover:text-deepSea transition-colors"
+                            className="text-[11px] text-primary-500 hover:text-primary transition-colors"
                           >
                             打开会话
                           </button>

@@ -3,6 +3,31 @@
 @tailwind utilities;
 
 @layer base {
+  /* 语义色 token（RGB 分量）：tailwind.config.js 里的 surface/panel/line/ink 等
+     类通过 rgb(var(--c-*) / <alpha-value>) 消费，改这里即可全局换肤。 */
+  :root {
+    --c-surface: 248 250 252;
+    --c-panel: 255 255 255;
+    --c-line: 226 232 240;
+    --c-ink: 30 41 59;
+    --c-ink-soft: 100 116 139;
+    --c-success: 22 163 74;
+    --c-warning: 217 119 6;
+    --c-danger: 220 38 38;
+  }
+
+  /* 暗色模式变量块本期仅预留（无切换入口）：启用时把 `dark` class 挂到 html 即可。 */
+  .dark {
+    --c-surface: 15 23 42;
+    --c-panel: 30 41 59;
+    --c-line: 51 65 85;
+    --c-ink: 226 232 240;
+    --c-ink-soft: 148 163 184;
+    --c-success: 74 222 128;
+    --c-warning: 251 191 36;
+    --c-danger: 248 113 113;
+  }
+
   html, body, #root {
     height: 100%;
   }
@@ -10,8 +35,8 @@
   body {
     margin: 0;
     font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-    color: #1F2937;
-    background-color: #F5F7FA;
+    color: rgb(var(--c-ink));
+    background-color: rgb(var(--c-surface));
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }

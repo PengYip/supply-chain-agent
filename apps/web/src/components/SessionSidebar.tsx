@@ -64,11 +64,11 @@ export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, c
         <button
           type="button"
           onClick={handleNew}
-          className="w-full rounded-lg bg-deepSea px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-deepSea/90"
+          className="w-full rounded-lg bg-primary px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90"
         >
           新建会话
         </button>
-        <div className="mt-2 flex gap-0.5 rounded-lg bg-bgGray p-1">
+        <div className="mt-2 flex gap-0.5 rounded-lg bg-surface p-1">
           {(
             [
               { label: `全部 (${sessions.length})`, active: !showFavoritesOnly, onClick: () => setShowFavoritesOnly(false) },
@@ -81,7 +81,7 @@ export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, c
               onClick={tab.onClick}
               className={clsx(
                 'flex-1 rounded-md px-1 py-1 text-xs transition-colors',
-                tab.active ? 'bg-white font-medium text-deepSea shadow-sm' : 'text-textGray hover:text-textDark',
+                tab.active ? 'bg-white font-medium text-primary shadow-sm' : 'text-ink-soft hover:text-ink',
               )}
             >
               {tab.label}
@@ -92,9 +92,9 @@ export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, c
 
       <div className="flex-1 overflow-y-auto">
         {loading ? (
-          <div className="p-4 text-center text-sm text-textGray">加载中...</div>
+          <div className="p-4 text-center text-sm text-ink-soft">加载中...</div>
         ) : visible.length === 0 ? (
-          <div className="p-4 text-center text-sm text-textGray">
+          <div className="p-4 text-center text-sm text-ink-soft">
             {showFavoritesOnly ? '暂无收藏会话' : '暂无会话'}
           </div>
         ) : (
@@ -106,7 +106,7 @@ export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, c
                 onClick={() => onSelect(s.id)}
                 className={clsx(
                   'group cursor-pointer border-l-2 px-3 py-2 transition-colors',
-                  active ? 'border-deepSea bg-deepSea/5' : 'border-transparent hover:bg-bgGray',
+                  active ? 'border-primary bg-primary/5' : 'border-transparent hover:bg-surface',
                 )}
               >
                 <div className="flex min-w-0 items-center gap-1.5 text-sm">
@@ -115,16 +115,16 @@ export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, c
                     title={s.favorited ? '取消收藏' : '收藏（可在收藏页补写反馈）'}
                     className={clsx(
                       'shrink-0 cursor-pointer leading-none transition-colors',
-                      s.favorited ? 'text-amber hover:text-amber/80' : 'text-borderGray hover:text-amber',
+                      s.favorited ? 'text-warning hover:text-warning/80' : 'text-line hover:text-warning',
                     )}
                   >
                     <Star size={14} fill={s.favorited ? 'currentColor' : 'none'} strokeWidth={1.5} />
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-textDark">
+                  <span className="min-w-0 flex-1 truncate text-ink">
                     {s.title ?? '新建会话'}
                   </span>
                   {s.status === 'busy' && (
-                    <span className="shrink-0 whitespace-nowrap rounded-full border border-deepSea/20 bg-deepSea/10 px-1.5 py-px text-[11px] text-deepSea">
+                    <span className="shrink-0 whitespace-nowrap rounded-full border border-primary/20 bg-primary/10 px-1.5 py-px text-[11px] text-primary">
                       运行中
                     </span>
                   )}
@@ -135,7 +135,7 @@ export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, c
                     删除
                   </span>
                 </div>
-                <div className="mt-0.5 text-xs text-textGray">
+                <div className="mt-0.5 text-xs text-ink-soft">
                   {relativeTime(s.updatedAt || s.createdAt)}
                 </div>
               </div>

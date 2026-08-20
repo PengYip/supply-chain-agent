@@ -17,11 +17,11 @@ const STATE_LABEL: Record<LiveState, string> = {
 
 function stateClass(state: LiveState): string {
   switch (state) {
-    case 'running': return 'bg-deepSea/10 text-deepSea border-deepSea/30 animate-pulse-bar'
+    case 'running': return 'bg-primary/10 text-primary border-primary/30 animate-pulse-bar'
     case 'done': return 'bg-success/10 text-success border-success/25'
     case 'error': return 'bg-danger/10 text-danger border-danger/25'
     case 'interrupted': return 'bg-warning/10 text-warning border-warning/30'
-    default: return 'bg-bgGray text-textGray border-borderGray'
+    default: return 'bg-surface text-ink-soft border-line'
   }
 }
 
@@ -76,13 +76,13 @@ export function EvalRunLive({ runId, onOpenReport, onBack }: {
     <div className="p-6 max-w-6xl">
       <div className="flex items-center gap-3 mb-4 flex-wrap">
         <button type="button" onClick={onBack}
-          className="inline-flex items-center gap-1 text-sm text-deepSea hover:underline">
+          className="inline-flex items-center gap-1 text-sm text-primary hover:underline">
           <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> 运行列表
         </button>
-        <h2 className="text-base font-medium text-textDark">评估直播</h2>
-        <span className="text-xs text-textGray font-mono">{runId}</span>
+        <h2 className="text-base font-medium text-ink">评估直播</h2>
+        <span className="text-xs text-ink-soft font-mono">{runId}</span>
         <span className={clsx('inline-flex items-center gap-1.5 rounded border px-1.5 py-0.5 text-xs', stateClass(state))}>
-          {state === 'running' && <span className="h-1.5 w-1.5 rounded-full bg-deepSea" aria-hidden />}
+          {state === 'running' && <span className="h-1.5 w-1.5 rounded-full bg-primary" aria-hidden />}
           {STATE_LABEL[state]}
         </span>
         <span className="flex-1" />
@@ -93,12 +93,12 @@ export function EvalRunLive({ runId, onOpenReport, onBack }: {
           </button>
         )}
         <button type="button" onClick={() => void replay()} title="重新拉取直播状态"
-          className="inline-flex items-center gap-1 rounded border border-borderGray bg-white px-2.5 py-1 text-xs text-textGray hover:text-deepSea">
+          className="inline-flex items-center gap-1 rounded border border-line bg-white px-2.5 py-1 text-xs text-ink-soft hover:text-primary">
           <RotateCcw className="h-3 w-3" aria-hidden /> 重连
         </button>
         {state === 'done' && (
           <button type="button" onClick={() => onOpenReport(runId)}
-            className="inline-flex items-center gap-1 rounded bg-deepSea px-2.5 py-1 text-xs text-white hover:opacity-90">
+            className="inline-flex items-center gap-1 rounded bg-primary px-2.5 py-1 text-xs text-white hover:opacity-90">
             查看报告 <ExternalLink className="h-3 w-3" aria-hidden />
           </button>
         )}
@@ -114,31 +114,31 @@ export function EvalRunLive({ runId, onOpenReport, onBack }: {
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
-        <div className="rounded-lg border border-borderGray bg-white p-3">
-          <div className="text-xs text-textGray mb-1">进度</div>
-          <div className="text-lg tabular-nums text-textDark">
+        <div className="rounded-lg border border-line bg-white p-3">
+          <div className="text-xs text-ink-soft mb-1">进度</div>
+          <div className="text-lg tabular-nums text-ink">
             {progress.done}{progress.total > 0 ? ` / ${progress.total}` : ''}
           </div>
         </div>
-        <div className="rounded-lg border border-borderGray bg-white p-3">
-          <div className="text-xs text-textGray mb-1">当前场景</div>
-          <div className="text-sm font-mono text-textDark">
+        <div className="rounded-lg border border-line bg-white p-3">
+          <div className="text-xs text-ink-soft mb-1">当前场景</div>
+          <div className="text-sm font-mono text-ink">
             {progress.current ? `${progress.current.scenarioId} · 第 ${progress.current.runIndex} 轮` : '-'}
           </div>
         </div>
-        <div className="rounded-lg border border-borderGray bg-white p-3">
-          <div className="text-xs text-textGray mb-1">事件数</div>
-          <div className="text-lg tabular-nums text-textDark">{events.length}</div>
+        <div className="rounded-lg border border-line bg-white p-3">
+          <div className="text-xs text-ink-soft mb-1">事件数</div>
+          <div className="text-lg tabular-nums text-ink">{events.length}</div>
         </div>
       </div>
 
       {verdicts.length > 0 && (
-        <div className="rounded-lg border border-borderGray bg-white p-4 mb-5">
-          <div className="text-xs text-textGray mb-2">判定 (已完成的 episode)</div>
+        <div className="rounded-lg border border-line bg-white p-4 mb-5">
+          <div className="text-xs text-ink-soft mb-2">判定 (已完成的 episode)</div>
           <div className="flex flex-wrap gap-x-8 gap-y-3">
             {verdicts.map(([scenarioId, list]) => (
               <div key={scenarioId}>
-                <div className="text-xs font-mono text-textDark mb-1">{scenarioId}</div>
+                <div className="text-xs font-mono text-ink mb-1">{scenarioId}</div>
                 <div className="flex flex-wrap gap-1">
                   {list.map((v) => (
                     <VerdictBadge key={v.runIndex} verdict={v.verdict} veto={v.vetoTriggered} />
@@ -150,12 +150,12 @@ export function EvalRunLive({ runId, onOpenReport, onBack }: {
         </div>
       )}
 
-      <div className="rounded-lg border border-borderGray bg-white p-4">
-        <div className="text-sm font-medium text-textDark mb-3">
+      <div className="rounded-lg border border-line bg-white p-4">
+        <div className="text-sm font-medium text-ink mb-3">
           {progress.current ? `${progress.current.scenarioId} · 第 ${progress.current.runIndex} 轮轨迹` : '轨迹'}
         </div>
         {trajectory.length === 0 ? (
-          <div className="text-sm text-textGray">{state === 'connecting' ? '连接中...' : '等待事件...'}</div>
+          <div className="text-sm text-ink-soft">{state === 'connecting' ? '连接中...' : '等待事件...'}</div>
         ) : (
           <div className="space-y-3">
             {trajectory.map((e, i) => {

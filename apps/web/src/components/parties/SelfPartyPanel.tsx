@@ -12,7 +12,7 @@ import { formatFlowSkipLines } from '../../lib/flowSkip';
 import { PageHeader } from '../shell/PageHeader';
 
 const inputCls =
-  'h-8 w-full min-w-0 rounded-md border border-borderGray bg-white px-2.5 text-[12px] text-textDark focus:border-deepSea focus:outline-none';
+  'h-8 w-full min-w-0 rounded-md border border-line bg-white px-2.5 text-[12px] text-ink focus:border-primary focus:outline-none';
 
 function formatDate(iso: string | null): string {
   if (!iso) return '';
@@ -47,12 +47,12 @@ function RemoveConfirm({
 }) {
   return (
     <span className="flex shrink-0 items-center gap-1.5">
-      <span className="text-[10px] leading-4 text-textGray">移除后已生成的执行流水不会回收</span>
+      <span className="text-[10px] leading-4 text-ink-soft">移除后已生成的执行流水不会回收</span>
       <button
         type="button"
         onClick={onCancel}
         disabled={deleting}
-        className="h-6 rounded-md border border-borderGray bg-white px-2 text-[11px] text-textGray transition-colors hover:bg-bgGray disabled:opacity-50"
+        className="h-6 rounded-md border border-line bg-white px-2 text-[11px] text-ink-soft transition-colors hover:bg-surface disabled:opacity-50"
       >
         取消
       </button>
@@ -60,7 +60,7 @@ function RemoveConfirm({
         type="button"
         onClick={onConfirm}
         disabled={deleting}
-        className="flex h-6 items-center gap-1 rounded-md bg-danger px-2 text-[11px] font-medium text-white transition-colors hover:bg-[#991B1B] disabled:opacity-50"
+        className="flex h-6 items-center gap-1 rounded-md bg-danger px-2 text-[11px] font-medium text-white transition-colors hover:brightness-90 disabled:opacity-50"
       >
         {deleting && <Loader2 className="h-3 w-3 animate-spin" aria-hidden />}
         移除
@@ -87,11 +87,11 @@ function PartyRow({
 }) {
   const envSourced = party.source === 'env';
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-borderGray/60 px-4 py-2.5 last:border-b-0">
-      <span className="min-w-0 flex-1 break-all text-[13px] leading-5 text-textDark">{party.name}</span>
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-line/60 px-4 py-2.5 last:border-b-0">
+      <span className="min-w-0 flex-1 break-all text-[13px] leading-5 text-ink">{party.name}</span>
       {envSourced ? (
         <span
-          className="shrink-0 rounded border border-[#CFDCE6] bg-[#EBF1F5] px-1.5 py-px text-[10px] text-steelBlue"
+          className="shrink-0 rounded border border-primary/20 bg-primary/10 px-1.5 py-px text-[10px] text-primary-500"
           title="已由环境变量配置，不可在此移除"
         >
           已由环境变量配置
@@ -104,7 +104,7 @@ function PartyRow({
           onClick={onAskRemove}
           title="移除主体"
           aria-label={`移除主体 ${party.name}`}
-          className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-borderGray bg-white px-2 text-[11px] text-textGray transition-colors hover:border-danger hover:text-danger"
+          className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-line bg-white px-2 text-[11px] text-ink-soft transition-colors hover:border-danger hover:text-danger"
         >
           <Trash2 className="h-3 w-3" aria-hidden />
           移除
@@ -133,11 +133,11 @@ function CandidateRow({
   if (typeof candidate.sellerCount === 'number') metaParts.push(`卖方侧 ${candidate.sellerCount}`);
   if (date) metaParts.push(`最近出现于 ${date}`);
   return (
-    <div className="border-b border-borderGray/60 px-4 py-2.5 last:border-b-0">
+    <div className="border-b border-line/60 px-4 py-2.5 last:border-b-0">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-        <span className="min-w-0 flex-1 break-all text-[13px] leading-5 text-textDark">{candidate.name}</span>
+        <span className="min-w-0 flex-1 break-all text-[13px] leading-5 text-ink">{candidate.name}</span>
         {candidate.isContractParty && (
-          <span className="shrink-0 rounded border border-[#CBE5D3] bg-[#E9F4EC] px-1.5 py-px text-[10px] text-[#15803D]">
+          <span className="shrink-0 rounded border border-success/25 bg-success/10 px-1.5 py-px text-[10px] text-success">
             合同当事方
           </span>
         )}
@@ -146,7 +146,7 @@ function CandidateRow({
             type="button"
             onClick={onConfirm}
             disabled={confirming}
-            className="flex h-6 items-center gap-1 rounded-md bg-deepSea px-2 text-[11px] font-medium text-white transition-colors hover:bg-[#164a76] disabled:opacity-50"
+            className="flex h-6 items-center gap-1 rounded-md bg-primary px-2 text-[11px] font-medium text-white transition-colors hover:bg-primary-800 disabled:opacity-50"
           >
             {confirming && <Loader2 className="h-3 w-3 animate-spin" aria-hidden />}
             确认
@@ -155,13 +155,13 @@ function CandidateRow({
             type="button"
             onClick={onIgnore}
             disabled={confirming}
-            className="h-6 rounded-md border border-borderGray bg-white px-2 text-[11px] text-textGray transition-colors hover:bg-bgGray disabled:opacity-50"
+            className="h-6 rounded-md border border-line bg-white px-2 text-[11px] text-ink-soft transition-colors hover:bg-surface disabled:opacity-50"
           >
             忽略
           </button>
         </span>
       </div>
-      <div className="mt-1 text-[11px] leading-4 text-textGray">{metaParts.join(' · ')}</div>
+      <div className="mt-1 text-[11px] leading-4 text-ink-soft">{metaParts.join(' · ')}</div>
     </div>
   );
 }
@@ -188,8 +188,8 @@ function ConflictSide({
 }) {
   return (
     <span className="flex min-w-0 items-center gap-1.5">
-      <span className="shrink-0 text-[10px] text-textGray">{roleLabel}</span>
-      <span className="min-w-0 break-all text-[12px] font-medium leading-5 text-textDark">{name}</span>
+      <span className="shrink-0 text-[10px] text-ink-soft">{roleLabel}</span>
+      <span className="min-w-0 break-all text-[12px] font-medium leading-5 text-ink">{name}</span>
       {removable ? (
         confirming ? (
           <RemoveConfirm deleting={deleting} onCancel={onCancelRemove} onConfirm={onConfirmRemove} />
@@ -199,14 +199,14 @@ function ConflictSide({
             onClick={onAskRemove}
             title={`移除主体 ${name}`}
             aria-label={`移除主体 ${name}`}
-            className="h-5 shrink-0 rounded px-1 text-[11px] text-textGray transition-colors hover:bg-[#FBE9E9] hover:text-danger"
+            className="h-5 shrink-0 rounded px-1 text-[11px] text-ink-soft transition-colors hover:bg-danger/10 hover:text-danger"
           >
             移除
           </button>
         )
       ) : (
         <span
-          className="shrink-0 rounded border border-[#CFDCE6] bg-[#EBF1F5] px-1.5 py-px text-[10px] text-steelBlue"
+          className="shrink-0 rounded border border-primary/20 bg-primary/10 px-1.5 py-px text-[10px] text-primary-500"
           title="已由环境变量配置，不可在此移除"
         >
           已由环境变量配置
@@ -235,8 +235,8 @@ function ConflictsBanner({
   onConfirmRemove: (name: string) => void;
 }) {
   return (
-    <div className="mb-4 overflow-hidden rounded-md border border-[#F0C4C4]">
-      <div className="flex items-center gap-2 bg-[#FBE9E9] px-4 py-2.5">
+    <div className="mb-4 overflow-hidden rounded-md border border-danger/30">
+      <div className="flex items-center gap-2 bg-danger/10 px-4 py-2.5">
         <AlertTriangle className="h-4 w-4 shrink-0 text-danger" aria-hidden />
         <span className="text-[13px] font-medium leading-5 text-danger">
           名单同时命中以下单据的双方，方向无法判定，请移除其中非己方名称
@@ -246,10 +246,10 @@ function ConflictsBanner({
         {conflicts.map((c, i) => (
           <div
             key={`${c.documentId}-${c.buyer}-${c.seller}-${i}`}
-            className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-t border-borderGray/60 px-4 py-2.5 first:border-t-0"
+            className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-t border-line/60 px-4 py-2.5 first:border-t-0"
             title={c.documentId || undefined}
           >
-            <span className="shrink-0 rounded border border-[#D8E2EB] bg-[#EEF2F6] px-1.5 py-px text-[10px] text-steelBlue">
+            <span className="shrink-0 rounded border border-primary/20 bg-primary/10 px-1.5 py-px text-[10px] text-primary-500">
               {c.docType || '单据'}
             </span>
             <ConflictSide
@@ -262,7 +262,7 @@ function ConflictsBanner({
               onCancelRemove={onCancelRemove}
               onConfirmRemove={() => onConfirmRemove(c.buyer)}
             />
-            <span className="shrink-0 text-[12px] text-textGray" aria-hidden>
+            <span className="shrink-0 text-[12px] text-ink-soft" aria-hidden>
               ↔
             </span>
             <ConflictSide
@@ -396,21 +396,21 @@ export function SelfPartyPanel() {
   };
 
   return (
-    <div className="flex h-full flex-col bg-bgGray">
+    <div className="flex h-full flex-col bg-surface">
       {/* 二级工具条（视图标题与提示语由 AppTopbar 承担） */}
       <PageHeader
         actions={
           <>
-            <span className="flex items-center gap-1.5 rounded-md bg-bgGray px-2.5 py-1 text-[11px] text-textGray">
-              已配置 <span className="font-semibold tabular-nums text-textDark">{parties.length}</span>
+            <span className="flex items-center gap-1.5 rounded-md bg-surface px-2.5 py-1 text-[11px] text-ink-soft">
+              已配置 <span className="font-semibold tabular-nums text-ink">{parties.length}</span>
             </span>
-            <span className="flex items-center gap-1.5 rounded-md bg-bgGray px-2.5 py-1 text-[11px] text-textGray">
-              候选 <span className="font-semibold tabular-nums text-textDark">{visibleCandidates.length}</span>
+            <span className="flex items-center gap-1.5 rounded-md bg-surface px-2.5 py-1 text-[11px] text-ink-soft">
+              候选 <span className="font-semibold tabular-nums text-ink">{visibleCandidates.length}</span>
             </span>
             <button
               type="button"
               onClick={() => void p.refresh()}
-              className="flex h-7 items-center gap-1 rounded-md border border-borderGray bg-white px-2.5 text-[12px] text-textDark hover:bg-bgGray"
+              className="flex h-7 items-center gap-1 rounded-md border border-line bg-white px-2.5 text-[12px] text-ink hover:bg-surface"
             >
               <RefreshCw className={clsx('h-3.5 w-3.5', p.loading && 'animate-spin')} aria-hidden />
               刷新
@@ -428,7 +428,7 @@ export function SelfPartyPanel() {
             <button
               type="button"
               onClick={() => void p.refresh()}
-              className="mt-3 flex items-center gap-1 rounded-md border border-borderGray bg-white px-2.5 py-1 text-[11px] text-textDark transition-colors hover:bg-bgGray"
+              className="mt-3 flex items-center gap-1 rounded-md border border-line bg-white px-2.5 py-1 text-[11px] text-ink transition-colors hover:bg-surface"
             >
               <RefreshCw className="h-3 w-3" aria-hidden />
               重试
@@ -449,12 +449,12 @@ export function SelfPartyPanel() {
             )}
             <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
               {/* 左列: 已配置名单 */}
-              <section className="overflow-hidden rounded-md border border-borderGray bg-white">
-                <div className="flex items-baseline gap-1.5 border-b border-borderGray px-4 py-2.5">
-                  <span className="text-[13px] font-semibold text-textDark">已配置主体</span>
-                  <span className="text-[11px] text-textGray">共 {parties.length} 个</span>
+              <section className="overflow-hidden rounded-md border border-line bg-white">
+                <div className="flex items-baseline gap-1.5 border-b border-line px-4 py-2.5">
+                  <span className="text-[13px] font-semibold text-ink">已配置主体</span>
+                  <span className="text-[11px] text-ink-soft">共 {parties.length} 个</span>
                 </div>
-                <div className="border-b border-borderGray px-4 py-3">
+                <div className="border-b border-line px-4 py-3">
                   <div className="flex gap-2">
                     <input
                       type="text"
@@ -475,7 +475,7 @@ export function SelfPartyPanel() {
                       type="button"
                       onClick={() => void handleAdd()}
                       disabled={adding || input.trim() === ''}
-                      className="flex h-8 shrink-0 items-center gap-1 rounded-md bg-deepSea px-3 text-[12px] font-medium text-white transition-colors hover:bg-[#164a76] disabled:opacity-50"
+                      className="flex h-8 shrink-0 items-center gap-1 rounded-md bg-primary px-3 text-[12px] font-medium text-white transition-colors hover:bg-primary-800 disabled:opacity-50"
                     >
                       {adding ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
@@ -485,21 +485,21 @@ export function SelfPartyPanel() {
                       添加
                     </button>
                   </div>
-                  {addNote && <div className="mt-1.5 text-[11px] text-textGray">{addNote}</div>}
+                  {addNote && <div className="mt-1.5 text-[11px] text-ink-soft">{addNote}</div>}
                   {addError && <div className="mt-1.5 text-[11px] text-danger">{addError}</div>}
                 </div>
                 <div>
                   {p.loading ? (
                     <div className="space-y-2 p-4">
                       {[0, 1, 2].map((i) => (
-                        <div key={i} className="h-10 animate-pulse rounded-lg bg-bgGray" />
+                        <div key={i} className="h-10 animate-pulse rounded-lg bg-surface" />
                       ))}
-                      <div className="pt-1 text-center text-[12px] text-textGray">主体名单加载中</div>
+                      <div className="pt-1 text-center text-[12px] text-ink-soft">主体名单加载中</div>
                     </div>
                   ) : parties.length === 0 ? (
                     <div className="flex flex-col items-center px-5 py-10 text-center">
-                      <div className="text-[13px] font-medium text-textDark">暂无主体</div>
-                      <div className="mt-1 text-[12px] leading-5 text-textGray">在上方添加，或从右侧候选中确认</div>
+                      <div className="text-[13px] font-medium text-ink">暂无主体</div>
+                      <div className="mt-1 text-[12px] leading-5 text-ink-soft">在上方添加，或从右侧候选中确认</div>
                     </div>
                   ) : (
                     parties.map((party) => (
@@ -518,10 +518,10 @@ export function SelfPartyPanel() {
               </section>
 
               {/* 右列: 候选建议 */}
-              <section className="overflow-hidden rounded-md border border-borderGray bg-white">
-                <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 border-b border-borderGray px-4 py-2.5">
-                  <span className="text-[13px] font-semibold text-textDark">候选主体</span>
-                  <span className="text-[11px] leading-4 text-textGray">
+              <section className="overflow-hidden rounded-md border border-line bg-white">
+                <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 border-b border-line px-4 py-2.5">
+                  <span className="text-[13px] font-semibold text-ink">候选主体</span>
+                  <span className="text-[11px] leading-4 text-ink-soft">
                     以下为单据中识别出的往来主体，仅勾选属于己方的名称
                   </span>
                 </div>
@@ -529,14 +529,14 @@ export function SelfPartyPanel() {
                   {p.loading ? (
                     <div className="space-y-2 p-4">
                       {[0, 1, 2].map((i) => (
-                        <div key={i} className="h-12 animate-pulse rounded-lg bg-bgGray" />
+                        <div key={i} className="h-12 animate-pulse rounded-lg bg-surface" />
                       ))}
-                      <div className="pt-1 text-center text-[12px] text-textGray">候选加载中</div>
+                      <div className="pt-1 text-center text-[12px] text-ink-soft">候选加载中</div>
                     </div>
                   ) : visibleCandidates.length === 0 ? (
                     <div className="flex flex-col items-center px-5 py-10 text-center">
-                      <div className="text-[13px] font-medium text-textDark">暂无待确认候选</div>
-                      <div className="mt-1 text-[12px] leading-5 text-textGray">
+                      <div className="text-[13px] font-medium text-ink">暂无待确认候选</div>
+                      <div className="mt-1 text-[12px] leading-5 text-ink-soft">
                         上传并解析文档后，系统会自动识别高频主体
                       </div>
                     </div>
@@ -564,7 +564,7 @@ export function SelfPartyPanel() {
           <div
             key={t.id}
             className={clsx(
-              'animate-fade-in rounded-md border border-borderGray border-l-4 bg-white px-3.5 py-2.5 shadow-card',
+              'animate-fade-in rounded-md border border-line border-l-4 bg-white px-3.5 py-2.5 shadow-card',
               t.kind === 'error' ? 'border-l-danger' : 'border-l-success',
             )}
           >
@@ -574,7 +574,7 @@ export function SelfPartyPanel() {
               ) : (
                 <CheckCircle2 className="mt-px h-4 w-4 shrink-0 text-success" aria-hidden />
               )}
-              <span className="whitespace-pre-line text-[12px] leading-5 text-textDark">{t.text}</span>
+              <span className="whitespace-pre-line text-[12px] leading-5 text-ink">{t.text}</span>
             </div>
           </div>
         ))}

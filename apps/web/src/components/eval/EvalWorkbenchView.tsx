@@ -31,11 +31,11 @@ export function EvalWorkbenchView() {
   }
 
   return (
-    <div className="h-full flex flex-col bg-bgGray">
+    <div className="h-full flex flex-col bg-surface">
       {/* 二级工具条（视图标题由 AppTopbar 承担）：结果/数据集分段式 Tab */}
       <PageHeader
         tabs={
-          <div className="flex items-center gap-1 rounded-lg bg-bgGray p-0.5">
+          <div className="flex items-center gap-1 rounded-lg bg-surface p-0.5">
             {(
               [
                 { key: 'results', label: '结果' },
@@ -48,7 +48,7 @@ export function EvalWorkbenchView() {
                 onClick={() => setTab(t.key)}
                 className={clsx(
                   'rounded-md px-3 py-1 text-xs transition-colors',
-                  tab === t.key ? 'bg-white font-medium text-deepSea shadow-sm' : 'text-textGray hover:text-textDark',
+                  tab === t.key ? 'bg-white font-medium text-primary shadow-sm' : 'text-ink-soft hover:text-ink',
                 )}
               >
                 {t.label}
@@ -96,8 +96,8 @@ export function EvalWorkbenchView() {
               />
             )}
             {(nav.page === 'episode' || nav.page === 'report') && !summary && (
-              <div className="p-8 text-sm text-textGray">运行数据不在列表中, 可能已被清理。
-                <button type="button" className="ml-2 text-deepSea underline" onClick={() => setNav({ page: 'runs' })}>返回</button>
+              <div className="p-8 text-sm text-ink-soft">运行数据不在列表中, 可能已被清理。
+                <button type="button" className="ml-2 text-primary underline" onClick={() => setNav({ page: 'runs' })}>返回</button>
               </div>
             )}
           </>

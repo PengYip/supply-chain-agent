@@ -61,11 +61,11 @@ function parseBadge(
   switch (parseStatus) {
     case 'uploaded':
     case 'parsing':
-      return { text: '未解析', className: 'bg-bgGray text-textGray' };
+      return { text: '未解析', className: 'bg-surface text-ink-soft' };
     case 'parsed':
       return { text: '已解析', className: 'bg-success/10 text-success' };
     case 'needs_ocr':
-      return { text: '需OCR', className: 'bg-amber/10 text-amber' };
+      return { text: '需OCR', className: 'bg-warning/10 text-warning' };
     case 'failed':
       return { text: '解析失败', className: 'bg-danger/10 text-danger' };
     default:
@@ -77,7 +77,7 @@ function parseBadge(
 function actionLinkClass(tone: 'primary' | 'danger' = 'primary') {
   return clsx(
     'cursor-pointer rounded px-1 py-0.5 text-[11px] whitespace-nowrap transition-colors',
-    tone === 'danger' ? 'text-danger hover:bg-danger/5' : 'text-deepSea hover:bg-deepSea/10',
+    tone === 'danger' ? 'text-danger hover:bg-danger/5' : 'text-primary hover:bg-primary/10',
   );
 }
 
@@ -110,18 +110,18 @@ function MoveDropdown({
     <div
       ref={ref}
       onClick={(e) => e.stopPropagation()}
-      className="absolute right-0 top-full z-20 mt-1 min-w-[170px] rounded-md border border-borderGray bg-white py-1 shadow-lg"
+      className="absolute right-0 top-full z-20 mt-1 min-w-[170px] rounded-md border border-line bg-white py-1 shadow-pop"
     >
       {folders.length === 0 ? (
-        <div className="px-3 py-2 text-xs text-textGray">暂无文件夹，请先新建</div>
+        <div className="px-3 py-2 text-xs text-ink-soft">暂无文件夹，请先新建</div>
       ) : (
         <>
           <div
             onClick={() => { onMove(file.key, ''); onClose(); }}
-            className="cursor-pointer whitespace-nowrap px-3 py-1.5 text-xs text-textDark hover:bg-bgGray"
+            className="cursor-pointer whitespace-nowrap px-3 py-1.5 text-xs text-ink hover:bg-surface"
           >
             根目录
-            {current === '' && <span className="ml-2 text-textGray">当前</span>}
+            {current === '' && <span className="ml-2 text-ink-soft">当前</span>}
           </div>
           {folders.map((folder) => {
             const isCurrent = folder.path === current;
@@ -129,10 +129,10 @@ function MoveDropdown({
               <div
                 key={folder.id}
                 onClick={() => { onMove(file.key, folder.path); onClose(); }}
-                className="cursor-pointer whitespace-nowrap px-3 py-1.5 text-xs text-textDark hover:bg-bgGray"
+                className="cursor-pointer whitespace-nowrap px-3 py-1.5 text-xs text-ink hover:bg-surface"
               >
                 {folder.path}
-                {isCurrent && <span className="ml-2 text-textGray">当前</span>}
+                {isCurrent && <span className="ml-2 text-ink-soft">当前</span>}
               </div>
             );
           })}
@@ -167,13 +167,13 @@ function DeleteConfirmOverlay({
     <div
       ref={ref}
       onClick={(e) => e.stopPropagation()}
-      className="absolute right-2 top-full z-20 mt-1 flex items-center gap-2 whitespace-nowrap rounded-md border border-borderGray bg-white px-2.5 py-1.5 text-[11px] shadow-lg"
+      className="absolute right-2 top-full z-20 mt-1 flex items-center gap-2 whitespace-nowrap rounded-md border border-line bg-white px-2.5 py-1.5 text-[11px] shadow-pop"
     >
-      <span className="text-textGray">{message}</span>
+      <span className="text-ink-soft">{message}</span>
       <span onClick={onConfirm} className="cursor-pointer font-medium text-danger">
         确定
       </span>
-      <span onClick={onCancel} className="cursor-pointer text-textGray">
+      <span onClick={onCancel} className="cursor-pointer text-ink-soft">
         取消
       </span>
     </div>
@@ -224,12 +224,12 @@ function FileRow(props: {
     <div
       onClick={() => onSelect(file.key)}
       className={clsx(
-        'group relative flex cursor-pointer items-center border-b border-borderGray/60 pr-3 text-sm text-textDark transition-colors',
-        isSelected ? 'bg-deepSea/5' : 'hover:bg-bgGray',
+        'group relative flex cursor-pointer items-center border-b border-line/60 pr-3 text-sm text-ink transition-colors',
+        isSelected ? 'bg-primary/5' : 'hover:bg-surface',
       )}
       style={{ paddingLeft: 12 + depth * 14, paddingTop: 7, paddingBottom: 7 }}
     >
-      <div className="flex w-[18px] shrink-0 items-center justify-center text-textGray">
+      <div className="flex w-[18px] shrink-0 items-center justify-center text-ink-soft">
         <FileText className="h-4 w-4" aria-hidden />
       </div>
       <span
@@ -243,7 +243,7 @@ function FileRow(props: {
           {badge.text}
         </span>
       )}
-      <span className="mr-2 hidden shrink-0 whitespace-nowrap text-[11px] text-textGray group-hover:inline">
+      <span className="mr-2 hidden shrink-0 whitespace-nowrap text-[11px] text-ink-soft group-hover:inline">
         {formatSize(file.size)}
       </span>
       <div
@@ -340,7 +340,7 @@ function TreeFolder(props: TreeFolderProps) {
     <div>
       <div
         onClick={() => toggle(fullPath)}
-        className="group relative flex cursor-pointer items-center border-b border-borderGray/60 pr-3 text-sm text-textDark transition-colors hover:bg-bgGray"
+        className="group relative flex cursor-pointer items-center border-b border-line/60 pr-3 text-sm text-ink transition-colors hover:bg-surface"
         style={{ paddingLeft: 12 + depth * 14, paddingTop: 7, paddingBottom: 7 }}
       >
         <span
@@ -349,7 +349,7 @@ function TreeFolder(props: TreeFolderProps) {
         >
           {hasChildren ? (
             <ChevronRight
-              className={clsx('h-3.5 w-3.5 text-textGray transition-transform', isOpen && 'rotate-90')}
+              className={clsx('h-3.5 w-3.5 text-ink-soft transition-transform', isOpen && 'rotate-90')}
               aria-hidden
             />
           ) : (
@@ -357,9 +357,9 @@ function TreeFolder(props: TreeFolderProps) {
           )}
         </span>
         {isOpen ? (
-          <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" aria-hidden />
+          <FolderOpen className="h-4 w-4 shrink-0 text-warning" aria-hidden />
         ) : (
-          <Folder className="h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+          <Folder className="h-4 w-4 shrink-0 text-warning" aria-hidden />
         )}
         <span title={name} className="line-clamp-2 ml-2 min-w-0 flex-1 font-medium [overflow-wrap:anywhere]">
           {name}
@@ -379,9 +379,9 @@ function TreeFolder(props: TreeFolderProps) {
         )}
       </div>
       {isOpen && (
-        <div className="ml-5 border-l border-borderGray pl-2">
+        <div className="ml-5 border-l border-line pl-2">
           {node.files.length === 0 && Object.keys(node.subdirs).length === 0 && (
-            <div className="px-3 py-1.5 text-xs text-textGray">（空）</div>
+            <div className="px-3 py-1.5 text-xs text-ink-soft">（空）</div>
           )}
           {node.files.map((f) => (
             <FileRow
@@ -503,18 +503,18 @@ export function FileDrawer(props: FileDrawerProps) {
   return (
     <>
       {/* 遮罩：点击关闭 */}
-      <div className="animate-fade-in fixed inset-0 z-30 bg-textDark/30" onClick={onClose} />
-      <aside className="animate-slide-in-right fixed inset-y-0 right-0 z-40 flex w-[360px] max-w-[90vw] flex-col border-l border-borderGray bg-white">
+      <div className="animate-fade-in fixed inset-0 z-40 bg-ink/30" onClick={onClose} />
+      <aside className="animate-slide-in-right fixed inset-y-0 right-0 z-drawer flex w-[360px] max-w-[90vw] flex-col border-l border-line bg-white">
         {/* 头部：标题 + 新建文件夹 + 关闭 */}
-        <div className="flex shrink-0 items-center gap-2 border-b border-borderGray px-3 py-3">
+        <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-3">
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-semibold leading-tight text-textDark">文件管理</div>
-            <div className="text-[11px] text-textGray">{files.length} 个文件</div>
+            <div className="text-sm font-semibold leading-tight text-ink">文件管理</div>
+            <div className="text-[11px] text-ink-soft">{files.length} 个文件</div>
           </div>
           <button
             type="button"
             onClick={() => setCreatingFolder(true)}
-            className="rounded-md border border-borderGray bg-bgGray px-2.5 py-1 text-xs font-medium text-textDark transition-colors hover:border-textGray/30"
+            className="rounded-md border border-line bg-surface px-2.5 py-1 text-xs font-medium text-ink transition-colors hover:border-ink-soft/30"
           >
             新建文件夹
           </button>
@@ -522,7 +522,7 @@ export function FileDrawer(props: FileDrawerProps) {
             type="button"
             onClick={onClose}
             aria-label="关闭文件抽屉"
-            className="flex h-7 w-7 items-center justify-center rounded-md text-textGray transition-colors hover:bg-bgGray hover:text-textDark"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-ink-soft transition-colors hover:bg-surface hover:text-ink"
           >
             <X className="h-4 w-4" aria-hidden />
           </button>
@@ -530,8 +530,8 @@ export function FileDrawer(props: FileDrawerProps) {
 
         {/* 新建文件夹输入 */}
         {creatingFolder && (
-          <div className="flex shrink-0 items-center gap-2 border-b border-borderGray px-3 py-2">
-            <Folder className="h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+          <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
+            <Folder className="h-4 w-4 shrink-0 text-warning" aria-hidden />
             <input
               autoFocus
               value={newFolderName}
@@ -548,12 +548,12 @@ export function FileDrawer(props: FileDrawerProps) {
                 }
               }}
               placeholder="文件夹名称"
-              className="min-w-0 flex-1 rounded border border-borderGray px-2 py-1 text-sm outline-none focus:border-deepSea"
+              className="min-w-0 flex-1 rounded border border-line px-2 py-1 text-sm outline-none focus:border-primary"
             />
-            <button type="button" onClick={handleCreateFolder} className="px-1.5 text-xs text-deepSea hover:underline">
+            <button type="button" onClick={handleCreateFolder} className="px-1.5 text-xs text-primary hover:underline">
               确认
             </button>
-            <button type="button" onClick={handleCancelCreate} className="px-1.5 text-xs text-textGray hover:underline">
+            <button type="button" onClick={handleCancelCreate} className="px-1.5 text-xs text-ink-soft hover:underline">
               取消
             </button>
           </div>
@@ -562,10 +562,10 @@ export function FileDrawer(props: FileDrawerProps) {
         {/* 文件树 */}
         <div className="flex-1 overflow-y-auto" onClick={() => setSelectedKey(null)}>
           {loading ? (
-            <div className="p-8 text-center text-sm text-textGray">加载中...</div>
+            <div className="p-8 text-center text-sm text-ink-soft">加载中...</div>
           ) : !hasContent ? (
-            <div className="flex flex-col items-center p-10 text-sm text-textGray">
-              <Folder className="mb-2 h-10 w-10 text-borderGray" aria-hidden />
+            <div className="flex flex-col items-center p-10 text-sm text-ink-soft">
+              <Folder className="mb-2 h-10 w-10 text-line" aria-hidden />
               <span>暂无文件</span>
             </div>
           ) : (

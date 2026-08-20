@@ -18,13 +18,13 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="flex h-12 shrink-0 items-center gap-3 border-b border-borderGray bg-white px-4">
+    <div className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-white px-4">
       {title && (
         <div className="flex min-w-0 items-center gap-2.5">
-          {Icon && <Icon className="h-5 w-5 shrink-0 text-deepSea" aria-hidden />}
+          {Icon && <Icon className="h-5 w-5 shrink-0 text-primary" aria-hidden />}
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-medium leading-tight text-textDark">{title}</h2>
-            {subtitle && <p className="truncate text-xs leading-tight text-textGray">{subtitle}</p>}
+            <h2 className="truncate text-sm font-medium leading-tight text-ink">{title}</h2>
+            {subtitle && <p className="truncate text-xs leading-tight text-ink-soft">{subtitle}</p>}
           </div>
         </div>
       )}

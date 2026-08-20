@@ -37,10 +37,10 @@ export function AppTopbar({
   const initial = displayName.slice(0, 1).toUpperCase() || '?';
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-borderGray bg-white px-4">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-line bg-white px-4">
       <div className="min-w-0">
-        <h1 className="truncate text-base font-medium leading-tight text-textDark">{title}</h1>
-        {subtitle && <p className="truncate text-xs leading-tight text-textGray">{subtitle}</p>}
+        <h1 className="truncate text-base font-medium leading-tight text-ink">{title}</h1>
+        {subtitle && <p className="truncate text-xs leading-tight text-ink-soft">{subtitle}</p>}
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <button
@@ -49,8 +49,8 @@ export function AppTopbar({
           className={clsx(
             'flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors',
             filesOpen
-              ? 'border-deepSea/30 bg-deepSea/5 font-medium text-deepSea'
-              : 'border-borderGray bg-white text-textGray hover:bg-bgGray hover:text-textDark',
+              ? 'border-primary/30 bg-primary/5 font-medium text-primary'
+              : 'border-line bg-white text-ink-soft hover:bg-surface hover:text-ink',
           )}
         >
           <FolderOpen className="h-4 w-4" aria-hidden />
@@ -62,13 +62,13 @@ export function AppTopbar({
             onClick={() => setMenuOpen((v) => !v)}
             title={user?.email ?? displayName}
             aria-label="用户菜单"
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-deepSea/10 text-sm font-medium text-deepSea transition-colors hover:bg-deepSea/20"
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
           >
             {initial}
           </button>
           {menuOpen && (
-            <div className="animate-fade-in absolute right-0 top-full z-30 mt-2 w-56 rounded-lg border border-borderGray bg-white p-1 shadow-lg">
-              <div className="truncate px-3 py-2 text-xs text-textGray">
+            <div className="animate-fade-in absolute right-0 top-full z-30 mt-2 w-56 rounded-lg border border-line bg-white p-1 shadow-lg">
+              <div className="truncate px-3 py-2 text-xs text-ink-soft">
                 {user?.email ?? '已登录'}
               </div>
               <button

@@ -136,20 +136,20 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
 
   return (
     <DocMetaProvider value={docMetaResolver}>
-    <div className="flex h-full flex-col bg-bgGray">
+    <div className="flex h-full flex-col bg-surface">
       {/* 二级工具条（视图标题由 AppTopbar 承担） */}
-      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-borderGray bg-white px-4">
+      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-white px-4">
         {center && (
-          <div className="flex min-w-0 items-center gap-2 rounded-md bg-bgGray px-2.5 py-1">
-            <span className="shrink-0 text-[11px] text-textGray">当前中心</span>
-            <span className="max-w-[220px] truncate text-[12px] font-medium text-textDark" title={center.label}>
+          <div className="flex min-w-0 items-center gap-2 rounded-md bg-surface px-2.5 py-1">
+            <span className="shrink-0 text-[11px] text-ink-soft">当前中心</span>
+            <span className="max-w-[220px] truncate text-[12px] font-medium text-ink" title={center.label}>
               {center.label}
             </span>
             {!center.fromDocument && selectedDoc && (
               <button
                 type="button"
                 onClick={backToDocument}
-                className="shrink-0 text-[12px] text-deepSea underline underline-offset-2 hover:text-[#164a76]"
+                className="shrink-0 text-[12px] text-primary underline underline-offset-2 hover:text-primary-800"
               >
                 返回文档
               </button>
@@ -158,12 +158,12 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
         )}
 
         <div className="ml-auto flex items-center gap-3">
-          <label className="flex items-center gap-1.5 text-[12px] text-textGray">
+          <label className="flex items-center gap-1.5 text-[12px] text-ink-soft">
             深度
             <select
               value={depth}
               onChange={(e) => handleDepthChange(Number(e.target.value))}
-              className="h-7 rounded-md border border-borderGray bg-white px-1.5 text-[12px] text-textDark focus:border-deepSea focus:outline-none"
+              className="h-7 rounded-md border border-line bg-white px-1.5 text-[12px] text-ink focus:border-primary focus:outline-none"
             >
               {DEPTH_OPTIONS.map((d) => (
                 <option key={d} value={d}>
@@ -173,7 +173,7 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
             </select>
           </label>
 
-          <div className="flex overflow-hidden rounded-md border border-borderGray">
+          <div className="flex overflow-hidden rounded-md border border-line">
             {DIRECTION_OPTIONS.map((opt) => (
               <button
                 key={opt.value}
@@ -182,8 +182,8 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
                 className={clsx(
                   'h-7 px-2.5 text-[12px] transition-colors',
                   direction === opt.value
-                    ? 'bg-deepSea text-white'
-                    : 'bg-white text-textGray hover:bg-bgGray',
+                    ? 'bg-primary text-white'
+                    : 'bg-white text-ink-soft hover:bg-surface',
                 )}
               >
                 {opt.label}
@@ -194,15 +194,15 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
           <button
             type="button"
             onClick={handleRefresh}
-            className="flex h-7 items-center gap-1 rounded-md border border-borderGray bg-white px-2.5 text-[12px] text-textDark hover:bg-bgGray"
+            className="flex h-7 items-center gap-1 rounded-md border border-line bg-white px-2.5 text-[12px] text-ink hover:bg-surface"
           >
             <RefreshCw className={clsx('h-3.5 w-3.5', busy && 'animate-spin')} aria-hidden />
             刷新
           </button>
 
-          <div className="hidden items-center gap-2.5 border-l border-borderGray pl-3 xl:flex">
+          <div className="hidden items-center gap-2.5 border-l border-line pl-3 xl:flex">
             {LEGEND_KINDS.map((kind) => (
-              <span key={kind} className="flex items-center gap-1 text-[11px] text-textGray">
+              <span key={kind} className="flex items-center gap-1 text-[11px] text-ink-soft">
                 {kind === 'Document' ? (
                   // 文档=空心圆、实体=实心圆，与画布上纸片/色块的家族区分呼应
                   <span
@@ -247,11 +247,11 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
         <main className="relative min-w-0 flex-1">
           {!center && !graphLoading && !graphError && (
             <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-              <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#E8EEF4]">
-                <Network className="h-7 w-7 text-deepSea" aria-hidden />
+              <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10">
+                <Network className="h-7 w-7 text-primary" aria-hidden />
               </span>
-              <div className="mt-4 text-[14px] font-medium text-textDark">从左侧选择一个文档</div>
-              <div className="mt-1 max-w-[320px] text-[12px] leading-5 text-textGray">
+              <div className="mt-4 text-[14px] font-medium text-ink">从左侧选择一个文档</div>
+              <div className="mt-1 max-w-[320px] text-[12px] leading-5 text-ink-soft">
                 以它为中心浏览关联的交易方、商品、合同与其他文档，点击任意节点可继续向外展开
               </div>
             </div>
@@ -260,12 +260,12 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
           {center && graphError && (
             <div className="flex h-full flex-col items-center justify-center px-6 text-center">
               <AlertTriangle className="h-10 w-10 text-danger" aria-hidden />
-              <div className="mt-3 text-[14px] font-medium text-textDark">图谱加载失败</div>
+              <div className="mt-3 text-[14px] font-medium text-ink">图谱加载失败</div>
               <div className="mt-1 max-w-[360px] break-all text-[12px] leading-5 text-danger">{graphError}</div>
               <button
                 type="button"
                 onClick={() => center && query(center.id, center.label, center.fromDocument, depth, direction)}
-                className="mt-4 flex items-center gap-1 rounded-md border border-borderGray bg-white px-3 py-1.5 text-[12px] text-textDark hover:bg-bgGray"
+                className="mt-4 flex items-center gap-1 rounded-md border border-line bg-white px-3 py-1.5 text-[12px] text-ink hover:bg-surface"
               >
                 <RefreshCw className="h-3.5 w-3.5" aria-hidden />
                 重试
@@ -275,9 +275,9 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
 
           {center && graphEmpty && (
             <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-              <Network className="h-10 w-10 text-borderGray" aria-hidden />
-              <div className="mt-3 text-[14px] font-medium text-textDark">未找到关联节点</div>
-              <div className="mt-1 text-[12px] leading-5 text-textGray">
+              <Network className="h-10 w-10 text-line" aria-hidden />
+              <div className="mt-3 text-[14px] font-medium text-ink">未找到关联节点</div>
+              <div className="mt-1 text-[12px] leading-5 text-ink-soft">
                 该节点在当前深度和方向下没有可展示的关联，可尝试增大深度或切换方向
               </div>
             </div>
@@ -299,14 +299,14 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
           {graphLoading && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/70">
               <div className="flex flex-col items-center gap-3">
-                <span className="h-8 w-8 animate-spin rounded-full border-2 border-borderGray border-t-deepSea" />
-                <span className="text-[12px] text-textGray">子图查询中</span>
+                <span className="h-8 w-8 animate-spin rounded-full border-2 border-line border-t-primary" />
+                <span className="text-[12px] text-ink-soft">子图查询中</span>
               </div>
             </div>
           )}
 
           {hasGraph && !graphLoading && (
-            <div className="pointer-events-none absolute left-3 top-3 z-10 rounded-md border border-borderGray bg-white/90 px-2.5 py-1 text-[11px] text-textGray shadow-card">
+            <div className="pointer-events-none absolute left-3 top-3 z-10 rounded-md border border-line bg-white/90 px-2.5 py-1 text-[11px] text-ink-soft shadow-card">
               节点 {subgraph.nodes.length} · 关系 {subgraph.edges.length}
             </div>
           )}

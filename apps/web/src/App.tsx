@@ -120,7 +120,7 @@ function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center text-textGray text-sm">
+      <div className="min-h-screen flex items-center justify-center text-ink-soft text-sm">
         Loading...
       </div>
     );

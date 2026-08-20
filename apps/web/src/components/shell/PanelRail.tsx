@@ -27,7 +27,7 @@ export function PanelRail({
     <div
       className={clsx(
         'flex w-7 shrink-0 flex-col items-center bg-white',
-        side === 'left' ? 'border-r border-borderGray' : 'border-l border-borderGray',
+        side === 'left' ? 'border-r border-line' : 'border-l border-line',
       )}
     >
       <button
@@ -35,12 +35,12 @@ export function PanelRail({
         onClick={onToggle}
         title={action}
         aria-label={action}
-        className="mt-1 flex h-7 w-7 items-center justify-center rounded-md text-textGray transition-colors hover:bg-bgGray hover:text-deepSea"
+        className="mt-1 flex h-7 w-7 items-center justify-center rounded-md text-ink-soft transition-colors hover:bg-surface hover:text-primary"
       >
         <Chevron className="h-4 w-4" aria-hidden />
       </button>
       {collapsed && (
-        <div className="flex flex-1 items-center justify-center pt-2 text-[11px] tracking-[0.3em] text-textGray [writing-mode:vertical-rl]">
+        <div className="flex flex-1 items-center justify-center pt-2 text-[11px] tracking-[0.3em] text-ink-soft [writing-mode:vertical-rl]">
           {label}
         </div>
       )}

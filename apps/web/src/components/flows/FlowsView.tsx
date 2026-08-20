@@ -36,14 +36,14 @@ export function FlowsView({ onOpenParties }: { onOpenParties?: () => void }) {
   const selected = contracts.find((c) => c.contractNo === selectedNo) ?? null;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-bgGray">
+    <div className="flex h-full flex-col overflow-hidden bg-surface">
       <PageHeader
         actions={
           <select
             value={selectedNo}
             onChange={(e) => setSelectedNo(e.target.value)}
             aria-label="选择合同"
-            className="h-8 w-64 rounded-md border border-borderGray bg-white px-2.5 text-[12px] text-textDark focus:border-deepSea focus:outline-none"
+            className="h-8 w-64 rounded-md border border-line bg-white px-2.5 text-[12px] text-ink focus:border-primary focus:outline-none"
           >
             <option value="">选择合同…</option>
             {contracts.map((c) => (
@@ -58,9 +58,9 @@ export function FlowsView({ onOpenParties }: { onOpenParties?: () => void }) {
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {phase === 'loading' && (
           <div className="space-y-2">
-            <div className="h-14 animate-pulse rounded-lg bg-bgGray" />
-            <div className="h-14 animate-pulse rounded-lg bg-bgGray" />
-            <div className="pt-1 text-center text-[12px] text-textGray">合同列表加载中</div>
+            <div className="h-14 animate-pulse rounded-lg bg-surface" />
+            <div className="h-14 animate-pulse rounded-lg bg-surface" />
+            <div className="pt-1 text-center text-[12px] text-ink-soft">合同列表加载中</div>
           </div>
         )}
 
@@ -71,7 +71,7 @@ export function FlowsView({ onOpenParties }: { onOpenParties?: () => void }) {
             <button
               type="button"
               onClick={() => void load()}
-              className="mt-3 flex items-center gap-1 rounded-md border border-borderGray bg-white px-2.5 py-1 text-[11px] text-textDark transition-colors hover:bg-bgGray"
+              className="mt-3 flex items-center gap-1 rounded-md border border-line bg-white px-2.5 py-1 text-[11px] text-ink transition-colors hover:bg-surface"
             >
               <RefreshCw className="h-3 w-3" aria-hidden />
               重试
@@ -82,11 +82,11 @@ export function FlowsView({ onOpenParties }: { onOpenParties?: () => void }) {
         {phase === 'ready' &&
           (contracts.length === 0 ? (
             <div className="flex flex-col items-center px-5 py-14 text-center">
-              <div className="text-[13px] font-medium text-textDark">暂无可用合同</div>
+              <div className="text-[13px] font-medium text-ink">暂无可用合同</div>
             </div>
           ) : !selectedNo ? (
             <div className="flex flex-col items-center px-5 py-14 text-center">
-              <div className="text-[13px] font-medium text-textDark">请选择合同号查看执行流水</div>
+              <div className="text-[13px] font-medium text-ink">请选择合同号查看执行流水</div>
             </div>
           ) : (
             <ExecutionFlowPanel
