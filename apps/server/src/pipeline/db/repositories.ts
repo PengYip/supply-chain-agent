@@ -250,7 +250,7 @@ export type ParseStatus = 'uploaded' | 'parsing' | 'parsed' | 'needs_ocr' | 'fai
 export type ExtractionStatus = 'pending' | 'running' | 'ok' | 'skipped' | 'failed';
 
 export interface ProposedRelationship {
-  kind: 'Party' | 'Commodity' | 'Contract';
+  kind: 'Party' | 'Commodity' | 'Contract' | 'Project';
   role?: string; // Party only: 买方|卖方
   name: string;
   sourceSpan?: unknown;
@@ -264,7 +264,7 @@ export interface ProposedRelationship {
  */
 export interface ProposedEdge {
   type: 'party' | 'commodity' | 'references' | 'executes';
-  dstKind: 'Party' | 'Commodity' | 'Contract';
+  dstKind: 'Party' | 'Commodity' | 'Contract' | 'Project';
   dstName: string;
   /** party 边专用：买方|卖方|发货人|收货人|承运人 */
   role?: string;

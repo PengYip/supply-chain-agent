@@ -111,7 +111,7 @@ export interface RelationshipFieldInput {
   confidence: number;
 }
 
-/** Pure: derive candidate Party/Commodity/Contract entities from flat extracted fields. */
+/** 纯函数：从扁平字段确定性派生实体提议，无 LLM 参与。 */
 export function deriveProposedRelationships(
   fields: RelationshipFieldInput[],
   vocab: TradeVocabulary = TRADE_VOCAB,
@@ -126,6 +126,10 @@ export function deriveProposedRelationships(
       out.push({ kind: 'Commodity', name: val, confidence: f.confidence });
     } else if (vocab.contractFields.has(f.name)) {
       out.push({ kind: 'Contract', name: val, confidence: f.confidence });
+    } else if (vocab.projectFields.has(f.name)) {
+      // 项目字段(编号/名称)各提升一条 Project 实体提议; 边侧(deriveProposedEdges)
+      // 才做编号优先折叠, 实体提议保留全部候选(写入侧按归一化名 MERGE 去重)。
+      out.push({ kind: 'Project', name: val, confidence: f.confidence });
     }
   }
   return out;
@@ -137,6 +141,9 @@ export interface EdgeFieldInput {
   value: string | number;
   confidence: number;
 }
+
+/** 项目标识字段中的「编号类」: 折叠 references->Project 边时优先于名称类(spec §4.2)。 */
+const PROJECT_CODE_FIELDS = new Set(['项目编号', '项目号']);
 
 /**
  * 纯函数：从扁平字段确定性派生 Document->实体边，无 LLM 参与。抽取时与确认时
@@ -150,6 +157,9 @@ export function deriveProposedEdges(
   const out: ProposedEdge[] = [];
   const contractConf = new Map<string, number>();
   const contractOrder: string[] = [];
+  // 项目字段折叠: 编号类(项目编号/项目号)优先于名称类, 同类取 confidence 最高者,
+  // 只出一条 references->Project 边(与 contractFields 的折叠同思路)。
+  let projectPick: { name: string; confidence: number; isCode: boolean } | null = null;
   for (const f of fields) {
     const val = typeof f.value === 'string' ? f.value.trim() : '';
     if (!val) continue;
@@ -161,7 +171,19 @@ export function deriveProposedEdges(
     } else if (vocab.contractFields.has(f.name)) {
       if (!contractConf.has(val)) contractOrder.push(val);
       contractConf.set(val, Math.max(contractConf.get(val) ?? 0, f.confidence));
+    } else if (vocab.projectFields.has(f.name)) {
+      const isCode = PROJECT_CODE_FIELDS.has(f.name);
+      if (
+        !projectPick ||
+        (isCode && !projectPick.isCode) ||
+        (isCode === projectPick.isCode && f.confidence > projectPick.confidence)
+      ) {
+        projectPick = { name: val, confidence: f.confidence, isCode };
+      }
     }
+  }
+  if (projectPick) {
+    out.push({ type: 'references', dstKind: 'Project', dstName: projectPick.name, confidence: projectPick.confidence });
   }
   for (const name of contractOrder) {
     const confidence = contractConf.get(name) ?? 0;

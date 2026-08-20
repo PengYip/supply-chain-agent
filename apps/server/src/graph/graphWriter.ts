@@ -8,7 +8,7 @@ import { normalizeName } from './normalize.js';
  */
 
 export interface GraphEntityInput {
-  kind: 'Party' | 'Commodity' | 'Contract';
+  kind: 'Party' | 'Commodity' | 'Contract' | 'Project';
   name: string; // 原始名；此处归一化
   role?: string;
   confidence: number;
@@ -16,7 +16,7 @@ export interface GraphEntityInput {
 
 export interface GraphEdgeInput {
   type: 'party' | 'commodity' | 'references' | 'executes';
-  dstKind: 'Party' | 'Commodity' | 'Contract';
+  dstKind: 'Party' | 'Commodity' | 'Contract' | 'Project';
   dstName: string; // 原始名；此处归一化
   role?: string;
   confidence: number;
