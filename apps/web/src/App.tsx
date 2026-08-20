@@ -12,8 +12,9 @@ import { GraphView } from './components/graph/GraphView';
 import { BindingsView } from './components/bindings/BindingsView';
 import { FlowsView } from './components/flows/FlowsView';
 import { SelfPartyPanel } from './components/parties/SelfPartyPanel';
+import { FavoritesView } from './components/favorites/FavoritesView';
 import type { GraphFocus, GraphFocusTarget } from './components/graph/focus';
-import { ArrowLeftRight, Building2, FlaskConical, Link2, MessageSquare, Network } from 'lucide-react';
+import { ArrowLeftRight, Building2, FlaskConical, Link2, MessageSquare, Network, Star } from 'lucide-react';
 import clsx from 'clsx';
 
 function App() {
@@ -21,7 +22,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [filePanelVisible, setFilePanelVisible] = useState(false);
-  const [view, setView] = useState<'chat' | 'eval' | 'graph' | 'bindings' | 'flows' | 'parties'>('chat');
+  const [view, setView] = useState<'chat' | 'eval' | 'graph' | 'bindings' | 'flows' | 'parties' | 'favorites'>('chat');
   // 跨视图定位：绑定工作台 -> 图谱页，以合同节点为中心展开。
   // nonce 自增保证重复跳转同一合同也会触发图谱页重新查询。
   const [graphFocus, setGraphFocus] = useState<GraphFocus | null>(null);
@@ -36,7 +37,7 @@ function App() {
   const [contextFiles, setContextFiles] = useState<ContextFile[]>([]);
   // Phase 5: sessions live at App so the sidebar (data) and RealChatView
   // (refresh trigger) can share one useSessions instance.
-  const { sessions, loading: sessionsLoading, refresh: refreshSessions, createSession, deleteSession } = useSessions();
+  const { sessions, loading: sessionsLoading, refresh: refreshSessions, createSession, deleteSession, favoriteSession, unfavoriteSession } = useSessions();
   // Files live at App so RealChatView (upload) and FilePanel (list) share one
   // useFiles instance; upload success refreshes the list via onFilesChanged.
   const filesApi = useFiles();
@@ -111,6 +112,8 @@ function App() {
         loading={sessionsLoading}
         createSession={createSession}
         deleteSession={deleteSession}
+        favoriteSession={favoriteSession}
+        unfavoriteSession={unfavoriteSession}
       />
       <div className="w-12 shrink-0 border-r border-borderGray bg-white flex flex-col items-center py-3 gap-2">
         <button type="button" title="对话" aria-label="对话" onClick={() => setView('chat')}
@@ -146,6 +149,10 @@ function App() {
           className={clsx('w-9 h-9 rounded-lg flex items-center justify-center', view === 'parties' ? 'bg-deepSea text-white' : 'text-textGray hover:bg-bgGray')}>
           <Building2 className="h-5 w-5" aria-hidden />
         </button>
+        <button type="button" title="收藏与反馈" aria-label="收藏与反馈" onClick={() => setView('favorites')}
+          className={clsx('w-9 h-9 rounded-lg flex items-center justify-center', view === 'favorites' ? 'bg-deepSea text-white' : 'text-textGray hover:bg-bgGray')}>
+          <Star className="h-5 w-5" aria-hidden />
+        </button>
       </div>
       {view === 'bindings' ? (
         <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
@@ -158,6 +165,15 @@ function App() {
       ) : view === 'parties' ? (
         <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
           <SelfPartyPanel />
+        </div>
+      ) : view === 'favorites' ? (
+        <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
+          <FavoritesView
+            onOpenSession={(id) => {
+              setActiveSessionId(id);
+              setView('chat');
+            }}
+          />
         </div>
       ) : view === 'graph' ? (
         <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>

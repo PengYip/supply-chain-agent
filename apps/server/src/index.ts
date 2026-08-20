@@ -13,6 +13,7 @@ import { chatRoute } from './routes/chat.js';
 import { approvalCallback } from './routes/approvalCallback.js';
 import { statusRoute } from './routes/status.js';
 import { sessionsRoute } from './routes/sessions.js';
+import { favoritesRoute } from './routes/favorites.js';
 import { filesRoute } from './routes/files.js';
 import { graphRoute } from './routes/graph.js';
 import { bindingsRoute } from './routes/bindings.js';
@@ -96,6 +97,7 @@ app.get('/api/health', (c) =>
 // Protect all other /api routes (health stays public).
 app.use('/api/chat/*', requireAuth);
 app.use('/api/sessions/*', requireAuth);
+app.use('/api/favorites/*', requireAuth);
 app.use('/api/approval/*', requireAuth);
 app.use('/api/documents/*', requireAuth);
 app.use('/api/eval/*', requireAuth);
@@ -109,6 +111,9 @@ app.route('/api', statusRoute);
 // Phase 2: chat-session list/create/history, scoped to the auth user.
 // /api/sessions/:id/status (statusRoute) is a distinct 3-segment path; no clash.
 app.route('/api/sessions', sessionsRoute);
+
+// 对话收藏: MVP 用户反馈通道。own-scope 读写 + admin ?scope=all 聚合视图。
+app.route('/api/favorites', favoritesRoute);
 
 // Phase 3: file upload (MinIO) + ingest bridge, scoped to the auth user.
 app.route('/api/files', filesRoute);

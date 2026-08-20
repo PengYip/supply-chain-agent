@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { setFavorite, clearFavorite } from '../api/favorites';
 
 export type SessionStatus = 'idle' | 'busy' | 'interrupted';
 
@@ -12,6 +13,8 @@ export interface Session {
   title?: string;
   /** Background-run lifecycle state surfaced by GET /api/sessions (phase 1). */
   status?: SessionStatus;
+  /** 对话收藏: true when the current user favorited this session (GET /api/sessions join). */
+  favorited?: boolean;
 }
 
 export function useSessions() {
@@ -56,5 +59,17 @@ export function useSessions() {
     } catch { /* ignore */ }
   }, [refresh]);
 
-  return { sessions, loading, refresh, createSession, deleteSession };
+  // 对话收藏 (upsert with optional feedback note) / 取消收藏. Both re-fetch the
+  // list so the sidebar star and the 已收藏 filter stay authoritative.
+  const favoriteSession = useCallback(async (id: string, note?: string | null) => {
+    await setFavorite(id, note);
+    await refresh();
+  }, [refresh]);
+
+  const unfavoriteSession = useCallback(async (id: string) => {
+    await clearFavorite(id);
+    await refresh();
+  }, [refresh]);
+
+  return { sessions, loading, refresh, createSession, deleteSession, favoriteSession, unfavoriteSession };
 }
