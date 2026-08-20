@@ -15,21 +15,29 @@ export interface Session {
   status?: SessionStatus;
   /** 对话收藏: true when the current user favorited this session (GET /api/sessions join). */
   favorited?: boolean;
+  /** Persisted message count (GET /api/sessions). 0 = 新建后从未发言的空会话。 */
+  messageCount?: number;
 }
 
 export function useSessions() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const refresh = useCallback(async () => {
+  // Returns the fresh rows so callers can act on authoritative data (e.g. the
+  // 新建会话 guard needs the CURRENT message count, not the possibly-stale
+  // rendered list).
+  const refresh = useCallback(async (): Promise<Session[]> => {
     try {
       const res = await fetch('/api/sessions');
       if (res.ok) {
         const data = await res.json();
-        setSessions(Array.isArray(data) ? data : (data.sessions ?? []));
+        const rows: Session[] = Array.isArray(data) ? data : (data.sessions ?? []);
+        setSessions(rows);
+        return rows;
       }
     } catch { /* ignore */ }
     setLoading(false);
+    return [];
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
