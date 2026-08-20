@@ -40,6 +40,8 @@ import { generateBindingProposals, type BindingRoute } from '../bindingProposal.
 import { materializeExecutionFlow, refreshExecutionFlowsForDocument, getEffectiveSelfPartyNames } from '../executionFlow.js';
 import { deriveContractType, type ContractTypeDerivation } from '../../domain/contractType.js';
 import type { ContractType } from '../../domain/tradeSemantics.js';
+import { proposeProjectMemberships } from '../projectProposal.js';
+import { createProject, upsertProjectMembership } from '../db/repositories.js';
 
 /** Phase A: 图片凭证 VLM 解析依赖(可注入 fake 供测试; 缺省用真实 extractVoucher)。 */
 export interface VlmDeps {
@@ -118,6 +120,35 @@ async function deriveContractTypeForDoc(args: {
   });
 }
 
+// 项目归属自动提议(spec 2026-08-20 §4.2): 故障隔离, 失败只告警。createProject 幂等
+// (已存在忽略), membership 以 (contractNo, projectCode) upsert 为 proposed。
+async function writeProjectProposals(args: {
+  ctx: DbContext;
+  docType: string;
+  fields: Record<string, { value: string | number; confidence?: number }>;
+  contractType: ContractType | null;
+  userId?: string;
+}): Promise<void> {
+  const proposals = proposeProjectMemberships({
+    docType: args.docType,
+    fields: Object.entries(args.fields).map(([name, f]) => ({ name, value: f.value, confidence: f.confidence ?? 0 })),
+    contractType: args.contractType,
+  });
+  for (const p of proposals) {
+    await createProject(args.ctx, { code: p.projectCode, name: p.projectName, userId: args.userId });
+    await upsertProjectMembership(args.ctx, {
+      contractNo: p.contractNo,
+      projectCode: p.projectCode,
+      role: p.role,
+      status: 'proposed',
+      proposedBy: 'system',
+      confirmationSource: null,
+      confidence: p.confidence,
+      createdBy: 'system',
+    }, args.userId);
+  }
+}
+
 /**
  * Fault-isolated ledger write-back. buildLedgerEntryFromExtraction 返回 null
  * (无有效合同号, 如发票/提单) 时静默跳过; 其余路径的失败也只记日志。
@@ -174,6 +205,23 @@ export function buildLedgerWritingDeps(
         userId: args.userId,
         contractType: derivation.contractType,
       });
+      // 项目归属自动提议(spec §4.2): 台账写回之后的旁路钩子, 故障隔离绝不阻塞录入。
+      try {
+        await writeProjectProposals({
+          ctx: opts.ctx,
+          docType: opts.docType,
+          fields: Object.fromEntries(
+            Object.entries(args.fields).map(([name, f]) => [
+              name,
+              { value: f.value, confidence: args.fieldMeta[name]?.confidence ?? 0 },
+            ]),
+          ),
+          contractType: derivation.contractType,
+          userId: args.userId ?? opts.userId,
+        });
+      } catch (e) {
+        console.error('[documentEntry] 项目归属提议失败:', (e as Error).message);
+      }
     },
   };
 }
@@ -1144,6 +1192,23 @@ export function buildExtractFieldsTool(deps: ToolDeps) {
         userId: deps.userId,
         contractType: manualDerivation.contractType,
       });
+      // 项目归属自动提议(spec §4.2): 与自动抽取路径同款旁路钩子(故障隔离)。
+      try {
+        await writeProjectProposals({
+          ctx: deps.ctx,
+          docType: docType as DocType,
+          fields: Object.fromEntries(
+            Object.entries(fields).map(([name, f]) => [
+              name,
+              { value: f.value, confidence: fieldMeta[name]?.confidence ?? 0 },
+            ]),
+          ),
+          contractType: manualDerivation.contractType,
+          userId: deps.userId,
+        });
+      } catch (e) {
+        console.error('[documentEntry] 项目归属提议失败:', (e as Error).message);
+      }
       // Bounded summary for the model trajectory. Full evidence (citedText,
       // sourceSpans) stays persisted via saveExtraction and is retrievable on
       // demand via inspect_extraction(extractionId, fieldName). The field VALUE

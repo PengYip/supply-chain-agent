@@ -180,6 +180,105 @@ describe('document-entry tools', () => {
     expect(row.contract_type).toBe('销售');
   });
 
+  it('合同抽取含合同号+项目名称 -> projects/project_memberships 出现 proposed 行', async () => {
+    const { addSelfParty } = await import('../../../src/pipeline/db/repositories.js');
+    await addSelfParty(ctx, '我方贸易', 'u1');
+
+    const f = join(dir, 'prj.txt');
+    writeFileSync(f, '合同号：HT-T8-001\n甲方：我方贸易\n乙方：某供应商\n项目名称：曹妃甸项目\n', 'utf-8');
+    const ingest = buildIngestDocumentTool({ ctx });
+    const ing: any = await ingest.execute(
+      { sourceUri: f, docType: '合同', modality: 'digital' },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+
+    const prjModel = {
+      ...stubModel,
+      async doGenerate() {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({
+                fields: {
+                  合同号: { value: 'HT-T8-001', sourceSpans: [{ blockId: 'b0', start: 4, end: 14 }] },
+                  甲方: { value: '我方贸易', sourceSpans: [{ blockId: 'b1', start: 3, end: 7 }] },
+                  乙方: { value: '某供应商', sourceSpans: [{ blockId: 'b2', start: 3, end: 7 }] },
+                  项目名称: { value: '曹妃甸项目', sourceSpans: [{ blockId: 'b3', start: 5, end: 10 }] },
+                },
+                llmConsistency: 0.95,
+              }),
+            },
+          ],
+          finishReason: 'stop' as const,
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          warnings: [] as unknown[],
+        };
+      },
+    } as any;
+    const extract = buildExtractFieldsTool({ ctx, extraction: { model: prjModel } as any });
+    await extract.execute(
+      { docId: ing.docId, docType: '合同' },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+
+    const project = ctx.sqlite
+      .prepare('SELECT code, name FROM projects')
+      .get() as { code: string; name: string } | undefined;
+    expect(project?.code).toBe('曹妃甸项目'); // normalizeName(名称) 兜底为 code
+    expect(project?.name).toBe('曹妃甸项目');
+
+    const membership = ctx.sqlite
+      .prepare('SELECT contract_no, project_code, status, proposed_by FROM project_memberships')
+      .get() as { contract_no: string; project_code: string; status: string; proposed_by: string } | undefined;
+    expect(membership?.contract_no).toBe('HT-T8-001');
+    expect(membership?.project_code).toBe('曹妃甸项目');
+    expect(membership?.status).toBe('proposed');
+    expect(membership?.proposed_by).toBe('system');
+  });
+
+  it('发票 docType 抽取 -> 两表无新行', async () => {
+    const f = join(dir, 'inv.txt');
+    writeFileSync(f, '发票号：INV-9\n合同号：HT-T8-002\n项目名称：某项目\n', 'utf-8');
+    const ingest = buildIngestDocumentTool({ ctx });
+    const ing: any = await ingest.execute(
+      { sourceUri: f, docType: '发票', modality: 'digital' },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+
+    const invModel = {
+      ...stubModel,
+      async doGenerate() {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({
+                fields: {
+                  发票号: { value: 'INV-9', sourceSpans: [{ blockId: 'b0', start: 4, end: 9 }] },
+                  合同号: { value: 'HT-T8-002', sourceSpans: [{ blockId: 'b1', start: 4, end: 14 }] },
+                  项目名称: { value: '某项目', sourceSpans: [{ blockId: 'b2', start: 5, end: 8 }] },
+                },
+                llmConsistency: 0.95,
+              }),
+            },
+          ],
+          finishReason: 'stop' as const,
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          warnings: [] as unknown[],
+        };
+      },
+    } as any;
+    const extract = buildExtractFieldsTool({ ctx, extraction: { model: invModel } as any });
+    await extract.execute(
+      { docId: ing.docId, docType: '发票' },
+      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
+    );
+
+    expect((ctx.sqlite.prepare('SELECT COUNT(*) AS n FROM projects').get() as { n: number }).n).toBe(0);
+    expect((ctx.sqlite.prepare('SELECT COUNT(*) AS n FROM project_memberships').get() as { n: number }).n).toBe(0);
+  });
+
   it('inspect_extraction returns persisted-field evidence on demand', async () => {
     // Seed an extraction row directly so the test does not depend on the LLM.
     const { saveExtraction } = await import('../../../src/pipeline/db/repositories.js');
