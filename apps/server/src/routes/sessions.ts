@@ -36,7 +36,7 @@ sessionsRoute.get('/', requireRole('admin', 'trader', 'viewer'), (c) => {
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const rows = listSessionsForUser(user.id);
   return c.json({
-    sessions: rows.map((r) => ({ id: r.id, role: r.role, createdAt: r.createdAt, title: r.title, status: r.status })),
+    sessions: rows.map((r) => ({ id: r.id, role: r.role, createdAt: r.createdAt, title: r.title, status: r.status, favorited: r.favorited })),
   });
 });
 
