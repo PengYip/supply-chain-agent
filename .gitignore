@@ -41,7 +41,13 @@ apps/server/pipeline.db
 apps/server/pipeline.db-wal
 apps/server/pipeline.db-shm
 
-# Ingest root: runtime upload dir populated by ingest_document tool (INGEST_ROOT)
+# Same runtime artifacts when server is launched from repo root (relative paths)
+/pipeline.db
+/pipeline.db-wal
+/pipeline.db-shm
+/ingest-root/
+
+# Ingest root: runtime upload dir populated by ingest_document_tool (INGEST_ROOT)
 apps/server/ingest-root/
 
 # Subagent-Driven Development scratch (progress ledger etc.)
