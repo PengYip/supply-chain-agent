@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react'
 import { useSessionMessages } from '../hooks/useSessionMessages'
-import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, LogOut, Paperclip, Check, Star } from 'lucide-react'
+import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, Paperclip, Check, Star } from 'lucide-react'
 import { getFavorite, setFavorite, clearFavorite, type FavoriteProbe } from '../api/favorites'
 import { RealMessageItem, ErrorMessage } from './RealMessageItem'
 import { HumanAgentStatusBar } from './HumanAgentStatusBar'
@@ -16,7 +16,6 @@ import {
   type EscalateCategory,
   type EscalateSeverity,
 } from '../utils/realChatUtils'
-import { authClient } from '../lib/auth'
 import clsx from 'clsx'
 
 /** Per-file parse status segment shown inside a context chip. Extends the
@@ -236,7 +235,6 @@ const HumanReviewCard: React.FC<{
 }
 
 export const RealChatView: React.FC<{
-  onSignOut?: () => void;
   sessionId?: string | null;
   contextFiles: ContextFile[];
   setContextFiles: React.Dispatch<React.SetStateAction<ContextFile[]>>;
@@ -252,7 +250,7 @@ export const RealChatView: React.FC<{
   /** Per-docId parse state for referenced files, shown on the context chips
    *  (owned by App, where 添加到对话 fires the parse). */
   docParseStates: Record<string, DocParseState>;
-}> = ({ onSignOut, sessionId, contextFiles, setContextFiles, onSessionChanged, onSessionCreated, onFilesChanged, docParseStates }) => {
+}> = ({ sessionId, contextFiles, setContextFiles, onSessionChanged, onSessionCreated, onFilesChanged, docParseStates }) => {
   const [input, setInput] = useState('')
 
   // 对话收藏: probe + header affordance for the CURRENT session. Self-contained
@@ -713,21 +711,6 @@ export const RealChatView: React.FC<{
               )}
             </div>
           )}
-          <button
-            type="button"
-            title="退出登录"
-            onClick={async () => {
-              try {
-                await authClient.signOut()
-              } catch {
-                /* best-effort */
-              }
-              onSignOut?.()
-            }}
-            className="p-1.5 rounded-lg hover:bg-bgGray text-textGray hover:text-textDark"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
         </div>
       </div>
 

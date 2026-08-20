@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import clsx from 'clsx'
 import { Star } from 'lucide-react'
 import { type Session } from '../hooks/useSessions'
 
@@ -27,6 +28,8 @@ function relativeTime(iso: string): string {
   return `${Math.floor(diff / day)}天前`
 }
 
+/** 会话面板：作为 ChatWorkspace 的左侧可折叠面板（容器负责宽度过渡）。
+ *  本组件固定 256px 宽，避免折叠动画期间内容被挤压重排。 */
 export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, createSession, deleteSession, favoriteSession, unfavoriteSession }: SessionSidebarProps) {
   // 全部 / 已收藏 filter over the server-joined favorited flag.
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false)
@@ -55,68 +58,43 @@ export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, c
     }
   }
 
-  const filterTab = (label: string, active: boolean, onClick: () => void) => (
-    <button
-      onClick={onClick}
-      style={{
-        flex: 1,
-        padding: '5px 0',
-        fontSize: 12,
-        border: 'none',
-        cursor: 'pointer',
-        borderRadius: 4,
-        color: active ? '#2563eb' : '#666',
-        background: active ? '#eff6ff' : 'transparent',
-        fontWeight: active ? 600 : 400,
-      }}
-    >
-      {label}
-    </button>
-  )
-
   return (
-    <div
-      style={{
-        width: 260,
-        height: '100vh',
-        borderRight: '1px solid #e0e0e0',
-        overflowY: 'auto',
-        display: 'flex',
-        flexDirection: 'column',
-        boxSizing: 'border-box',
-        flexShrink: 0,
-      }}
-    >
-      <div style={{ padding: 12 }}>
+    <div className="flex h-full w-64 flex-col overflow-hidden bg-white">
+      <div className="p-3">
         <button
+          type="button"
           onClick={handleNew}
-          style={{
-            width: '100%',
-            padding: 8,
-            background: '#2563eb',
-            color: 'white',
-            border: 'none',
-            borderRadius: 4,
-            cursor: 'pointer',
-            marginBottom: 8,
-            fontSize: 14,
-          }}
+          className="w-full rounded-lg bg-deepSea px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-deepSea/90"
         >
           新建会话
         </button>
-        <div style={{ display: 'flex', gap: 4, background: '#f5f5f5', borderRadius: 4, padding: 2 }}>
-          {filterTab(`全部 (${sessions.length})`, !showFavoritesOnly, () => setShowFavoritesOnly(false))}
-          {filterTab(`已收藏 (${sessions.filter((s) => s.favorited).length})`, showFavoritesOnly, () => setShowFavoritesOnly(true))}
+        <div className="mt-2 flex gap-0.5 rounded-lg bg-bgGray p-1">
+          {(
+            [
+              { label: `全部 (${sessions.length})`, active: !showFavoritesOnly, onClick: () => setShowFavoritesOnly(false) },
+              { label: `已收藏 (${sessions.filter((s) => s.favorited).length})`, active: showFavoritesOnly, onClick: () => setShowFavoritesOnly(true) },
+            ] as const
+          ).map((tab) => (
+            <button
+              key={tab.label}
+              type="button"
+              onClick={tab.onClick}
+              className={clsx(
+                'flex-1 rounded-md px-1 py-1 text-xs transition-colors',
+                tab.active ? 'bg-white font-medium text-deepSea shadow-sm' : 'text-textGray hover:text-textDark',
+              )}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
       </div>
 
-      <div style={{ flex: 1 }}>
+      <div className="flex-1 overflow-y-auto">
         {loading ? (
-          <div style={{ textAlign: 'center', color: '#888', padding: 16, fontSize: 13 }}>
-            加载中...
-          </div>
+          <div className="p-4 text-center text-sm text-textGray">加载中...</div>
         ) : visible.length === 0 ? (
-          <div style={{ textAlign: 'center', color: '#888', padding: 16, fontSize: 13 }}>
+          <div className="p-4 text-center text-sm text-textGray">
             {showFavoritesOnly ? '暂无收藏会话' : '暂无会话'}
           </div>
         ) : (
@@ -126,75 +104,39 @@ export function SessionSidebar({ activeSessionId, onSelect, sessions, loading, c
               <div
                 key={s.id}
                 onClick={() => onSelect(s.id)}
-                style={{
-                  padding: '8px 12px',
-                  cursor: 'pointer',
-                  borderLeft: active ? '3px solid #2563eb' : '3px solid transparent',
-                  background: active ? '#f0f4ff' : undefined,
-                }}
-                onMouseEnter={(e) => {
-                  if (!active) e.currentTarget.style.background = '#f5f5f5'
-                }}
-                onMouseLeave={(e) => {
-                  if (!active) e.currentTarget.style.background = ''
-                }}
+                className={clsx(
+                  'group cursor-pointer border-l-2 px-3 py-2 transition-colors',
+                  active ? 'border-deepSea bg-deepSea/5' : 'border-transparent hover:bg-bgGray',
+                )}
               >
-                <div style={{ overflow: 'hidden' }}>
+                <div className="flex min-w-0 items-center gap-1.5 text-sm">
                   <span
-                    onClick={(e) => handleDelete(e, s.id)}
-                    style={{
-                      float: 'right',
-                      fontSize: 12,
-                      color: '#dc2626',
-                      cursor: 'pointer',
-                    }}
+                    onClick={(e) => void handleToggleFavorite(e, s)}
+                    title={s.favorited ? '取消收藏' : '收藏（可在收藏页补写反馈）'}
+                    className={clsx(
+                      'shrink-0 cursor-pointer leading-none transition-colors',
+                      s.favorited ? 'text-amber hover:text-amber/80' : 'text-borderGray hover:text-amber',
+                    )}
+                  >
+                    <Star size={14} fill={s.favorited ? 'currentColor' : 'none'} strokeWidth={1.5} />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-textDark">
+                    {s.title ?? '新建会话'}
+                  </span>
+                  {s.status === 'busy' && (
+                    <span className="shrink-0 whitespace-nowrap rounded-full border border-deepSea/20 bg-deepSea/10 px-1.5 py-px text-[11px] text-deepSea">
+                      运行中
+                    </span>
+                  )}
+                  <span
+                    onClick={(e) => void handleDelete(e, s.id)}
+                    className="hidden shrink-0 cursor-pointer rounded px-1 text-[11px] text-danger transition-colors hover:bg-danger/5 group-hover:inline"
                   >
                     删除
                   </span>
-                  <div style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span
-                      onClick={(e) => void handleToggleFavorite(e, s)}
-                      title={s.favorited ? '取消收藏' : '收藏（可在收藏页补写反馈）'}
-                      style={{
-                        flexShrink: 0,
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        color: s.favorited ? '#f59e0b' : '#c4c4c4',
-                        lineHeight: 1,
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.color = s.favorited ? '#d97706' : '#9ca3af'
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.color = s.favorited ? '#f59e0b' : '#c4c4c4'
-                      }}
-                    >
-                      <Star size={14} fill={s.favorited ? 'currentColor' : 'none'} strokeWidth={1.5} />
-                    </span>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {s.title ?? '新建会话'}
-                    </span>
-                    {s.status === 'busy' && (
-                      <span
-                        style={{
-                          fontSize: 11,
-                          color: '#2563eb',
-                          background: '#eff6ff',
-                          border: '1px solid #bfdbfe',
-                          borderRadius: 999,
-                          padding: '1px 7px',
-                          whiteSpace: 'nowrap',
-                          flexShrink: 0,
-                        }}
-                      >
-                        运行中
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ fontSize: 12, color: '#888' }}>
-                    {relativeTime(s.updatedAt || s.createdAt)}
-                  </div>
+                </div>
+                <div className="mt-0.5 text-xs text-textGray">
+                  {relativeTime(s.updatedAt || s.createdAt)}
                 </div>
               </div>
             )

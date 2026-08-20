@@ -174,5 +174,5 @@ export function useFiles() {
 }
 
 /** The full useFiles() return value, so App can own one instance and hand it
- *  to FilePanel as a single prop (files live above the panel now). */
+ *  to the file drawer as a single prop (files live above the drawer now). */
 export type FilesApi = ReturnType<typeof useFiles>;
