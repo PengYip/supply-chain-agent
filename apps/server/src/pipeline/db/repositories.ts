@@ -6,8 +6,10 @@ import type { SpanMatchStrength } from '../spanValidator.js';
 import { normalizeContractNo } from '../contractLedger.js';
 import type { ContractLedgerEntry } from '../contractLedger.js';
 import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.js';
-import { normalizeCompanyName } from '../../domain/flowDirection.js';
+import { normalizeCompanyName, parseSelfPartyNames } from '../../domain/flowDirection.js';
+import { deriveContractType, type ContractTypeDerivation } from '../../domain/contractType.js';
 import type { ContractType } from '../../domain/tradeSemantics.js';
+import { env } from '../../env.js';
 // Postgres impls. Static import: pg is a declared dep on both backends now; the
 // functions are only CALLED on the postgres branch (lazy Pool connect), so the
 // import cost is one module load. Type-only for the input/output types below.
@@ -328,11 +330,27 @@ export interface ReviewSnapshot {
   vectorization: DocumentVectorization;
   /** 确定性 Document->实体边提议（design 2026-08-17 §3.2），快照读取时同规则派生。 */
   proposedEdges: ProposedEdge[];
+  /** 合同类型派生结果（spec 2026-08-20 §3.2），与台账/图提交同规则；非合同为 null。 */
+  contractType: ContractTypeDerivation | null;
   /** 确认时 Neo4j 写入结果；未确认或从未写入时为 null。 */
   graphStatus: DocumentGraphStatus | null;
 }
 
 const rid = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
+/** 快照侧派生用有效主体名单: env ∪ self_parties。与 executionFlow
+ * 的 getEffectiveSelfPartyNames 同语义, 本地实现以免环(executionFlow 依赖本文件)。
+ * 导出供 postgres-repositories 的 pg 快照分支复用。 */
+export async function effectiveSelfPartyNamesForDerivation(ctx: DbContext): Promise<string[]> {
+  const rows = await listSelfParties(ctx);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const n of [...parseSelfPartyNames(env.SELF_PARTY_NAMES), ...rows.map((r) => r.name)]) {
+    const key = normalizeCompanyName(n);
+    if (key && !seen.has(key)) { seen.add(key); out.push(n); }
+  }
+  return out;
+}
 
 // All repository fns are ASYNC on BOTH backends. The SQLite branch just wraps its
 // existing sync better-sqlite3 call in `async` (returns a Promise) -- runtime
@@ -1400,6 +1418,17 @@ export async function getReviewSnapshot(
   // the review card and what commitDocumentGraph writes to Neo4j.
   const proposedRelationships: ProposedRelationship[] = deriveProposedRelationships(fields);
 
+  // 合同类型派生(spec 2026-08-20 §3.2): 与台账写回/图提交同一纯函数, 快照侧
+  // 就地计算; 无识别结果时挂 null(非合同/全无信号 -> 复核卡不渲染该区)。
+  // 人工在复核卡改「合同类型」字段 -> applyDocumentCorrections 以
+  // confidence 1.0 落 fields -> 派生 source 自动变 'field', 无需额外代码。
+  const contractDerivation = deriveContractType({
+    docType: doc.doc_type,
+    fields,
+    selfPartyNames: await effectiveSelfPartyNamesForDerivation(ctx),
+  });
+  const contractType = contractDerivation.contractType ? contractDerivation : null;
+
   return {
     docId,
     docType: doc.doc_type,
@@ -1413,6 +1442,7 @@ export async function getReviewSnapshot(
     proposedRelationships,
     vectorization,
     proposedEdges: deriveProposedEdges(doc.doc_type, fields),
+    contractType,
     graphStatus,
   };
 }

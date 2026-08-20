@@ -3,7 +3,7 @@ import { createDb, migrate } from '../../../src/pipeline/db/client.js';
 import {
   saveDocument, saveExtraction, saveDocumentTags, listDocumentTags,
   getReviewSnapshot, setReviewStatus, updateExtractionFields,
-  setDocumentVectorization, applyDocumentCorrections, saveChunks,
+  setDocumentVectorization, applyDocumentCorrections, saveChunks, addSelfParty,
 } from '../../../src/pipeline/db/repositories.js';
 import type { BlockModel } from '../../../src/pipeline/types.js';
 
@@ -168,6 +168,39 @@ describe('applyDocumentCorrections', () => {
 });
 
 // ---- Lane B: chunk tags on the review snapshot (分段标签) -------------------
+
+describe('getReviewSnapshot contractType (合同类型派生, spec 2026-08-20)', () => {
+  it('甲方命中主体名单 -> 采购/side; 与台账/图提交同一派生规则', async () => {
+    await addSelfParty(ctx, '我方贸易', 'u1');
+    await saveDocument(ctx, mkModel('DOC-cty1'));
+    await saveExtraction(ctx, {
+      documentId: 'DOC-cty1', docType: '合同',
+      fields: {
+        甲方: { value: '我方贸易', sourceSpans: [] },
+        乙方: { value: '某供应商', sourceSpans: [] },
+      },
+      fieldMeta: {
+        甲方: { strength: 'exact', confidence: 0.9 },
+        乙方: { strength: 'exact', confidence: 0.9 },
+      },
+      overallConfidence: 0.9, needsReview: false,
+    });
+    const snap = await getReviewSnapshot(ctx, 'DOC-cty1');
+    expect(snap?.contractType).toEqual({ contractType: '采购', source: 'side', conflict: false });
+  });
+
+  it('非合同 docType -> contractType null', async () => {
+    await saveDocument(ctx, { ...mkModel('DOC-cty2'), docType: '发票' });
+    await saveExtraction(ctx, {
+      documentId: 'DOC-cty2', docType: '发票',
+      fields: { 金额: { value: 100, sourceSpans: [] } },
+      fieldMeta: { 金额: { strength: 'exact', confidence: 0.9 } },
+      overallConfidence: 0.9, needsReview: false,
+    });
+    const snap = await getReviewSnapshot(ctx, 'DOC-cty2');
+    expect(snap?.contractType).toBeNull();
+  });
+});
 
 describe('getReviewSnapshot chunkTags (Lane B)', () => {
   it('returns distinct chunk tags in first-appearance order, skipping null-tag chunks', async () => {

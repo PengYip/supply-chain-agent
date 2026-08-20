@@ -21,8 +21,9 @@ import { normalizeContractNo } from '../contractLedger.js';
 import type { ContractLedgerEntry } from '../contractLedger.js';
 import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.js';
 import { normalizeCompanyName } from '../../domain/flowDirection.js';
+import { deriveContractType } from '../../domain/contractType.js';
 import type { ContractType } from '../../domain/tradeSemantics.js';
-import { parseGraphStatus } from './repositories.js';
+import { parseGraphStatus, effectiveSelfPartyNamesForDerivation } from './repositories.js';
 import type {
   ExtractionInput,
   BindingInput,
@@ -1154,6 +1155,15 @@ export async function getReviewSnapshotPg(
     }
   }
 
+  // 合同类型派生: 与 SQLite 分支同规则(共用 effectiveSelfPartyNamesForDerivation,
+  // 按后端分发读 self_parties); 无识别结果时挂 null。
+  const contractDerivation = deriveContractType({
+    docType: doc.doc_type,
+    fields,
+    selfPartyNames: await effectiveSelfPartyNamesForDerivation(ctx),
+  });
+  const contractType = contractDerivation.contractType ? contractDerivation : null;
+
   return {
     docId,
     docType: doc.doc_type,
@@ -1171,6 +1181,7 @@ export async function getReviewSnapshotPg(
     proposedRelationships: deriveProposedRelationships(fields),
     vectorization,
     proposedEdges: deriveProposedEdges(doc.doc_type, fields),
+    contractType,
     graphStatus,
   };
 }

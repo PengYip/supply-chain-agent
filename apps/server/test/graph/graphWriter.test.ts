@@ -117,4 +117,31 @@ describe('writeDocumentGraph (fake io)', () => {
     ]);
     expect(io.calls.filter((c) => c.startsWith('create:Party:中石化'))).toHaveLength(1);
   });
+
+  it('contractType 透传: Document 与 Contract 实体 props 都带; null 时 key 不出现', async () => {
+    function mkPropsIo() {
+      const created: Array<{ kind: string; name: string; props: Record<string, unknown> }> = [];
+      const io: GraphWriterIo = {
+        createEntity: async ({ kind, name, props }) => {
+          created.push({ kind, name, props: props ?? {} });
+          return { elementId: `el-${kind}-${name}`, kind, name, props: props ?? {}, created: true };
+        },
+        mergeEdge: async () => ({}),
+      };
+      return { io, created };
+    }
+
+    const withType = mkPropsIo();
+    await writeDocumentGraph({ ...input, contractType: '销售' }, withType.io);
+    const docNode = withType.created.find((c) => c.kind === 'Document');
+    const contractNode = withType.created.find((c) => c.kind === 'Contract');
+    expect(docNode?.props.contractType).toBe('销售');
+    expect(contractNode?.props.contractType).toBe('销售');
+
+    const nullType = mkPropsIo();
+    await writeDocumentGraph({ ...input, contractType: null }, nullType.io);
+    for (const c of nullType.created) {
+      expect(c.props).not.toHaveProperty('contractType');
+    }
+  });
 });

@@ -46,6 +46,8 @@ export interface WriteDocumentGraphInput {
   docId: string;
   docType: string;
   sourceUri: string | null;
+  /** 合同类型(spec 2026-08-20): 非空时写入 Document 与 Contract 实体 props。 */
+  contractType?: string | null;
   entities: GraphEntityInput[];
   edges: GraphEdgeInput[];
 }
@@ -79,6 +81,7 @@ export async function writeDocumentGraph(
         docId: input.docId,
         docType: input.docType,
         ...(input.sourceUri ? { sourceUri: input.sourceUri } : {}),
+        ...(input.contractType ? { contractType: input.contractType } : {}),
       },
     });
     docNodeId = docNode.elementId;
@@ -103,7 +106,11 @@ export async function writeDocumentGraph(
       const node = await io.createEntity({
         kind: ent.kind,
         name: norm,
-        props: { rawName: ent.name, ...(ent.role ? { role: ent.role } : {}) },
+        props: {
+          rawName: ent.name,
+          ...(ent.role ? { role: ent.role } : {}),
+          ...(ent.kind === 'Contract' && input.contractType ? { contractType: input.contractType } : {}),
+        },
       });
       entityIds.set(key, node.elementId);
       nodeCount += 1;
