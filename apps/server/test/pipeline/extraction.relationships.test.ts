@@ -43,6 +43,13 @@ describe('deriveProposedRelationships', () => {
     expect(rels).toContainEqual(expect.objectContaining({ kind: 'Party', role: '收货人', name: 'R公司' }));
     expect(rels).toContainEqual(expect.objectContaining({ kind: 'Party', role: '承运人', name: 'C航运' }));
   });
+
+  it('项目字段提升为 Project 实体提议（spec 2026-08-20 §4.2）', () => {
+    const rels = deriveProposedRelationships([f('项目编号', 'PRJ-2026-001', 0.95)]);
+    expect(rels).toContainEqual({ kind: 'Project', name: 'PRJ-2026-001', confidence: 0.95 });
+    const byName = deriveProposedRelationships([f('项目名称', '曹妃甸项目', 0.9)]);
+    expect(byName).toContainEqual({ kind: 'Project', name: '曹妃甸项目', confidence: 0.9 });
+  });
 });
 
 describe('TradeVocabulary 注入（L2 租户定制口子）', () => {

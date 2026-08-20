@@ -8,6 +8,7 @@ import {
 } from '../data/seed.js';
 import type { DbContext } from '../pipeline/db/client.js';
 import { findContractLedgerByNo } from '../pipeline/db/repositories.js';
+import { rollupProject } from '../pipeline/projectRollup.js';
 
 // NOTE: AI SDK 6 renamed the tool schema field `parameters` -> `inputSchema`
 // (v5 used `parameters`). The execute signature is `async (input, options)`.
@@ -63,6 +64,40 @@ export function buildQueryContractTool(deps?: { ctx?: DbContext; userId?: string
 
 // 无 ctx = 纯 seed 行为, 兼容旧测试(不触 DB)。
 export const queryContract = buildQueryContractTool();
+
+// ---- project_rollup ----------------------------------------------------------
+//
+// 项目维度统计(spec 2026-08-20 §5): L1 只读, rollupProject 只读关系库
+// (memberships + 台账 + 执行流水), 报表不依赖图。不传 deps.ctx -> notConfigured
+// (与 buildQueryContractTool 的 builder 模式一致, 但无 seed 回退 —— 统计必须有库)。
+
+const projectRollupSchema = z.object({
+  projectCode: z.string().min(1).describe('项目编号，如 PRJ-2026-001'),
+});
+
+export function buildProjectRollupTool(deps?: { ctx?: DbContext; userId?: string }) {
+  return tool({
+    description:
+      '按项目编号汇总该项目的销售/采购/费用合同金额、毛差、应收应付未清、六向执行流水(资金/货物/发票 x 进/出)与校验提示。用于"这个项目赚了多少/还差多少发票/项目概况"等报表类问题。',
+    inputSchema: projectRollupSchema,
+    execute: async ({ projectCode }) => {
+      if (!deps?.ctx) return { notConfigured: true as const };
+      const rollup = await rollupProject(deps.ctx, projectCode, deps.userId);
+      if (!rollup) return { notFound: true as const, projectCode };
+      return {
+        project: rollup.project,
+        contractCount: rollup.contracts.length,
+        pendingCount: rollup.pendingMemberships.length,
+        contracts: rollup.contracts.map((x) => ({
+          contractNo: x.displayContractNo, role: x.role, counterparty: x.counterparty, amount: x.amount,
+        })),
+        flows: rollup.flows,
+        metrics: rollup.metrics,
+        checks: rollup.checks,
+      };
+    },
+  });
+}
 
 // ---- query_orders -----------------------------------------------------------
 

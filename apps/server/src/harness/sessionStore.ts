@@ -76,6 +76,17 @@ CREATE TABLE IF NOT EXISTS session_events (
   created_at TEXT NOT NULL,
   PRIMARY KEY (session_id, seq)
 );
+
+CREATE TABLE IF NOT EXISTS session_favorites (
+  session_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  user_email TEXT,
+  note TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (session_id, user_id),
+  FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
 `);
 
 // Phase 2: add user_id to pre-existing dev databases (CREATE TABLE IF NOT EXISTS
@@ -166,15 +177,48 @@ interface MessageRow {
   model_message_json: string;
 }
 
+/** One user's favorite ("收藏") of one chat session, with an optional feedback
+ *  note. user_email is a write-time snapshot so the aggregated feedback view
+ *  can attribute notes without a cross-store join (auth users live in
+ *  Postgres, chat sessions in this SQLite file). */
+export interface SessionFavorite {
+  sessionId: string;
+  userId: string;
+  userEmail: string | null;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A favorite joined with its session's list-facing fields (title/status). */
+export interface SessionFavoriteSummary extends SessionFavorite {
+  title?: string;
+  status: SessionStatus;
+}
+
+interface FavoriteRow {
+  session_id: string;
+  user_id: string;
+  user_email: string | null;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 // ---- prepared statements ----
 
 const stmtInsertSession = db.prepare(
   'INSERT INTO sessions (id, role, created_at, updated_at, user_id) VALUES (?, ?, ?, ?, ?)',
 );
 const stmtGetSession = db.prepare('SELECT * FROM sessions WHERE id = ?');
-const stmtListSessionsForUser = db.prepare(
-  'SELECT id, role, created_at, metadata_json, status FROM sessions WHERE user_id = ? ORDER BY created_at DESC',
-);
+const stmtListSessionsForUser = db.prepare(`
+  SELECT s.id, s.role, s.created_at, s.metadata_json, s.status,
+         CASE WHEN f.session_id IS NULL THEN 0 ELSE 1 END AS favorited
+  FROM sessions s
+  LEFT JOIN session_favorites f ON f.session_id = s.id AND f.user_id = ?
+  WHERE s.user_id = ?
+  ORDER BY s.created_at DESC
+`);
 const stmtTouchSession = db.prepare(
   'UPDATE sessions SET updated_at = ? WHERE id = ?',
 );
@@ -210,6 +254,33 @@ const stmtCountPending = db.prepare(
 const stmtDeleteSession = db.prepare('DELETE FROM sessions WHERE id = ?');
 const stmtDeleteSessionMessages = db.prepare('DELETE FROM session_messages WHERE session_id = ?');
 const stmtDeleteSessionPending = db.prepare('DELETE FROM pending_approvals WHERE session_id = ?');
+const stmtDeleteSessionFavorites = db.prepare('DELETE FROM session_favorites WHERE session_id = ?');
+
+// --- session favorites (对话收藏/用户反馈) ---
+
+const stmtUpsertFavorite = db.prepare(`
+  INSERT INTO session_favorites (session_id, user_id, user_email, note, created_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT (session_id, user_id) DO UPDATE SET
+    user_email = excluded.user_email,
+    note = excluded.note,
+    updated_at = excluded.updated_at
+`);
+const stmtDeleteFavorite = db.prepare('DELETE FROM session_favorites WHERE session_id = ? AND user_id = ?');
+const stmtGetFavorite = db.prepare('SELECT * FROM session_favorites WHERE session_id = ? AND user_id = ?');
+const stmtListFavoritesForUser = db.prepare(`
+  SELECT f.*, s.metadata_json, s.status
+  FROM session_favorites f
+  JOIN sessions s ON s.id = f.session_id
+  WHERE f.user_id = ?
+  ORDER BY f.updated_at DESC
+`);
+const stmtListAllFavorites = db.prepare(`
+  SELECT f.*, s.metadata_json, s.status
+  FROM session_favorites f
+  JOIN sessions s ON s.id = f.session_id
+  ORDER BY f.updated_at DESC
+`);
 
 // ---- API ----
 
@@ -274,16 +345,19 @@ export function setSessionTitle(sessionId: string, title: string): void {
   stmtUpdateMetadata.run(JSON.stringify(meta), new Date().toISOString(), sessionId);
 }
 
-/** List chat sessions owned by a user (Phase 2 data isolation). */
+/** List chat sessions owned by a user (Phase 2 data isolation). Includes the
+ *  caller's favorite state per session so the sidebar can star rows without a
+ *  second round-trip. */
 export function listSessionsForUser(
   userId: string,
-): Array<{ id: string; role: Role; createdAt: string; title?: string; status: SessionStatus }> {
-  const rows = stmtListSessionsForUser.all(userId) as Array<{
+): Array<{ id: string; role: Role; createdAt: string; title?: string; status: SessionStatus; favorited: boolean }> {
+  const rows = stmtListSessionsForUser.all(userId, userId) as Array<{
     id: string;
     role: Role;
     created_at: string;
     metadata_json: string | null;
     status: SessionStatus;
+    favorited: 0 | 1;
   }>;
   return rows.map((r) => ({
     id: r.id,
@@ -291,6 +365,7 @@ export function listSessionsForUser(
     createdAt: r.created_at,
     title: parseTitle(r.metadata_json),
     status: r.status,
+    favorited: r.favorited === 1,
   }));
 }
 
@@ -364,8 +439,8 @@ export function loadSession(id: string): LoadedSession | null {
 
 /**
  * Delete a chat session and all of its dependent rows (messages, pending
- * approvals). Returns true if the session existed (and was deleted), false if
- * it was already gone. Callers MUST verify ownership first
+ * approvals, favorites). Returns true if the session existed (and was
+ * deleted), false if it was already gone. Callers MUST verify ownership first
  * (sessionBelongsTo) -- this fn does not re-check.
  */
 export function deleteSession(id: string): boolean {
@@ -374,10 +449,77 @@ export function deleteSession(id: string): boolean {
   const tx = db.transaction(() => {
     stmtDeleteSessionMessages.run(id);
     stmtDeleteSessionPending.run(id);
+    stmtDeleteSessionFavorites.run(id);
     stmtDeleteSession.run(id);
   });
   tx();
   return true;
+}
+
+// --- session favorites (对话收藏: MVP 用户反馈通道) ---
+
+/** Favorite a session (upsert). Re-favoriting overwrites the note and refreshes
+ *  the email snapshot. Returns the stored favorite. Callers MUST verify the
+ *  session exists and is owned by userId (sessionBelongsTo) -- this fn does
+ *  not re-check, mirroring the other writers here. */
+export function setSessionFavorite(
+  sessionId: string,
+  userId: string,
+  userEmail: string | null,
+  note: string | null,
+): SessionFavorite {
+  const now = new Date().toISOString();
+  stmtUpsertFavorite.run(sessionId, userId, userEmail, note, now, now);
+  return {
+    sessionId,
+    userId,
+    userEmail,
+    note,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/** Remove a user's favorite of a session. Returns true if a row was removed. */
+export function clearSessionFavorite(sessionId: string, userId: string): boolean {
+  return stmtDeleteFavorite.run(sessionId, userId).changes > 0;
+}
+
+/** Read one user's favorite of one session (null when not favorited). */
+export function getSessionFavorite(sessionId: string, userId: string): SessionFavorite | null {
+  const row = stmtGetFavorite.get(sessionId, userId) as FavoriteRow | undefined;
+  return row ? toFavorite(row) : null;
+}
+
+function toFavorite(row: FavoriteRow): SessionFavorite {
+  return {
+    sessionId: row.session_id,
+    userId: row.user_id,
+    userEmail: row.user_email,
+    note: row.note,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** Map a joined favorites+sessions row to the summary shape (title from
+ *  metadata_json, defensive parse). */
+function toFavoriteSummary(row: FavoriteRow & { metadata_json: string | null; status: SessionStatus }): SessionFavoriteSummary {
+  return { ...toFavorite(row), title: parseTitle(row.metadata_json), status: row.status };
+}
+
+/** List one user's favorites with session title/status (newest first).
+ *  Favorites of since-deleted sessions drop out via the inner JOIN. */
+export function listSessionFavorites(userId: string): SessionFavoriteSummary[] {
+  const rows = stmtListFavoritesForUser.all(userId) as Array<FavoriteRow & { metadata_json: string | null; status: SessionStatus }>;
+  return rows.map(toFavoriteSummary);
+}
+
+/** List EVERY user's favorites (admin feedback inbox). Same shape as
+ *  listSessionFavorites plus the per-row userId/userEmail attribution. */
+export function listAllSessionFavorites(): SessionFavoriteSummary[] {
+  const rows = stmtListAllFavorites.all() as Array<FavoriteRow & { metadata_json: string | null; status: SessionStatus }>;
+  return rows.map(toFavoriteSummary);
 }
 
 export function appendMessages(sessionId: string, msgs: UIMessage[]): void {

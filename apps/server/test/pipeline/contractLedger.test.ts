@@ -117,6 +117,27 @@ describe('buildLedgerEntryFromExtraction', () => {
     expect(entry?.contractNo).toBe('HT-B-002');
     expect(entry?.displayContractNo).toBe('HT-B-002');
   });
+
+  it('contractType 未传 -> null', () => {
+    const entry = buildLedgerEntryFromExtraction({
+      documentId: 'DOC-4',
+      docType: '合同',
+      fields: { 合同号: { value: 'HT-2024-004', sourceSpans: [span] } },
+      fieldMeta: { 合同号: { strength: 'exact', confidence: 0.9 } },
+    });
+    expect(entry?.contractType).toBeNull();
+  });
+
+  it('contractType 传销售 -> 透传', () => {
+    const entry = buildLedgerEntryFromExtraction({
+      documentId: 'DOC-5',
+      docType: '合同',
+      fields: { 合同号: { value: 'HT-2024-005', sourceSpans: [span] } },
+      fieldMeta: { 合同号: { strength: 'exact', confidence: 0.9 } },
+      contractType: '销售',
+    });
+    expect(entry?.contractType).toBe('销售');
+  });
 });
 
 let ctx: ReturnType<typeof createDb>;
@@ -158,6 +179,18 @@ describe('upsertContractLedgerEntry', () => {
       .get() as { document_id: string; title: string };
     expect(row.document_id).toBe('DOC-2'); // second write won
     expect(row.title).toBe('合同A');
+  });
+
+  it('contract_type 落库并在再 upsert 时更新(ON CONFLICT SET 生效)', async () => {
+    const first = { ...build('DOC-1', 'HT-2024-100'), contractType: '采购' as const };
+    await upsertContractLedgerEntry(ctx, first);
+    expect((await findContractLedgerByNo(ctx, 'HT-2024-100'))?.contractType).toBe('采购');
+
+    const second = { ...build('DOC-2', 'HT-2024-100'), contractType: '销售' as const };
+    await upsertContractLedgerEntry(ctx, second);
+    const after = await findContractLedgerByNo(ctx, 'HT-2024-100');
+    expect(after?.contractType).toBe('销售');
+    expect(after?.documentId).toBe('DOC-2'); // same update path as other columns
   });
 });
 

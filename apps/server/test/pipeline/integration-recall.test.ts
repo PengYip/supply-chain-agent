@@ -276,11 +276,12 @@ describe('integration: document-entry -> hybrid recall chain', () => {
     // recall_documents + execute_code + inspect_extraction + tag_document +
     // create_entity + link_entities + graph_query + graph_find_entity +
     // present_document_review + update_document_fields + list_binding_proposals
-    // = 19 live trader tools.
-    expect(names).toHaveLength(20);
+    // + project_rollup = 21 live trader tools.
+    expect(names).toHaveLength(21);
     expect(names).toContain('recall_documents');
     expect(names).toContain('ingest_document');
     expect(names).toContain('extract_fields');
+    expect(names).toContain('project_rollup');
     // The buildGatedTools choke point enforces a contract for every live tool;
     // passing here means recall_documents (and friends) all have contract entries.
     expect(() => assertAllToolsContracted(names)).not.toThrow();

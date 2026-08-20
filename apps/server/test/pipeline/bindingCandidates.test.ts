@@ -12,6 +12,7 @@ beforeEach(() => { ctx = createDb(':memory:'); migrate(ctx.sqlite); });
 function ledger(no: string, fields: ContractLedgerEntry['fields']): ContractLedgerEntry {
   return {
     contractNo: no, displayContractNo: no, docType: '合同', documentId: 'DOC-C', title: '',
+    contractType: null,
     fields, fieldMeta: {}, overallConfidence: 1, needsReview: false, userId: 'u1',
   };
 }

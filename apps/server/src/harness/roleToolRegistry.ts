@@ -1,5 +1,5 @@
 import type { Tool } from 'ai';
-import { buildQueryContractTool, queryOrders, crossCheck } from '../tools/queries.js';
+import { buildQueryContractTool, buildProjectRollupTool, queryOrders, crossCheck } from '../tools/queries.js';
 import { escalateToHuman, verifyDocumentFields } from '../tools/hitl.js';
 import {
   buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool, buildInspectExtractionTool,
@@ -75,7 +75,7 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
 // though constructing their instances requires a DbContext (see getToolsForRole).
 // query_contract is listed here too: after the BASE removal above its name would
 // otherwise drop out of listToolNames (it is still always registered for trader).
-const TRADER_CTX_TOOL_NAMES = ['query_contract', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'query_execution_flows'] as const;
+const TRADER_CTX_TOOL_NAMES = ['query_contract', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'query_execution_flows', 'project_rollup'] as const;
 
 export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
   const base: GatedTool[] = (BASE_TOOLS_FOR_ROLE[role] ?? []).map((t) => ({ ...t }));
@@ -83,6 +83,8 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
     const { userId } = deps ?? {};
     // query_contract 无条件注册(台账优先; deps.ctx 缺省时降级纯 seed)。
     base.push({ ...buildQueryContractTool({ ctx: deps?.ctx, userId }), name: 'query_contract' });
+    // project_rollup 同款无条件注册(L1 只读; 无 ctx 时 execute 返回 notConfigured)。
+    base.push({ ...buildProjectRollupTool({ ctx: deps?.ctx, userId }), name: 'project_rollup' });
     if (deps?.ctx) {
       const { ctx, extraction, embedder, classifier, tagger, userId } = deps;
       base.push(

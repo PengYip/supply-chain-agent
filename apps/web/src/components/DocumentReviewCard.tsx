@@ -10,6 +10,7 @@ import {
   Database,
   AlertTriangle,
   AlertCircle,
+  Bookmark,
   CheckCircle2,
   MinusCircle,
   Loader2,
@@ -62,6 +63,13 @@ export type DocumentReviewPayload = {
     role?: string
     confidence: number
   }>
+  /** 合同类型派生结果（主体视角, spec 2026-08-20）。null/缺失 = 非合同或未识别，
+   *  复核卡不渲染该区；conflict=true 表示字段方向与主体侧别相反，需人工确认。 */
+  contractType?: {
+    contractType: string | null
+    source: 'field' | 'side' | 'keyword' | null
+    conflict: boolean
+  } | null
   graphStatus?: {
     status: 'ok' | 'partial' | 'failed' | 'skipped'
     nodeCount: number
@@ -104,6 +112,13 @@ const EDGE_TYPE_LABEL: Record<string, string> = {
   commodity: '标的物',
   references: '引用合同',
   executes: '执行合同',
+}
+
+/** 合同类型派生来源的可读名（快照 contractType.source）。 */
+const CONTRACT_TYPE_SOURCE_LABEL: Record<string, string> = {
+  field: '字段',
+  side: '主体侧别',
+  keyword: '标题关键词',
 }
 
 /** Preserve a field's original type when coercing an edited string back to a
@@ -377,6 +392,7 @@ export const DocumentReviewCard: React.FC<{
     chunkTagDetails,
     vectorization,
     proposedEdges,
+    contractType,
     graphStatus,
     reviewStatus,
   } = snapshot || {}
@@ -475,6 +491,31 @@ export const DocumentReviewCard: React.FC<{
             {classificationLow && <FlagBadge />}
           </div>
         </div>
+
+        {/* 1.5 合同类型 — 主体视角派生（spec 2026-08-20）; null = 非合同或未识别,
+            不渲染该区。conflict=true 时黄条提示人工确认方向。 */}
+        {contractType?.contractType && (
+          <div>
+            <SectionLabel icon={<Bookmark className="w-3 h-3" />}>合同类型</SectionLabel>
+            <div className="flex items-center gap-2 flex-wrap text-xs">
+              <span className="inline-flex items-center text-[11px] px-2 py-0.5 rounded border bg-bgGray/50 text-textDark border-borderGray/50">
+                {contractType.contractType}
+              </span>
+              <span className="text-textGray">
+                来源{' '}
+                <span className="font-mono text-steelBlue">
+                  {CONTRACT_TYPE_SOURCE_LABEL[contractType.source ?? ''] ?? '未识别'}
+                </span>
+              </span>
+            </div>
+            {contractType.conflict && (
+              <div className="mt-1.5 flex items-start gap-1.5 text-xs text-amber bg-amber/5 border border-amber/30 rounded px-2 py-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span className="leading-relaxed">合同类型与主体方向不一致，请人工确认</span>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* 2. 结构化字段 — core value: flag needsReview / low confidence.
             Editable when pending; read-only otherwise. */}

@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react'
 import { useSessionMessages } from '../hooks/useSessionMessages'
-import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, LogOut, Paperclip, Check } from 'lucide-react'
+import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, LogOut, Paperclip, Check, Star } from 'lucide-react'
+import { getFavorite, setFavorite, clearFavorite, type FavoriteProbe } from '../api/favorites'
 import { RealMessageItem, ErrorMessage } from './RealMessageItem'
 import { HumanAgentStatusBar } from './HumanAgentStatusBar'
 import { useHumanAgentStatus } from '../hooks/useHumanAgentStatus'
@@ -253,6 +254,80 @@ export const RealChatView: React.FC<{
   docParseStates: Record<string, DocParseState>;
 }> = ({ onSignOut, sessionId, contextFiles, setContextFiles, onSessionChanged, onSessionCreated, onFilesChanged, docParseStates }) => {
   const [input, setInput] = useState('')
+
+  // 对话收藏: probe + header affordance for the CURRENT session. Self-contained
+  // here (no prop threading from App) — mutations notify App via
+  // onSessionChanged so the sidebar list re-fetches fresh favorited flags.
+  const [favProbe, setFavProbe] = useState<FavoriteProbe | null>(null)
+  const [favBusy, setFavBusy] = useState(false)
+  const [favMenuOpen, setFavMenuOpen] = useState(false)
+  const [favNoteDraft, setFavNoteDraft] = useState('')
+
+  useEffect(() => {
+    setFavMenuOpen(false)
+    if (!sessionId) {
+      setFavProbe(null)
+      return
+    }
+    let alive = true
+    void getFavorite(sessionId).then((p) => {
+      if (alive) setFavProbe(p)
+    })
+    return () => {
+      alive = false
+    }
+  }, [sessionId])
+
+  // Star click: not favorited -> favorite + open the note editor right away;
+  // already favorited -> toggle the note editor (unfavorite lives inside it,
+  // so a stray click cannot silently drop a favorite + its feedback note).
+  const handleHeaderStar = async () => {
+    if (!sessionId || favBusy) return
+    if (favProbe?.favorited) {
+      setFavNoteDraft(favProbe.note ?? '')
+      setFavMenuOpen((v) => !v)
+      return
+    }
+    setFavBusy(true)
+    try {
+      await setFavorite(sessionId)
+      setFavProbe({ sessionId, favorited: true, note: null, updatedAt: new Date().toISOString() })
+      setFavNoteDraft('')
+      setFavMenuOpen(true)
+      onSessionChanged?.()
+    } catch { /* probe stays stale-free: re-probe on failure */
+      void getFavorite(sessionId).then((p) => setFavProbe(p))
+    } finally {
+      setFavBusy(false)
+    }
+  }
+
+  const handleUnfavorite = async () => {
+    if (!sessionId || favBusy) return
+    setFavBusy(true)
+    try {
+      await clearFavorite(sessionId)
+      setFavProbe({ sessionId, favorited: false, note: null, updatedAt: null })
+      setFavMenuOpen(false)
+      onSessionChanged?.()
+    } finally {
+      setFavBusy(false)
+    }
+  }
+
+  const handleSaveFavNote = async () => {
+    if (!sessionId || favBusy) return
+    setFavBusy(true)
+    try {
+      await setFavorite(sessionId, favNoteDraft)
+      const note = favNoteDraft.trim() || null
+      setFavProbe((p) => (p ? { ...p, note, updatedAt: new Date().toISOString() } : p))
+      setFavMenuOpen(false)
+      onSessionChanged?.()
+    } finally {
+      setFavBusy(false)
+    }
+  }
 
   // File upload state. Uploads POST to /api/files — storage-only; parsing
   // activates when the file is added to a conversation as a reference.
@@ -574,6 +649,70 @@ export const RealChatView: React.FC<{
             : error ? '出错'
             : '就绪'}
           </span>
+          {/* 对话收藏: current-session star + feedback-note editor */}
+          {sessionId && (
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                title={favProbe?.favorited ? '已收藏（点击编辑反馈备注）' : '收藏本会话'}
+                onClick={handleHeaderStar}
+                disabled={favBusy}
+                className={clsx(
+                  'p-1.5 rounded-lg transition-colors',
+                  favProbe?.favorited
+                    ? 'text-amber hover:bg-amber/10'
+                    : 'text-textGray hover:text-textDark hover:bg-bgGray',
+                )}
+              >
+                <Star className="w-4 h-4" fill={favProbe?.favorited ? 'currentColor' : 'none'} />
+              </button>
+              {favMenuOpen && favProbe?.favorited && (
+                <div className="absolute right-0 top-full mt-2 w-72 rounded-lg border border-borderGray bg-white p-3 shadow-lg z-30">
+                  <div className="text-xs font-medium text-textDark mb-1.5">反馈备注（可选）</div>
+                  <div className="text-[11px] text-textGray mb-2">记录这条对话的价值或问题，汇总在收藏页供产品迭代参考。</div>
+                  <textarea
+                    value={favNoteDraft}
+                    onChange={(e) => setFavNoteDraft(e.target.value)}
+                    disabled={favBusy}
+                    rows={3}
+                    placeholder="例如：三单匹配对账结果准确，但发票金额识别有误"
+                    className="w-full rounded-lg border border-borderGray bg-white p-2 text-xs text-textDark placeholder:text-textGray focus:outline-none focus:border-steelBlue resize-none disabled:opacity-70"
+                  />
+                  <div className="mt-2 flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={handleUnfavorite}
+                      disabled={favBusy}
+                      className="text-[11px] text-danger hover:text-danger/80 transition-colors disabled:opacity-50"
+                    >
+                      取消收藏
+                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setFavMenuOpen(false)}
+                        disabled={favBusy}
+                        className="px-2.5 py-1 rounded-md text-[11px] text-textGray hover:text-textDark transition-colors"
+                      >
+                        收起
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveFavNote}
+                        disabled={favBusy}
+                        className={clsx(
+                          'px-3 py-1 rounded-md text-[11px] font-medium text-white transition-colors',
+                          favBusy ? 'bg-borderGray cursor-not-allowed' : 'bg-deepSea hover:bg-deepSea/90',
+                        )}
+                      >
+                        {favBusy ? '保存中...' : '保存备注'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           <button
             type="button"
             title="退出登录"

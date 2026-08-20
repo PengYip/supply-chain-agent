@@ -74,9 +74,9 @@ export function buildGraphQueryTool() {
 export function buildGraphFindEntityTool() {
   return tool({
     description:
-      '按名称查找图实体 (Party/Commodity/Contract/Document), 返回 elementId 列表, 供 graph_query 起步或 link_entities 引用. 默认包含匹配 (CONTAINS), exact=true 精确匹配. 图不可用时返回错误.',
+      '按名称查找图实体 (Party/Commodity/Contract/Document/Project), 返回 elementId 列表, 供 graph_query 起步或 link_entities 引用. 默认包含匹配 (CONTAINS), exact=true 精确匹配. 项目（Project）节点由合同归属项目产生, name 为项目编号. 图不可用时返回错误.',
     inputSchema: z.object({
-      kind: z.enum(['Party', 'Commodity', 'Contract', 'Document']).optional().describe('实体类型, 省略则查所有类型'),
+      kind: z.enum(['Party', 'Commodity', 'Contract', 'Document', 'Project']).optional().describe('实体类型, 省略则查所有类型'),
       name: z.string().min(1).describe('实体名称或名称片段, 如 "中石化" / 合同号'),
       exact: z.boolean().optional().describe('true=精确匹配; 默认包含匹配'),
     }),

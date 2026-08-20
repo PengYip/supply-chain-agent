@@ -92,6 +92,41 @@ export function migrate(sqlite: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_extractions_user ON extractions(user_id);
     CREATE INDEX IF NOT EXISTS idx_bindings_user ON bindings(user_id);
 
+    -- 项目维度(spec 2026-08-20 §4.1): projects 是统计维度实体, code 归一大写;
+    -- project_memberships 是合同<->项目归属的 SSOT, 图(Neo4j)只是投影视图。
+    -- DDL 只在此处(raw SQL), 不进 drizzle schema.ts(与 contract_ledger 同例)。
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      code TEXT NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      user_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS projects_code_user_uq ON projects (code, user_id);
+
+    CREATE TABLE IF NOT EXISTS project_memberships (
+      id TEXT PRIMARY KEY,
+      contract_no TEXT NOT NULL,
+      project_code TEXT NOT NULL,
+      role TEXT,
+      status TEXT NOT NULL DEFAULT 'proposed',
+      proposed_by TEXT NOT NULL DEFAULT 'system',
+      confirmation_source TEXT,
+      confidence REAL NOT NULL DEFAULT 0,
+      created_by TEXT NOT NULL DEFAULT 'system',
+      user_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      graph_status TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS project_memberships_uq
+      ON project_memberships (contract_no, project_code, user_id);
+    CREATE INDEX IF NOT EXISTS project_memberships_project_idx
+      ON project_memberships (project_code, user_id);
+    CREATE INDEX IF NOT EXISTS project_memberships_contract_idx
+      ON project_memberships (contract_no, user_id);
+
     -- 自主体名单(Task A): 与 env.SELF_PARTY_NAMES 并集的 DB 侧名单。租户全局
     -- (无 user_id 过滤), created_by 仅审计; name 为原始名(raw), 去重按
     -- normalizeCompanyName 归一化形式(应用层判定, 见 addSelfParty)。
@@ -182,6 +217,7 @@ export function migrate(sqlite: Database.Database): void {
       overall_confidence REAL NOT NULL,
       needs_review INTEGER NOT NULL DEFAULT 0,
       user_id TEXT NOT NULL DEFAULT '',
+      contract_type TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -337,6 +373,18 @@ export function migrate(sqlite: Database.Database): void {
     }
   }
 
+  // 合同类型维度(主体视角: 采购/销售/物流/租赁/服务/其他, spec 2026-08-20 §3):
+  // deriveContractType 在录入写回时派生落库; NULL = 未识别。存量 dev 库补列,
+  // 同 guarded ALTER 模式(CREATE TABLE IF NOT EXISTS 不加列)。
+  {
+    const have = new Set(
+      (sqlite.prepare('PRAGMA table_info(contract_ledger)').all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!have.has('contract_type')) {
+      try { sqlite.exec('ALTER TABLE contract_ledger ADD COLUMN contract_type TEXT'); } catch { /* concurrent */ }
+    }
+  }
+
   // Backfill created_at (+ user_id) on classifications/document_tags/extractions
   // for old prod DBs whose tables predate these columns. CREATE TABLE IF NOT
   // EXISTS adds no columns to an existing table, and these previously had no
@@ -481,10 +529,13 @@ export async function migratePostgres(pool: Pool): Promise<void> {
        overall_confidence numeric(5,4) NOT NULL,
        needs_review boolean NOT NULL DEFAULT false,
        user_id TEXT NOT NULL DEFAULT '',
+       contract_type TEXT,
        created_at timestamptz NOT NULL DEFAULT NOW(),
        updated_at timestamptz NOT NULL DEFAULT NOW()
      )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_ledger_no_user ON contract_ledger(contract_no, user_id)`,
+    // 合同类型维度(spec 2026-08-20 §3): 存量库补列(SQLite 侧同款 guarded ALTER)。
+    `ALTER TABLE contract_ledger ADD COLUMN IF NOT EXISTS contract_type TEXT`,
     // Execution flows (六向执行流水): mirror of the SQLite execution_flows.
     // amount/quantity_ton 用 double precision(对应 SQLite REAL), confidence 沿用
     // numeric(5,4) pg 惯例, created_at timestamptz。UNIQUE 索引支撑 ON CONFLICT upsert。
@@ -520,6 +571,39 @@ export async function migratePostgres(pool: Pool): Promise<void> {
        created_by TEXT NOT NULL,
        created_at timestamptz NOT NULL DEFAULT NOW()
      )`,
+    // 项目维度(spec 2026-08-20 §4.1): pg mirror of the SQLite projects /
+    // project_memberships。confidence 用 double precision(SQLite REAL 对应),
+    // 时间列 timestamptz。DDL 不进 drizzle schema.ts。
+    `CREATE TABLE IF NOT EXISTS projects (
+       id TEXT PRIMARY KEY,
+       code TEXT NOT NULL,
+       name TEXT NOT NULL,
+       status TEXT NOT NULL DEFAULT 'active',
+       user_id TEXT,
+       created_at timestamptz NOT NULL DEFAULT NOW(),
+       updated_at timestamptz NOT NULL DEFAULT NOW()
+     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS projects_code_user_uq ON projects (code, user_id)`,
+    `CREATE TABLE IF NOT EXISTS project_memberships (
+       id TEXT PRIMARY KEY,
+       contract_no TEXT NOT NULL,
+       project_code TEXT NOT NULL,
+       role TEXT,
+       status TEXT NOT NULL DEFAULT 'proposed',
+       proposed_by TEXT NOT NULL DEFAULT 'system',
+       confirmation_source TEXT,
+       confidence double precision NOT NULL DEFAULT 0,
+       created_by TEXT NOT NULL DEFAULT 'system',
+       user_id TEXT,
+       created_at timestamptz NOT NULL DEFAULT NOW(),
+       graph_status jsonb
+     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS project_memberships_uq
+       ON project_memberships (contract_no, project_code, user_id)`,
+    `CREATE INDEX IF NOT EXISTS project_memberships_project_idx
+       ON project_memberships (project_code, user_id)`,
+    `CREATE INDEX IF NOT EXISTS project_memberships_contract_idx
+       ON project_memberships (contract_no, user_id)`,
     // L4 FTS fix (2026-08-17): drizzle migration 0000 created doc_chunk.fts_vector
     // as a PLAIN tsvector column (no GENERATED), so it stays NULL forever and
     // every FTS query silently returns 0 hits. Recreate it as a GENERATED column
