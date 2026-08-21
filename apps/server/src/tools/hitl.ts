@@ -48,7 +48,7 @@ export const escalateToHuman = tool({
     const sessionId = getSessionId();
     const ticketId = `ESC-${randomUUID().slice(0, 8)}`;
     if (sessionId) {
-      recordPendingApproval({
+      await recordPendingApproval({
         sessionId,
         level: 'L3',
         toolName: 'escalate_to_human',

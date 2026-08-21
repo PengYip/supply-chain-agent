@@ -3,6 +3,11 @@
 // session_events replay buffer first, then fans out to live subscribers.
 // The buffer only needs to outlive in-flight runs: runManager prunes it
 // when the run finalizes (snapshot path covers completed runs).
+//
+// Dual-backend note: the store is async (SQLite or Postgres), so emit() is
+// async too -- callers await it, which keeps seq assignment + fan-out in
+// emission order. Persistence stays best-effort (a failure must not drop the
+// live event); subscribers that throw never break other subscribers or the run.
 
 import { appendSessionEvent } from './sessionStore.js';
 
@@ -25,14 +30,14 @@ export function subscribe(sessionId: string, fn: (e: SessionEvent) => void): () 
   };
 }
 
-export function emit(event: SessionEvent): void {
+export async function emit(event: SessionEvent): Promise<void> {
   // Persist first (even with zero subscribers — the replay buffer must
   // capture events emitted while nobody is listening), best-effort: a
   // persistence failure (e.g. Postgres backend without the table) must not
   // drop the live event.
   let seq: number | undefined;
   try {
-    seq = appendSessionEvent(event.sessionId, event.type, event as Record<string, unknown>);
+    seq = await appendSessionEvent(event.sessionId, event.type, event as Record<string, unknown>);
   } catch (err) {
     console.error('[sessionEvents] persist failed:', err instanceof Error ? err.message : err);
   }

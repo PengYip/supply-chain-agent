@@ -32,10 +32,10 @@ const CreateBody = z.object({
 
 // List the current user's chat sessions (newest first).
 // Phase 4 RBAC: admin/trader can manage sessions; viewer is read-only (list only).
-sessionsRoute.get('/', requireRole('admin', 'trader', 'viewer'), (c) => {
+sessionsRoute.get('/', requireRole('admin', 'trader', 'viewer'), async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
-  const rows = listSessionsForUser(user.id);
+  const rows = await listSessionsForUser(user.id);
   return c.json({
     sessions: rows.map((r) => ({ id: r.id, role: r.role, createdAt: r.createdAt, title: r.title, status: r.status, favorited: r.favorited, messageCount: r.messageCount })),
   });
@@ -59,22 +59,22 @@ sessionsRoute.post('/', requireRole('admin', 'trader'), async (c) => {
   // A new session implies the previous one is done: drop the user's leftover
   // zero-message sessions so empties never accumulate (the sidebar hides them
   // anyway; this keeps the DB honest).
-  purgeEmptySessionsForUser(user.id);
-  const info = createSession(parsed.data.role as Role, user.id);
+  await purgeEmptySessionsForUser(user.id);
+  const info = await createSession(parsed.data.role as Role, user.id);
   return c.json({ id: info.id, role: info.role }, 201);
 });
 
 // Get a session's messages -- only if the authenticated user owns it.
-sessionsRoute.get('/:id', (c) => {
+sessionsRoute.get('/:id', async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const id = c.req.param('id');
-  if (!sessionBelongsTo(id, user.id)) {
+  if (!(await sessionBelongsTo(id, user.id))) {
     // 403 (not 404) would leak existence; use 404 to avoid confirming an id an
     // untrusted user does not own. Either is defensible -- 404 hides existence.
     return c.json({ error: 'not found' }, 404);
   }
-  const loaded = loadSession(id);
+  const loaded = await loadSession(id);
   if (!loaded) return c.json({ error: 'not found' }, 404);
   return c.json({ id: loaded.id, role: loaded.role, messages: loaded.messages, title: loaded.title });
 });
@@ -83,18 +83,18 @@ sessionsRoute.get('/:id', (c) => {
 // messages, pending approvals, and authorized tickets (see deleteSession).
 // Returns 404 (existence hidden) for both unknown and not-owned ids.
 // Phase 4 RBAC: only admin/trader may delete sessions (viewer cannot).
-sessionsRoute.delete('/:id', requireRole('admin', 'trader'), (c) => {
+sessionsRoute.delete('/:id', requireRole('admin', 'trader'), async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const id = c.req.param('id');
   // Ownership check: distinguish not-found from forbidden. The brief asks for a
   // 403 'forbidden' on not-owned and a 404 'not_found' on missing.
-  const loaded = loadSession(id);
+  const loaded = await loadSession(id);
   if (!loaded) return c.json({ error: 'not_found' }, 404);
-  if (!sessionBelongsTo(id, user.id)) {
+  if (!(await sessionBelongsTo(id, user.id))) {
     return c.json({ error: 'forbidden' }, 403);
   }
-  const removed = deleteSession(id);
+  const removed = await deleteSession(id);
   if (!removed) return c.json({ error: 'not_found' }, 404);
   return c.json({ ok: true });
 });
@@ -103,11 +103,11 @@ sessionsRoute.delete('/:id', requireRole('admin', 'trader'), (c) => {
 // AbortController; the run decides how to unwind (AI SDK streamText propagates
 // the abort to tool calls). Returns aborted=false when no run is in-flight.
 // Phase 4 RBAC: only admin/trader may abort (same as delete).
-sessionsRoute.post('/:id/abort', requireRole('admin', 'trader'), (c) => {
+sessionsRoute.post('/:id/abort', requireRole('admin', 'trader'), async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const id = c.req.param('id');
-  if (!sessionBelongsTo(id, user.id)) return c.json({ error: 'not found' }, 404);
+  if (!(await sessionBelongsTo(id, user.id))) return c.json({ error: 'not found' }, 404);
   const aborted = abortSessionRun(id);
   return c.json({ ok: true, aborted });
 });
@@ -118,11 +118,11 @@ sessionsRoute.post('/:id/abort', requireRole('admin', 'trader'), (c) => {
 // Every forwarded bus event carries an `id: <seq>` line (standard SSE reconnect
 // protocol); on reconnect the browser resends Last-Event-ID and the server
 // replays persisted events `seq > lastEventId` before continuing live.
-sessionsRoute.get('/:id/events', (c) => {
+sessionsRoute.get('/:id/events', async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const id = c.req.param('id');
-  if (!sessionBelongsTo(id, user.id)) {
+  if (!(await sessionBelongsTo(id, user.id))) {
     return c.json({ error: 'not found' }, 404);
   }
 
@@ -137,7 +137,7 @@ sessionsRoute.get('/:id/events', (c) => {
 
   // First event: current status snapshot. No id line — a snapshot is not a
   // log entry and must not advance the browser's lastEventId.
-  const st = getSessionStatus(id);
+  const st = await getSessionStatus(id);
   void send({ type: 'session.status', sessionId: id, status: st?.status ?? 'idle', runId: st?.runId ?? null });
 
   // Reconnect replay: the browser resends the last seen id as Last-Event-ID.
@@ -160,7 +160,7 @@ sessionsRoute.get('/:id/events', (c) => {
 
   if (sinceSeq !== null) {
     try {
-      const missed = listSessionEventsSince(id, sinceSeq);
+      const missed = await listSessionEventsSince(id, sinceSeq);
       let maxSent = sinceSeq;
       for (const row of missed) {
         // Prefer the DB columns (type/session_id) over payload-embedded

@@ -14,14 +14,14 @@ export const statusRoute = new Hono<AuthEnv>();
 // session must belong to them or we 404. When no user is attached (legacy/test
 // path that bypasses the middleware) the check is skipped so pre-Phase-2 callers
 // keep working, mirroring the repository-layer "no userId -> no filter" rule.
-statusRoute.get('/sessions/:id/status', (c) => {
+statusRoute.get('/sessions/:id/status', async (c) => {
   const user = c.get('user');
   const id = c.req.param('id');
-  if (user && !sessionBelongsTo(id, user.id)) {
+  if (user && !(await sessionBelongsTo(id, user.id))) {
     return c.json({ error: 'not found' }, 404);
   }
   try {
-    return c.json(getSessionStatus(id));
+    return c.json(await getSessionStatus(id));
   } catch (e) {
     return c.json(
       {

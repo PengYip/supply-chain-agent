@@ -76,7 +76,7 @@ describe('POST /api/chat (background runtime)', () => {
   });
 
   it('starts a background run and returns {sessionId, runId, status:busy}', async () => {
-    const s = createSession('trader', 'u-chat1');
+    const s = await createSession('trader', 'u-chat1');
     const res = await appAs('u-chat1').request('http://test/api/chat', {
       method: 'POST',
       headers: headers(s.id),
@@ -92,7 +92,7 @@ describe('POST /api/chat (background runtime)', () => {
   });
 
   it('returns 409 session_busy when a run is already in-flight', async () => {
-    const s = createSession('trader', 'u-chat2');
+    const s = await createSession('trader', 'u-chat2');
     // First request starts a run (the stub blocks until released).
     const res1 = await appAs('u-chat2').request('http://test/api/chat', {
       method: 'POST',
@@ -114,8 +114,8 @@ describe('POST /api/chat (background runtime)', () => {
   });
 
   it('returns 409 approval_pending when an L2 approval is pending (user msg not persisted, run not started)', async () => {
-    const s = createSession('trader', 'u-chat3');
-    recordPendingApproval({
+    const s = await createSession('trader', 'u-chat3');
+    await recordPendingApproval({
       sessionId: s.id, level: 'L2', toolName: 'tag_document',
       input: {}, approvalId: 'ap-' + s.id,
     });
@@ -129,14 +129,14 @@ describe('POST /api/chat (background runtime)', () => {
     const json = await res.json();
     expect(json.error).toBe('approval_pending');
     // The user message must NOT have been persisted on the 409.
-    expect(loadSession(s.id)!.messages.length).toBe(0);
+    expect((await loadSession(s.id))!.messages.length).toBe(0);
     // No background run was started.
     expect(runSession).not.toHaveBeenCalled();
   });
 
   it('L3 pending ticket does NOT block chat (blocked tool-result already in history)', async () => {
-    const s = createSession('trader', 'u-chat4');
-    recordPendingApproval({
+    const s = await createSession('trader', 'u-chat4');
+    await recordPendingApproval({
       sessionId: s.id, level: 'L3', toolName: 'escalate_to_human',
       input: {}, ticketId: 'T-' + randomUUID().slice(0, 8),
     });
@@ -153,13 +153,13 @@ describe('POST /api/chat (background runtime)', () => {
   });
 
   it('a resolved L2 approval does NOT block chat', async () => {
-    const s = createSession('trader', 'u-chat5');
+    const s = await createSession('trader', 'u-chat5');
     const aid = 'resolved-' + s.id;
-    recordPendingApproval({
+    await recordPendingApproval({
       sessionId: s.id, level: 'L2', toolName: 'tag_document',
       input: {}, approvalId: aid,
     });
-    resolveApproval(aid, 'approved');
+    await resolveApproval(aid, 'approved');
 
     const res = await appAs('u-chat5').request('http://test/api/chat', {
       method: 'POST',
@@ -173,8 +173,8 @@ describe('POST /api/chat (background runtime)', () => {
   });
 
   it('places the current turn file context after prior history and before the new user message', async () => {
-    const s = createSession('trader', 'u-chat6');
-    appendMessages(s.id, [
+    const s = await createSession('trader', 'u-chat6');
+    await appendMessages(s.id, [
       uiMsgWithId('prior-user', '上一轮文件: DOC-first-turn'),
       {
         id: 'prior-assistant',

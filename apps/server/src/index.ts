@@ -170,7 +170,11 @@ process.on('SIGINT', async () => { await closeNeo4j(); });
   // was interrupted by a crash/restart. Flip it to 'interrupted' so the UI can
   // flag it and the caller can decide to resume or discard. Best-effort: a
   // failure here would only leave a stale 'busy' flag, not crash the boot.
-  resetBusyOnStartup();
+  try {
+    await resetBusyOnStartup();
+  } catch (e) {
+    console.error('[boot] resetBusyOnStartup failed:', e instanceof Error ? e.message : e);
+  }
   // 接线闭环: 启动抽取回填(不 await, 不阻塞启动)。重新跑历史上抽取
   // pending/skipped/failed/NULL 的已解析文档, 把合同台账回填齐。失败只记日志。
   void runExtractionBackfill({

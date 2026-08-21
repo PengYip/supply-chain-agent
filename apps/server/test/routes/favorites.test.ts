@@ -34,7 +34,7 @@ const jsonHeaders = { 'Content-Type': 'application/json' };
 
 describe('PUT /api/favorites/:sessionId', () => {
   it('favorites an own session with a note', async () => {
-    const s = createSession('trader', 'r1');
+    const s = await createSession('trader', 'r1');
     const res = await appAs(trader('r1')).request(`/api/favorites/${s.id}`, {
       method: 'PUT',
       headers: jsonHeaders,
@@ -47,7 +47,7 @@ describe('PUT /api/favorites/:sessionId', () => {
   });
 
   it('blank note normalizes to null', async () => {
-    const s = createSession('trader', 'r1');
+    const s = await createSession('trader', 'r1');
     const res = await appAs(trader('r1')).request(`/api/favorites/${s.id}`, {
       method: 'PUT',
       headers: jsonHeaders,
@@ -58,7 +58,7 @@ describe('PUT /api/favorites/:sessionId', () => {
   });
 
   it('note over 2000 chars -> 400', async () => {
-    const s = createSession('trader', 'r1');
+    const s = await createSession('trader', 'r1');
     const res = await appAs(trader('r1')).request(`/api/favorites/${s.id}`, {
       method: 'PUT',
       headers: jsonHeaders,
@@ -68,7 +68,7 @@ describe('PUT /api/favorites/:sessionId', () => {
   });
 
   it("someone else's session -> 404 (existence hidden)", async () => {
-    const s = createSession('trader', 'r1');
+    const s = await createSession('trader', 'r1');
     const res = await appAs(trader('r2')).request(`/api/favorites/${s.id}`, {
       method: 'PUT',
       headers: jsonHeaders,
@@ -87,7 +87,7 @@ describe('PUT /api/favorites/:sessionId', () => {
   });
 
   it('viewer cannot favorite -> 403', async () => {
-    const s = createSession('trader', 'v1');
+    const s = await createSession('trader', 'v1');
     const res = await appAs(viewer('v1')).request(`/api/favorites/${s.id}`, {
       method: 'PUT',
       headers: jsonHeaders,
@@ -108,7 +108,7 @@ describe('PUT /api/favorites/:sessionId', () => {
 
 describe('GET /api/favorites/:sessionId', () => {
   it('reports favorited state and note', async () => {
-    const s = createSession('trader', 'r1');
+    const s = await createSession('trader', 'r1');
     const app = appAs(trader('r1'));
     const before = (await (await app.request(`/api/favorites/${s.id}`)).json()) as {
       favorited: boolean;
@@ -130,7 +130,7 @@ describe('GET /api/favorites/:sessionId', () => {
   });
 
   it("not-owned session -> 404", async () => {
-    const s = createSession('trader', 'r1');
+    const s = await createSession('trader', 'r1');
     const res = await appAs(trader('r2')).request(`/api/favorites/${s.id}`);
     expect(res.status).toBe(404);
   });
@@ -138,8 +138,8 @@ describe('GET /api/favorites/:sessionId', () => {
 
 describe('GET /api/favorites', () => {
   it('lists own favorites with title', async () => {
-    const s = createSession('trader', 'r1');
-    setSessionTitle(s.id, '查合同');
+    const s = await createSession('trader', 'r1');
+    await setSessionTitle(s.id, '查合同');
     const app = appAs(trader('r1'));
     await app.request(`/api/favorites/${s.id}`, {
       method: 'PUT',
@@ -157,7 +157,7 @@ describe('GET /api/favorites', () => {
   });
 
   it('own scope excludes other users favorites', async () => {
-    const s = createSession('trader', 'r2');
+    const s = await createSession('trader', 'r2');
     const app2 = appAs(trader('r2'));
     await app2.request(`/api/favorites/${s.id}`, {
       method: 'PUT',
@@ -170,8 +170,8 @@ describe('GET /api/favorites', () => {
   });
 
   it('scope=all as admin aggregates with attribution', async () => {
-    const s1 = createSession('trader', 'r1');
-    const s2 = createSession('trader', 'r2');
+    const s1 = await createSession('trader', 'r1');
+    const s2 = await createSession('trader', 'r2');
     const app1 = appAs(trader('r1', 'one@corp'));
     const app2 = appAs(trader('r2', 'two@corp'));
     await app1.request(`/api/favorites/${s1.id}`, {
@@ -216,7 +216,7 @@ describe('GET /api/favorites', () => {
 
 describe('DELETE /api/favorites/:sessionId', () => {
   it('removes a favorite, then reports removed=false', async () => {
-    const s = createSession('trader', 'r1');
+    const s = await createSession('trader', 'r1');
     const app = appAs(trader('r1'));
     await app.request(`/api/favorites/${s.id}`, {
       method: 'PUT',
@@ -234,7 +234,7 @@ describe('DELETE /api/favorites/:sessionId', () => {
   });
 
   it("someone else's favorite is not removable (404 on not-owned session)", async () => {
-    const s = createSession('trader', 'r1');
+    const s = await createSession('trader', 'r1');
     await appAs(trader('r1')).request(`/api/favorites/${s.id}`, {
       method: 'PUT',
       headers: jsonHeaders,

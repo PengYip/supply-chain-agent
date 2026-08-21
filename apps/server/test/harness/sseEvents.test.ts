@@ -24,8 +24,8 @@ function appAs(user: SessionUser | null): Hono<AuthEnv> {
 
 describe('GET /api/sessions/:id/events SSE', () => {
   it('streams text/event-stream, snapshots status, forwards emits, cleans up on disconnect', async () => {
-    const s = createSession('trader', 'sse-u1');
-    setSessionStatus(s.id, 'busy', 'run-sse');
+    const s = await createSession('trader', 'sse-u1');
+    await setSessionStatus(s.id, 'busy', 'run-sse');
     const app = appAs({ id: 'sse-u1', email: 'sse-u1@test', role: 'trader' });
 
     // The request carries an AbortSignal: aborting it is the client-disconnect
@@ -52,7 +52,7 @@ describe('GET /api/sessions/:id/events SSE', () => {
       expect(first).toContain('run-sse');
 
       // An event emitted on the bus is forwarded onto the stream.
-      emit({ type: 'run.started', sessionId: s.id, runId: 'r2' });
+      await emit({ type: 'run.started', sessionId: s.id, runId: 'r2' });
       const second = decoder.decode((await reader.read()).value);
       expect(second).toContain('run.started');
       expect(second).toContain('r2');
@@ -65,7 +65,7 @@ describe('GET /api/sessions/:id/events SSE', () => {
   });
 
   it('404 for a session not owned by the user', async () => {
-    const s = createSession('trader', 'owner-x');
+    const s = await createSession('trader', 'owner-x');
     const app = appAs({ id: 'intruder', email: 'intruder@test', role: 'trader' });
     const res = await app.request(`http://test/api/sessions/${s.id}/events`);
     expect(res.status).toBe(404);

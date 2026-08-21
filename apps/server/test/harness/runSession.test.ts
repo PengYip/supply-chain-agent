@@ -7,7 +7,7 @@ import { createSession, loadSession } from '../../src/harness/sessionStore.js';
 
 describe('runSession', () => {
   it('consumes fullStream, emits message.part, persists on finish (R1)', async () => {
-    const s = createSession('trader', 'u1');
+    const s = await createSession('trader', 'u1');
     const parts: unknown[] = [];
     subscribe(s.id, (e) => {
       if (e.type === 'message.part') parts.push(e);
@@ -27,7 +27,7 @@ describe('runSession', () => {
     // R1 core: fullStream consumed + parts emitted.
     expect(parts.length).toBeGreaterThan(0);
     // assistant message persisted (onFinish fired).
-    const loaded = loadSession(s.id);
+    const loaded = await loadSession(s.id);
     const assistant = (loaded?.messages ?? []).find((m: any) => m.role === 'assistant');
     expect(assistant).toBeTruthy();
     // Note: status lifecycle is no longer runSession's responsibility (Task 7a
@@ -35,7 +35,7 @@ describe('runSession', () => {
   });
 
   it('abort signal stops the run and it resolves without hanging', async () => {
-    const s = createSession('trader', 'u-abort');
+    const s = await createSession('trader', 'u-abort');
     const controller = new AbortController();
     controller.abort(); // pre-aborted signal
     const messages: ModelMessage[] = [{ role: 'user', content: 'hi' }];

@@ -137,7 +137,7 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
   const ctx = opts.deps?.ctx ?? createDb(':memory:');
   if (!opts.deps?.ctx) migrate((ctx as ReturnType<typeof createDb>).sqlite);
 
-  const sessionId = createSession('trader', 'eval-user').id;
+  const sessionId = (await createSession('trader', 'eval-user')).id;
   const transcript: TranscriptEntry[] = [];
   const toolCalls: ToolCallObservation[] = [];
   const approvals: EpisodeArtifact['approvals'] = [];
@@ -153,7 +153,7 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
   // approval-resume must be built from them (see the L2 branch below).
   let lastPrompt: ModelMessage[] = [];
   let lastResponse: ModelMessage[] = [];
-  const bookkeepTurn = (turn: AgentTurnResult, promptMessages: ModelMessage[]) => {
+  const bookkeepTurn = async (turn: AgentTurnResult, promptMessages: ModelMessage[]) => {
     lastPrompt = promptMessages;
     lastResponse = turn.responseMessages;
     turnsUsed++;
@@ -165,7 +165,7 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
     finalAssistantText = turn.finalText;
     transcript.push({ role: 'assistant', text: turn.finalText });
     emit({ type: 'turn', scenarioId: scenario.id, runIndex, role: 'assistant', text: turn.finalText });
-    appendMessages(sessionId, [{
+    await appendMessages(sessionId, [{
       id: randomUUID(), role: 'assistant', parts: [{ type: 'text', text: turn.finalText }],
     } as UIMessage]);
   };
@@ -190,20 +190,20 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
       }
 
       // 2. Persist the user message, build model messages from full history.
-      appendMessages(sessionId, [
+      await appendMessages(sessionId, [
         { id: randomUUID(), role: 'user', parts: [{ type: 'text', text: userTurn.message }] } as UIMessage,
       ]);
-      const loaded = loadSession(sessionId);
+      const loaded = await loadSession(sessionId);
       const baseMessages = loaded && loaded.messages.length > 0
         ? await convertToModelMessages(loaded.messages)
         : [];
 
       // 3. Run one agent turn.
       const turn = await runAgentTurn(opts, sessionId, baseMessages);
-      bookkeepTurn(turn, baseMessages);
+      await bookkeepTurn(turn, baseMessages);
 
       // 5. Simulate the human approver on pending items (L2 + L3), then resume.
-      const pending = listPending(sessionId);
+      const pending = await listPending(sessionId);
       for (const p of pending) {
         const decision = decideApproval(
           { id: p.id, level: p.level, tool_name: p.tool_name, input: JSON.parse(p.input_json) },
@@ -217,39 +217,39 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
         };
         approvals.push(approvalObs);
         emit({ type: 'approval', scenarioId: scenario.id, runIndex: opts.runIndex, toolName: p.tool_name, decision: decision.approved ? 'approved' : 'denied' });
-        resolveApproval(p.id, decision.approved ? 'approved' : 'denied');
+        await resolveApproval(p.id, decision.approved ? 'approved' : 'denied');
 
         if (!decision.approved) {
           // Deny: append an honest denial instruction + one closing agent turn.
-          appendMessages(sessionId, [{
+          await appendMessages(sessionId, [{
             id: randomUUID(), role: 'user',
             parts: [{ type: 'text', text: `外部审批未通过（${p.level} ${p.tool_name}，理由：${decision.reason}）。请如实向用户转达该操作未执行及原因，不要重试。` }],
           } as UIMessage]);
           transcript.push({ role: 'system-note', text: `approval denied: ${p.tool_name} (${decision.reason})` });
           emit({ type: 'turn', scenarioId: scenario.id, runIndex: opts.runIndex, role: 'system-note', text: `approval denied: ${p.tool_name} (${decision.reason})` });
-          const reload = loadSession(sessionId);
+          const reload = await loadSession(sessionId);
           const denyPrompt = reload && reload.messages.length > 0
             ? await convertToModelMessages(reload.messages)
             : [];
           const denyTurn = await runAgentTurn(opts, sessionId, denyPrompt);
-          bookkeepTurn(denyTurn, denyPrompt);
+          await bookkeepTurn(denyTurn, denyPrompt);
           continue;
         }
 
         // Approve.
         if (p.level === 'L3') {
-          appendMessages(sessionId, [{
+          await appendMessages(sessionId, [{
             id: randomUUID(), role: 'user',
             parts: [{ type: 'text', text: l3Instruction(p.id, decision.reason) }],
           } as UIMessage]);
           transcript.push({ role: 'system-note', text: `approval approved: ${p.tool_name} (${p.id})` });
           emit({ type: 'turn', scenarioId: scenario.id, runIndex: opts.runIndex, role: 'system-note', text: `approval approved: ${p.tool_name} (${p.id})` });
-          const reload = loadSession(sessionId);
+          const reload = await loadSession(sessionId);
           const l3Prompt = reload && reload.messages.length > 0
             ? await convertToModelMessages(reload.messages)
             : [];
           const resumeTurn = await runAgentTurn(opts, sessionId, l3Prompt);
-          bookkeepTurn(resumeTurn, l3Prompt);
+          await bookkeepTurn(resumeTurn, l3Prompt);
         } else {
           // L2 approve: resume IMMEDIATELY (mirrors approvalCallback.ts, whose
           // startSessionRun runs the resume turn right after the callback) with
@@ -280,13 +280,13 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
             } as unknown as ModelMessage,
           ];
           const resumeTurn = await runAgentTurn(opts, sessionId, l2ResumeMessages, true);
-          bookkeepTurn(resumeTurn, l2ResumeMessages);
+          await bookkeepTurn(resumeTurn, l2ResumeMessages);
         }
       }
     }
   } finally {
     // Global constraint: sessionStore rows live in the real file DB.
-    try { deleteSession(sessionId); } catch { /* best-effort cleanup */ }
+    try { await deleteSession(sessionId); } catch { /* best-effort cleanup */ }
   }
 
   // Patch real durations from audit records (index-aligned, same order).
