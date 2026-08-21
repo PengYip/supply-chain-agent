@@ -2,35 +2,35 @@ import { describe, it, expect } from 'vitest';
 import { emit, subscribe, subscriberCount } from '../../src/harness/sessionEvents.js';
 
 describe('sessionEvents', () => {
-  it('emit delivers to subscribers of that session', () => {
+  it('emit delivers to subscribers of that session', async () => {
     const received: unknown[] = [];
     const unsub = subscribe('s1', (e) => received.push(e));
-    emit({ type: 'run.started', sessionId: 's1', runId: 'r1' });
+    await emit({ type: 'run.started', sessionId: 's1', runId: 'r1' });
     expect(received).toHaveLength(1);
     expect(received[0]).toMatchObject({ type: 'run.started', runId: 'r1' });
     unsub();
   });
 
-  it('emit does not deliver to other sessions', () => {
+  it('emit does not deliver to other sessions', async () => {
     const received: unknown[] = [];
     subscribe('s1', (e) => received.push(e));
-    emit({ type: 'run.started', sessionId: 's2', runId: 'r2' });
+    await emit({ type: 'run.started', sessionId: 's2', runId: 'r2' });
     expect(received).toHaveLength(0);
   });
 
-  it('unsubscribe stops delivery', () => {
+  it('unsubscribe stops delivery', async () => {
     const received: unknown[] = [];
     const unsub = subscribe('s1', (e) => received.push(e));
     unsub();
-    emit({ type: 'run.started', sessionId: 's1' });
+    await emit({ type: 'run.started', sessionId: 's1' });
     expect(received).toHaveLength(0);
   });
 
-  it('multiple subscribers each receive', () => {
+  it('multiple subscribers each receive', async () => {
     let a = 0, b = 0;
     subscribe('s1', () => a++);
     subscribe('s1', () => b++);
-    emit({ type: 'x', sessionId: 's1' });
+    await emit({ type: 'x', sessionId: 's1' });
     expect(a).toBe(1);
     expect(b).toBe(1);
   });
@@ -49,11 +49,11 @@ describe('sessionEvents', () => {
     expect(subscriberCount('s-count')).toBe(0);
   });
 
-  it('a throwing subscriber does not break others or emit', () => {
+  it('a throwing subscriber does not break others or emit', async () => {
     let ok = 0
     subscribe('s-throw', () => { throw new Error('boom') })
     subscribe('s-throw', () => { ok++ })
-    expect(() => emit({ type: 'x', sessionId: 's-throw' })).not.toThrow()
+    await expect(emit({ type: 'x', sessionId: 's-throw' })).resolves.toBeUndefined()
     expect(ok).toBe(1)
   });
 });

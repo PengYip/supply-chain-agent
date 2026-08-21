@@ -66,7 +66,7 @@ approvalCallback.post('/approval/callback', async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
 
-  const pending = getPending((ticketId ?? approvalId) as string);
+  const pending = await getPending((ticketId ?? approvalId) as string);
   if (!pending) {
     return ticketId
       ? c.json({ error: 'ticket not found', ticketId }, 404)
@@ -74,7 +74,7 @@ approvalCallback.post('/approval/callback', async (c) => {
   }
 
   const sessionId = pending.session_id;
-  if (!sessionBelongsTo(sessionId, user.id)) {
+  if (!(await sessionBelongsTo(sessionId, user.id))) {
     return c.json({ error: 'forbidden' }, 403);
   }
 
@@ -93,13 +93,13 @@ approvalCallback.post('/approval/callback', async (c) => {
       {
         error: 'session_busy',
         approvalResolved: false,
-        activeRunId: getSessionStatus(sessionId)?.runId ?? null,
+        activeRunId: (await getSessionStatus(sessionId))?.runId ?? null,
       },
       409,
     );
   }
 
-  const session = loadSession(sessionId);
+  const session = await loadSession(sessionId);
   const role: Role = (session?.role ?? 'trader') as Role;
   const uiMessages = (session?.messages ?? []) as UIMessage[];
   const baseModelMessages = uiMessages.length > 0
@@ -134,7 +134,7 @@ approvalCallback.post('/approval/callback', async (c) => {
       role: 'user',
       parts: [{ type: 'text', text: instruction }],
     } as UIMessage;
-    appendMessages(sessionId, [instructionUIMsg]);
+    await appendMessages(sessionId, [instructionUIMsg]);
     extraModelMessages.push({ role: 'user', content: instruction });
     originalMessages = [...uiMessages, instructionUIMsg];
   } else {
@@ -158,7 +158,7 @@ approvalCallback.post('/approval/callback', async (c) => {
 
   // DB state first: the decision is durable even if the run fails to start
   // or errors later.
-  resolveApproval(pending.id, approved ? 'approved' : 'denied');
+  await resolveApproval(pending.id, approved ? 'approved' : 'denied');
 
   console.log(
     JSON.stringify({
@@ -181,7 +181,7 @@ approvalCallback.post('/approval/callback', async (c) => {
     }),
   );
 
-  const start = startSessionRun(sessionId, user.id, role, (signal) =>
+  const start = await startSessionRun(sessionId, user.id, role, (signal) =>
     runSession({
       sessionId,
       userId: user.id,
@@ -211,7 +211,7 @@ approvalCallback.post('/approval/callback', async (c) => {
       {
         error: 'session_busy',
         approvalResolved: true,
-        activeRunId: getSessionStatus(sessionId)?.runId ?? null,
+        activeRunId: (await getSessionStatus(sessionId))?.runId ?? null,
       },
       409,
     );

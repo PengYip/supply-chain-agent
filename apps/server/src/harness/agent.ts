@@ -237,6 +237,7 @@ export interface RunStreamOpts {
 // Scan a turn's response messages for v6 tool-approval-request parts (emitted
 // when an L2 `needsApproval` tool is called) and persist each as a pending L2
 // approval so the external /api/approval/callback can later resume it.
+// Async since the session store went dual-backend (SQLite/Postgres).
 //
 // Field-availability gotcha (AI SDK 6): in response.messages the
 // tool-approval-request part only carries { approvalId, toolCallId } -- it has
@@ -244,10 +245,10 @@ export interface RunStreamOpts {
 // sibling `tool-call` part in the SAME assistant message (matched by
 // toolCallId). The OUTPUT part in result.content does carry toolCall, but
 // response.messages does not.
-export function recordL2PendingFromResponse(
+export async function recordL2PendingFromResponse(
   sessionId: string,
   messages: ModelMessage[],
-): void {
+): Promise<void> {
   for (const msg of messages) {
     if (msg.role !== 'assistant') continue;
     const content = msg.content;
@@ -274,7 +275,7 @@ export function recordL2PendingFromResponse(
       const info = toolCallInfo.get(toolCallId);
       const toolName = info?.toolName ?? 'unknown';
       if (getPermission(toolName) !== 'L2') continue;
-      recordPendingApproval({
+      await recordPendingApproval({
         sessionId,
         level: 'L2',
         toolName,
@@ -312,7 +313,7 @@ export async function buildAgentStatusSnapshot({
   return {
     toolCounts,
     totalCalls,
-    pendingApprovals: countPendingApprovals(sessionId),
+    pendingApprovals: await countPendingApprovals(sessionId),
     docsIngested: await countDocuments(ctx, userId),
     extractionsPendingReview: await countExtractionsNeedingReview(ctx, userId),
   };

@@ -104,7 +104,7 @@ export async function runSession(opts: RunSessionOpts): Promise<void> {
   result.response.then(
     async (r) => {
       try {
-        recordL2PendingFromResponse(sessionId, r.messages);
+        await recordL2PendingFromResponse(sessionId, r.messages);
       } catch (err) {
         console.error('[runSession] L2 record failed:', err instanceof Error ? err.message : err);
       }
@@ -130,21 +130,27 @@ export async function runSession(opts: RunSessionOpts): Promise<void> {
   const uiStream = result.toUIMessageStream({
     originalMessages,
     generateMessageId: randomUUID,
-    onFinish: ({ responseMessage, isContinuation }) => {
+    // Async since the session store went dual-backend (SQLite/Postgres). The
+    // SDK awaits onFinish during the stream's flush (before the stream
+    // closes), so the message is durably persisted by the time the for-await
+    // loop below exits.
+    onFinish: async ({ responseMessage, isContinuation }) => {
       if (isContinuation) {
         // Continuation run (L2 resume seeded from the approval-requested
         // assistant message): update that message IN PLACE — its tool part
         // flipped approval-requested -> output-available / output-denied and
         // the follow-up text was appended — instead of appending a duplicate
         // with the same id.
-        replaceMessage(sessionId, responseMessage);
+        await replaceMessage(sessionId, responseMessage);
       } else {
-        appendMessages(sessionId, [responseMessage]);
+        await appendMessages(sessionId, [responseMessage]);
       }
     },
   });
 
   for await (const part of uiStream) {
-    emit({ type: 'message.part', sessionId, part });
+    // await emit: the store persist is async on both backends; awaiting keeps
+    // per-session seq assignment + SSE forwarding in stream order.
+    await emit({ type: 'message.part', sessionId, part });
   }
 }

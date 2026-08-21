@@ -18,7 +18,7 @@ import { statusRoute } from '../../src/routes/status.js';
  */
 
 describe('getSessionStatus', () => {
-  it('tallies by signal and strictly filters by sessionId', () => {
+  it('tallies by signal and strictly filters by sessionId', async () => {
     const rec = createAuditRecorder();
 
     runSessionContext({ sessionId: 'sessA', role: 'trader' }, () => {
@@ -46,7 +46,7 @@ describe('getSessionStatus', () => {
       });
     });
 
-    const status = getSessionStatus('sessA', rec);
+    const status = await getSessionStatus('sessA', rec);
     expect(status.sessionId).toBe('sessA');
     expect(status.totalCalls).toBe(2);
     expect(status.bySignal).toEqual({ counter: 1, todo: 1, env: 0, none: 0 });
@@ -59,7 +59,7 @@ describe('getSessionStatus', () => {
     expect(status.pendingApprovals).toBe(0);
   });
 
-  it('counts the env bucket and reflects the actual last call', () => {
+  it('counts the env bucket and reflects the actual last call', async () => {
     const rec = createAuditRecorder();
     runSessionContext({ sessionId: 'sessA', role: 'trader' }, () => {
       rec.recordToolCall({
@@ -76,13 +76,13 @@ describe('getSessionStatus', () => {
       });
     });
 
-    const status = getSessionStatus('sessA', rec);
+    const status = await getSessionStatus('sessA', rec);
     expect(status.totalCalls).toBe(2);
     expect(status.bySignal).toEqual({ counter: 1, todo: 0, env: 1, none: 0 });
     expect(status.lastToolName).toBe('bind_document');
   });
 
-  it('routes unknown tool names (no contract) into the none bucket', () => {
+  it('routes unknown tool names (no contract) into the none bucket', async () => {
     const rec = createAuditRecorder();
     runSessionContext({ sessionId: 'sessA', role: 'trader' }, () => {
       rec.recordToolCall({
@@ -93,14 +93,14 @@ describe('getSessionStatus', () => {
       });
     });
 
-    const status = getSessionStatus('sessA', rec);
+    const status = await getSessionStatus('sessA', rec);
     expect(status.totalCalls).toBe(1);
     expect(status.bySignal).toEqual({ counter: 0, todo: 0, env: 0, none: 1 });
   });
 
-  it('returns zeros and nulls for a session with no records', () => {
+  it('returns zeros and nulls for a session with no records', async () => {
     const rec = createAuditRecorder();
-    const status = getSessionStatus('sess-empty', rec);
+    const status = await getSessionStatus('sess-empty', rec);
     expect(status.sessionId).toBe('sess-empty');
     expect(status.totalCalls).toBe(0);
     expect(status.bySignal).toEqual({ counter: 0, todo: 0, env: 0, none: 0 });

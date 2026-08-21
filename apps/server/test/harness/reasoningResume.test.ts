@@ -216,9 +216,9 @@ describe('reasoning_content resume survival (Task 4)', () => {
         { type: 'text', text: '录入完成' },
       ],
     };
-    const session = createSession('trader');
-    appendMessages(session.id, [assistantUIMessage]);
-    const loaded = loadSession(session.id);
+    const session = await createSession('trader');
+    await appendMessages(session.id, [assistantUIMessage]);
+    const loaded = await loadSession(session.id);
     expect(loaded, 'loaded session must exist').not.toBeNull();
 
     const reconverted = await convertToModelMessages(loaded!.messages as UIMessage[]);
@@ -273,13 +273,13 @@ describe('reasoning_content resume survival (Task 4)', () => {
         { type: 'text', text: '录入完成' },
       ],
     };
-    const session = createSession('trader');
-    appendMessages(session.id, [assistantUIMessage1]);
+    const session = await createSession('trader');
+    await appendMessages(session.id, [assistantUIMessage1]);
 
     // Turn 2 (resume): load the persisted UIMessage history and re-convert it
     // to ModelMessages for runStream. This is the kill-process -> restart ->
     // loadSession path under the UIMessage-canonical contract.
-    const loaded = loadSession(session.id)!;
+    const loaded = (await loadSession(session.id))!;
     const reconvertedLoaded = await convertToModelMessages(loaded.messages as UIMessage[]);
     expect(reasoningParts(reconvertedLoaded).length).toBeGreaterThan(0);
 

@@ -82,7 +82,7 @@ async function waitUntil(pred: () => boolean, timeoutMs = 3000): Promise<void> {
 
 describe('event replay integration (mid-run reconnect)', () => {
   it('a mid-run disconnect reconnects with Last-Event-ID and receives exactly the missed parts', async () => {
-    const s = createSession('trader', 'u-er1');
+    const s = await createSession('trader', 'u-er1');
     const userId = 'u-er1';
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
@@ -100,7 +100,7 @@ describe('event replay integration (mid-run reconnect)', () => {
     expect(res1.status).toBe(200);
 
     // Start the background run.
-    const start = startSessionRun(s.id, userId, 'trader', (signal) =>
+    const start = await startSessionRun(s.id, userId, 'trader', (signal) =>
       runSession({
         sessionId: s.id,
         userId,
@@ -168,6 +168,6 @@ describe('event replay integration (mid-run reconnect)', () => {
 
     // Run finalizes -> prune runs end-to-end (buffer empty again).
     await waitUntil(() => !isRunning(s.id));
-    expect(listSessionEventsSince(s.id, 0)).toEqual([]);
+    expect(await listSessionEventsSince(s.id, 0)).toEqual([]);
   });
 });

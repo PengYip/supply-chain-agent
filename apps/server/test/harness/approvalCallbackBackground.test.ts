@@ -60,10 +60,10 @@ describe('POST /api/approval/callback (background runtime)', () => {
   });
 
   it('L2 approve: starts a background resume run and returns {ok, status, sessionId, runId}', async () => {
-    const s = createSession('trader', 'u-a1');
-    appendMessages(s.id, [userMsg('hi') as any]);
+    const s = await createSession('trader', 'u-a1');
+    await appendMessages(s.id, [userMsg('hi') as any]);
     const aid = uid('appr');
-    recordPendingApproval({
+    await recordPendingApproval({
       sessionId: s.id, level: 'L2', toolName: 'tag_document',
       toolCallId: 'call_x', input: {}, approvalId: aid,
     });
@@ -78,7 +78,7 @@ describe('POST /api/approval/callback (background runtime)', () => {
     expect(res.headers.get('x-session-id')).toBe(s.id);
 
     // DB state flipped synchronously, before/independent of the run.
-    expect(getPending(aid)?.status).toBe('approved');
+    expect((await getPending(aid))?.status).toBe('approved');
 
     // runSession got the transient tool-approval-response as the LAST message.
     expect(runSession).toHaveBeenCalledTimes(1);
@@ -92,15 +92,15 @@ describe('POST /api/approval/callback (background runtime)', () => {
     expect(part.approved).toBe(true);
 
     // The transient message was NOT persisted: history still ends with the user msg.
-    const loaded = loadSession(s.id)!;
+    const loaded = await loadSession(s.id)!;
     expect(loaded.messages[loaded.messages.length - 1].role).toBe('user');
     runResolve.current();
   });
 
   it('L2 deny: also starts a resume run with approved:false and default reason', async () => {
-    const s = createSession('trader', 'u-a2');
+    const s = await createSession('trader', 'u-a2');
     const aid = uid('appr');
-    recordPendingApproval({
+    await recordPendingApproval({
       sessionId: s.id, level: 'L2', toolName: 'tag_document',
       toolCallId: 'call_y', input: {}, approvalId: aid,
     });
@@ -109,7 +109,7 @@ describe('POST /api/approval/callback (background runtime)', () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.status).toBe('denied');
-    expect(getPending(aid)?.status).toBe('denied');
+    expect((await getPending(aid))?.status).toBe('denied');
     expect(runSession).toHaveBeenCalledTimes(1);
     const opts = (runSession as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const part = (opts.messages[opts.messages.length - 1].content as any[])[0];
@@ -119,19 +119,19 @@ describe('POST /api/approval/callback (background runtime)', () => {
   });
 
   it('L3 approve (escalate_to_human): appends the unified human-reviewed instruction and starts the run', async () => {
-    const s = createSession('trader', 'u-a3');
+    const s = await createSession('trader', 'u-a3');
     const tid = uid('T');
-    recordPendingApproval({
+    await recordPendingApproval({
       sessionId: s.id, level: 'L3', toolName: 'escalate_to_human',
       input: {}, ticketId: tid,
     });
 
     const res = await post(appAs('u-a3'), { ticketId: tid, approved: true });
     expect(res.status).toBe(200);
-    expect(getPending(tid)?.status).toBe('approved');
+    expect((await getPending(tid))?.status).toBe('approved');
 
     // The unified approved instruction is appended to the persisted history.
-    const loaded = loadSession(s.id)!;
+    const loaded = await loadSession(s.id)!;
     const lastMsg = loaded.messages[loaded.messages.length - 1];
     expect(lastMsg.role).toBe('user');
     const text = JSON.stringify(lastMsg);
@@ -149,16 +149,16 @@ describe('POST /api/approval/callback (background runtime)', () => {
   });
 
   it('L3 approve (escalate_to_human): appends the generic human-review instruction', async () => {
-    const s = createSession('trader', 'u-a4');
+    const s = await createSession('trader', 'u-a4');
     const tid = uid('T');
-    recordPendingApproval({
+    await recordPendingApproval({
       sessionId: s.id, level: 'L3', toolName: 'escalate_to_human',
       input: {}, ticketId: tid,
     });
 
     const res = await post(appAs('u-a4'), { ticketId: tid, approved: true });
     expect(res.status).toBe(200);
-    const loaded = loadSession(s.id)!;
+    const loaded = await loadSession(s.id)!;
     const text = JSON.stringify(loaded.messages[loaded.messages.length - 1]);
     expect(text).toContain('人工已复核');
     expect(text).not.toContain('authorizedTicketId');
@@ -166,9 +166,9 @@ describe('POST /api/approval/callback (background runtime)', () => {
   });
 
   it('L3 deny: appends deny instruction and still resumes', async () => {
-    const s = createSession('trader', 'u-a5');
+    const s = await createSession('trader', 'u-a5');
     const tid = uid('T');
-    recordPendingApproval({
+    await recordPendingApproval({
       sessionId: s.id, level: 'L3', toolName: 'escalate_to_human',
       input: {}, ticketId: tid,
     });
@@ -177,7 +177,7 @@ describe('POST /api/approval/callback (background runtime)', () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.status).toBe('denied');
-    const loaded = loadSession(s.id)!;
+    const loaded = await loadSession(s.id)!;
     const text = JSON.stringify(loaded.messages[loaded.messages.length - 1]);
     expect(text).toContain('已拒绝');
     expect(runSession).toHaveBeenCalledTimes(1);
@@ -185,23 +185,23 @@ describe('POST /api/approval/callback (background runtime)', () => {
   });
 
   it('returns 409 session_busy (approvalResolved:false) when a run is in-flight; DB untouched', async () => {
-    const s = createSession('trader', 'u-a6');
+    const s = await createSession('trader', 'u-a6');
     const aid = uid('appr');
-    recordPendingApproval({
+    await recordPendingApproval({
       sessionId: s.id, level: 'L2', toolName: 'tag_document',
       input: {}, approvalId: aid,
     });
 
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
-    startSessionRun(s.id, 'u-a6', 'trader', () => gate);
+    await startSessionRun(s.id, 'u-a6', 'trader', () => gate);
 
     const res = await post(appAs('u-a6'), { approvalId: aid, approved: true });
     expect(res.status).toBe(409);
     const json = await res.json();
     expect(json.error).toBe('session_busy');
     expect(json.approvalResolved).toBe(false);
-    expect(getPending(aid)?.status).toBe('pending');
+    expect((await getPending(aid))?.status).toBe('pending');
     expect(runSession).not.toHaveBeenCalled();
     release();
   });
@@ -210,21 +210,21 @@ describe('POST /api/approval/callback (background runtime)', () => {
     const res404 = await post(appAs('u-a7'), { approvalId: 'nope-' + randomUUID().slice(0, 6), approved: true });
     expect(res404.status).toBe(404);
 
-    const s = createSession('trader', 'u-owner');
+    const s = await createSession('trader', 'u-owner');
     const aid = uid('appr');
-    recordPendingApproval({
+    await recordPendingApproval({
       sessionId: s.id, level: 'L2', toolName: 'tag_document',
       input: {}, approvalId: aid,
     });
     const res403 = await post(appAs('u-other'), { approvalId: aid, approved: true });
     expect(res403.status).toBe(403);
-    expect(getPending(aid)?.status).toBe('pending');
+    expect((await getPending(aid))?.status).toBe('pending');
   });
 
   it('replay of an already-resolved approval returns 409 approval_already_resolved and does not re-run', async () => {
-    const s = createSession('trader', 'u-replay');
+    const s = await createSession('trader', 'u-replay');
     const tid = uid('T');
-    recordPendingApproval({
+    await recordPendingApproval({
       sessionId: s.id, level: 'L3', toolName: 'escalate_to_human',
       input: {}, ticketId: tid,
     });
@@ -232,7 +232,7 @@ describe('POST /api/approval/callback (background runtime)', () => {
     // First callback: approve -> 200, one run started, instruction appended once.
     const res1 = await post(appAs('u-replay'), { ticketId: tid, approved: true });
     expect(res1.status).toBe(200);
-    expect(getPending(tid)?.status).toBe('approved');
+    expect((await getPending(tid))?.status).toBe('approved');
     expect(runSession).toHaveBeenCalledTimes(1);
     runResolve.current();
     // Let the first run's cleanup (RunManager finally) settle so this replay
@@ -248,7 +248,7 @@ describe('POST /api/approval/callback (background runtime)', () => {
     // runSession was NOT called again (mock call count unchanged).
     expect(runSession).toHaveBeenCalledTimes(1);
     // The L3 instruction was not re-appended (history still has the single one).
-    const loaded = loadSession(s.id)!;
+    const loaded = await loadSession(s.id)!;
     expect(loaded.messages.length).toBe(1);
   });
 });

@@ -10,6 +10,7 @@ import {
   sessionBelongsTo,
   getSessionStatus,
   listPending,
+  type LoadedSession,
 } from '../harness/sessionStore.js';
 import { startSessionRun } from '../harness/runManager.js';
 import { runSession, extractMessageText } from '../harness/runSession.js';
@@ -95,9 +96,14 @@ chatRoute.post('/chat', async (c) => {
   // route is already requireAuth-gated in index.ts, so a user is always attached.
   const agentRole: Role = (user?.role === 'admin' || user?.role === 'trader' || !user?.role) ? 'trader' : 'trader';
   const headerId = c.req.header('x-session-id');
-  const candidate = headerId && userId ? (sessionBelongsTo(headerId, userId) ? loadSession(headerId) : null) : null;
-  const loaded = headerId && !userId ? loadSession(headerId) : candidate;
-  const sessionId = loaded?.id ?? createSession(role as Role, userId).id;
+  // Dual-backend session store: every call awaits once (SQLite or Postgres).
+  let loaded: LoadedSession | null = null;
+  if (headerId && userId) {
+    if (await sessionBelongsTo(headerId, userId)) loaded = await loadSession(headerId);
+  } else if (headerId && !userId) {
+    loaded = await loadSession(headerId);
+  }
+  const sessionId = loaded?.id ?? (await createSession(role as Role, userId)).id;
   const priorMessages = loaded?.messages ?? [];
   // First turn = no prior messages. Detecting via `loaded == null` misses the
   // primary user flow: the sidebar pre-creates an empty session (新建会话), the
@@ -112,7 +118,7 @@ chatRoute.post('/chat', async (c) => {
   // subsequent turn fails the same way). The user must resolve the approval
   // card first. L3 tickets do NOT block: their blocked tool-result is already
   // in history, protocol-valid.
-  const pendingL2 = listPending(sessionId).filter((p) => p.level === 'L2' && p.status === 'pending');
+  const pendingL2 = (await listPending(sessionId)).filter((p) => p.level === 'L2' && p.status === 'pending');
   if (pendingL2.length > 0) {
     return c.json({ error: 'approval_pending' }, 409);
   }
@@ -138,7 +144,7 @@ chatRoute.post('/chat', async (c) => {
     const msg = err instanceof Error ? err.message : String(err);
     return c.json({ error: 'Failed to convert messages', detail: msg }, 400);
   }
-  appendMessages(sessionId, messages as UIMessage[]);
+  await appendMessages(sessionId, messages as UIMessage[]);
   // Convert prior persisted UIMessages -> ModelMessages for streamText input.
   const priorModelMessages = priorMessages.length > 0
     ? (await convertToModelMessages(priorMessages as UIMessage[]))
@@ -160,7 +166,7 @@ chatRoute.post('/chat', async (c) => {
     // immediately. The run consumes the stream + persists via onFinish +
     // emits to the session event bus (GET /api/sessions/:id/events). The HTTP
     // response no longer carries the stream — disconnects do NOT abort the run.
-    const start = startSessionRun(sessionId, userId ?? undefined, agentRole, async (signal) => {
+    const start = await startSessionRun(sessionId, userId ?? undefined, agentRole, async (signal) => {
       let streamMessages = baseMessages;
       if (contextFiles.length > 0) {
         // Model B chat backstop (moved inside the background run): uploads are
@@ -225,7 +231,7 @@ chatRoute.post('/chat', async (c) => {
       });
     });
     if ('conflict' in start) {
-      const st = getSessionStatus(sessionId);
+      const st = await getSessionStatus(sessionId);
       return c.json({ error: 'session_busy', activeRunId: st?.runId }, 409);
     }
     return c.json(

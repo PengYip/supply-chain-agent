@@ -30,14 +30,14 @@ const PutBody = z.object({
 
 // List favorites. Default: the current user's own. ?scope=all (admin only)
 // aggregates every user's favorites with attribution (userId/userEmail).
-favoritesRoute.get('/', requireRole('admin', 'trader', 'viewer'), (c) => {
+favoritesRoute.get('/', requireRole('admin', 'trader', 'viewer'), async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const scopeAll = c.req.query('scope') === 'all';
   if (scopeAll && user.role !== 'admin') {
     return c.json({ error: 'forbidden' }, 403);
   }
-  const rows = scopeAll ? listAllSessionFavorites() : listSessionFavorites(user.id);
+  const rows = scopeAll ? await listAllSessionFavorites() : await listSessionFavorites(user.id);
   return c.json({
     favorites: rows.map((r) => ({
       sessionId: r.sessionId,
@@ -55,14 +55,14 @@ favoritesRoute.get('/', requireRole('admin', 'trader', 'viewer'), (c) => {
 // Read the current user's favorite state for one session. Always 200 with
 // { favorited: false } for not-favorited (own or not) — a boolean probe, not
 // a resource fetch, so it does not leak existence.
-favoritesRoute.get('/:sessionId', (c) => {
+favoritesRoute.get('/:sessionId', async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const sessionId = c.req.param('sessionId');
-  if (!sessionBelongsTo(sessionId, user.id)) {
+  if (!(await sessionBelongsTo(sessionId, user.id))) {
     return c.json({ error: 'not found' }, 404);
   }
-  const fav = getSessionFavorite(sessionId, user.id);
+  const fav = await getSessionFavorite(sessionId, user.id);
   return c.json({
     sessionId,
     favorited: !!fav,
@@ -77,7 +77,7 @@ favoritesRoute.put('/:sessionId', requireRole('admin', 'trader'), async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const sessionId = c.req.param('sessionId');
-  if (!sessionBelongsTo(sessionId, user.id)) {
+  if (!(await sessionBelongsTo(sessionId, user.id))) {
     return c.json({ error: 'not found' }, 404);
   }
   let body: unknown;
@@ -92,19 +92,19 @@ favoritesRoute.put('/:sessionId', requireRole('admin', 'trader'), async (c) => {
   }
   // Empty/whitespace-only note normalizes to null (no note), not ''.
   const note = parsed.data.note?.trim() ? parsed.data.note : null;
-  const fav = setSessionFavorite(sessionId, user.id, user.email, note);
+  const fav = await setSessionFavorite(sessionId, user.id, user.email, note);
   return c.json({ ok: true, favorite: { sessionId: fav.sessionId, note: fav.note, updatedAt: fav.updatedAt } });
 });
 
 // Remove the current user's favorite of a session. Idempotent: removing a
 // non-favorited (but owned) session returns removed=false, still 200.
-favoritesRoute.delete('/:sessionId', requireRole('admin', 'trader'), (c) => {
+favoritesRoute.delete('/:sessionId', requireRole('admin', 'trader'), async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const sessionId = c.req.param('sessionId');
-  if (!sessionBelongsTo(sessionId, user.id)) {
+  if (!(await sessionBelongsTo(sessionId, user.id))) {
     return c.json({ error: 'not found' }, 404);
   }
-  const removed = clearSessionFavorite(sessionId, user.id);
+  const removed = await clearSessionFavorite(sessionId, user.id);
   return c.json({ ok: true, removed });
 });

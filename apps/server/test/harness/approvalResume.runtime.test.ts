@@ -114,8 +114,8 @@ const userUIMsg = (text: string): UIMessage =>
 describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
   it('turn-1 gates tag_document, the stream finishes, pending is recorded; approve resume re-executes it', async () => {
     const { ctx, docId } = await seedDoc();
-    const s = createSession('trader', 'u-rt1');
-    appendMessages(s.id, [userUIMsg('给文档打标签')]);
+    const s = await createSession('trader', 'u-rt1');
+    await appendMessages(s.id, [userUIMsg('给文档打标签')]);
 
     // --- Turn 1 (production shape: via runSession, which persists + records) ---
     const gateFake = scriptedModel([
@@ -126,7 +126,7 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
       sessionId: s.id,
       userId: 'u-rt1',
       role: 'trader',
-      messages: await convertToModelMessages(loadSession(s.id)!.messages as UIMessage[]),
+      messages: await convertToModelMessages((await loadSession(s.id))!.messages as UIMessage[]),
       auditTraceId: 'rt-gate',
       abortSignal: new AbortController().signal,
       model: gateFake as any,
@@ -134,7 +134,7 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
 
     // The assistant message with the approval-requested part IS persisted
     // (spec §2 Q4 closure) with its SDK-generated approval id.
-    const loaded = loadSession(s.id)!;
+    const loaded = (await loadSession(s.id))!;
     const assistantMsg = loaded.messages.find((m) => m.role === 'assistant');
     expect(assistantMsg).toBeTruthy();
     const part = (assistantMsg!.parts as any[]).find(
@@ -145,7 +145,7 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
     expect(approvalId).toBeTruthy();
 
     // L2 pending row recorded (runSession -> recordL2PendingFromResponse).
-    const pend = listPending(s.id).find(
+    const pend = (await listPending(s.id)).find(
       (p) => p.level === 'L2' && p.tool_name === 'tag_document',
     );
     expect(pend).toBeTruthy();
@@ -165,7 +165,7 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
         },
       ],
     } as unknown as ModelMessage;
-    const history = await convertToModelMessages(loadSession(s.id)!.messages as UIMessage[]);
+    const history = await convertToModelMessages((await loadSession(s.id))!.messages as UIMessage[]);
     const resumeFake = scriptedModel([{ text: '已完成打标' }]);
     const result = await runStream({
       messages: [...history, resumeMsg],
@@ -193,8 +193,8 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
 
   it('deny resume: the tool does NOT execute; the model still answers', async () => {
     const { ctx, docId } = await seedDoc();
-    const s = createSession('trader', 'u-rt2');
-    appendMessages(s.id, [userUIMsg('给文档打标签')]);
+    const s = await createSession('trader', 'u-rt2');
+    await appendMessages(s.id, [userUIMsg('给文档打标签')]);
 
     const gateFake = scriptedModel([
       { toolCall: { toolCallId: 'call_tag2', toolName: 'tag_document', input: { docId, tags: ['次要'] } } },
@@ -204,13 +204,13 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
       sessionId: s.id,
       userId: 'u-rt2',
       role: 'trader',
-      messages: await convertToModelMessages(loadSession(s.id)!.messages as UIMessage[]),
+      messages: await convertToModelMessages((await loadSession(s.id))!.messages as UIMessage[]),
       auditTraceId: 'rt-gate2',
       abortSignal: new AbortController().signal,
       model: gateFake as any,
     });
 
-    const loaded = loadSession(s.id)!;
+    const loaded = (await loadSession(s.id))!;
     const assistantMsg = loaded.messages.find((m) => m.role === 'assistant')!;
     const part = (assistantMsg.parts as any[]).find(
       (p) => typeof p?.type === 'string' && p.type.startsWith('tool-') && p.state === 'approval-requested',
@@ -273,13 +273,13 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
     // (the just-persisted user instruction is the last original message, so the
     // SDK creates a NEW message). Production L2 resume uses the
     // originalMessages continuation — that path is covered by the test below.
-    const s = createSession('trader', 'u-rt3');
-    appendMessages(s.id, [
+    const s = await createSession('trader', 'u-rt3');
+    await appendMessages(s.id, [
       userUIMsg('第一轮'),
       { id: 'old-assistant-' + randomUUID().slice(0, 6), role: 'assistant', parts: [{ type: 'text', text: '旧回复' }] } as UIMessage,
       userUIMsg('继续'),
     ]);
-    const before = loadSession(s.id)!.messages;
+    const before = (await loadSession(s.id))!.messages;
 
     const fake = scriptedModel([{ text: '续写回复' }]);
     await runSession({
@@ -292,7 +292,7 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
       model: fake as any,
     });
 
-    const after = loadSession(s.id)!.messages;
+    const after = (await loadSession(s.id))!.messages;
     expect(after.length).toBe(before.length + 1);
     const appended = after[after.length - 1];
     expect(appended.role).toBe('assistant');
@@ -301,8 +301,8 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
 
   it('approve resume via runSession continues the persisted assistant message (UI assembly)', async () => {
     const { docId } = await seedDoc();
-    const s = createSession('trader', 'u-rt4');
-    appendMessages(s.id, [userUIMsg('给文档打标签')]);
+    const s = await createSession('trader', 'u-rt4');
+    await appendMessages(s.id, [userUIMsg('给文档打标签')]);
 
     // --- Turn 1 gate: same seeding as test 1 ---
     const gateFake = scriptedModel([
@@ -313,13 +313,13 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
       sessionId: s.id,
       userId: 'u-rt4',
       role: 'trader',
-      messages: await convertToModelMessages(loadSession(s.id)!.messages as UIMessage[]),
+      messages: await convertToModelMessages((await loadSession(s.id))!.messages as UIMessage[]),
       auditTraceId: 'rt-gate4',
       abortSignal: new AbortController().signal,
       model: gateFake as any,
     });
 
-    const before = loadSession(s.id)!;
+    const before = (await loadSession(s.id))!;
     const origAssistant = before.messages.find((m) => m.role === 'assistant')!;
     const gatePart = (origAssistant.parts as any[]).find(
       (p) => typeof p?.type === 'string' && p.type.startsWith('tool-') && p.state === 'approval-requested',
@@ -364,7 +364,7 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
 
     // The ORIGINAL assistant message was updated IN PLACE: the tag part is now
     // output-available (tool re-executed), not approval-requested.
-    const after = loadSession(s.id)!;
+    const after = (await loadSession(s.id))!;
     const continued = after.messages.find((m) => m.id === origAssistantId);
     expect(continued).toBeTruthy();
     const tagPart = (continued!.parts as any[]).find(

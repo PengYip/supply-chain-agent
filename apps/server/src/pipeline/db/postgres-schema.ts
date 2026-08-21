@@ -33,6 +33,7 @@ import {
   uniqueIndex,
   customType,
   doublePrecision,
+  primaryKey,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
@@ -263,4 +264,95 @@ export const executionFlows = pgTable(
     bindingIdx: uniqueIndex('idx_execution_flows_binding').on(t.bindingId, t.userId),
     contractIdx: index('idx_execution_flows_contract').on(t.contractNo, t.userId),
   }),
+);
+
+// ---- Harness session store (sessions/messages/approvals/events/favorites) ---
+//
+// MIRRORS the runtime idempotent DDL in src/harness/sessionStorePostgres.ts
+// (ensureSessionTables) and the SQLite DDL in src/harness/sessionStoreSqlite.ts,
+// column-for-column. That runtime DDL is the truth for live DBs (it runs on
+// first use); these Drizzle declarations exist so `npx drizzle-kit generate`
+// users get the same five tables. Any column change must touch BOTH files.
+//
+// Deliberate parity choices (vs. typical pg conventions) -- see
+// sessionStorePostgres.ts for the rationale:
+//   - timestamps are TEXT ISO-8601 strings, not timestamptz;
+//   - JSON payloads are TEXT strings, not jsonb;
+//   - seq is INTEGER (small per-session counters, no bigint needed).
+// No table here collides with Better Auth's `session` table (auth-schema.ts) --
+// that one is singular, these are plural/prefixed.
+
+/** sessions: one chat conversation (harness agent session). */
+export const agentSessions = pgTable('sessions', {
+  id: text('id').primaryKey(),
+  role: text('role').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  metadataJson: text('metadata_json'),
+  userId: text('user_id'),
+  status: text('status').notNull().default('idle'),
+  runId: text('run_id'),
+  currentRunStartedAt: text('current_run_started_at'),
+});
+
+/** session_messages: persisted UIMessage history (JSON in TEXT). */
+export const sessionMessages = pgTable(
+  'session_messages',
+  {
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => agentSessions.id),
+    seq: integer('seq').notNull(),
+    modelMessageJson: text('model_message_json').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.sessionId, t.seq] })],
+);
+
+/** pending_approvals: L2/L3 approval tickets awaiting external callback. */
+export const pendingApprovals = pgTable('pending_approvals', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id')
+    .notNull()
+    .references(() => agentSessions.id),
+  level: text('level').notNull(),
+  toolName: text('tool_name').notNull(),
+  toolCallId: text('tool_call_id'),
+  inputJson: text('input_json').notNull(),
+  ticketId: text('ticket_id'),
+  approvalId: text('approval_id'),
+  status: text('status').notNull(),
+  createdAt: text('created_at').notNull(),
+});
+
+/**
+ * session_events: SSE reconnect replay buffer. Deliberately NO FK on
+ * session_id (parity with both runtime DDLs): the buffer accepts writes for
+ * sessions without a backing row (tests, degraded modes).
+ */
+export const sessionEvents = pgTable(
+  'session_events',
+  {
+    sessionId: text('session_id').notNull(),
+    seq: integer('seq').notNull(),
+    type: text('type').notNull(),
+    payloadJson: text('payload_json').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.sessionId, t.seq] })],
+);
+
+/** session_favorites: per-user session favorites with feedback note. */
+export const sessionFavorites = pgTable(
+  'session_favorites',
+  {
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => agentSessions.id),
+    userId: text('user_id').notNull(),
+    userEmail: text('user_email'),
+    note: text('note'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.sessionId, t.userId] })],
 );

@@ -28,11 +28,14 @@ type SignalBucket = 'counter' | 'todo' | 'env' | 'none';
  * Build the status snapshot for a session. `recorder` defaults to the
  * process-wide singleton auditRecorder so production wiring needs no arg, but
  * tests can pass a local recorder for deterministic isolation.
+ *
+ * Async since the session store went dual-backend (SQLite/Postgres):
+ * countPendingApprovals awaits the store regardless of backend.
  */
-export function getSessionStatus(
+export async function getSessionStatus(
   sessionId: string,
   recorder: { records: ToolCallRecord[] } = auditRecorder,
-): AgentStatus {
+): Promise<AgentStatus> {
   const bySignal: Record<SignalBucket, number> = {
     counter: 0,
     todo: 0,
@@ -64,7 +67,7 @@ export function getSessionStatus(
     bySignal,
     lastToolName: last ? last.toolName : null,
     lastToolAt: last ? last.timestamp : null,
-    pendingApprovals: countPendingApprovals(sessionId),
+    pendingApprovals: await countPendingApprovals(sessionId),
   };
 }
 

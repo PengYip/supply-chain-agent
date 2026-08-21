@@ -60,7 +60,7 @@ async function readNFrames(
 
 describe('GET /api/sessions/:id/events SSE replay (Last-Event-ID)', () => {
   it('forwards live events with id lines once persistence assigns seq', async () => {
-    const s = createSession('trader', 'sse-r1');
+    const s = await createSession('trader', 'sse-r1');
     const app = appAs({ id: 'sse-r1', email: 'r1@test', role: 'trader' });
     const ac = new AbortController();
     const res = await app.request(
@@ -68,8 +68,8 @@ describe('GET /api/sessions/:id/events SSE replay (Last-Event-ID)', () => {
     );
     expect(res.status).toBe(200);
 
-    emit({ type: 'run.started', sessionId: s.id, runId: 'r1' });
-    emit({ type: 'message.part', sessionId: s.id, part: { type: 'text-start' } });
+    await emit({ type: 'run.started', sessionId: s.id, runId: 'r1' });
+    await emit({ type: 'message.part', sessionId: s.id, part: { type: 'text-start' } });
 
     const got = await readNFrames(res.body as ReadableStream<Uint8Array>, 3, ac);
     expect(got.length).toBe(3);
@@ -84,12 +84,12 @@ describe('GET /api/sessions/:id/events SSE replay (Last-Event-ID)', () => {
   });
 
   it('replays missed events on Last-Event-ID, in order, with id lines', async () => {
-    const s = createSession('trader', 'sse-r2');
+    const s = await createSession('trader', 'sse-r2');
     // Seed 4 events BEFORE connecting (seqs 1-4, no subscriber).
-    emit({ type: 'run.started', sessionId: s.id, runId: 'r' });
-    emit({ type: 'message.part', sessionId: s.id, part: { type: 'text-start', id: 'a' } });
-    emit({ type: 'message.part', sessionId: s.id, part: { type: 'text-delta', id: 'a', delta: 'h' } });
-    emit({ type: 'message.part', sessionId: s.id, part: { type: 'text-end', id: 'a' } });
+    await emit({ type: 'run.started', sessionId: s.id, runId: 'r' });
+    await emit({ type: 'message.part', sessionId: s.id, part: { type: 'text-start', id: 'a' } });
+    await emit({ type: 'message.part', sessionId: s.id, part: { type: 'text-delta', id: 'a', delta: 'h' } });
+    await emit({ type: 'message.part', sessionId: s.id, part: { type: 'text-end', id: 'a' } });
 
     const app = appAs({ id: 'sse-r2', email: 'r2@test', role: 'trader' });
     const ac = new AbortController();
@@ -112,10 +112,10 @@ describe('GET /api/sessions/:id/events SSE replay (Last-Event-ID)', () => {
   });
 
   it('treats an invalid Last-Event-ID as absent (no replay, live only)', async () => {
-    const s = createSession('trader', 'sse-r3');
+    const s = await createSession('trader', 'sse-r3');
     // Seed events that MUST NOT be replayed (invalid header => absent).
-    emit({ type: 'run.started', sessionId: s.id, runId: 'r' });
-    emit({ type: 'message.part', sessionId: s.id, part: { type: 'text-start' } });
+    await emit({ type: 'run.started', sessionId: s.id, runId: 'r' });
+    await emit({ type: 'message.part', sessionId: s.id, part: { type: 'text-start' } });
 
     const app = appAs({ id: 'sse-r3', email: 'r3@test', role: 'trader' });
     const ac = new AbortController();
@@ -139,9 +139,9 @@ describe('GET /api/sessions/:id/events SSE replay (Last-Event-ID)', () => {
   });
 
   it('returns an empty replay for a stale larger Last-Event-ID', async () => {
-    const s = createSession('trader', 'sse-r4');
-    emit({ type: 'run.started', sessionId: s.id, runId: 'r' });
-    emit({ type: 'message.part', sessionId: s.id, part: { type: 'text-start' } });
+    const s = await createSession('trader', 'sse-r4');
+    await emit({ type: 'run.started', sessionId: s.id, runId: 'r' });
+    await emit({ type: 'message.part', sessionId: s.id, part: { type: 'text-start' } });
 
     const app = appAs({ id: 'sse-r4', email: 'r4@test', role: 'trader' });
     const ac = new AbortController();

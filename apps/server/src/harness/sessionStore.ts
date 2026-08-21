@@ -1,125 +1,29 @@
-import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-import fs from 'node:fs';
-import Database from 'better-sqlite3';
+// Harness session store -- backend-neutral facade (dual-backend split).
+//
+// The session store owns 5 tables: sessions / session_messages /
+// pending_approvals / session_events / session_favorites. Two interchangeable
+// backends implement the exact same async API:
+//   - sessionStoreSqlite.ts   (DEFAULT; better-sqlite3, apps/server/data/agent.db)
+//   - sessionStorePostgres.ts (DB_BACKEND=postgres; pg Pool from DATABASE_URL)
+//
+// Backend selection reuses the pipeline convention (pipeline/db/dbBackend.ts):
+// the exact string 'postgres' selects Postgres, anything else falls back to
+// SQLite so a misconfiguration cannot select the un-provisioned backend. No new
+// env vars; Postgres reads DATABASE_URL with the same dev default as auth.ts.
+//
+// ALL functions return Promises on BOTH backends (mirroring the pipeline
+// repositories pattern: better-sqlite3 is sync internally, but callers `await`
+// once and never branch per backend).
+//
+// Migration note: the pre-split module exported a better-sqlite3 `db` instance.
+// It was removed -- no consumer imported it (verified across src/ + test/).
+// SQLite-side access is internal to sessionStoreSqlite.ts.
+
 import type { UIMessage } from 'ai';
+import { randomUUID } from 'node:crypto';
 
 import type { Role } from './roleToolRegistry.js';
-
-// File-backed SQLite (WAL) for durable agent sessions + pending approvals.
-// Production swaps this for Postgres (Drizzle-compatible) -- the API below is
-// the abstraction boundary.
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.resolve(__dirname, '../../data');
-const DB_PATH = path.join(DATA_DIR, 'agent.db');
-
-fs.mkdirSync(DATA_DIR, { recursive: true });
-
-export const db = new Database(DB_PATH);
-// busy_timeout 必须先于 WAL 设置: 并发测试 worker 同时 import 本模块时,
-// 第二个进程的 journal_mode 切换会撞 SQLITE_BUSY 直接抛错(CI 上已复现)。
-db.pragma('busy_timeout = 5000');
-// SQLite 的 journal_mode 切换需要短暂排他锁, 且该操作不走 busy handler——
-// busy_timeout 覆盖不了它(CI 2026-08-18 复现)。先读当前模式: 已是 WAL(其他
-// worker 已切好, 并发导入的常态)则跳过; 确需切换时对 SQLITE_BUSY 小步重试。
-if (db.pragma('journal_mode', { simple: true }) !== 'wal') {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      db.pragma('journal_mode = WAL');
-      break;
-    } catch (e) {
-      const busy = e instanceof Error && /database is locked|SQLITE_BUSY/i.test(e.message);
-      if (!busy || attempt >= 40) throw e;
-      await new Promise((r) => setTimeout(r, 25 * (attempt + 1)));
-    }
-  }
-}
-
-db.exec(`
-CREATE TABLE IF NOT EXISTS sessions (
-  id TEXT PRIMARY KEY,
-  role TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  metadata_json TEXT,
-  user_id TEXT
-);
-
-CREATE TABLE IF NOT EXISTS session_messages (
-  session_id TEXT NOT NULL,
-  seq INTEGER NOT NULL,
-  model_message_json TEXT NOT NULL,
-  PRIMARY KEY (session_id, seq),
-  FOREIGN KEY (session_id) REFERENCES sessions(id)
-);
-
-CREATE TABLE IF NOT EXISTS pending_approvals (
-  id TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL,
-  level TEXT NOT NULL,
-  tool_name TEXT NOT NULL,
-  tool_call_id TEXT,
-  input_json TEXT NOT NULL,
-  ticket_id TEXT,
-  approval_id TEXT,
-  status TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  FOREIGN KEY (session_id) REFERENCES sessions(id)
-);
-
-CREATE TABLE IF NOT EXISTS session_events (
-  session_id TEXT NOT NULL,
-  seq INTEGER NOT NULL,
-  type TEXT NOT NULL,
-  payload_json TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (session_id, seq)
-);
-
-CREATE TABLE IF NOT EXISTS session_favorites (
-  session_id TEXT NOT NULL,
-  user_id TEXT NOT NULL,
-  user_email TEXT,
-  note TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  PRIMARY KEY (session_id, user_id),
-  FOREIGN KEY (session_id) REFERENCES sessions(id)
-);
-`);
-
-// Phase 2: add user_id to pre-existing dev databases (CREATE TABLE IF NOT EXISTS
-// does not add columns to an already-existing table). Idempotent + guarded.
-// try/catch: vitest workers / clustered processes can race the PRAGMA check
-// (check-then-act) against the same SQLite file -- same pattern as client.ts.
-{
-  const cols = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
-  if (!cols.some((c) => c.name === 'user_id')) {
-    try { db.exec('ALTER TABLE sessions ADD COLUMN user_id TEXT'); } catch { /* concurrent */ }
-  }
-}
-
-// Background session runtime: add status / run_id / current_run_started_at to
-// pre-existing dev databases. Same idempotent PRAGMA-check guard as user_id
-// above (CREATE TABLE IF NOT EXISTS cannot add columns to an existing table).
-// Defaults to 'idle' so legacy rows are treated as not running.
-{
-  const cols = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
-  const has = (name: string): boolean => cols.some((c) => c.name === name);
-  // try/catch each ALTER: concurrent module init (separate vitest workers /
-  // processes sharing this file) can pass the PRAGMA check simultaneously and
-  // the second ALTER would throw "duplicate column name" without it.
-  if (!has('status')) {
-    try { db.exec("ALTER TABLE sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'idle'"); } catch { /* concurrent */ }
-  }
-  if (!has('run_id')) {
-    try { db.exec('ALTER TABLE sessions ADD COLUMN run_id TEXT'); } catch { /* concurrent */ }
-  }
-  if (!has('current_run_started_at')) {
-    try { db.exec('ALTER TABLE sessions ADD COLUMN current_run_started_at TEXT'); } catch { /* concurrent */ }
-  }
-}
+import { DB_BACKEND } from '../pipeline/db/dbBackend.js';
 
 // ---- types ----
 
@@ -150,7 +54,9 @@ export type ApprovalStatus = 'pending' | 'approved' | 'denied';
  */
 export type SessionStatus = 'idle' | 'busy' | 'interrupted';
 
-export interface PendingApprovalRow {
+// Type alias (not interface) so it satisfies pg's QueryResultRow constraint in
+// the Postgres backend; identical shape to the historical interface.
+export type PendingApprovalRow = {
   id: string;
   session_id: string;
   level: ApprovalLevel;
@@ -161,26 +67,45 @@ export interface PendingApprovalRow {
   approval_id: string | null;
   status: ApprovalStatus;
   created_at: string;
-}
+};
 
-interface SessionRow {
+/** Raw `sessions` row shape (shared by both backend modules). Declared as a
+ *  type alias (not interface) so it satisfies pg's QueryResultRow index-
+ *  signature constraint in sessionStorePostgres.ts. */
+export type SessionRow = {
   id: string;
   role: Role;
   created_at: string;
   updated_at: string;
   metadata_json: string | null;
   user_id: string | null;
-}
+  status?: SessionStatus;
+  run_id?: string | null;
+  current_run_started_at?: string | null;
+};
 
-interface MessageRow {
+/** Raw `session_messages` row shape (shared by both backend modules; type
+ *  alias for the pg QueryResultRow constraint, see SessionRow). */
+export type MessageRow = {
   seq: number;
   model_message_json: string;
-}
+};
+
+/** Raw `session_favorites` row shape (shared by both backend modules; type
+ *  alias for the pg QueryResultRow constraint, see SessionRow). */
+export type FavoriteRow = {
+  session_id: string;
+  user_id: string;
+  user_email: string | null;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+};
 
 /** One user's favorite ("收藏") of one chat session, with an optional feedback
  *  note. user_email is a write-time snapshot so the aggregated feedback view
  *  can attribute notes without a cross-store join (auth users live in
- *  Postgres, chat sessions in this SQLite file). */
+ *  Postgres, chat sessions in this store). */
 export interface SessionFavorite {
   sessionId: string;
   userId: string;
@@ -196,109 +121,87 @@ export interface SessionFavoriteSummary extends SessionFavorite {
   status: SessionStatus;
 }
 
-interface FavoriteRow {
-  session_id: string;
-  user_id: string;
-  user_email: string | null;
-  note: string | null;
-  created_at: string;
-  updated_at: string;
+export interface SessionEventRow {
+  seq: number;
+  type: string;
+  payload: Record<string, unknown>;
 }
 
-// ---- prepared statements ----
-
-const stmtInsertSession = db.prepare(
-  'INSERT INTO sessions (id, role, created_at, updated_at, user_id) VALUES (?, ?, ?, ?, ?)',
-);
-const stmtGetSession = db.prepare('SELECT * FROM sessions WHERE id = ?');
-const stmtListSessionsForUser = db.prepare(`
-  SELECT s.id, s.role, s.created_at, s.metadata_json, s.status,
-         CASE WHEN f.session_id IS NULL THEN 0 ELSE 1 END AS favorited,
-         (SELECT COUNT(*) FROM session_messages m WHERE m.session_id = s.id) AS message_count
-  FROM sessions s
-  LEFT JOIN session_favorites f ON f.session_id = s.id AND f.user_id = ?
-  WHERE s.user_id = ?
-  ORDER BY s.created_at DESC
-`);
-const stmtListEmptySessionsForUser = db.prepare(`
-  SELECT s.id FROM sessions s
-  WHERE s.user_id = ?
-    AND NOT EXISTS (SELECT 1 FROM session_messages m WHERE m.session_id = s.id)
-`);
-const stmtTouchSession = db.prepare(
-  'UPDATE sessions SET updated_at = ? WHERE id = ?',
-);
-const stmtUpdateMetadata = db.prepare(
-  'UPDATE sessions SET metadata_json = ?, updated_at = ? WHERE id = ?',
-);
-const stmtMaxSeq = db.prepare(
-  'SELECT COALESCE(MAX(seq), -1) AS max_seq FROM session_messages WHERE session_id = ?',
-);
-const stmtInsertMessage = db.prepare(
-  'INSERT INTO session_messages (session_id, seq, model_message_json) VALUES (?, ?, ?)',
-);
-const stmtReplaceMessage = db.prepare(
-  'UPDATE session_messages SET model_message_json = ? WHERE session_id = ? AND seq = ?',
-);
-const stmtListMessages = db.prepare(
-  'SELECT seq, model_message_json FROM session_messages WHERE session_id = ? ORDER BY seq ASC',
-);
-const stmtInsertPending = db.prepare(
-  `INSERT INTO pending_approvals (id, session_id, level, tool_name, tool_call_id, input_json, ticket_id, approval_id, status, created_at)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-);
-const stmtUpdatePendingStatus = db.prepare(
-  'UPDATE pending_approvals SET status = ? WHERE id = ?',
-);
-const stmtGetPending = db.prepare('SELECT * FROM pending_approvals WHERE id = ?');
-const stmtListPending = db.prepare(
-  "SELECT * FROM pending_approvals WHERE session_id = ? AND status = 'pending' ORDER BY created_at ASC",
-);
-const stmtCountPending = db.prepare(
-  "SELECT COUNT(*) AS n FROM pending_approvals WHERE session_id = ? AND status = 'pending'",
-);
-const stmtDeleteSession = db.prepare('DELETE FROM sessions WHERE id = ?');
-const stmtDeleteSessionMessages = db.prepare('DELETE FROM session_messages WHERE session_id = ?');
-const stmtDeleteSessionPending = db.prepare('DELETE FROM pending_approvals WHERE session_id = ?');
-const stmtDeleteSessionFavorites = db.prepare('DELETE FROM session_favorites WHERE session_id = ?');
-
-// --- session favorites (对话收藏/用户反馈) ---
-
-const stmtUpsertFavorite = db.prepare(`
-  INSERT INTO session_favorites (session_id, user_id, user_email, note, created_at, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?)
-  ON CONFLICT (session_id, user_id) DO UPDATE SET
-    user_email = excluded.user_email,
-    note = excluded.note,
-    updated_at = excluded.updated_at
-`);
-const stmtDeleteFavorite = db.prepare('DELETE FROM session_favorites WHERE session_id = ? AND user_id = ?');
-const stmtGetFavorite = db.prepare('SELECT * FROM session_favorites WHERE session_id = ? AND user_id = ?');
-const stmtListFavoritesForUser = db.prepare(`
-  SELECT f.*, s.metadata_json, s.status
-  FROM session_favorites f
-  JOIN sessions s ON s.id = f.session_id
-  WHERE f.user_id = ?
-  ORDER BY f.updated_at DESC
-`);
-const stmtListAllFavorites = db.prepare(`
-  SELECT f.*, s.metadata_json, s.status
-  FROM session_favorites f
-  JOIN sessions s ON s.id = f.session_id
-  ORDER BY f.updated_at DESC
-`);
-
-// ---- API ----
-
-export function createSession(role: Role, userId?: string | null): SessionInfo {
-  const id = randomUUID();
-  const now = new Date().toISOString();
-  stmtInsertSession.run(id, role, now, now, userId ?? null);
-  return { id, role };
+export interface RecordPendingInput {
+  sessionId: string;
+  level: ApprovalLevel;
+  toolName: string;
+  toolCallId?: string | null;
+  input: unknown;
+  ticketId?: string | null;
+  approvalId?: string | null;
 }
+
+/** List-facing per-session row (GET /api/sessions). */
+export interface SessionListItem {
+  id: string;
+  role: Role;
+  createdAt: string;
+  title?: string;
+  status: SessionStatus;
+  favorited: boolean;
+  messageCount: number;
+}
+
+/** Status read result for getSessionStatus(). */
+export interface SessionStatusInfo {
+  status: SessionStatus;
+  runId?: string;
+  startedAt?: string;
+}
+
+/**
+ * Structural contract every backend module satisfies. The facade delegates to
+ * exactly one of these for the process lifetime (memoized dynamic import, so
+ * the inactive backend module is never even loaded -- a Postgres deployment
+ * never opens agent.db, and vice versa).
+ */
+export interface SessionStoreBackend {
+  createSession(role: Role, userId?: string | null): Promise<SessionInfo>;
+  setSessionTitle(sessionId: string, title: string): Promise<void>;
+  listSessionsForUser(userId: string): Promise<SessionListItem[]>;
+  purgeEmptySessionsForUser(userId: string): Promise<number>;
+  setSessionStatus(id: string, status: SessionStatus, runId?: string): Promise<void>;
+  getSessionStatus(id: string): Promise<SessionStatusInfo | null>;
+  resetBusyOnStartup(): Promise<void>;
+  sessionBelongsTo(id: string, userId: string): Promise<boolean>;
+  loadSession(id: string): Promise<LoadedSession | null>;
+  deleteSession(id: string): Promise<boolean>;
+  setSessionFavorite(
+    sessionId: string,
+    userId: string,
+    userEmail: string | null,
+    note: string | null,
+  ): Promise<SessionFavorite>;
+  clearSessionFavorite(sessionId: string, userId: string): Promise<boolean>;
+  getSessionFavorite(sessionId: string, userId: string): Promise<SessionFavorite | null>;
+  listSessionFavorites(userId: string): Promise<SessionFavoriteSummary[]>;
+  listAllSessionFavorites(): Promise<SessionFavoriteSummary[]>;
+  appendMessages(sessionId: string, msgs: UIMessage[]): Promise<void>;
+  replaceMessage(sessionId: string, message: UIMessage): Promise<boolean>;
+  appendSessionEvent(
+    sessionId: string,
+    type: string,
+    payload: Record<string, unknown>,
+  ): Promise<number>;
+  listSessionEventsSince(sessionId: string, sinceSeq: number): Promise<SessionEventRow[]>;
+  pruneSessionEvents(sessionId: string): Promise<void>;
+  recordPendingApproval(input: RecordPendingInput): Promise<void>;
+  resolveApproval(id: string, status: ApprovalStatus): Promise<void>;
+  getPending(id: string): Promise<PendingApprovalRow | null>;
+  listPending(sessionId: string): Promise<PendingApprovalRow[]>;
+  countPendingApprovals(sessionId: string): Promise<number>;
+}
+
+// ---- shared helpers (used by both backends; exported for them only) ----
 
 /** Parse the title out of a session's metadata_json blob (defensive). */
-function parseTitle(metadataJson: string | null | undefined): string | undefined {
+export function parseTitle(metadataJson: string | null | undefined): string | undefined {
   if (!metadataJson) return undefined;
   try {
     const meta = JSON.parse(metadataJson) as { title?: unknown };
@@ -313,8 +216,10 @@ function parseTitle(metadataJson: string | null | undefined): string | undefined
  * ModelMessage ({role, content}) without .parts; wrap them so reload never
  * crashes convertToModelMessages. Roles outside the UIMessage union (e.g.
  * 'tool' from old server-synthesized resume rows) coerce to a valid role.
+ *
+ * Both backends must apply this on load (legacy-compat contract).
  */
-function normalizeToUIMessage(raw: unknown): UIMessage {
+export function normalizeToUIMessage(raw: unknown): UIMessage {
   const m = raw as { parts?: unknown; role?: unknown; content?: unknown };
   if (Array.isArray(m.parts)) return m as UIMessage;
   const roleRaw = (m.role ?? 'user') as string;
@@ -333,58 +238,51 @@ function normalizeToUIMessage(raw: unknown): UIMessage {
   return { id: randomUUID(), role, parts: [{ type: 'text', text }] } as UIMessage;
 }
 
+// ---- backend dispatch ----
+
+let backendPromise: Promise<SessionStoreBackend> | null = null;
+
+function getBackend(): Promise<SessionStoreBackend> {
+  // Memoized dynamic import: the backend module loads exactly once, and the
+  // inactive backend never loads at all (keeps agent.db unopened on Postgres
+  // deployments and pg Pool unconstructed on SQLite ones).
+  if (!backendPromise) {
+    backendPromise =
+      DB_BACKEND === 'postgres'
+        ? import('./sessionStorePostgres.js').then((m) => m.createAgentSessionStore(m.getDefaultAgentPool()))
+        : import('./sessionStoreSqlite.js').then((m) => m.sqliteSessionStore);
+  }
+  return backendPromise;
+}
+
+// ---- API (backend-neutral; every fn awaits the backend once) ----
+
+export async function createSession(role: Role, userId?: string | null): Promise<SessionInfo> {
+  return (await getBackend()).createSession(role, userId);
+}
+
 /**
  * Set the session's auto-generated title. Stored inside the existing
  * metadata_json blob (no schema migration): merges `{...meta, title}` so other
  * metadata keys are preserved. No-op if the session does not exist.
  */
-export function setSessionTitle(sessionId: string, title: string): void {
-  const row = stmtGetSession.get(sessionId) as SessionRow | undefined;
-  if (!row) return;
-  let meta: Record<string, unknown> = {};
-  try {
-    meta = row.metadata_json ? (JSON.parse(row.metadata_json) as Record<string, unknown>) : {};
-  } catch {
-    meta = {};
-  }
-  meta.title = title;
-  stmtUpdateMetadata.run(JSON.stringify(meta), new Date().toISOString(), sessionId);
+export async function setSessionTitle(sessionId: string, title: string): Promise<void> {
+  return (await getBackend()).setSessionTitle(sessionId, title);
 }
 
 /** List chat sessions owned by a user (Phase 2 data isolation). Includes the
  *  caller's favorite state per session so the sidebar can star rows without a
  *  second round-trip. */
-export function listSessionsForUser(
-  userId: string,
-): Array<{ id: string; role: Role; createdAt: string; title?: string; status: SessionStatus; favorited: boolean; messageCount: number }> {
-  const rows = stmtListSessionsForUser.all(userId, userId) as Array<{
-    id: string;
-    role: Role;
-    created_at: string;
-    metadata_json: string | null;
-    status: SessionStatus;
-    favorited: 0 | 1;
-    message_count: number;
-  }>;
-  return rows.map((r) => ({
-    id: r.id,
-    role: r.role,
-    createdAt: r.created_at,
-    title: parseTitle(r.metadata_json),
-    status: r.status,
-    favorited: r.favorited === 1,
-    messageCount: r.message_count,
-  }));
+export async function listSessionsForUser(userId: string): Promise<SessionListItem[]> {
+  return (await getBackend()).listSessionsForUser(userId);
 }
 
 /** Delete the user's zero-message sessions (an empty session holds nothing of
  *  value) and return how many were removed. Reuses deleteSession so the
  *  dependent-row cascade (favorites etc.) applies. Called on session create so
  *  abandoned empty sessions never accumulate. */
-export function purgeEmptySessionsForUser(userId: string): number {
-  const rows = stmtListEmptySessionsForUser.all(userId) as Array<{ id: string }>;
-  for (const r of rows) deleteSession(r.id);
-  return rows.length;
+export async function purgeEmptySessionsForUser(userId: string): Promise<number> {
+  return (await getBackend()).purgeEmptySessionsForUser(userId);
 }
 
 /**
@@ -394,37 +292,20 @@ export function purgeEmptySessionsForUser(userId: string): number {
  * stale run cannot be confused with a live one. No-op if the session does not
  * exist (UPDATE matches zero rows).
  */
-export function setSessionStatus(id: string, status: SessionStatus, runId?: string): void {
-  const now = new Date().toISOString();
-  const startedAt = status === 'busy' ? now : null;
-  db.prepare(
-    `UPDATE sessions
-       SET status = @status,
-           run_id = @runId,
-           current_run_started_at = @startedAt,
-           updated_at = @now
-     WHERE id = @id`,
-  ).run({ status, runId: runId ?? null, startedAt, now, id });
+export async function setSessionStatus(
+  id: string,
+  status: SessionStatus,
+  runId?: string,
+): Promise<void> {
+  return (await getBackend()).setSessionStatus(id, status, runId);
 }
 
 /**
  * Read the background-run status of a session. Returns null if the session does
  * not exist. runId/startedAt are omitted from the result when NULL in the row.
  */
-export function getSessionStatus(
-  id: string,
-): { status: SessionStatus; runId?: string; startedAt?: string } | null {
-  const row = db
-    .prepare('SELECT status, run_id, current_run_started_at FROM sessions WHERE id = ?')
-    .get(id) as
-    | { status: SessionStatus; run_id: string | null; current_run_started_at: string | null }
-    | undefined;
-  if (!row) return null;
-  return {
-    status: row.status,
-    runId: row.run_id ?? undefined,
-    startedAt: row.current_run_started_at ?? undefined,
-  };
+export async function getSessionStatus(id: string): Promise<SessionStatusInfo | null> {
+  return (await getBackend()).getSessionStatus(id);
 }
 
 /**
@@ -433,8 +314,8 @@ export function getSessionStatus(
  * it and the caller can decide to resume or discard. Safe to call when there
  * are no busy rows (UPDATE matches zero rows).
  */
-export function resetBusyOnStartup(): void {
-  db.prepare("UPDATE sessions SET status = 'interrupted' WHERE status = 'busy'").run();
+export async function resetBusyOnStartup(): Promise<void> {
+  return (await getBackend()).resetBusyOnStartup();
 }
 
 /**
@@ -442,17 +323,12 @@ export function resetBusyOnStartup(): void {
  * user_id matches. A legacy session (user_id NULL, pre-Phase-2) is treated as
  * NOT owned by any authenticated user.
  */
-export function sessionBelongsTo(id: string, userId: string): boolean {
-  const row = stmtGetSession.get(id) as SessionRow | undefined;
-  return !!row && row.user_id === userId;
+export async function sessionBelongsTo(id: string, userId: string): Promise<boolean> {
+  return (await getBackend()).sessionBelongsTo(id, userId);
 }
 
-export function loadSession(id: string): LoadedSession | null {
-  const row = stmtGetSession.get(id) as SessionRow | undefined;
-  if (!row) return null;
-  const rows = stmtListMessages.all(id) as MessageRow[];
-  const messages = rows.map((r) => normalizeToUIMessage(JSON.parse(r.model_message_json)));
-  return { id: row.id, role: row.role, messages, title: parseTitle(row.metadata_json) };
+export async function loadSession(id: string): Promise<LoadedSession | null> {
+  return (await getBackend()).loadSession(id);
 }
 
 /**
@@ -461,17 +337,8 @@ export function loadSession(id: string): LoadedSession | null {
  * deleted), false if it was already gone. Callers MUST verify ownership first
  * (sessionBelongsTo) -- this fn does not re-check.
  */
-export function deleteSession(id: string): boolean {
-  const row = stmtGetSession.get(id) as SessionRow | undefined;
-  if (!row) return false;
-  const tx = db.transaction(() => {
-    stmtDeleteSessionMessages.run(id);
-    stmtDeleteSessionPending.run(id);
-    stmtDeleteSessionFavorites.run(id);
-    stmtDeleteSession.run(id);
-  });
-  tx();
-  return true;
+export async function deleteSession(id: string): Promise<boolean> {
+  return (await getBackend()).deleteSession(id);
 }
 
 // --- session favorites (对话收藏: MVP 用户反馈通道) ---
@@ -480,186 +347,97 @@ export function deleteSession(id: string): boolean {
  *  the email snapshot. Returns the stored favorite. Callers MUST verify the
  *  session exists and is owned by userId (sessionBelongsTo) -- this fn does
  *  not re-check, mirroring the other writers here. */
-export function setSessionFavorite(
+export async function setSessionFavorite(
   sessionId: string,
   userId: string,
   userEmail: string | null,
   note: string | null,
-): SessionFavorite {
-  const now = new Date().toISOString();
-  stmtUpsertFavorite.run(sessionId, userId, userEmail, note, now, now);
-  return {
-    sessionId,
-    userId,
-    userEmail,
-    note,
-    createdAt: now,
-    updatedAt: now,
-  };
+): Promise<SessionFavorite> {
+  return (await getBackend()).setSessionFavorite(sessionId, userId, userEmail, note);
 }
 
 /** Remove a user's favorite of a session. Returns true if a row was removed. */
-export function clearSessionFavorite(sessionId: string, userId: string): boolean {
-  return stmtDeleteFavorite.run(sessionId, userId).changes > 0;
+export async function clearSessionFavorite(sessionId: string, userId: string): Promise<boolean> {
+  return (await getBackend()).clearSessionFavorite(sessionId, userId);
 }
 
 /** Read one user's favorite of one session (null when not favorited). */
-export function getSessionFavorite(sessionId: string, userId: string): SessionFavorite | null {
-  const row = stmtGetFavorite.get(sessionId, userId) as FavoriteRow | undefined;
-  return row ? toFavorite(row) : null;
-}
-
-function toFavorite(row: FavoriteRow): SessionFavorite {
-  return {
-    sessionId: row.session_id,
-    userId: row.user_id,
-    userEmail: row.user_email,
-    note: row.note,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-/** Map a joined favorites+sessions row to the summary shape (title from
- *  metadata_json, defensive parse). */
-function toFavoriteSummary(row: FavoriteRow & { metadata_json: string | null; status: SessionStatus }): SessionFavoriteSummary {
-  return { ...toFavorite(row), title: parseTitle(row.metadata_json), status: row.status };
+export async function getSessionFavorite(
+  sessionId: string,
+  userId: string,
+): Promise<SessionFavorite | null> {
+  return (await getBackend()).getSessionFavorite(sessionId, userId);
 }
 
 /** List one user's favorites with session title/status (newest first).
  *  Favorites of since-deleted sessions drop out via the inner JOIN. */
-export function listSessionFavorites(userId: string): SessionFavoriteSummary[] {
-  const rows = stmtListFavoritesForUser.all(userId) as Array<FavoriteRow & { metadata_json: string | null; status: SessionStatus }>;
-  return rows.map(toFavoriteSummary);
+export async function listSessionFavorites(userId: string): Promise<SessionFavoriteSummary[]> {
+  return (await getBackend()).listSessionFavorites(userId);
 }
 
 /** List EVERY user's favorites (admin feedback inbox). Same shape as
  *  listSessionFavorites plus the per-row userId/userEmail attribution. */
-export function listAllSessionFavorites(): SessionFavoriteSummary[] {
-  const rows = stmtListAllFavorites.all() as Array<FavoriteRow & { metadata_json: string | null; status: SessionStatus }>;
-  return rows.map(toFavoriteSummary);
+export async function listAllSessionFavorites(): Promise<SessionFavoriteSummary[]> {
+  return (await getBackend()).listAllSessionFavorites();
 }
 
-export function appendMessages(sessionId: string, msgs: UIMessage[]): void {
-  if (msgs.length === 0) return;
-  const maxRow = stmtMaxSeq.get(sessionId) as { max_seq: number } | undefined;
-  const startSeq = (maxRow?.max_seq ?? -1) + 1;
-  const now = new Date().toISOString();
-  const tx = db.transaction((items: UIMessage[]) => {
-    items.forEach((msg, i) => {
-      stmtInsertMessage.run(
-        sessionId,
-        startSeq + i,
-        JSON.stringify(msg),
-      );
-    });
-    stmtTouchSession.run(now, sessionId);
-  });
-  tx(msgs);
+export async function appendMessages(sessionId: string, msgs: UIMessage[]): Promise<void> {
+  return (await getBackend()).appendMessages(sessionId, msgs);
 }
 
 /**
  * Replace a persisted message IN PLACE (same row, same seq) — used by
  * continuation-mode runs (L2 approval resume) to update the continued
  * assistant message (the approval-requested part flips to output-available /
- * output-denied) instead of appending a duplicate with the same id. Linear
- * scan over the session's rows parsing the stored .id is fine (sessions are
- * small; better-sqlite3 is sync). Returns true if a row with that message id
- * was replaced, false if no such message exists.
+ * output-denied) instead of appending a duplicate with the same id. The SQLite
+ * backend linear-scans parsed .id values; the Postgres backend resolves the
+ * seq in SQL (model_message_json::jsonb ->> 'id'). Returns true if a row with
+ * that message id was replaced, false if no such message exists.
  */
-export function replaceMessage(sessionId: string, message: UIMessage): boolean {
-  const rows = stmtListMessages.all(sessionId) as MessageRow[];
-  const target = rows.find((r) => {
-    try {
-      return (JSON.parse(r.model_message_json) as { id?: string }).id === message.id;
-    } catch {
-      return false;
-    }
-  });
-  if (!target) return false;
-  const now = new Date().toISOString();
-  stmtReplaceMessage.run(JSON.stringify(message), sessionId, target.seq);
-  stmtTouchSession.run(now, sessionId);
-  return true;
+export async function replaceMessage(sessionId: string, message: UIMessage): Promise<boolean> {
+  return (await getBackend()).replaceMessage(sessionId, message);
 }
 
 // --- session event replay buffer (phase 2) ---
 // Events are a reconnect replay buffer, not SSOT (session_messages is).
-// No FK on session_id: buffer writes must not fail for sessions without a
-// backing row (tests, degraded modes).
+// No FK on session_id in either backend: buffer writes must not fail for
+// sessions without a backing row (tests, degraded modes).
 
-export interface SessionEventRow {
-  seq: number;
-  type: string;
-  payload: Record<string, unknown>;
+export async function appendSessionEvent(
+  sessionId: string,
+  type: string,
+  payload: Record<string, unknown>,
+): Promise<number> {
+  return (await getBackend()).appendSessionEvent(sessionId, type, payload);
 }
 
-export function appendSessionEvent(sessionId: string, type: string, payload: Record<string, unknown>): number {
-  const row = db
-    .prepare('SELECT COALESCE(MAX(seq), 0) AS max_seq FROM session_events WHERE session_id = ?')
-    .get(sessionId) as { max_seq: number };
-  const seq = row.max_seq + 1;
-  db.prepare(
-    'INSERT INTO session_events (session_id, seq, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?)',
-  ).run(sessionId, seq, type, JSON.stringify(payload), new Date().toISOString());
-  return seq;
+export async function listSessionEventsSince(
+  sessionId: string,
+  sinceSeq: number,
+): Promise<SessionEventRow[]> {
+  return (await getBackend()).listSessionEventsSince(sessionId, sinceSeq);
 }
 
-export function listSessionEventsSince(sessionId: string, sinceSeq: number): SessionEventRow[] {
-  const rows = db
-    .prepare('SELECT seq, type, payload_json FROM session_events WHERE session_id = ? AND seq > ? ORDER BY seq ASC')
-    .all(sessionId, sinceSeq) as Array<{ seq: number; type: string; payload_json: string }>;
-  return rows.map((r) => ({ seq: r.seq, type: r.type, payload: JSON.parse(r.payload_json) as Record<string, unknown> }));
+export async function pruneSessionEvents(sessionId: string): Promise<void> {
+  return (await getBackend()).pruneSessionEvents(sessionId);
 }
 
-export function pruneSessionEvents(sessionId: string): void {
-  db.prepare('DELETE FROM session_events WHERE session_id = ?').run(sessionId);
+export async function recordPendingApproval(input: RecordPendingInput): Promise<void> {
+  return (await getBackend()).recordPendingApproval(input);
 }
 
-export interface RecordPendingInput {
-  sessionId: string;
-  level: ApprovalLevel;
-  toolName: string;
-  toolCallId?: string | null;
-  input: unknown;
-  ticketId?: string | null;
-  approvalId?: string | null;
+export async function resolveApproval(id: string, status: ApprovalStatus): Promise<void> {
+  return (await getBackend()).resolveApproval(id, status);
 }
 
-export function recordPendingApproval(input: RecordPendingInput): void {
-  const id =
-    input.ticketId ?? input.approvalId ?? randomUUID();
-  stmtInsertPending.run(
-    id,
-    input.sessionId,
-    input.level,
-    input.toolName,
-    input.toolCallId ?? null,
-    JSON.stringify(input.input ?? {}),
-    input.ticketId ?? null,
-    input.approvalId ?? null,
-    'pending',
-    new Date().toISOString(),
-  );
+export async function getPending(id: string): Promise<PendingApprovalRow | null> {
+  return (await getBackend()).getPending(id);
 }
 
-export function resolveApproval(
-  id: string,
-  status: ApprovalStatus,
-): void {
-  stmtUpdatePendingStatus.run(status, id);
+export async function listPending(sessionId: string): Promise<PendingApprovalRow[]> {
+  return (await getBackend()).listPending(sessionId);
 }
 
-export function getPending(id: string): PendingApprovalRow | null {
-  const row = stmtGetPending.get(id) as PendingApprovalRow | undefined;
-  return row ?? null;
-}
-
-export function listPending(sessionId: string): PendingApprovalRow[] {
-  return stmtListPending.all(sessionId) as PendingApprovalRow[];
-}
-
-export function countPendingApprovals(sessionId: string): number {
-  const row = stmtCountPending.get(sessionId) as { n: number };
-  return row.n;
+export async function countPendingApprovals(sessionId: string): Promise<number> {
+  return (await getBackend()).countPendingApprovals(sessionId);
 }
