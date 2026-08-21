@@ -100,9 +100,14 @@ Access cheat-sheet (verify before trusting local files):
   `/home/ubuntu/supply-chain-agent/ingest-root` as
   `<key with / replaced by _>.<ext>`; `documents.source_uri` points there and
   parsing reads from that path.
-- **Node version trap:** remote `better-sqlite3` is compiled against nvm node
-  v20 while the system node is 18 — run remote node scripts with
-  `~/.nvm/versions/node/v20.20.2/bin/node`.
+- **Node version:** unified on Node 24 LTS (Krypton, `.nvmrc` = 24.19.0;
+  2026-08-21, previously node 20 / 18 mix). The remote nvm default alias is
+  24.19.0, but **non-interactive ssh shells don't load nvm** and fall back to
+  system node 18 — run remote node scripts with an explicit PATH:
+  `export PATH=$HOME/.nvm/versions/node/v24.19.0/bin:$PATH`. `better-sqlite3`
+  is ^12 (has node-24 prebuilds); pm2 daemon was restarted under node 24
+  (cluster-mode children follow the daemon's node binary — `pm2 reload` alone
+  does NOT switch node versions).
 - The `pipeline.db` / `agent.db` copies under the local repo are **not** the
   dev data — when debugging against real uploads/documents, inspect the DB and
   MinIO buckets on 10.10.0.2, not local files.
@@ -169,7 +174,7 @@ than trusting docs.
 ### CI (`.github/workflows/ci.yml`)
 
 Runs on a **self-hosted** runner (not GitHub-hosted — it cannot pull Node from
-GitHub, hence `nvm use 20`). Steps: `npm install` (**not** `npm ci`, per repo
+GitHub, hence `nvm use 24`). Steps: `npm install` (**not** `npm ci`, per repo
 convention), `build`, `lint`, `test`. `OPENAI_API_KEY=ci-dummy-key` is injected
 because `env.ts` zod-parses at import time and unit tests never call the API.
 
@@ -182,7 +187,7 @@ The `deploy` job (`needs: ci`, gated on `push` to `main`) runs on the same
 self-hosted runner and performs the deploy directly on the ubuntu-server.
 Concrete flow (`git clone git@github.com:PengYip/supply-chain-agent.git`):
 
-1. `nvm use 20`; ensure `pm2` is installed globally (`~/.npm-global`).
+1. `nvm use 24`; ensure `pm2` is installed globally (`~/.npm-global`).
 2. Target dir: `~/supply-chain-agent`. First deploy **clones**; subsequent
    deploys `git fetch origin && git reset --hard origin/main` (destructive —
    local changes on the server are discarded).
@@ -195,8 +200,9 @@ Process: **PM2**, app name `sca-server`, entry `apps/server/dist/index.js`,
 single instance, `max_memory_restart: 4G`, `autorestart` on (see
 `ecosystem.config.cjs`). `NODE_ENV=production`.
 
-Prerequisites on the server (not set up by CI): nvm + Node 20, an SSH/git key
-authorized as a deploy key for `PengYip/supply-chain-agent`, and pm2. There is
+Prerequisites on the server (not set up by CI): nvm + Node 24 LTS (24.19.0),
+an SSH/git key authorized as a deploy key for `PengYip/supply-chain-agent`,
+and pm2 (daemon running under node 24). There is
 **no Vercel deploy** — the Hono server on `:3001` serves `apps/web/dist` as
 static files in production, so always build the web app before deploying the
 server.

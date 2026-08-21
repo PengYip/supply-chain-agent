@@ -18,7 +18,7 @@ jobs:
         run: |
           export NVM_DIR=$HOME/.nvm
           . $NVM_DIR/nvm.sh
-          nvm use 20
+          nvm use 24
           echo "$NVM_BIN" >> $GITHUB_PATH
 
       - name: Install dependencies
@@ -42,7 +42,7 @@ jobs:
         run: |
           export NVM_DIR=$HOME/.nvm
           . $NVM_DIR/nvm.sh
-          nvm use 20
+          nvm use 24
           export PATH=$HOME/.npm-global/bin:$PATH
           which pm2 || npm install -g pm2
           DEPLOY_DIR="$HOME/supply-chain-agent"
