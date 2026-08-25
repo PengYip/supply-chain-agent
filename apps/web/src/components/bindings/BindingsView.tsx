@@ -94,6 +94,19 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
     [overview],
   );
 
+  // 业务顺序(2026-08-25): 已挂合同文件的合同号集合——合同类型文档的非 rejected 绑定目标。
+  // 执行类单据(发票/运输单据等)只能绑定到这些合同; 服务端 POST /api/bindings 有同规则硬门禁。
+  const establishedContracts = useMemo(() => {
+    const s = new Set<string>();
+    for (const d of overview) {
+      if (d.docType !== '合同') continue;
+      for (const bk of d.bindings) {
+        if (bk.status !== 'rejected') s.add(bk.contractNo);
+      }
+    }
+    return s;
+  }, [overview]);
+
   // overview 刷新后同步 selected(文档仍存在则保留选中)。
   useEffect(() => {
     if (!selectedDocId) return;
@@ -631,6 +644,7 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
           error={b.candidatesError}
           focusedKey={focusedKey}
           contracts={contracts}
+          establishedContracts={establishedContracts}
           batchErrors={batchErrors}
           pending={pending}
           batchPending={batchPending}

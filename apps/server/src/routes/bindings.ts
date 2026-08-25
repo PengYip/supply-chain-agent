@@ -9,7 +9,7 @@ import {
   listUserDocuments, listBindingsForUser, listBindingProposals, listContractLedgerEntries,
   findBindingById, updateBindingStatus, saveBinding, findBindingByDocAndContract,
   listBindingsForContract, setBindingGraphStatus, getDocumentMeta, type BindingGraphStatus,
-  listExecutionFlows, summarizeExecutionFlows, getDocumentSourcesByIds,
+  listExecutionFlows, summarizeExecutionFlows, getDocumentSourcesByIds, hasContractDocBinding,
 } from '../pipeline/db/repositories.js';
 import { buildBindingCandidates } from '../pipeline/bindingCandidates.js';
 import { syncBindingEdge, removeBindingEdge, type GraphSyncOutcome } from '../pipeline/bindingGraphSync.js';
@@ -239,6 +239,18 @@ bindingsRoute.post('/', async (c) => {
       return c.json({ ok: true, bindingId: existing.id, existing: true, graphSync: sync.outcome, ...(sync.reason ? { graphReason: sync.reason } : {}) });
     }
     return c.json({ ok: true, bindingId: existing.id, existing: true, graphSync: 'ok' });
+  }
+  // 业务顺序门禁(2026-08-25): 执行类单据(非合同文件)绑定前, 目标合同必须已挂
+  // 合同类型文件(先建立合同实体锚点)。合同文件本身不受限——它是链条第一步。
+  const srcMeta = await getDocumentMeta(db, documentId, user.id);
+  if (srcMeta && srcMeta.docType !== '合同') {
+    const established = await hasContractDocBinding(db, contractNo, user.id);
+    if (!established) {
+      return c.json(
+        { error: '该合同尚未绑定合同类型文件：请先在左侧选择合同文件，手动创建到该合同的绑定（关系选"引用"），再绑定执行类单据' },
+        409,
+      );
+    }
   }
   const bindingId = await saveBinding(db, {
     documentId, contractNo, relation, sourceRefs: [],

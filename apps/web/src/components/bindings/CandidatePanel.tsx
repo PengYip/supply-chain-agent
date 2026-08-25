@@ -12,8 +12,9 @@ import {
 import type { Anchors, ContractOption, OverviewDoc } from '../../hooks/useBindings';
 import type { WorkbenchRow } from './BindingsView';
 
-/** 关系类型常用值(对应服务端 bindingRelationFor 映射), 支持自定义。 */
-const RELATION_PRESETS = ['货权转移', '付款', '质检', '凭证'];
+/** 关系类型常用值(对应服务端 bindingRelationFor 映射), 支持自定义。
+ *  「引用」用于把合同类型文件挂到合同实体上——绑定链条的第一步。 */
+const RELATION_PRESETS = ['引用', '货权转移', '付款', '质检', '凭证'];
 
 const inputCls =
   'mt-1 h-8 w-full rounded-md border border-line bg-white px-2.5 text-[12px] text-ink focus:border-primary focus:outline-none';
@@ -44,6 +45,8 @@ interface CandidatePanelProps {
   error: string | null;
   focusedKey: string | null;
   contracts: ContractOption[];
+  /** 已挂合同文件的合同号集合(overview 中 docType=合同 文档的非 rejected 绑定目标)。 */
+  establishedContracts: Set<string>;
   batchErrors: Record<string, string>;
   pending: Set<string>;
   batchPending: boolean;
@@ -64,6 +67,7 @@ export function CandidatePanel({
   error,
   focusedKey,
   contracts,
+  establishedContracts,
   batchErrors,
   pending,
   batchPending,
@@ -109,6 +113,14 @@ export function CandidatePanel({
     );
   }, [contracts, manualSearch]);
 
+  // 业务顺序(2026-08-25): 已挂合同文件的合同排前; 执行类单据(非合同文件)只能选已挂的。
+  const isExecutionDoc = doc != null && doc.docType !== '合同';
+  const { establishedOptions, unestablishedOptions } = useMemo(() => {
+    const est = filteredContracts.filter((c) => establishedContracts.has(c.contractNo));
+    const unest = filteredContracts.filter((c) => !establishedContracts.has(c.contractNo));
+    return { establishedOptions: est, unestablishedOptions: unest };
+  }, [filteredContracts, establishedContracts]);
+
   const toggleChecked = (id: string) => {
     setChecked((prev) => {
       const next = new Set(prev);
@@ -136,6 +148,11 @@ export function CandidatePanel({
     }
     if (!relation) {
       setFormError('请选择或输入关系类型');
+      return;
+    }
+    // 业务顺序门禁(2026-08-25): 执行类单据只能绑定到已挂合同文件的合同。
+    if (doc && doc.docType !== '合同' && !establishedContracts.has(manualContract)) {
+      setFormError('该合同尚未绑定合同类型文件：请先将合同文件绑定到该合同（关系=引用），再绑定执行类单据');
       return;
     }
     setFormError(null);
@@ -357,15 +374,28 @@ export function CandidatePanel({
                     className={inputCls}
                   >
                     <option value="">请选择合同</option>
-                    {filteredContracts.map((c) => (
+                    {establishedOptions.map((c) => (
                       <option key={c.contractNo} value={c.contractNo}>
                         {c.displayContractNo}
                         {c.title ? ` · ${c.title}` : ''}
+                        {' · 已挂合同文件'}
+                      </option>
+                    ))}
+                    {unestablishedOptions.map((c) => (
+                      <option key={c.contractNo} value={c.contractNo} disabled={isExecutionDoc}>
+                        {c.displayContractNo}
+                        {c.title ? ` · ${c.title}` : ''}
+                        {isExecutionDoc ? ' · 未挂合同文件（不可选）' : ' · 未挂合同文件'}
                       </option>
                     ))}
                   </select>
                   {filteredContracts.length === 0 && (
                     <div className="mt-1 text-[11px] text-ink-soft">没有匹配「{manualSearch}」的合同</div>
+                  )}
+                  {isExecutionDoc && (
+                    <div className="mt-1 text-[11px] leading-4 text-ink-soft">
+                      执行类单据只能绑定到「已挂合同文件」的合同；请先把合同类型文件绑定到该合同（关系选「引用」）
+                    </div>
                   )}
                 </div>
                 <div>

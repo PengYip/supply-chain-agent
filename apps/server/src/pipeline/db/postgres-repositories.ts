@@ -621,6 +621,26 @@ export async function listUserDocumentsPg(
   }));
 }
 
+/** 业务顺序门禁(2026-08-25) PG 变体: 目标合同是否已挂合同类型文件。 */
+export async function hasContractDocBindingPg(
+  ctx: PostgresDbContext,
+  contractNo: string,
+  userId?: string,
+): Promise<boolean> {
+  const uid = effectiveUserId(userId);
+  if (!uid) return false;
+  const res = await ctx.pool.query(
+    `SELECT 1 AS ok
+       FROM bindings b
+       JOIN documents d ON d.id = b.document_id
+      WHERE b.contract_no = $1 AND b.status != 'rejected' AND d.doc_type = '合同'
+        AND (d.user_id = $2 OR d.user_id = '' OR d.user_id IS NULL)
+      LIMIT 1`,
+    [contractNo, uid],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
 export async function loadExtractionPg(
   ctx: PostgresDbContext,
   extractionId: string,
