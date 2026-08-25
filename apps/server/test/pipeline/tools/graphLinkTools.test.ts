@@ -45,6 +45,17 @@ describe('link_contracts / link_projects 工具', () => {
     expect(row?.srcKind).toBe('Project');
   });
 
+  it('link_contracts: 分摊入参 allocatedAmount/allocatedQuantity 落 props', async () => {
+    const tool = buildLinkContractsTool({ ctx, userId: 'u1' });
+    const res = await tool.execute!({
+      purchaseContractNo: 'CG-9', salesContractNo: 'XS-9',
+      allocatedAmount: 500000, allocatedQuantity: 200.5,
+    }, { toolCallId: 't1', messages: [] as never[] }) as { status: string };
+    expect(res.status).toBe('ok');
+    const row = await findGraphLinkByTriple(ctx, { kind: 'correlates', srcKey: 'CG-9', dstKey: 'XS-9' }, 'u1');
+    expect(row?.props).toEqual({ allocatedAmount: 500000, allocatedQuantity: 200.5 });
+  });
+
   it('权限注册: 两工具均为 L2 软门控', () => {
     expect(isSoftGate('link_contracts')).toBe(true);
     expect(isSoftGate('link_projects')).toBe(true);

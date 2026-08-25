@@ -68,11 +68,15 @@ export function buildLinkContractsTool(deps: GraphLinkToolDeps) {
       purchaseContractNo: z.string().min(1).describe('采购合同号(主体买进的一方)'),
       salesContractNo: z.string().min(1).describe('销售合同号(主体卖出的一方)'),
       share: z.number().min(0).max(1).optional().describe('对应份额 0-1, 如 0.5 = 一半数量对应'),
+      allocatedAmount: z.number().optional().describe('分摊金额(Phase 3): 这笔对应分摊的合同金额'),
+      allocatedQuantity: z.number().optional().describe('分摊数量(Phase 3): 这笔对应分摊的商品数量'),
       note: z.string().max(500).optional().describe('备注(如批次/业务线索)'),
     }),
-    execute: async ({ purchaseContractNo, salesContractNo, share, note }) => {
+    execute: async ({ purchaseContractNo, salesContractNo, share, allocatedAmount, allocatedQuantity, note }) => {
       const props: Record<string, unknown> = {};
       if (share !== undefined) props.share = share;
+      if (allocatedAmount !== undefined) props.allocatedAmount = allocatedAmount;
+      if (allocatedQuantity !== undefined) props.allocatedQuantity = allocatedQuantity;
       if (note !== undefined) props.note = note;
       const { linkId, graphSync } = await upsertLinkAndSync(deps, {
         kind: 'correlates',
