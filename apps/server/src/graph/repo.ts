@@ -329,3 +329,25 @@ export async function removeEdge(input: RemoveEdgeInput): Promise<number> {
     await session.close();
   }
 }
+
+export interface UpdateNodePropsInput {
+  elementId: string;
+  props: Record<string, unknown>;
+}
+/**
+ * 按 elementId 浅合并节点属性(`SET n += $props`)——对账桥物化通道: 把 SQL
+ * 精确聚合出的 Quota.used / Project.rollup 等数值写回图节点(spec 2026-08-25
+ * 方案A §2)。只更新已存在节点, 不创建; 匹配不到时静默无操作(调用方先行
+ * findEntityByName 判存在)。
+ */
+export async function updateNodeProps(input: UpdateNodePropsInput): Promise<void> {
+  const session = getDriver().session({ defaultAccessMode: neo4j.session.WRITE });
+  try {
+    const cypher = 'MATCH (n) WHERE elementId(n) = $elementId SET n += $props';
+    await session.executeWrite((txc) =>
+      txc.run(cypher, { elementId: input.elementId, props: input.props }),
+    );
+  } finally {
+    await session.close();
+  }
+}

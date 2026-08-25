@@ -273,6 +273,28 @@ export function migrate(sqlite: Database.Database): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_graph_links_triple ON graph_links(kind, src_key, dst_key, user_id);
     CREATE INDEX IF NOT EXISTS idx_graph_links_user ON graph_links(user_id);
     CREATE INDEX IF NOT EXISTS idx_graph_links_src ON graph_links(src_kind, src_key);
+
+    -- Quotas(spec 2026-08-25 方案A §3.1 Quota): 两层额度 SSOT——scope=counterparty
+    -- (对手方授信, owner_key=归一化企业名)或 project(项目限额, owner_key=项目码)。
+    -- used_amount/computed_at 为对账桥物化结果, 只经 updateQuotaUsed 写入;
+    -- 图上 granted 边与 Quota 节点只是本表的投影。
+    CREATE TABLE IF NOT EXISTS quotas (
+      id TEXT PRIMARY KEY,
+      scope TEXT NOT NULL,
+      owner_key TEXT NOT NULL,
+      owner_label TEXT NOT NULL DEFAULT '',
+      limit_amount REAL NOT NULL,
+      currency TEXT,
+      period TEXT,
+      used_amount REAL NOT NULL DEFAULT 0,
+      computed_at TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_by TEXT NOT NULL,
+      user_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_quotas_owner ON quotas(scope, owner_key, user_id);
+    CREATE INDEX IF NOT EXISTS idx_quotas_user ON quotas(user_id);
   `);
 
   // Phase 2 business-data isolation: add user_id to pre-existing dev databases.

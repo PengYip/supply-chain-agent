@@ -105,6 +105,12 @@ import {
   updateGraphLinkStatusPg,
   updateGraphLinkPropsPg,
   setGraphLinkGraphStatusPg,
+  // Quotas(spec 2026-08-25 方案A §3.1): pg twins for 两层额度。
+  saveQuotaPg,
+  findQuotaByIdPg,
+  listQuotasPg,
+  updateQuotaPg,
+  updateQuotaUsedPg,
 } from './postgres-repositories.js';
 
 // Phase 2 business-data isolation: a normalized userId is '' / undefined when the
@@ -2953,4 +2959,162 @@ export async function setGraphLinkGraphStatus(
   } else {
     ctx.sqlite.prepare('UPDATE graph_links SET graph_status = ? WHERE id = ?').run(raw, id);
   }
+}
+
+// ---- Quotas(spec 2026-08-25 方案A §3.1): 两层额度 SSOT ----------------------
+//
+// scope=counterparty(对手方授信, owner_key=归一化企业名)或 project(项目限额,
+// owner_key=项目码)。used_amount/computed_at 为对账桥物化结果, 只经
+// updateQuotaUsed 写入; 图上 granted 边与 Quota 节点只是本表的投影。
+// 同一 owner 允许多条额度(不同 period/currency), 故不做 owner 唯一约束。
+
+export type QuotaStatus = 'active' | 'inactive';
+
+export interface QuotaInput {
+  /** 'counterparty' | 'project'(受控词表 tradeSemantics.QUOTA_SCOPES, 路由层校验)。 */
+  scope: 'counterparty' | 'project';
+  ownerKey: string;
+  ownerLabel?: string;
+  limitAmount: number;
+  currency?: string | null;
+  period?: string | null;
+  createdBy: string;
+}
+
+export interface QuotaRow {
+  id: string;
+  scope: 'counterparty' | 'project';
+  ownerKey: string;
+  ownerLabel: string;
+  limitAmount: number;
+  currency: string | null;
+  period: string | null;
+  usedAmount: number;
+  computedAt: string | null;
+  status: QuotaStatus;
+  createdBy: string;
+  userId: string;
+  createdAt: string;
+}
+
+interface QuotaSqliteRow {
+  id: string; scope: string; owner_key: string; owner_label: string;
+  limit_amount: number; currency: string | null; period: string | null;
+  used_amount: number; computed_at: string | null; status: string;
+  created_by: string; user_id: string; created_at: string;
+}
+
+const QUOTA_COLS = `id, scope, owner_key, owner_label, limit_amount, currency, period,
+  used_amount, computed_at, status, created_by, user_id, created_at`;
+
+function quotaFromSqlite(r: QuotaSqliteRow): QuotaRow {
+  return {
+    id: r.id,
+    scope: r.scope === 'project' ? 'project' : 'counterparty',
+    ownerKey: r.owner_key,
+    ownerLabel: r.owner_label ?? '',
+    limitAmount: r.limit_amount,
+    currency: r.currency ?? null,
+    period: r.period ?? null,
+    usedAmount: r.used_amount ?? 0,
+    computedAt: r.computed_at ?? null,
+    status: (r.status ?? 'active') as QuotaStatus,
+    createdBy: r.created_by,
+    userId: r.user_id ?? '',
+    createdAt: r.created_at,
+  };
+}
+
+/** 创建额度(默认 active, used=0)。返回行 id。 */
+export async function saveQuota(
+  ctx: DbContext, input: QuotaInput, userId?: string,
+): Promise<string> {
+  if (ctx.backend === 'postgres') return saveQuotaPg(ctx, input, userId);
+  const uid = effectiveUserId(userId);
+  const id = rid('Q');
+  ctx.sqlite
+    .prepare(
+      `INSERT INTO quotas
+         (id, scope, owner_key, owner_label, limit_amount, currency, period, status, created_by, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+    )
+    .run(
+      id, input.scope, input.ownerKey, input.ownerLabel ?? '',
+      input.limitAmount, input.currency ?? null, input.period ?? null,
+      input.createdBy, uid,
+    );
+  return id;
+}
+
+export async function findQuotaById(
+  ctx: DbContext, id: string, userId?: string,
+): Promise<QuotaRow | null> {
+  if (ctx.backend === 'postgres') return findQuotaByIdPg(ctx, id, userId);
+  const uid = effectiveUserId(userId);
+  const row = (uid
+    ? ctx.sqlite
+        .prepare(`SELECT ${QUOTA_COLS} FROM quotas WHERE id = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)`)
+        .get(id, uid)
+    : ctx.sqlite.prepare(`SELECT ${QUOTA_COLS} FROM quotas WHERE id = ?`).get(id)) as QuotaSqliteRow | undefined;
+  return row ? quotaFromSqlite(row) : null;
+}
+
+/** 额度列表。默认仅 active; includeInactive=true 时全量。createdAt DESC。 */
+export async function listQuotas(
+  ctx: DbContext, opts?: { scope?: 'counterparty' | 'project'; userId?: string; includeInactive?: boolean },
+): Promise<QuotaRow[]> {
+  if (ctx.backend === 'postgres') return listQuotasPg(ctx, opts);
+  const uid = effectiveUserId(opts?.userId);
+  const scope = opts?.scope;
+  const statusFilter = opts?.includeInactive ? '' : "status = 'active'";
+  const scopeFilter = scope ? 'scope = ?' : '';
+  const userFilter = uid ? "(user_id = ? OR user_id = '' OR user_id IS NULL)" : '';
+  const where = [userFilter, scopeFilter, statusFilter].filter(Boolean).join(' AND ').replace(/^/, 'WHERE ');
+  const params: unknown[] = [];
+  if (uid) params.push(uid);
+  if (scope) params.push(scope);
+  const rows = ctx.sqlite
+    .prepare(`SELECT ${QUOTA_COLS} FROM quotas ${where} ORDER BY created_at DESC`)
+    .all(...params) as QuotaSqliteRow[];
+  return rows.map(quotaFromSqlite);
+}
+
+/** 字段级 patch(limitAmount/currency/period/status); 未命中返回 false。 */
+export async function updateQuota(
+  ctx: DbContext, id: string,
+  patch: { limitAmount?: number; currency?: string | null; period?: string | null; status?: QuotaStatus },
+  userId?: string,
+): Promise<boolean> {
+  if (ctx.backend === 'postgres') return updateQuotaPg(ctx, id, patch, userId);
+  const current = await findQuotaById(ctx, id, userId);
+  if (!current) return false;
+  const limitAmount = patch.limitAmount ?? current.limitAmount;
+  const currency = patch.currency !== undefined ? patch.currency : current.currency;
+  const period = patch.period !== undefined ? patch.period : current.period;
+  const status = patch.status ?? current.status;
+  const uid = effectiveUserId(userId);
+  const res = (uid
+    ? ctx.sqlite
+        .prepare("UPDATE quotas SET limit_amount = ?, currency = ?, period = ?, status = ? WHERE id = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)")
+        .run(limitAmount, currency, period, status, id, uid)
+    : ctx.sqlite
+        .prepare('UPDATE quotas SET limit_amount = ?, currency = ?, period = ?, status = ? WHERE id = ?')
+        .run(limitAmount, currency, period, status, id)) as { changes: number };
+  return res.changes > 0;
+}
+
+/** 对账桥物化结果回写(used + computedAt); 未命中返回 false。 */
+export async function updateQuotaUsed(
+  ctx: DbContext, id: string, used: number, computedAt: string, userId?: string,
+): Promise<boolean> {
+  if (ctx.backend === 'postgres') return updateQuotaUsedPg(ctx, id, used, computedAt, userId);
+  const uid = effectiveUserId(userId);
+  const res = (uid
+    ? ctx.sqlite
+        .prepare("UPDATE quotas SET used_amount = ?, computed_at = ? WHERE id = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)")
+        .run(used, computedAt, id, uid)
+    : ctx.sqlite
+        .prepare('UPDATE quotas SET used_amount = ?, computed_at = ? WHERE id = ?')
+        .run(used, computedAt, id)) as { changes: number };
+  return res.changes > 0;
 }

@@ -207,3 +207,31 @@ export const graphLinks = sqliteTable(
     srcIdx: index('idx_graph_links_src').on(t.srcKind, t.srcKey),
   }),
 );
+
+/**
+ * Quotas(spec 2026-08-25 方案A §3.1 Quota): 两层额度 SSOT——scope=counterparty
+ * (对手方授信)或 project(项目限额)。used_amount/computed_at 为对账桥物化结果。
+ */
+export const quotas = sqliteTable(
+  'quotas',
+  {
+    id: text('id').primaryKey(),
+    /** 'counterparty' | 'project'(受控词表 domain/tradeSemantics.QUOTA_SCOPES)。 */
+    scope: text('scope').notNull(),
+    ownerKey: text('owner_key').notNull(),
+    ownerLabel: text('owner_label').notNull().default(''),
+    limitAmount: real('limit_amount').notNull(),
+    currency: text('currency'),
+    period: text('period'),
+    usedAmount: real('used_amount').notNull().default(0),
+    computedAt: text('computed_at'),
+    status: text('status').notNull().default('active'),
+    createdBy: text('created_by').notNull(),
+    userId: text('user_id').notNull().default(''),
+    createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  },
+  (t) => ({
+    ownerIdx: index('idx_quotas_owner').on(t.scope, t.ownerKey, t.userId),
+    userIdx: index('idx_quotas_user').on(t.userId),
+  }),
+);

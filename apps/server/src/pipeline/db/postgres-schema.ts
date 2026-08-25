@@ -298,6 +298,34 @@ export const graphLinks = pgTable(
   }),
 );
 
+/**
+ * quotas(spec 2026-08-25 方案A §3.1 Quota): 两层额度 SSOT。Mirrors SQLite
+ * quotas 列对列; limit/used 用 double precision(与 execution_flows.amount 惯例
+ * 一致, 避免 numeric 读回字符串)。
+ */
+export const quotas = pgTable(
+  'quotas',
+  {
+    id: text('id').primaryKey(),
+    scope: text('scope').notNull(),
+    ownerKey: text('owner_key').notNull(),
+    ownerLabel: text('owner_label').notNull().default(''),
+    limitAmount: doublePrecision('limit_amount').notNull(),
+    currency: text('currency'),
+    period: text('period'),
+    usedAmount: doublePrecision('used_amount').notNull().default(0),
+    computedAt: text('computed_at'),
+    status: text('status').notNull().default('active'),
+    createdBy: text('created_by').notNull(),
+    userId: text('user_id').notNull().default(''),
+    createdAt: nowTs(),
+  },
+  (t) => ({
+    ownerIdx: index('idx_quotas_owner').on(t.scope, t.ownerKey, t.userId),
+    userIdx: index('idx_quotas_user').on(t.userId),
+  }),
+);
+
 // ---- Harness session store (sessions/messages/approvals/events/favorites) ---
 //
 // MIRRORS the runtime idempotent DDL in src/harness/sessionStorePostgres.ts

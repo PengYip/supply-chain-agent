@@ -63,6 +63,9 @@ import type {
   GraphLinkInput,
   GraphLinkRow,
   GraphLinkStatus,
+  QuotaInput,
+  QuotaRow,
+  QuotaStatus,
 } from './repositories.js';
 
 // Phase 2 business-data isolation: same convention as repositories.ts -- a
@@ -2255,4 +2258,130 @@ export async function setGraphLinkGraphStatusPg(
   } else {
     await ctx.pool.query('UPDATE graph_links SET graph_status = $1 WHERE id = $2', [raw, id]);
   }
+}
+
+// ---- Quotas(spec 2026-08-25 方案A §3.1): pg twins ----------------------------
+// limit/used 为 double precision(读回即 number), 其余同 SQLite 列对列。
+
+interface QuotaPgRaw {
+  id: string; scope: string; owner_key: string; owner_label: string;
+  limit_amount: number | string; currency: string | null; period: string | null;
+  used_amount: number | string; computed_at: string | null; status: string;
+  created_by: string; user_id: string | null; created_at: string | Date;
+}
+
+const QUOTA_COLS_PG = `id, scope, owner_key, owner_label, limit_amount, currency, period,
+  used_amount, computed_at, status, created_by, user_id, created_at`;
+
+function quotaFromPg(r: QuotaPgRaw): QuotaRow {
+  const num = (v: number | string) => (typeof v === 'number' ? v : parseFloat(v ?? '0'));
+  return {
+    id: r.id,
+    scope: r.scope === 'project' ? 'project' : 'counterparty',
+    ownerKey: r.owner_key,
+    ownerLabel: r.owner_label ?? '',
+    limitAmount: num(r.limit_amount),
+    currency: r.currency ?? null,
+    period: r.period ?? null,
+    usedAmount: num(r.used_amount ?? 0),
+    computedAt: r.computed_at ?? null,
+    status: (r.status ?? 'active') as QuotaStatus,
+    createdBy: r.created_by,
+    userId: r.user_id ?? '',
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+  };
+}
+
+export async function saveQuotaPg(
+  ctx: PostgresDbContext, input: QuotaInput, userId?: string,
+): Promise<string> {
+  const uid = effectiveUserId(userId);
+  const id = rid('Q');
+  await ctx.pool.query(
+    `INSERT INTO quotas
+       (id, scope, owner_key, owner_label, limit_amount, currency, period, status, created_by, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9)`,
+    [
+      id, input.scope, input.ownerKey, input.ownerLabel ?? '',
+      input.limitAmount, input.currency ?? null, input.period ?? null,
+      input.createdBy, uid,
+    ],
+  );
+  return id;
+}
+
+export async function findQuotaByIdPg(
+  ctx: PostgresDbContext, id: string, userId?: string,
+): Promise<QuotaRow | null> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT ${QUOTA_COLS_PG} FROM quotas WHERE id = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)`,
+        [id, uid],
+      )
+    : await ctx.pool.query(`SELECT ${QUOTA_COLS_PG} FROM quotas WHERE id = $1`, [id]);
+  return res.rows[0] ? quotaFromPg(res.rows[0] as unknown as QuotaPgRaw) : null;
+}
+
+export async function listQuotasPg(
+  ctx: PostgresDbContext, opts?: { scope?: 'counterparty' | 'project'; userId?: string; includeInactive?: boolean },
+): Promise<QuotaRow[]> {
+  const uid = effectiveUserId(opts?.userId);
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (uid) {
+    params.push(uid);
+    clauses.push(`(user_id = $${params.length} OR user_id = '' OR user_id IS NULL)`);
+  }
+  if (opts?.scope) {
+    params.push(opts.scope);
+    clauses.push(`scope = $${params.length}`);
+  }
+  if (!opts?.includeInactive) clauses.push(`status = 'active'`);
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const res = await ctx.pool.query(
+    `SELECT ${QUOTA_COLS_PG} FROM quotas ${where} ORDER BY created_at DESC`,
+    params,
+  );
+  return res.rows.map((r) => quotaFromPg(r as unknown as QuotaPgRaw));
+}
+
+export async function updateQuotaPg(
+  ctx: PostgresDbContext, id: string,
+  patch: { limitAmount?: number; currency?: string | null; period?: string | null; status?: QuotaStatus },
+  userId?: string,
+): Promise<boolean> {
+  const current = await findQuotaByIdPg(ctx, id, userId);
+  if (!current) return false;
+  const limitAmount = patch.limitAmount ?? current.limitAmount;
+  const currency = patch.currency !== undefined ? patch.currency : current.currency;
+  const period = patch.period !== undefined ? patch.period : current.period;
+  const status = patch.status ?? current.status;
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        "UPDATE quotas SET limit_amount = $1, currency = $2, period = $3, status = $4 WHERE id = $5 AND (user_id = $6 OR user_id = '' OR user_id IS NULL)",
+        [limitAmount, currency, period, status, id, uid],
+      )
+    : await ctx.pool.query(
+        'UPDATE quotas SET limit_amount = $1, currency = $2, period = $3, status = $4 WHERE id = $5',
+        [limitAmount, currency, period, status, id],
+      );
+  return (res.rowCount ?? 0) > 0;
+}
+
+export async function updateQuotaUsedPg(
+  ctx: PostgresDbContext, id: string, used: number, computedAt: string, userId?: string,
+): Promise<boolean> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        "UPDATE quotas SET used_amount = $1, computed_at = $2 WHERE id = $3 AND (user_id = $4 OR user_id = '' OR user_id IS NULL)",
+        [used, computedAt, id, uid],
+      )
+    : await ctx.pool.query(
+        'UPDATE quotas SET used_amount = $1, computed_at = $2 WHERE id = $3',
+        [used, computedAt, id],
+      );
+  return (res.rowCount ?? 0) > 0;
 }
