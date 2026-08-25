@@ -15,6 +15,7 @@ import { buildBindingCandidates } from '../pipeline/bindingCandidates.js';
 import { syncBindingEdge, removeBindingEdge, type GraphSyncOutcome } from '../pipeline/bindingGraphSync.js';
 import { materializeExecutionFlow, retractExecutionFlow, getEffectiveSelfPartyNames } from '../pipeline/executionFlow.js';
 import { DOC_TYPES } from '../pipeline/classifier.js';
+import { parseFileKey } from './files.js';
 
 export const bindingsRoute = new Hono<AuthEnv>();
 
@@ -43,13 +44,19 @@ bindingsRoute.get('/overview', async (c) => {
     });
     byDoc.set(b.documentId, list);
   }
-  const documents = docs.map((d) => ({
-    docId: d.id,
-    fileName: (d.sourceUri ?? '').split('/').pop() ?? d.sourceUri ?? '',
-    docType: d.docType,
-    createdAt: d.createdAt,
-    bindings: byDoc.get(d.id) ?? [],
-  }));
+  const documents = docs.map((d) => {
+    // 目录上下文(2026-08-25): 绑定工作台需要展示文件所在文件夹, 便于按业务链
+    // (如 汽运业务资料/煤焦化/2.发运单据)精确配对。minio_key 缺失时回退 '/'。
+    const parsed = d.minioKey ? parseFileKey(d.minioKey, user.id) : null;
+    return {
+      docId: d.id,
+      fileName: parsed?.name ?? (d.sourceUri ?? '').split('/').pop() ?? d.sourceUri ?? '',
+      directory: parsed?.directory ?? '/',
+      docType: d.docType,
+      createdAt: d.createdAt,
+      bindings: byDoc.get(d.id) ?? [],
+    };
+  });
   // 单据类型词汇表(SSOT: pipeline/classifier DOC_TYPES), 前端据此渲染 docType
   // 下拉/徽章, 不必硬编码。
   return c.json({ documents, docTypes: [...DOC_TYPES] });

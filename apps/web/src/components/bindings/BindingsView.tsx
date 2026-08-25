@@ -602,11 +602,12 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
         <div
           className={clsx(
             'flex min-h-0 shrink-0 overflow-hidden transition-[width] duration-200',
-            docsCollapsed ? 'w-0' : 'w-64',
+            docsCollapsed ? 'w-0' : 'w-80',
           )}
         >
           <DocListPanel
             docs={overview}
+            docTypes={b.docTypes}
             loading={b.loading}
             error={b.error}
             selectedDocId={selectedDocId}

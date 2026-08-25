@@ -135,11 +135,12 @@ export async function countExtractionsNeedingReview(ctx: DbContext, userId?: str
   return row?.n ?? 0;
 }
 
-/** Doc row shape for doc list surfaces: id + created_at (graph route) + docType/sourceUri (bindings workbench overview). */
+/** Doc row shape for doc list surfaces: id + created_at (graph route) + docType/sourceUri/minioKey (bindings workbench overview). */
 export interface UserDocumentRow {
   id: string;
   docType: string;
   sourceUri: string | null;
+  minioKey: string | null;
   createdAt: string;
 }
 
@@ -157,13 +158,14 @@ export async function listUserDocuments(
   const uid = effectiveUserId(userId);
   const rows = ctx.sqlite
     .prepare(
-      "SELECT id, doc_type, source_uri, created_at FROM documents WHERE (user_id = ? OR user_id = '' OR user_id IS NULL) ORDER BY created_at DESC",
+      "SELECT id, doc_type, source_uri, minio_key, created_at FROM documents WHERE (user_id = ? OR user_id = '' OR user_id IS NULL) ORDER BY created_at DESC",
     )
-    .all(uid) as Array<{ id: string; doc_type: string; source_uri: string | null; created_at: string }>;
+    .all(uid) as Array<{ id: string; doc_type: string; source_uri: string | null; minio_key: string | null; created_at: string }>;
   return rows.map((r) => ({
     id: r.id,
     docType: r.doc_type,
     sourceUri: r.source_uri,
+    minioKey: r.minio_key ?? null,
     createdAt: r.created_at,
   }));
 }

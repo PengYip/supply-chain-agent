@@ -79,7 +79,7 @@ function normalizeDirectory(dir: string): string {
  *   - directory: the folder path between the user prefix and the filename,
  *     prefixed with '/'. '/' when the file lives at the user root.
  */
-function parseFileKey(key: string, userId: string): { name: string; directory: string } | null {
+export function parseFileKey(key: string, userId: string): { name: string; directory: string } | null {
   const prefix = `users/${userId}/`;
   if (!key.startsWith(prefix)) return null;
   const rest = key.slice(prefix.length);

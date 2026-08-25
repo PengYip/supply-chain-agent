@@ -18,6 +18,8 @@ export interface BindingListItem {
 export interface OverviewDoc {
   docId: string;
   fileName: string;
+  /** 文件所在目录(如 "/汽运业务资料/煤焦化/2.发运单据"), 根目录为 "/"。 */
+  directory: string;
   docType: string;
   createdAt: string;
   bindings: BindingListItem[];
@@ -228,6 +230,7 @@ function normalizeOverviewDoc(raw: Record<string, unknown>): OverviewDoc | null 
   return {
     docId,
     fileName: asStr(raw.fileName),
+    directory: asStr(raw.directory) || '/',
     docType: asStr(raw.docType),
     createdAt: asStr(raw.createdAt),
     bindings,

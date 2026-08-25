@@ -606,16 +606,17 @@ export async function countExtractionsNeedingReviewPg(ctx: PostgresDbContext, us
 export async function listUserDocumentsPg(
   ctx: PostgresDbContext,
   userId: string,
-): Promise<Array<{ id: string; docType: string; sourceUri: string | null; createdAt: string }>> {
+): Promise<Array<{ id: string; docType: string; sourceUri: string | null; minioKey: string | null; createdAt: string }>> {
   const uid = effectiveUserId(userId);
   const res = await ctx.pool.query(
-    "SELECT id, doc_type, source_uri, created_at FROM documents WHERE (user_id = $1 OR user_id = '' OR user_id IS NULL) ORDER BY created_at DESC",
+    "SELECT id, doc_type, source_uri, minio_key, created_at FROM documents WHERE (user_id = $1 OR user_id = '' OR user_id IS NULL) ORDER BY created_at DESC",
     [uid],
   );
   return res.rows.map((r) => ({
     id: r.id,
     docType: r.doc_type,
     sourceUri: r.source_uri,
+    minioKey: r.minio_key ?? null,
     createdAt: r.created_at,
   }));
 }
