@@ -174,3 +174,36 @@ export const executionFlows = sqliteTable(
     contractIdx: index('idx_execution_flows_contract').on(t.contractNo, t.userId),
   }),
 );
+
+/**
+ * Graph links(spec 2026-08-25 方案A §3.3/§6): correlates(背靠背购销对应)与
+ * relates(项目级关联)的提案-确认 SSOT。图上的边只是确认后的投影。triple 唯一
+ * (kind+src_key+dst_key+user_id)支撑幂等 upsert; props 为 JSON 自由属性。
+ */
+export const graphLinks = sqliteTable(
+  'graph_links',
+  {
+    id: text('id').primaryKey(),
+    /** 'correlates' | 'relates'(受控词表 domain/tradeSemantics.GRAPH_TRADE_EDGES)。 */
+    kind: text('kind').notNull(),
+    srcKind: text('src_kind').notNull(),
+    srcKey: text('src_key').notNull(),
+    srcLabel: text('src_label').notNull().default(''),
+    dstKind: text('dst_kind').notNull(),
+    dstKey: text('dst_key').notNull(),
+    dstLabel: text('dst_label').notNull().default(''),
+    props: text('props').notNull().default('{}'), // JSON
+    confidence: real('confidence').notNull().default(0),
+    status: text('status').notNull().default('proposed'),
+    confirmationSource: text('confirmation_source'),
+    createdBy: text('created_by').notNull(),
+    userId: text('user_id').notNull().default(''),
+    createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+    graphStatus: text('graph_status'), // JSON(BindingGraphStatus)
+  },
+  (t) => ({
+    tripleIdx: uniqueIndex('idx_graph_links_triple').on(t.kind, t.srcKey, t.dstKey, t.userId),
+    userIdx: index('idx_graph_links_user').on(t.userId),
+    srcIdx: index('idx_graph_links_src').on(t.srcKind, t.srcKey),
+  }),
+);

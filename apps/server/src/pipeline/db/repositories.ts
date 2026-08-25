@@ -96,6 +96,15 @@ import {
   listMembershipsByContractPg,
   updateMembershipStatusPg,
   setMembershipGraphStatusPg,
+  // Graph links(spec 2026-08-25 方案A): pg twins for correlates/relates 提案-确认。
+  saveGraphLinkPg,
+  findGraphLinkByIdPg,
+  findGraphLinkByTriplePg,
+  listGraphLinkProposalsPg,
+  listGraphLinksPg,
+  updateGraphLinkStatusPg,
+  updateGraphLinkPropsPg,
+  setGraphLinkGraphStatusPg,
 } from './postgres-repositories.js';
 
 // Phase 2 business-data isolation: a normalized userId is '' / undefined when the
@@ -2731,5 +2740,217 @@ export async function setMembershipGraphStatus(
       .run(JSON.stringify(gs), id, uid);
   } else {
     ctx.sqlite.prepare('UPDATE project_memberships SET graph_status = ? WHERE id = ?').run(JSON.stringify(gs), id);
+  }
+}
+
+// ---- Graph links(spec 2026-08-25 方案A §3.3/§6): correlates/relates 提案-确认 SSOT
+//
+// 图上的 correlates/relates 边只是本表确认后的投影(与 bindings -> binds 边同
+// 模式)。triple 唯一(kind+src_key+dst_key+user_id)支撑幂等 upsert; props 为
+// JSON 自由属性(白名单裁剪在路由层, 存储层不解释)。
+
+export type GraphLinkStatus = 'proposed' | 'confirmed' | 'rejected';
+
+export interface GraphLinkInput {
+  /** 'correlates' | 'relates'(受控词表 tradeSemantics.GRAPH_TRADE_EDGES)。 */
+  kind: string;
+  srcKind: string;
+  srcKey: string;
+  srcLabel?: string;
+  dstKind: string;
+  dstKey: string;
+  dstLabel?: string;
+  props?: Record<string, unknown>;
+  confidence?: number;
+  /** 缺省 proposed; 人工作台直建传 confirmed。 */
+  status?: 'proposed' | 'confirmed';
+  confirmationSource?: string | null;
+  createdBy: string;
+}
+
+export interface GraphLinkRow {
+  id: string;
+  kind: string;
+  srcKind: string;
+  srcKey: string;
+  srcLabel: string;
+  dstKind: string;
+  dstKey: string;
+  dstLabel: string;
+  props: Record<string, unknown>;
+  confidence: number;
+  status: GraphLinkStatus;
+  confirmationSource: string | null;
+  createdBy: string;
+  userId: string;
+  createdAt: string;
+  graphStatus: BindingGraphStatus | null;
+}
+
+interface GraphLinkSqliteRow {
+  id: string; kind: string; src_kind: string; src_key: string; src_label: string;
+  dst_kind: string; dst_key: string; dst_label: string;
+  props: string; confidence: number; status: string; confirmation_source: string | null;
+  created_by: string; user_id: string; created_at: string; graph_status: string | null;
+}
+
+const GRAPH_LINK_COLS = `id, kind, src_kind, src_key, src_label, dst_kind, dst_key, dst_label,
+  props, confidence, status, confirmation_source, created_by, user_id, created_at, graph_status`;
+
+function graphLinkFromSqlite(r: GraphLinkSqliteRow): GraphLinkRow {
+  let props: Record<string, unknown> = {};
+  try { props = JSON.parse(r.props) as Record<string, unknown>; } catch { /* 损坏行按空 props */ }
+  return {
+    id: r.id, kind: r.kind,
+    srcKind: r.src_kind, srcKey: r.src_key, srcLabel: r.src_label,
+    dstKind: r.dst_kind, dstKey: r.dst_key, dstLabel: r.dst_label,
+    props,
+    confidence: r.confidence,
+    status: (r.status ?? 'proposed') as GraphLinkStatus,
+    confirmationSource: r.confirmation_source ?? null,
+    createdBy: r.created_by,
+    userId: r.user_id ?? '',
+    createdAt: r.created_at,
+    graphStatus: parseGraphStatus(r.graph_status),
+  };
+}
+
+/**
+ * 幂等 upsert: 同 triple 复活更新(label/props/confidence/status/confirmation_source/
+ * created_by), 返回行 id。人工作台重发与 Agent 重提都收敛到同一行。
+ */
+export async function saveGraphLink(
+  ctx: DbContext, input: GraphLinkInput, userId?: string,
+): Promise<string> {
+  if (ctx.backend === 'postgres') return saveGraphLinkPg(ctx, input, userId);
+  const uid = effectiveUserId(userId);
+  const row = ctx.sqlite
+    .prepare(
+      `INSERT INTO graph_links
+         (id, kind, src_kind, src_key, src_label, dst_kind, dst_key, dst_label,
+          props, confidence, status, confirmation_source, created_by, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(kind, src_key, dst_key, user_id) DO UPDATE SET
+         src_label = excluded.src_label,
+         dst_label = excluded.dst_label,
+         props = excluded.props,
+         confidence = excluded.confidence,
+         status = excluded.status,
+         confirmation_source = excluded.confirmation_source,
+         created_by = excluded.created_by
+       RETURNING id`,
+    )
+    .get(
+      rid('GL'), input.kind, input.srcKind, input.srcKey, input.srcLabel ?? '',
+      input.dstKind, input.dstKey, input.dstLabel ?? '',
+      JSON.stringify(input.props ?? {}), input.confidence ?? 0,
+      input.status ?? 'proposed', input.confirmationSource ?? null,
+      input.createdBy, uid,
+    ) as { id: string } | undefined;
+  if (!row) throw new Error('saveGraphLink: upsert returned no id');
+  return row.id;
+}
+
+export async function findGraphLinkById(
+  ctx: DbContext, id: string, userId?: string,
+): Promise<GraphLinkRow | null> {
+  if (ctx.backend === 'postgres') return findGraphLinkByIdPg(ctx, id, userId);
+  const uid = effectiveUserId(userId);
+  const row = (uid
+    ? ctx.sqlite
+        .prepare(`SELECT ${GRAPH_LINK_COLS} FROM graph_links WHERE id = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)`)
+        .get(id, uid)
+    : ctx.sqlite.prepare(`SELECT ${GRAPH_LINK_COLS} FROM graph_links WHERE id = ?`).get(id)) as GraphLinkSqliteRow | undefined;
+  return row ? graphLinkFromSqlite(row) : null;
+}
+
+export async function findGraphLinkByTriple(
+  ctx: DbContext, q: { kind: string; srcKey: string; dstKey: string }, userId?: string,
+): Promise<GraphLinkRow | null> {
+  if (ctx.backend === 'postgres') return findGraphLinkByTriplePg(ctx, q, userId);
+  const uid = effectiveUserId(userId);
+  const row = (uid
+    ? ctx.sqlite
+        .prepare(`SELECT ${GRAPH_LINK_COLS} FROM graph_links WHERE kind = ? AND src_key = ? AND dst_key = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)`)
+        .get(q.kind, q.srcKey, q.dstKey, uid)
+    : ctx.sqlite
+        .prepare(`SELECT ${GRAPH_LINK_COLS} FROM graph_links WHERE kind = ? AND src_key = ? AND dst_key = ?`)
+        .get(q.kind, q.srcKey, q.dstKey)) as GraphLinkSqliteRow | undefined;
+  return row ? graphLinkFromSqlite(row) : null;
+}
+
+/** 待确认提案(status=proposed), createdAt DESC。 */
+export async function listGraphLinkProposals(ctx: DbContext, userId?: string): Promise<GraphLinkRow[]> {
+  if (ctx.backend === 'postgres') return listGraphLinkProposalsPg(ctx, userId);
+  const uid = effectiveUserId(userId);
+  const rows = (uid
+    ? ctx.sqlite
+        .prepare(`SELECT ${GRAPH_LINK_COLS} FROM graph_links WHERE status = 'proposed' AND (user_id = ? OR user_id = '' OR user_id IS NULL) ORDER BY created_at DESC`)
+        .all(uid)
+    : ctx.sqlite
+        .prepare(`SELECT ${GRAPH_LINK_COLS} FROM graph_links WHERE status = 'proposed' ORDER BY created_at DESC`)
+        .all()) as GraphLinkSqliteRow[];
+  return rows.map(graphLinkFromSqlite);
+}
+
+/** 全状态列表(rejected 含内, 调用方自行过滤), createdAt DESC。 */
+export async function listGraphLinks(ctx: DbContext, userId?: string): Promise<GraphLinkRow[]> {
+  if (ctx.backend === 'postgres') return listGraphLinksPg(ctx, userId);
+  const uid = effectiveUserId(userId);
+  const rows = (uid
+    ? ctx.sqlite
+        .prepare(`SELECT ${GRAPH_LINK_COLS} FROM graph_links WHERE (user_id = ? OR user_id = '' OR user_id IS NULL) ORDER BY created_at DESC`)
+        .all(uid)
+    : ctx.sqlite.prepare(`SELECT ${GRAPH_LINK_COLS} FROM graph_links ORDER BY created_at DESC`).all()) as GraphLinkSqliteRow[];
+  return rows.map(graphLinkFromSqlite);
+}
+
+/** 状态机推进(proposed->confirmed|rejected / rejected->confirmed 复活路径)。 */
+export async function updateGraphLinkStatus(
+  ctx: DbContext, id: string, status: Exclude<GraphLinkStatus, 'proposed'>,
+  confirmationSource: 'human' | 'agent', userId?: string,
+): Promise<boolean> {
+  if (ctx.backend === 'postgres') return updateGraphLinkStatusPg(ctx, id, status, confirmationSource, userId);
+  const uid = effectiveUserId(userId);
+  const res = (uid
+    ? ctx.sqlite
+        .prepare("UPDATE graph_links SET status = ?, confirmation_source = ? WHERE id = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)")
+        .run(status, confirmationSource, id, uid)
+    : ctx.sqlite
+        .prepare('UPDATE graph_links SET status = ?, confirmation_source = ? WHERE id = ?')
+        .run(status, confirmationSource, id)) as { changes: number };
+  return res.changes > 0;
+}
+
+/** props JSON 浅合并(patch 键覆盖同名既有键)。 */
+export async function updateGraphLinkProps(
+  ctx: DbContext, id: string, patch: Record<string, unknown>, userId?: string,
+): Promise<boolean> {
+  if (ctx.backend === 'postgres') return updateGraphLinkPropsPg(ctx, id, patch, userId);
+  const current = await findGraphLinkById(ctx, id, userId);
+  if (!current) return false;
+  const merged = { ...current.props, ...patch };
+  const uid = effectiveUserId(userId);
+  const res = (uid
+    ? ctx.sqlite
+        .prepare("UPDATE graph_links SET props = ? WHERE id = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)")
+        .run(JSON.stringify(merged), id, uid)
+    : ctx.sqlite.prepare('UPDATE graph_links SET props = ? WHERE id = ?').run(JSON.stringify(merged), id)) as { changes: number };
+  return res.changes > 0;
+}
+
+/** 边同步结果落库(gs=null 清空)。 */
+export async function setGraphLinkGraphStatus(
+  ctx: DbContext, id: string, gs: BindingGraphStatus | null, userId?: string,
+): Promise<void> {
+  if (ctx.backend === 'postgres') return setGraphLinkGraphStatusPg(ctx, id, gs, userId);
+  const raw = gs ? JSON.stringify(gs) : null;
+  const uid = effectiveUserId(userId);
+  if (uid) {
+    ctx.sqlite
+      .prepare("UPDATE graph_links SET graph_status = ? WHERE id = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)")
+      .run(raw, id, uid);
+  } else {
+    ctx.sqlite.prepare('UPDATE graph_links SET graph_status = ? WHERE id = ?').run(raw, id);
   }
 }

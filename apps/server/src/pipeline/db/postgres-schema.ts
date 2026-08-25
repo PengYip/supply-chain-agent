@@ -266,6 +266,38 @@ export const executionFlows = pgTable(
   }),
 );
 
+/**
+ * graph_links(spec 2026-08-25 方案A §3.3/§6): correlates(背靠背购销对应)与
+ * relates(项目级关联)的提案-确认 SSOT。Mirrors SQLite graph_links 列对列;
+ * props/graph_status 为 TEXT(JSON 字符串), 与本文件 JSON-in-TEXT 惯例一致。
+ */
+export const graphLinks = pgTable(
+  'graph_links',
+  {
+    id: text('id').primaryKey(),
+    kind: text('kind').notNull(),
+    srcKind: text('src_kind').notNull(),
+    srcKey: text('src_key').notNull(),
+    srcLabel: text('src_label').notNull().default(''),
+    dstKind: text('dst_kind').notNull(),
+    dstKey: text('dst_key').notNull(),
+    dstLabel: text('dst_label').notNull().default(''),
+    props: text('props').notNull().default('{}'),
+    confidence: numeric('confidence', { precision: 5, scale: 4 }).notNull().default(sql`0`),
+    status: text('status').notNull().default('proposed'),
+    confirmationSource: text('confirmation_source'),
+    createdBy: text('created_by').notNull(),
+    userId: text('user_id').notNull().default(''),
+    createdAt: nowTs(),
+    graphStatus: text('graph_status'),
+  },
+  (t) => ({
+    tripleIdx: uniqueIndex('idx_graph_links_triple').on(t.kind, t.srcKey, t.dstKey, t.userId),
+    userIdx: index('idx_graph_links_user').on(t.userId),
+    srcIdx: index('idx_graph_links_src').on(t.srcKind, t.srcKey),
+  }),
+);
+
 // ---- Harness session store (sessions/messages/approvals/events/favorites) ---
 //
 // MIRRORS the runtime idempotent DDL in src/harness/sessionStorePostgres.ts

@@ -247,6 +247,32 @@ export function migrate(sqlite: Database.Database): void {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_flows_binding ON execution_flows(binding_id, user_id);
     CREATE INDEX IF NOT EXISTS idx_execution_flows_contract ON execution_flows(contract_no, user_id);
+
+    -- Graph links (spec 2026-08-25 方案A §3.3/§6): correlates(背靠背购销对应)与
+    -- relates(项目级关联)的提案-确认 SSOT。图上的边只是本表确认后的投影。
+    -- triple 唯一(kind+src_key+dst_key+user_id)支撑幂等 upsert; props 为 JSON
+    -- 自由属性(share/type/note/allocated*, 白名单裁剪在路由层)。
+    CREATE TABLE IF NOT EXISTS graph_links (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      src_kind TEXT NOT NULL,
+      src_key TEXT NOT NULL,
+      src_label TEXT NOT NULL DEFAULT '',
+      dst_kind TEXT NOT NULL,
+      dst_key TEXT NOT NULL,
+      dst_label TEXT NOT NULL DEFAULT '',
+      props TEXT NOT NULL DEFAULT '{}',
+      confidence REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'proposed',
+      confirmation_source TEXT,
+      created_by TEXT NOT NULL,
+      user_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      graph_status TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_graph_links_triple ON graph_links(kind, src_key, dst_key, user_id);
+    CREATE INDEX IF NOT EXISTS idx_graph_links_user ON graph_links(user_id);
+    CREATE INDEX IF NOT EXISTS idx_graph_links_src ON graph_links(src_kind, src_key);
   `);
 
   // Phase 2 business-data isolation: add user_id to pre-existing dev databases.

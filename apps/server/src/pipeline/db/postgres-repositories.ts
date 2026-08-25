@@ -60,6 +60,9 @@ import type {
   MembershipProposedBy,
   ProjectMembershipRow,
   ProjectMembershipInput,
+  GraphLinkInput,
+  GraphLinkRow,
+  GraphLinkStatus,
 } from './repositories.js';
 
 // Phase 2 business-data isolation: same convention as repositories.ts -- a
@@ -2090,5 +2093,166 @@ export async function setMembershipGraphStatusPg(
     );
   } else {
     await ctx.pool.query('UPDATE project_memberships SET graph_status = $1 WHERE id = $2', [JSON.stringify(gs), id]);
+  }
+}
+
+// ---- Graph links(spec 2026-08-25 方案A §3.3/§6): pg twins -------------------
+// props/graph_status 为 TEXT(JSON 字符串, 与本文件 JSON-in-TEXT 惯例一致);
+// confidence numeric(5,4) 读回为字符串 -> parseFloat。
+
+interface GraphLinkPgRaw {
+  id: string; kind: string; src_kind: string; src_key: string; src_label: string;
+  dst_kind: string; dst_key: string; dst_label: string;
+  props: string; confidence: string | number; status: string; confirmation_source: string | null;
+  created_by: string; user_id: string | null; created_at: string | Date; graph_status: string | null;
+}
+
+const GRAPH_LINK_COLS_PG = `id, kind, src_kind, src_key, src_label, dst_kind, dst_key, dst_label,
+  props, confidence, status, confirmation_source, created_by, user_id, created_at, graph_status`;
+
+function graphLinkFromPg(r: GraphLinkPgRaw): GraphLinkRow {
+  let props: Record<string, unknown> = {};
+  try { props = JSON.parse(String(r.props ?? '{}')) as Record<string, unknown>; } catch { /* 损坏行按空 props */ }
+  return {
+    id: r.id, kind: r.kind,
+    srcKind: r.src_kind, srcKey: r.src_key, srcLabel: r.src_label,
+    dstKind: r.dst_kind, dstKey: r.dst_key, dstLabel: r.dst_label,
+    props,
+    confidence: typeof r.confidence === 'number' ? r.confidence : parseFloat(r.confidence ?? '0'),
+    status: (r.status ?? 'proposed') as GraphLinkStatus,
+    confirmationSource: r.confirmation_source ?? null,
+    createdBy: r.created_by,
+    userId: r.user_id ?? '',
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+    graphStatus: parseGraphStatus(r.graph_status),
+  };
+}
+
+export async function saveGraphLinkPg(
+  ctx: PostgresDbContext, input: GraphLinkInput, userId?: string,
+): Promise<string> {
+  const uid = effectiveUserId(userId);
+  const res = await ctx.pool.query<{ id: string }>(
+    `INSERT INTO graph_links
+       (id, kind, src_kind, src_key, src_label, dst_kind, dst_key, dst_label,
+        props, confidence, status, confirmation_source, created_by, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+     ON CONFLICT(kind, src_key, dst_key, user_id) DO UPDATE SET
+       src_label = EXCLUDED.src_label,
+       dst_label = EXCLUDED.dst_label,
+       props = EXCLUDED.props,
+       confidence = EXCLUDED.confidence,
+       status = EXCLUDED.status,
+       confirmation_source = EXCLUDED.confirmation_source,
+       created_by = EXCLUDED.created_by
+     RETURNING id`,
+    [
+      rid('GL'), input.kind, input.srcKind, input.srcKey, input.srcLabel ?? '',
+      input.dstKind, input.dstKey, input.dstLabel ?? '',
+      JSON.stringify(input.props ?? {}), input.confidence ?? 0,
+      input.status ?? 'proposed', input.confirmationSource ?? null,
+      input.createdBy, uid,
+    ],
+  );
+  const id = res.rows[0]?.id;
+  if (!id) throw new Error('saveGraphLinkPg: upsert returned no id');
+  return id;
+}
+
+export async function findGraphLinkByIdPg(
+  ctx: PostgresDbContext, id: string, userId?: string,
+): Promise<GraphLinkRow | null> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT ${GRAPH_LINK_COLS_PG} FROM graph_links WHERE id = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)`,
+        [id, uid],
+      )
+    : await ctx.pool.query(`SELECT ${GRAPH_LINK_COLS_PG} FROM graph_links WHERE id = $1`, [id]);
+  return res.rows[0] ? graphLinkFromPg(res.rows[0] as unknown as GraphLinkPgRaw) : null;
+}
+
+export async function findGraphLinkByTriplePg(
+  ctx: PostgresDbContext, q: { kind: string; srcKey: string; dstKey: string }, userId?: string,
+): Promise<GraphLinkRow | null> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT ${GRAPH_LINK_COLS_PG} FROM graph_links WHERE kind = $1 AND src_key = $2 AND dst_key = $3 AND (user_id = $4 OR user_id = '' OR user_id IS NULL)`,
+        [q.kind, q.srcKey, q.dstKey, uid],
+      )
+    : await ctx.pool.query(
+        `SELECT ${GRAPH_LINK_COLS_PG} FROM graph_links WHERE kind = $1 AND src_key = $2 AND dst_key = $3`,
+        [q.kind, q.srcKey, q.dstKey],
+      );
+  return res.rows[0] ? graphLinkFromPg(res.rows[0] as unknown as GraphLinkPgRaw) : null;
+}
+
+export async function listGraphLinkProposalsPg(ctx: PostgresDbContext, userId?: string): Promise<GraphLinkRow[]> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT ${GRAPH_LINK_COLS_PG} FROM graph_links WHERE status = 'proposed' AND (user_id = $1 OR user_id = '' OR user_id IS NULL) ORDER BY created_at DESC`,
+        [uid],
+      )
+    : await ctx.pool.query(
+        `SELECT ${GRAPH_LINK_COLS_PG} FROM graph_links WHERE status = 'proposed' ORDER BY created_at DESC`,
+      );
+  return res.rows.map((r) => graphLinkFromPg(r as unknown as GraphLinkPgRaw));
+}
+
+export async function listGraphLinksPg(ctx: PostgresDbContext, userId?: string): Promise<GraphLinkRow[]> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT ${GRAPH_LINK_COLS_PG} FROM graph_links WHERE (user_id = $1 OR user_id = '' OR user_id IS NULL) ORDER BY created_at DESC`,
+        [uid],
+      )
+    : await ctx.pool.query(`SELECT ${GRAPH_LINK_COLS_PG} FROM graph_links ORDER BY created_at DESC`);
+  return res.rows.map((r) => graphLinkFromPg(r as unknown as GraphLinkPgRaw));
+}
+
+export async function updateGraphLinkStatusPg(
+  ctx: PostgresDbContext, id: string, status: Exclude<GraphLinkStatus, 'proposed'>,
+  confirmationSource: 'human' | 'agent', userId?: string,
+): Promise<boolean> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        "UPDATE graph_links SET status = $1, confirmation_source = $2 WHERE id = $3 AND (user_id = $4 OR user_id = '' OR user_id IS NULL)",
+        [status, confirmationSource, id, uid],
+      )
+    : await ctx.pool.query('UPDATE graph_links SET status = $1, confirmation_source = $2 WHERE id = $3', [status, confirmationSource, id]);
+  return (res.rowCount ?? 0) > 0;
+}
+
+export async function updateGraphLinkPropsPg(
+  ctx: PostgresDbContext, id: string, patch: Record<string, unknown>, userId?: string,
+): Promise<boolean> {
+  const current = await findGraphLinkByIdPg(ctx, id, userId);
+  if (!current) return false;
+  const merged = { ...current.props, ...patch };
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        "UPDATE graph_links SET props = $1 WHERE id = $2 AND (user_id = $3 OR user_id = '' OR user_id IS NULL)",
+        [JSON.stringify(merged), id, uid],
+      )
+    : await ctx.pool.query('UPDATE graph_links SET props = $1 WHERE id = $2', [JSON.stringify(merged), id]);
+  return (res.rowCount ?? 0) > 0;
+}
+
+export async function setGraphLinkGraphStatusPg(
+  ctx: PostgresDbContext, id: string, gs: BindingGraphStatus | null, userId?: string,
+): Promise<void> {
+  const raw = gs ? JSON.stringify(gs) : null;
+  const uid = effectiveUserId(userId);
+  if (uid) {
+    await ctx.pool.query(
+      "UPDATE graph_links SET graph_status = $1 WHERE id = $2 AND (user_id = $3 OR user_id = '' OR user_id IS NULL)",
+      [raw, id, uid],
+    );
+  } else {
+    await ctx.pool.query('UPDATE graph_links SET graph_status = $1 WHERE id = $2', [raw, id]);
   }
 }
