@@ -27,17 +27,19 @@ export function useSessions() {
   // 新建会话 guard needs the CURRENT message count, not the possibly-stale
   // rendered list).
   const refresh = useCallback(async (): Promise<Session[]> => {
+    let rows: Session[] = [];
     try {
       const res = await fetch('/api/sessions');
       if (res.ok) {
         const data = await res.json();
-        const rows: Session[] = Array.isArray(data) ? data : (data.sessions ?? []);
+        rows = Array.isArray(data) ? data : (data.sessions ?? []);
         setSessions(rows);
-        return rows;
       }
     } catch { /* ignore */ }
+    // 成功/失败都必须关掉加载态——此前成功路径提前 return 导致 loading 永远为 true,
+    // 侧边栏一直显示"加载中"(2026-08-25 线上回归)。
     setLoading(false);
-    return [];
+    return rows;
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
