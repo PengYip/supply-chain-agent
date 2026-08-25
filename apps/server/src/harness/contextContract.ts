@@ -138,6 +138,17 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
   },
+  // 2026-08-25 方案A §6: 两层额度管控。manage_quota 落 quotas SSOT + granted
+  // 投影 + 即时占用重算 -> persist 'business'。query_quota_usage 只读 DB 物化
+  // 结果 -> persist 'business'(读路由同源), injection 'safe'。金额/限额为可信数值输入。
+  manage_quota: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'business', risk: { level: 'L2', injection: 'safe' },
+  },
+  query_quota_usage: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'business', risk: { level: 'L1', injection: 'safe' },
+  },
   graph_query: {
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'graph', risk: { level: 'L1', injection: 'safe' },

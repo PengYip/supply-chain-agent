@@ -16,6 +16,8 @@ import { sessionsRoute } from './routes/sessions.js';
 import { favoritesRoute } from './routes/favorites.js';
 import { filesRoute } from './routes/files.js';
 import { graphRoute } from './routes/graph.js';
+import { quotasRoute } from './routes/quotas.js';
+import { reconciliationRoute } from './routes/reconciliation.js';
 import { bindingsRoute } from './routes/bindings.js';
 import { partiesRoute } from './routes/parties.js';
 import { projectsRoute } from './routes/projects.js';
@@ -103,6 +105,8 @@ app.use('/api/approval/*', requireAuth);
 app.use('/api/documents/*', requireAuth);
 app.use('/api/eval/*', requireAuth);
 app.use('/api/graph/*', requireAuth);
+app.use('/api/quotas/*', requireAuth);
+app.use('/api/reconcile/*', requireAuth);
 app.use('/api/bindings/*', requireAuth);
 app.use('/api/parties/*', requireAuth);
 app.use('/api/projects/*', requireAuth);
@@ -126,6 +130,11 @@ app.route('/api/documents', reviewRoute);
 
 // Graph REST surface (read-only): user documents, bounded traversal, entity search.
 app.route('/api/graph', graphRoute);
+
+// 额度管控(spec 2026-08-25 方案A §6): quotas SSOT + granted 投影 + 即时占用。
+app.route('/api/quotas', quotasRoute);
+// 对账桥(§5): R1/R2/R3 全量物化 + 报告。
+app.route('/api/reconcile', reconciliationRoute);
 
 // Bindings workbench (read-only, spec §5.1): overview / proposals / candidates / contracts.
 app.route('/api/bindings', bindingsRoute);
