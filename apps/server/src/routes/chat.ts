@@ -90,11 +90,9 @@ chatRoute.post('/chat', async (c) => {
   // runSessionContext wrapper for the run body.
   const user = c.get('user');
   const userId = user?.id ?? null;
-  // Phase 4 RBAC: map the authenticated user's role to the agent role. For now
-  // every authenticated user runs the trader agent (admin/trader/undefined -> all
-  // map to 'trader'); viewer->agent-role isolation is a future enhancement. The
-  // route is already requireAuth-gated in index.ts, so a user is always attached.
-  const agentRole: Role = (user?.role === 'admin' || user?.role === 'trader' || !user?.role) ? 'trader' : 'trader';
+  // Phase 4 RBAC: every authenticated user runs the trader agent for now;
+  // viewer-to-agent role isolation is a future enhancement.
+  const agentRole: Role = 'trader';
   const headerId = c.req.header('x-session-id');
   // Dual-backend session store: every call awaits once (SQLite or Postgres).
   let loaded: LoadedSession | null = null;

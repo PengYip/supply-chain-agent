@@ -58,18 +58,8 @@ export interface Order {
   updateTime: string;
 }
 
-export interface InventoryLine {
-  warehouse: string;
-  commodity: string;
-  quantity: number;
-  unit: string;
-  availableQuantity: number;
-  inTransit: number;
-  asOfDate: string;
-}
-
 // Central contract HT-2024 (diesel procurement, amount 2,860,000 CNY,
-// counterparty 华盛集团). 4 related orders + corresponding inventory.
+// counterparty 华盛集团). 4 related orders.
 export const contracts: Contract[] = [
   {
     contractNo: 'HT-2024-001',
@@ -187,27 +177,6 @@ export const orders: Order[] = [
     invoiceNo: null,
     invoiceStatus: '未开票',
     updateTime: '2024-08-15',
-  },
-];
-
-export const inventory: InventoryLine[] = [
-  {
-    warehouse: '张家港仓库',
-    commodity: '0# 柴油',
-    quantity: 12000,
-    unit: '吨',
-    availableQuantity: 9500,
-    inTransit: 500,
-    asOfDate: '2024-08-15',
-  },
-  {
-    warehouse: '连云港仓库',
-    commodity: '0# 柴油',
-    quantity: 8000,
-    unit: '吨',
-    availableQuantity: 8000,
-    inTransit: 0,
-    asOfDate: '2024-08-15',
   },
 ];
 

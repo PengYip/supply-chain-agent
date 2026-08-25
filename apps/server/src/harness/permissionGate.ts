@@ -67,7 +67,6 @@ registerPermission('list_binding_proposals', 'L1'); // Phase B: 待确认的凭�
 registerPermission('query_execution_flows', 'L1'); // 执行流水六向汇总与逐笔明细（只读）
 registerPermission('project_rollup', 'L1'); // 项目维度统计汇总（只读关系库，不依赖图）
 // L2 write confirm
-registerPermission('advance_contract_stage', 'L2');
 registerPermission('bind_document', 'L2'); // T9: bind document to contract
 registerPermission('tag_document', 'L2'); // Phase 2: explicit document labeling
 registerPermission('create_entity', 'L2'); // Phase 4 §7: graph entity create

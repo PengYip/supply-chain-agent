@@ -125,7 +125,7 @@ streamText + 后台运行时（非 ToolLoopAgent；loop 在后端 runSession 内
 | 等级 | 语义 | 触发机制 | 实际工具（permissionGate.ts 注册表） |
 |---|---|---|---|
 | **L1 只读自动** | 无副作用查询 | 自动执行，不询问 | query_contract / query_orders / cross_check / recall_documents / execute_code / ingest_document / extract_fields / inspect_extraction / present_document_review / graph_find_entity / graph_query / list_binding_proposals / query_execution_flows / project_rollup / escalate_to_human / verify_document_fields |
-| **L2 写需确认** | 内部写操作 | 软门：per-tool `needsApproval`（v6），前端 SoftGateCard 确认后经 `/api/approval/callback` 回灌续跑 | bind_document / tag_document / update_document_fields / create_entity / link_entities（另：advance_contract_stage 已注册但工具尚未实现，属死项待清理） |
+| **L2 写需确认** | 内部写操作 | 软门：per-tool `needsApproval`（v6），前端 SoftGateCard 确认后经 `/api/approval/callback` 回灌续跑 | bind_document / tag_document / update_document_fields / create_entity / link_entities |
 | **L3 双人审批** | 资金/合同不可逆 | 硬门：系统内不提供资金类工具，经 escalate_to_human（L1）落库工单转人工复核，前端 HumanReviewCard approve/deny 后续跑 | （无系统内工具） |
 
 **硬约束（现状）**：
@@ -187,7 +187,7 @@ streamText + 后台运行时（非 ToolLoopAgent；loop 在后端 runSession 内
 
 **读工具（L1，16 个）**：query_contract（台账优先）/ query_orders / cross_check / query_execution_flows / project_rollup / list_binding_proposals / graph_find_entity / graph_query / recall_documents / execute_code（CubeSandbox 隔离执行）/ ingest_document / extract_fields / inspect_extraction / present_document_review / escalate_to_human / verify_document_fields
 
-**写工具（L2，5 个）**：bind_document / tag_document / update_document_fields / create_entity / link_entities（另 advance_contract_stage 已注册权限但工具未实现）
+**写工具（L2，5 个）**：bind_document / tag_document / update_document_fields / create_entity / link_entities
 
 **数据源现状**：合同台账（contract_ledger）与执行流水（execution_flows）为真实 DB 源；query_orders / cross_check / verify_document_fields 仍读 `data/seed.ts` 演示种子（半 mock，待退役）；仓储/行情/风控敞口工具未建。
 

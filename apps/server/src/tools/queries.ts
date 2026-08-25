@@ -62,9 +62,6 @@ export function buildQueryContractTool(deps?: { ctx?: DbContext; userId?: string
   });
 }
 
-// 无 ctx = 纯 seed 行为, 兼容旧测试(不触 DB)。
-export const queryContract = buildQueryContractTool();
-
 // ---- project_rollup ----------------------------------------------------------
 //
 // 项目维度统计(spec 2026-08-20 §5): L1 只读, rollupProject 只读关系库
