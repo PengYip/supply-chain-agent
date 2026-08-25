@@ -1,12 +1,15 @@
-// Backend graph REST surface (read-only). Mounted at /api/graph in index.ts and
+// Backend graph REST surface. Mounted at /api/graph in index.ts and
 // gated there by requireAuth (any authenticated role may read; no requireRole).
-// Four GET endpoints:
+// GET endpoints (read-only):
 //   GET /documents — the current user's documents that have a graph node
 //   GET /query     — bounded traversal from a subject elementId (Neo4j elementId)
 //   GET /entities  — kind+name entity search (CONTAINS / exact)
 //   GET /resolve   — docId + contractNo -> graph nodes (binding workbench link)
+// Link workbench writes (spec 2026-08-25 方案A §6, graph_links 是 SSOT):
+//   GET/POST /links* — correlates/relates 提案-确认 + props 分摊录入通道
 // Neo4j unconfigured (NEO4J_PASSWORD unset) or unreachable -> 503 with a clear
 // Chinese message; the frontend surfaces it as "graph service unavailable".
+// Link writes NEVER hard-fail on graph sync: outcome 落 graph_status 供重试。
 
 import { Hono } from 'hono';
 import { Neo4jError } from 'neo4j-driver';
@@ -14,7 +17,19 @@ import { z } from 'zod';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
 import type { DbContext } from '../pipeline/db/client.js';
-import { listUserDocuments } from '../pipeline/db/repositories.js';
+import {
+  listUserDocuments,
+  saveGraphLink,
+  findGraphLinkById,
+  findGraphLinkByTriple,
+  listGraphLinkProposals,
+  listGraphLinks,
+  updateGraphLinkStatus,
+  updateGraphLinkProps,
+  setGraphLinkGraphStatus,
+  type BindingGraphStatus,
+  type GraphLinkRow,
+} from '../pipeline/db/repositories.js';
 import {
   graphQuery,
   findEntities,
@@ -22,15 +37,14 @@ import {
   type GraphEntity,
 } from '../graph/repo.js';
 import { normalizeName } from '../graph/normalize.js';
+import { syncGraphLinkEdge, removeGraphLinkEdge, type GraphLinkKind } from '../pipeline/graphLinkSync.js';
 
 export const graphRoute = new Hono<AuthEnv>();
 
-// One DbContext reused across requests (same pipeline.db / Postgres as the agent,
-// so graph rows align with the documents table).
-let _ctx: DbContext | null = null;
+// One DbContext per call (getDbContext itself is a singleton in dbBackend, so
+// this stays cheap); no local caching so per-user/test context swaps are seen.
 function ctx(): DbContext {
-  if (!_ctx) _ctx = getDbContext();
-  return _ctx;
+  return getDbContext();
 }
 
 /** True when the failure means the graph store is missing or unusable (as
@@ -204,4 +218,204 @@ graphRoute.get('/resolve', async (c) => {
     console.error('[graph] resolve failed:', errDetail(e));
     return c.json({ error: 'resolve query failed', detail: errDetail(e) }, 500);
   }
+});
+
+// ---- Link workbench(spec 2026-08-25 方案A §6): /api/graph/links -------------
+//
+// graph_links 是 SSOT, 图上的 correlates/relates 边只是确认后的投影。图同步
+// 永不阻塞业务写: outcome 落 graph_status(前端角标/重试)。服务端按 kind 强制
+// 节点类型(correlates=Contract/Contract, relates=Project/Project), 防乱配。
+
+const LINK_KINDS: Record<GraphLinkKind, { srcKind: 'Contract' | 'Project'; dstKind: 'Contract' | 'Project' }> = {
+  correlates: { srcKind: 'Contract', dstKind: 'Contract' },
+  relates: { srcKind: 'Project', dstKind: 'Project' },
+};
+
+/** props 白名单: share/type/note + Phase 3 分摊键。其余键在路由层剥离。 */
+const linkPropsSchema = z.object({
+  share: z.number().min(0).max(1).optional(),
+  type: z.string().max(50).optional(),
+  note: z.string().max(500).optional(),
+  allocatedAmount: z.number().optional(),
+  allocatedQuantity: z.number().optional(),
+}).strip();
+
+const linkCreateSchema = z.object({
+  kind: z.enum(['correlates', 'relates']),
+  srcKey: z.string().min(1, 'srcKey 必填'),
+  srcLabel: z.string().optional(),
+  dstKey: z.string().min(1, 'dstKey 必填'),
+  dstLabel: z.string().optional(),
+  props: linkPropsSchema.optional(),
+  confidence: z.number().min(0).max(1).optional(),
+});
+
+function linkGraphStatus(outcome: 'ok' | 'skipped' | 'failed', reason?: string): BindingGraphStatus {
+  return outcome === 'ok'
+    ? { status: 'ok', syncedAt: new Date().toISOString() }
+    : { status: outcome, ...(reason ? { reason } : {}), syncedAt: new Date().toISOString() };
+}
+
+function linkRowJson(r: GraphLinkRow) {
+  return {
+    id: r.id, kind: r.kind,
+    srcKind: r.srcKind, srcKey: r.srcKey, srcLabel: r.srcLabel,
+    dstKind: r.dstKind, dstKey: r.dstKey, dstLabel: r.dstLabel,
+    props: r.props, confidence: r.confidence,
+    status: r.status, confirmationSource: r.confirmationSource,
+    createdAt: r.createdAt, graphStatus: r.graphStatus,
+  };
+}
+
+/** confirmed 行的边同步(工作台直建/确认/props 更新共用)。 */
+async function syncLinkEdgeForRow(db: DbContext, userId: string, row: GraphLinkRow) {
+  const sync = await syncGraphLinkEdge({
+    kind: row.kind as GraphLinkKind,
+    srcKind: row.srcKind as 'Contract' | 'Project', srcKey: row.srcKey,
+    dstKind: row.dstKind as 'Contract' | 'Project', dstKey: row.dstKey,
+    props: row.props,
+    confirmationSource: (row.confirmationSource === 'agent' ? 'agent' : 'human'),
+    confidence: row.confidence,
+  });
+  await setGraphLinkGraphStatus(db, row.id, linkGraphStatus(sync.outcome, sync.reason), userId);
+  return sync;
+}
+
+/** GET /api/graph/links — 当前列表(默认排除 rejected)。 */
+graphRoute.get('/links', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const rows = await listGraphLinks(ctx(), user.id);
+  return c.json({ links: rows.filter((r) => r.status !== 'rejected').map(linkRowJson) });
+});
+
+/** GET /api/graph/links/proposals — 待确认提案。 */
+graphRoute.get('/links/proposals', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const rows = await listGraphLinkProposals(ctx(), user.id);
+  return c.json({ proposals: rows.map(linkRowJson) });
+});
+
+/** POST /api/graph/links — 人工作台直建 confirmed(human), triple 幂等。 */
+graphRoute.post('/links', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const parsed = linkCreateSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    return c.json({ error: 'invalid body', detail: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) }, 400);
+  }
+  const { kind, srcKey, dstKey } = parsed.data;
+  const db = ctx();
+  const kinds = LINK_KINDS[kind];
+  const existing = await findGraphLinkByTriple(db, { kind, srcKey, dstKey }, user.id);
+  if (existing && existing.status !== 'rejected') {
+    // 幂等重试入口: 更新 label/props 并对 confirmed 行重跑边同步。
+    const linkId = await saveGraphLink(db, {
+      kind, srcKind: kinds.srcKind, srcKey, srcLabel: parsed.data.srcLabel,
+      dstKind: kinds.dstKind, dstKey, dstLabel: parsed.data.dstLabel,
+      props: parsed.data.props, confidence: parsed.data.confidence,
+      status: existing.status, confirmationSource: existing.confirmationSource, createdBy: user.id,
+    }, user.id);
+    let graphSync = 'ok';
+    if (existing.status === 'confirmed') {
+      const row = await findGraphLinkById(db, linkId, user.id);
+      if (row) graphSync = (await syncLinkEdgeForRow(db, user.id, row)).outcome;
+    }
+    return c.json({ ok: true, linkId, existing: true, graphSync });
+  }
+  const linkId = await saveGraphLink(db, {
+    kind, srcKind: kinds.srcKind, srcKey, srcLabel: parsed.data.srcLabel,
+    dstKind: kinds.dstKind, dstKey, dstLabel: parsed.data.dstLabel,
+    props: parsed.data.props, confidence: parsed.data.confidence,
+    status: 'confirmed', confirmationSource: 'human', createdBy: user.id,
+  }, user.id);
+  const row = await findGraphLinkById(db, linkId, user.id);
+  const graphSync = row ? (await syncLinkEdgeForRow(db, user.id, row)).outcome : 'ok';
+  return c.json({ ok: true, linkId, graphSync });
+});
+
+const linkIdSchema = z.object({ id: z.string().min(1) });
+
+/** POST /api/graph/links/confirm — proposed -> confirmed(human) + 边同步。 */
+graphRoute.post('/links/confirm', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const parsed = linkIdSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
+  const db = ctx();
+  const row = await findGraphLinkById(db, parsed.data.id, user.id);
+  if (!row) return c.json({ error: 'link not found', id: parsed.data.id }, 404);
+  if (row.status !== 'proposed') return c.json({ error: `link status is ${row.status}, expected proposed`, id: row.id }, 409);
+  const ok = await updateGraphLinkStatus(db, row.id, 'confirmed', 'human', user.id);
+  if (!ok) return c.json({ error: 'concurrent state change', id: row.id }, 409);
+  const fresh = await findGraphLinkById(db, row.id, user.id);
+  const sync = fresh ? await syncLinkEdgeForRow(db, user.id, fresh) : { outcome: 'skipped' as const };
+  return c.json({ ok: true, linkId: row.id, graphSync: sync.outcome });
+});
+
+/** POST /api/graph/links/reject — proposed -> rejected。 */
+graphRoute.post('/links/reject', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const parsed = linkIdSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
+  const db = ctx();
+  const row = await findGraphLinkById(db, parsed.data.id, user.id);
+  if (!row) return c.json({ error: 'link not found', id: parsed.data.id }, 404);
+  if (row.status !== 'proposed') return c.json({ error: `link status is ${row.status}, expected proposed`, id: row.id }, 409);
+  const ok = await updateGraphLinkStatus(db, row.id, 'rejected', 'human', user.id);
+  if (!ok) return c.json({ error: 'concurrent state change', id: row.id }, 409);
+  return c.json({ ok: true, linkId: row.id });
+});
+
+/** POST /api/graph/links/remove — confirmed -> rejected + 删边(幂等)。 */
+graphRoute.post('/links/remove', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const parsed = linkIdSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
+  const db = ctx();
+  const row = await findGraphLinkById(db, parsed.data.id, user.id);
+  if (!row) return c.json({ error: 'link not found', id: parsed.data.id }, 404);
+  if (row.status !== 'confirmed') return c.json({ error: `link status is ${row.status}, expected confirmed`, id: row.id }, 409);
+  const ok = await updateGraphLinkStatus(db, row.id, 'rejected', 'human', user.id);
+  if (!ok) return c.json({ error: 'concurrent state change', id: row.id }, 409);
+  let graphSync = 'ok';
+  try {
+    const sync = await removeGraphLinkEdge({
+      kind: row.kind as GraphLinkKind,
+      srcKind: row.srcKind as 'Contract' | 'Project', srcKey: row.srcKey,
+      dstKind: row.dstKind as 'Contract' | 'Project', dstKey: row.dstKey,
+    });
+    graphSync = sync.outcome;
+  } catch (e) {
+    console.warn('[graphLinks] remove 删边失败:', errDetail(e));
+    graphSync = 'failed';
+  }
+  return c.json({ ok: true, linkId: row.id, graphSync });
+});
+
+const linkPropsPatchSchema = z.object({ props: linkPropsSchema });
+
+/** PATCH /api/graph/links/:id/props — 白名单键合并; confirmed 行重同步边。
+ *  Phase 3 分摊录入通道(allocatedAmount/allocatedQuantity, HITL)。 */
+graphRoute.patch('/links/:id/props', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const parsed = linkPropsPatchSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
+  const id = c.req.param('id');
+  const db = ctx();
+  const row = await findGraphLinkById(db, id, user.id);
+  if (!row || row.status === 'rejected') return c.json({ error: 'link not found', id }, 404);
+  const patch = Object.fromEntries(Object.entries(parsed.data.props).filter(([, v]) => v !== undefined));
+  const ok = await updateGraphLinkProps(db, id, patch, user.id);
+  if (!ok) return c.json({ error: 'props update failed', id }, 409);
+  let graphSync = 'ok';
+  if (row.status === 'confirmed') {
+    const fresh = await findGraphLinkById(db, id, user.id);
+    if (fresh) graphSync = (await syncLinkEdgeForRow(db, user.id, fresh)).outcome;
+  }
+  return c.json({ ok: true, linkId: id, graphSync });
 });
