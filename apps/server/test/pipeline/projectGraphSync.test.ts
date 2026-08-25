@@ -7,6 +7,7 @@ import {
   PART_OF_EDGE,
   COUNTERPARTY_EDGE,
   PARTICIPATES_EDGE,
+  TRADES_EDGE,
   type ProjectGraphSyncIo,
 } from '../../src/pipeline/projectGraphSync.js';
 import { buildLedgerEntryFromExtraction } from '../../src/pipeline/contractLedger.js';
@@ -186,5 +187,68 @@ describe('removeProjectMembershipGraph', () => {
       { contractNo: 'HT-404', projectCode: 'PRJ-404' }, io,
     );
     expect(r.status).toBe('ok');
+  });
+});
+
+describe('trades 投影(spec 2026-08-25 方案A §3.3)', () => {
+  async function seedLedgerWithCommodity(contractNo: string) {
+    const entry = buildLedgerEntryFromExtraction({
+      documentId: 'DOC-T',
+      docType: '合同',
+      fields: {
+        合同号: { value: contractNo, sourceSpans: [] },
+        甲方: { value: '我方贸易', sourceSpans: [] },
+        乙方: { value: '某供应商', sourceSpans: [] },
+        标的物: { value: '动力煤', sourceSpans: [] },
+        数量: { value: '5,000', sourceSpans: [] },
+        单价: { value: '650', sourceSpans: [] },
+        金额: { value: '3250000', sourceSpans: [] },
+      },
+      fieldMeta: Object.fromEntries(
+        ['合同号', '甲方', '乙方', '标的物', '数量', '单价', '金额'].map((k) => [k, { strength: 'exact' as const, confidence: 0.9 }]),
+      ),
+    })!;
+    await upsertContractLedgerEntry(ctx, entry);
+  }
+
+  it('采购归属确认 -> trades 边 direction=buy 且带台账量价(千分位解析)', async () => {
+    await addSelfParty(ctx, '我方贸易', 'u1');
+    await seedLedgerWithCommodity('CG-TRADES-1');
+    const { io, edges } = makeIo();
+    const r = await syncProjectMembershipGraph(ctx, { ...baseInput, contractNo: 'CG-TRADES-1', role: '采购' }, io);
+    expect(r.status).toBe('ok');
+    const trades = edges.filter((e) => e.kind === TRADES_EDGE);
+    expect(trades).toHaveLength(1);
+    expect(trades[0]!.props).toMatchObject({ direction: 'buy', quantity: 5000, unitPrice: 650, amount: 3250000 });
+  });
+
+  it('销售归属确认 -> direction=sell; 商品名归一化收敛到同一 Commodity 节点', async () => {
+    await addSelfParty(ctx, '我方贸易', 'u1');
+    await seedLedgerWithCommodity('CG-TRADES-2');
+    const { io, nodes, edges } = makeIo();
+    const r = await syncProjectMembershipGraph(ctx, { ...baseInput, contractNo: 'CG-TRADES-2', role: '销售' }, io);
+    expect(r.status).toBe('ok');
+    const trades = edges.filter((e) => e.kind === TRADES_EDGE);
+    expect(trades).toHaveLength(1);
+    expect(trades[0]!.props?.direction).toBe('sell');
+    expect(nodes.has('Commodity:动力煤')).toBe(true);
+  });
+
+  it("role='物流' -> 无 trades 边", async () => {
+    await addSelfParty(ctx, '我方贸易', 'u1');
+    await seedLedgerWithCommodity('CG-TRADES-3');
+    const { io, edges } = makeIo();
+    const r = await syncProjectMembershipGraph(ctx, { ...baseInput, contractNo: 'CG-TRADES-3', role: '物流' }, io);
+    expect(r.status).toBe('ok');
+    expect(edges.filter((e) => e.kind === TRADES_EDGE)).toHaveLength(0);
+  });
+
+  it('缺标的物 -> 安静跳过, 无 trades 边', async () => {
+    await addSelfParty(ctx, '我方贸易', 'u1');
+    await seedLedger('HT-2026-001'); // 只有甲乙方
+    const { io, edges } = makeIo();
+    const r = await syncProjectMembershipGraph(ctx, baseInput, io);
+    expect(r.status).toBe('ok');
+    expect(edges.filter((e) => e.kind === TRADES_EDGE)).toHaveLength(0);
   });
 });

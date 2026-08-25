@@ -20,6 +20,7 @@ import type { DbContext } from './db/client.js';
 export const PART_OF_EDGE = 'part_of';
 export const COUNTERPARTY_EDGE = 'counterparty';
 export const PARTICIPATES_EDGE = 'participates';
+export const TRADES_EDGE = 'trades';
 
 export interface ProjectGraphSyncIo {
   createEntity(i: { kind: string; name: string; props?: Record<string, unknown> }): Promise<{ elementId: string }>;
@@ -54,6 +55,50 @@ function anchorsFromLedger(entry: ContractLedgerEntry): { buyer?: string; seller
   return { buyer, seller };
 }
 
+function fieldNum(v: unknown): number | null {
+  if (v === undefined) return null;
+  const n = typeof v === 'number' ? v : Number(String(v).replace(/[,，\s]/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+function commodityOf(entry: ContractLedgerEntry | null): string | null {
+  if (!entry) return null;
+  const raw = String(entry.fields['标的物']?.value ?? entry.fields['商品']?.value ?? '').trim();
+  return raw ? normalizeName(raw) : null;
+}
+
+/**
+ * trades 投影(spec 2026-08-25 方案A §3.3): Contract-[trades {direction,
+ * quantity?, unitPrice?, amount?}]->Commodity。把商品从文档层提升到合同层,
+ * 量价挂边不挂节点。仅买卖角色投影(物流/租赁/服务安静跳过); 缺标的物跳过;
+ * 数字解析失败的字段省略属性(宁缺毋错)。方向由合同类型确定性派生:
+ * 采购->buy / 销售->sell。
+ */
+async function syncTradesEdge(
+  io: ProjectGraphSyncIo,
+  contractElementId: string,
+  role: string,
+  entry: ContractLedgerEntry | null,
+): Promise<void> {
+  if (role !== '采购' && role !== '销售') return;
+  const commodity = commodityOf(entry);
+  if (!commodity || !entry) return;
+  const commodityNode = await ensureNode(io, 'Commodity', commodity,
+    () => io.createEntity({ kind: 'Commodity', name: commodity }));
+  const quantity = fieldNum(entry.fields['数量']?.value);
+  const unitPrice = fieldNum(entry.fields['单价']?.value);
+  const amount = fieldNum(entry.fields['金额']?.value);
+  await io.mergeEdge({
+    srcId: contractElementId, dstId: commodityNode.elementId, kind: TRADES_EDGE,
+    props: {
+      direction: role === '采购' ? 'buy' : 'sell',
+      ...(quantity !== null ? { quantity } : {}),
+      ...(unitPrice !== null ? { unitPrice } : {}),
+      ...(amount !== null ? { amount } : {}),
+    },
+  });
+}
+
 export interface ProjectMembershipSyncInput {
   contractNo: string;   // 已 normalizeContractNo
   projectCode: string;  // 已 normalizeProjectCode
@@ -86,6 +131,7 @@ export async function syncProjectMembershipGraph(
 
     // 派生边: 台账甲乙方锚点 + 主体名单 -> counterparty / participates(纯投影, 不落库)。
     const ledger = await findContractLedgerByNo(ctx, input.contractNo);
+    await syncTradesEdge(io, contractNode.elementId, input.role, ledger);
     const anchors = ledger ? anchorsFromLedger(ledger) : {};
     if (anchors.buyer && anchors.seller) {
       const side = resolveSelfSide(await getEffectiveSelfPartyNames(ctx), anchors);
