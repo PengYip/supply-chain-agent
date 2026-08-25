@@ -126,6 +126,18 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'graph', risk: { level: 'L2', injection: 'safe' },
   },
+  // 2026-08-25 方案A §6: 背靠背购销对应(correlates)与项目级关联(relates)。
+  // Agent 传入的合同号/项目码/份额为可信输入(与 link_entities 同源), 返回短
+  // handle -> output 'raw' / injection 'safe'。落 graph_links SSOT + 图边投影
+  // -> signal 'env', persist 'business'(SSOT 在关系库, 图只是投影)。L2 软门控。
+  link_contracts: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'business', risk: { level: 'L2', injection: 'safe' },
+  },
+  link_projects: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'business', risk: { level: 'L2', injection: 'safe' },
+  },
   graph_query: {
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'graph', risk: { level: 'L1', injection: 'safe' },

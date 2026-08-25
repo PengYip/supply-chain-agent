@@ -10,6 +10,7 @@ import { buildQueryExecutionFlowsTool } from '../pipeline/executionFlow.js';
 import { buildRecallDocumentsTool } from '../pipeline/tools/recall.js';
 import { buildExecuteCodeTool } from '../pipeline/tools/executeCode.js';
 import { buildCreateEntityTool, buildLinkEntitiesTool, buildGraphQueryTool, buildGraphFindEntityTool } from '../graph/tools.js';
+import { buildLinkContractsTool, buildLinkProjectsTool } from '../pipeline/tools/graphLinkTools.js';
 import type { DbContext } from '../pipeline/db/client.js';
 import type { ExtractionDeps } from '../pipeline/extraction.js';
 import type { ClassifierDeps } from '../pipeline/classifier.js';
@@ -75,7 +76,7 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
 // though constructing their instances requires a DbContext (see getToolsForRole).
 // query_contract is listed here too: after the BASE removal above its name would
 // otherwise drop out of listToolNames (it is still always registered for trader).
-const TRADER_CTX_TOOL_NAMES = ['query_contract', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'query_execution_flows', 'project_rollup'] as const;
+const TRADER_CTX_TOOL_NAMES = ['query_contract', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'query_execution_flows', 'project_rollup', 'link_contracts', 'link_projects'] as const;
 
 export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
   const base: GatedTool[] = (BASE_TOOLS_FOR_ROLE[role] ?? []).map((t) => ({ ...t }));
@@ -115,6 +116,11 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
         // graph_find_entity is L1: read-only name lookup —— graph_query 缺的
         // "按名称找实体"入口（用户说名称，不说 elementId）。
         { ...buildGraphFindEntityTool(), name: 'graph_find_entity' },
+        // link_contracts / link_projects are L2 (2026-08-25 方案A §6):
+        // 背靠背购销对应(correlates)与项目级关联(relates), 落 graph_links
+        // SSOT + best-effort 边投影, 与 bind_document 同款软门控。
+        { ...buildLinkContractsTool({ ctx, userId }), name: 'link_contracts', needsApproval: true },
+        { ...buildLinkProjectsTool({ ctx, userId }), name: 'link_projects', needsApproval: true },
         // recall_documents is L1: FTS5/vector/hybrid recall over ingested chunks.
         { ...buildRecallDocumentsTool({ ctx, embedder, userId }), name: 'recall_documents' },
         // execute_code is L1: run Python in an isolated CubeSandbox microVM.

@@ -35,6 +35,8 @@ const EXPECTED_TOOLS = [
   'list_binding_proposals',
   'query_execution_flows',
   'project_rollup',
+  'link_contracts',
+  'link_projects',
 ] as const;
 
 describe('tool-context contract registry', () => {

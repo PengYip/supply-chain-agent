@@ -72,6 +72,8 @@ registerPermission('bind_document', 'L2'); // T9: bind document to contract
 registerPermission('tag_document', 'L2'); // Phase 2: explicit document labeling
 registerPermission('create_entity', 'L2'); // Phase 4 §7: graph entity create
 registerPermission('link_entities', 'L2'); // Phase 4 §7: graph edge create
+registerPermission('link_contracts', 'L2'); // 2026-08-25 方案A: 背靠背购销对应(correlates)
+registerPermission('link_projects', 'L2'); // 2026-08-25 方案A: 项目级关联(relates)
 registerPermission('update_document_fields', 'L2'); // post-ingest field correction (write)
 // L3: no registered tools -- money/irreversible operations are not executable
 // in-system. Human-in-the-loop goes through escalate_to_human tickets

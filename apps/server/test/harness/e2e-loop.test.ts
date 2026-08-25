@@ -121,8 +121,9 @@ describe('agent e2e loop (stub model)', () => {
     // recall_documents + execute_code + inspect_extraction + tag_document +
     // create_entity + link_entities + graph_query + graph_find_entity +
     // present_document_review + update_document_fields + list_binding_proposals
-    // + project_rollup = 21 live trader tools.
-    expect(capturedNames).toHaveLength(21);
+    // + project_rollup = 21 live trader tools; 2026-08-25 方案A adds
+    // link_contracts + link_projects = 23.
+    expect(capturedNames).toHaveLength(23);
     for (const n of ['ingest_document', 'extract_fields', 'bind_document', 'query_contract', 'escalate_to_human', 'recall_documents', 'project_rollup']) {
       expect(capturedNames).toContain(n);
     }
