@@ -84,7 +84,7 @@ describe('自主体名单 -> 执行流水物化(真 sqlite)', () => {
       documentId: docId, contractNo: CONTRACT_NO, bindingId: 'BD-1',
       confidence: 1, createdBy: 'u1',
     }, 'u1');
-    expect(flowId).toMatch(/^EF-/);
+    expect(flowId?.flowId).toMatch(/^EF-/);
     const flows = await listExecutionFlows(ctx, CONTRACT_NO, 'u1');
     expect(flows).toHaveLength(1);
     expect(flows[0]!.flowType).toBe('发票流');

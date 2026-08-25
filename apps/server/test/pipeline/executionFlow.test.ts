@@ -85,7 +85,7 @@ describe('materializeExecutionFlow 物化决策', () => {
       }),
     );
     const id = await materializeExecutionFlow(ctx, baseInput, 'u1', SELF);
-    expect(id).toBe('EX-1');
+    expect(id?.flowId).toBe('EX-1');
     expect(mocks.upsertExecutionFlow).toHaveBeenCalledTimes(1);
     expect(mocks.upsertExecutionFlow).toHaveBeenCalledWith(
       ctx,
@@ -117,7 +117,7 @@ describe('materializeExecutionFlow 物化决策', () => {
       }),
     );
     const id = await materializeExecutionFlow(ctx, baseInput, 'u1', SELF);
-    expect(id).toBe('EX-1');
+    expect(id?.flowId).toBe('EX-1');
     expect(mocks.upsertExecutionFlow).toHaveBeenCalledTimes(1);
     expect(mocks.upsertExecutionFlow).toHaveBeenCalledWith(
       ctx,
@@ -144,7 +144,7 @@ describe('materializeExecutionFlow 物化决策', () => {
       }),
     );
     const id = await materializeExecutionFlow(ctx, baseInput, 'u1', SELF);
-    expect(id).toBe('EX-1');
+    expect(id?.flowId).toBe('EX-1');
     expect(mocks.upsertExecutionFlow).toHaveBeenCalledTimes(1);
     expect(mocks.upsertExecutionFlow).toHaveBeenCalledWith(
       ctx,
@@ -170,7 +170,7 @@ describe('materializeExecutionFlow 物化决策', () => {
       }),
     );
     const id = await materializeExecutionFlow(ctx, baseInput, 'u1', SELF);
-    expect(id).toBe('EX-1');
+    expect(id?.flowId).toBe('EX-1');
     expect(mocks.upsertExecutionFlow).toHaveBeenCalledWith(
       ctx,
       expect.objectContaining({

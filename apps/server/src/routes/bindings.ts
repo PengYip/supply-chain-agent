@@ -13,6 +13,8 @@ import {
 } from '../pipeline/db/repositories.js';
 import { buildBindingCandidates } from '../pipeline/bindingCandidates.js';
 import { syncBindingEdge, removeBindingEdge, type GraphSyncOutcome } from '../pipeline/bindingGraphSync.js';
+import { syncSettlesEdge, removeSettlesEdge } from '../pipeline/settlesGraphSync.js';
+import { settlesRelationFor } from '../domain/tradeSemantics.js';
 import { materializeExecutionFlow, retractExecutionFlow, getEffectiveSelfPartyNames } from '../pipeline/executionFlow.js';
 import { DOC_TYPES } from '../pipeline/classifier.js';
 import { parseFileKey } from './files.js';
@@ -165,6 +167,48 @@ async function syncBindingEdgeWithMeta(
   });
 }
 
+/** syncSettlesEdge + 查 documents 行回填 docType/sourceUri（与 binds 同款兜底）。 */
+async function syncSettlesEdgeWithMeta(
+  db: DbContext,
+  userId: string,
+  input: { docId: string; contractNo: string; relation: string; direction: 'in' | 'out'; amount?: number | null; confidence: number },
+) {
+  let meta: Awaited<ReturnType<typeof getDocumentMeta>> = null;
+  try {
+    meta = await getDocumentMeta(db, input.docId, userId);
+  } catch {
+    // 行读不到不阻断 settles 同步, 仅少回填两个属性
+  }
+  return syncSettlesEdge({
+    ...input,
+    ...(meta?.docType ? { docType: meta.docType } : {}),
+    ...(meta?.sourceUri ? { sourceUri: meta.sourceUri } : {}),
+  });
+}
+
+/**
+ * 执行流水物化成功后的 settles 边同步(spec 方案A §3.3): 六向 relation 由
+ * (flowType, direction)确定性派生; 白名单外/方向未判出(返回 null 或 relation
+ * 为空)安静跳过。失败仅告警, 绝不影响确认/创建主流程。
+ */
+async function syncSettlesAfterFlow(
+  db: DbContext,
+  userId: string,
+  input: { documentId: string; contractNo: string; confidence: number },
+  settled: NonNullable<Awaited<ReturnType<typeof materializeExecutionFlow>>>,
+) {
+  const relation = settlesRelationFor(settled.flowType, settled.direction);
+  if (!relation) return;
+  const sync = await syncSettlesEdgeWithMeta(db, userId, {
+    docId: input.documentId, contractNo: input.contractNo, relation,
+    direction: settled.direction as 'in' | 'out', amount: settled.amount,
+    confidence: input.confidence,
+  });
+  if (sync.outcome === 'failed') {
+    console.warn('[settlesGraphSync] settles 边同步失败:', sync.reason);
+  }
+}
+
 /** confirm 单条(内部, batch 复用)。前置: 行存在且 status='proposed'。 */
 async function confirmOne(db: DbContext, userId: string, bindingId: string) {
   const row = await findBindingById(db, bindingId, userId);
@@ -174,10 +218,14 @@ async function confirmOne(db: DbContext, userId: string, bindingId: string) {
   if (!updated) return { status: 409 as const, body: { error: 'concurrent state change', bindingId } };
   // 执行流水物化(hook): 确认成功后用最新抽取行落执行流水; 失败仅告警, 绝不影响确认结果。
   try {
-    await materializeExecutionFlow(db, {
+    const settled = await materializeExecutionFlow(db, {
       documentId: row.documentId, contractNo: row.contractNo, bindingId: row.id,
       confidence: row.confidence, createdBy: 'human',
     }, userId);
+    if (settled) {
+      await syncSettlesAfterFlow(db, userId,
+        { documentId: row.documentId, contractNo: row.contractNo, confidence: row.confidence }, settled);
+    }
   } catch (e) {
     console.warn('[executionFlow] 确认绑定物化执行流水失败:', (e as Error).message);
   }
@@ -259,10 +307,14 @@ bindingsRoute.post('/', async (c) => {
   }, user.id);
   // 执行流水物化(hook): 手动创建 confirmed 绑定后物化; 失败仅告警, 绝不影响创建结果。
   try {
-    await materializeExecutionFlow(db, {
+    const settled = await materializeExecutionFlow(db, {
       documentId, contractNo, bindingId,
       confidence: 1, createdBy: user.id,
     }, user.id);
+    if (settled) {
+      await syncSettlesAfterFlow(db, user.id,
+        { documentId, contractNo, confidence: 1 }, settled);
+    }
   } catch (e) {
     console.warn('[executionFlow] 手动创建绑定物化执行流水失败:', (e as Error).message);
   }
@@ -295,6 +347,12 @@ bindingsRoute.post('/unbind', async (c) => {
   if (siblings.length === 0) {
     const sync = await removeBindingEdge({ docId: row.documentId, contractNo: row.contractNo });
     graphSync = sync.outcome;
+    // settles 边同款守卫下删除(失败仅告警, 不影响解绑结果)。
+    try {
+      await removeSettlesEdge({ docId: row.documentId, contractNo: row.contractNo });
+    } catch (e) {
+      console.warn('[settlesGraphSync] 解绑删 settles 边失败:', (e as Error).message);
+    }
   }
   return c.json({ ok: true, bindingId: row.id, graphSync });
 });

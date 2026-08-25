@@ -46,6 +46,17 @@ export interface MaterializeInput {
   createdBy: string;
 }
 
+/**
+ * 物化成功时的流信息投影(spec 2026-08-25 方案A §3.3): settles 边同步据此派生
+ * 六向 relation(flowType x direction), amount 随边落 props。null = 未物化。
+ */
+export interface MaterializedFlow {
+  flowId: string;
+  flowType: string;
+  direction: FlowDirection;
+  amount: number | null;
+}
+
 /** docType -> 执行流水流族。白名单外不物化(提单/装箱单/质检等未来扩展)。 */
 const FLOW_TYPE_BY_DOC_TYPE: Record<string, string> = {
   付款凭证: '资金流',
@@ -98,7 +109,7 @@ export async function materializeExecutionFlow(
   input: MaterializeInput,
   userId?: string,
   selfPartyNames?: string[],
-): Promise<string | null> {
+): Promise<MaterializedFlow | null> {
   const extraction = await loadLatestExtractionByDocId(ctx, input.documentId, userId);
   if (!extraction) return null;
 
@@ -125,7 +136,7 @@ export async function materializeExecutionFlow(
   else if (flowType === '货物流') direction = goodsDirectionFor(side);
   else direction = invoiceDirectionFor(side);
 
-  return upsertExecutionFlow(
+  const flowId = await upsertExecutionFlow(
     ctx,
     {
       bindingId: input.bindingId,
@@ -146,6 +157,7 @@ export async function materializeExecutionFlow(
     },
     userId,
   );
+  return { flowId, flowType, direction, amount: anchors.amount ?? null };
 }
 
 /**
@@ -227,7 +239,7 @@ export async function refreshExecutionFlowsForDocument(
           continue;
         }
       }
-      const flowId = await materializeExecutionFlow(
+      const materializedFlow = await materializeExecutionFlow(
         ctx,
         {
           documentId,
@@ -239,7 +251,7 @@ export async function refreshExecutionFlowsForDocument(
         userId,
         selfPartyNames,
       );
-      if (flowId) materialized += 1;
+      if (materializedFlow) materialized += 1;
     } catch (e) {
       console.warn('[executionFlow] 重建流水失败(跳过该绑定):', b.id, (e as Error).message);
     }
