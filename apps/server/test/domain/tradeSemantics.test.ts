@@ -4,6 +4,9 @@ import {
   bindingRelationFor,
   CHUNK_TAG_TAXONOMY,
   getTaxonomy,
+  settlesRelationFor,
+  QUOTA_SCOPES,
+  GRAPH_TRADE_EDGES,
   type TradeVocabulary,
 } from '../../src/domain/tradeSemantics.js';
 
@@ -72,5 +75,33 @@ describe('tradeSemantics (L1 行业词汇表)', () => {
       expect(getTaxonomy('货转单')).toEqual([]);
       expect(getTaxonomy('其他')).toEqual([]);
     });
+  });
+});
+
+describe('settles/quota 受控词汇(spec 2026-08-25 方案A)', () => {
+  it('settlesRelationFor: 六向映射', () => {
+    expect(settlesRelationFor('资金流', 'in')).toBe('收款');
+    expect(settlesRelationFor('资金流', 'out')).toBe('付款');
+    expect(settlesRelationFor('货物流', 'in')).toBe('收货');
+    expect(settlesRelationFor('货物流', 'out')).toBe('发货');
+    expect(settlesRelationFor('发票流', 'in')).toBe('收票');
+    expect(settlesRelationFor('发票流', 'out')).toBe('开票');
+  });
+
+  it('白名单外流族/未知方向 -> null(宁可空缺不猜)', () => {
+    expect(settlesRelationFor('质检流', 'in')).toBeNull();
+    expect(settlesRelationFor('资金流', 'sideways')).toBeNull();
+  });
+
+  it('QUOTA_SCOPES 受控值', () => {
+    expect(QUOTA_SCOPES).toEqual(['counterparty', 'project']);
+  });
+
+  it('GRAPH_TRADE_EDGES 边名常量', () => {
+    expect(GRAPH_TRADE_EDGES.correlates).toBe('correlates');
+    expect(GRAPH_TRADE_EDGES.relates).toBe('relates');
+    expect(GRAPH_TRADE_EDGES.trades).toBe('trades');
+    expect(GRAPH_TRADE_EDGES.settles).toBe('settles');
+    expect(GRAPH_TRADE_EDGES.granted).toBe('granted');
   });
 });

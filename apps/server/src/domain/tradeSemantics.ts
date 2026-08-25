@@ -125,3 +125,43 @@ export const CHUNK_TAG_TAXONOMY: Record<DocType, string[]> = {
 export function getTaxonomy(docType: DocType): string[] {
   return CHUNK_TAG_TAXONOMY[docType] ?? [];
 }
+
+// ---------------------------------------------------------------------------
+// 履约六向与图谱边词汇(spec 2026-08-25 方案A §3.3)。settles 边 relation 由
+// execution_flows(flowType x direction)确定性派生; 新增流族必须先扩
+// SETTLES_RELATION_BY_FLOW, 宁可返回 null 空缺也不猜方向语义。
+// ---------------------------------------------------------------------------
+
+/** 履约六向受控词表: settles 边 relation 的唯一取值域。 */
+export type SettlesRelation = '收款' | '付款' | '收货' | '发货' | '收票' | '开票';
+/** 执行流水流族(executionFlow.FLOW_TYPE_BY_DOC_TYPE 的值域)。 */
+export type FlowFamily = '资金流' | '货物流' | '发票流';
+
+/** (flowType, direction) -> 六向 relation。唯一派生规则, L1 归宿。 */
+export const SETTLES_RELATION_BY_FLOW: Readonly<
+  Record<FlowFamily, Readonly<Record<'in' | 'out', SettlesRelation>>>
+> = {
+  资金流: { in: '收款', out: '付款' },
+  货物流: { in: '收货', out: '发货' },
+  发票流: { in: '收票', out: '开票' },
+};
+
+/** 白名单外流族或未知方向返回 null(宁可空缺不猜)。 */
+export function settlesRelationFor(flowType: string, direction: string): SettlesRelation | null {
+  const family = SETTLES_RELATION_BY_FLOW[flowType as FlowFamily];
+  if (!family) return null;
+  return family[direction as 'in' | 'out'] ?? null;
+}
+
+/** 额度范围受控词表: counterparty=对手方授信(跨项目聚合), project=项目限额。 */
+export type QuotaScope = 'counterparty' | 'project';
+export const QUOTA_SCOPES: readonly QuotaScope[] = ['counterparty', 'project'];
+
+/** 图谱新增边类型常量(spec §3.3), graph 模块与工具描述共享, 禁止散落字符串。 */
+export const GRAPH_TRADE_EDGES = {
+  correlates: 'correlates',
+  relates: 'relates',
+  trades: 'trades',
+  settles: 'settles',
+  granted: 'granted',
+} as const;
