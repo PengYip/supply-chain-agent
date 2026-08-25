@@ -144,21 +144,21 @@ RETURN p.name, q.limitAmount, q.used, q.limitAmount - q.used AS remaining;
 ## 8. 分期落地计划
 
 **Phase 1 — Schema 与确定性投影**
-- [ ] repo.ts：Quota label 唯一约束 + 新边 kind 白名单
-- [ ] tradeSemantics.ts：六向 settles 词汇 + quota scope 受控值
-- [ ] bindingGraphSync/projectGraphSync：trades/settles 投影写入
-- [ ] 工作台/API：correlates、relates 手动关联入口（提案→确认流，复用绑定工作台模式）
-- [ ] link_contracts/link_projects L2 工具
+- [x] repo.ts：Quota label 唯一约束 + 新边 kind 白名单
+- [x] tradeSemantics.ts：六向 settles 词汇 + quota scope 受控值
+- [x] bindingGraphSync/projectGraphSync：trades/settles 投影写入
+- [x] 工作台/API：correlates、relates 手动关联入口（提案→确认流，复用绑定工作台模式）
+- [x] link_contracts/link_projects L2 工具
 
 **Phase 2 — 额度与对账桥**
-- [ ] Quota CRUD + granted 边（manage_quota L2 工具 + API）
-- [ ] 占用物化任务（SQL 聚合 → Quota.used/remaining 回写）
-- [ ] R1/R2/R3 守恒校验与超限告警
-- [ ] query_quota_usage L1 工具
+- [x] Quota CRUD + granted 边（manage_quota L2 工具 + API）
+- [x] 占用物化任务（SQL 聚合 → Quota.used/remaining 回写）
+- [x] R1/R2/R3 守恒校验与超限告警
+- [x] query_quota_usage L1 工具
 
 **Phase 3 — 分摊与报表**
-- [ ] correlates/settles 边上 allocatedAmount/allocatedQuantity 分摊录入（HITL）
-- [ ] 对账差额看板（R1/R2 报表视图）
+- [x] correlates/settles 边上 allocatedAmount/allocatedQuantity 分摊录入（HITL）
+- [x] 对账差额看板（R1/R2 报表视图）
 
 ## 9. 风险与已知取舍
 
@@ -167,3 +167,7 @@ RETURN p.name, q.limitAmount, q.used, q.limitAmount - q.used AS remaining;
 - **数值精度**：图上聚合仅作展示；守恒判定一律以 SQL 为准。
 - **向后兼容**：全部为增量节点/边，不改既有 7 种边语义；老数据无需迁移。
 - **键设计**：Quota 用生成 id 作唯一键，避免与 name 唯一约束体系冲突。
+
+## 实施记录
+
+2026-08-26 完成全部 Phase 1-3(T1-T12)。Phase 1: 48d919b..5635af5(词汇/settles/trades 投影/graph_links 存储/关联边同步/工作台 REST/L2 工具); Phase 2: a84bdbe..9e96f51(quotas 存储+granted 边+PG 迁移/对账桥/额度与对账路由/quota 工具); Phase 3: b6d1680..T12(分摊入参/报表 API)。前端看板页消费 /api/reconcile/report 与 /api/graph/links，属后续 UI 任务。

@@ -141,3 +141,26 @@ describe('POST /api/reconcile/run', () => {
     expect(data.alerts.some((a) => a.code === 'quota_over_limit')).toBe(true);
   });
 });
+
+describe('GET /api/reconcile/report', () => {
+  it('报告结构齐全(generatedAt/quotas/projects/alerts)', async () => {
+    await upsertContractLedgerEntry(ctx, ledger('HT-1', { 甲方: '我方', 乙方: '中石化股份有限公司', 金额: 100 }));
+    await saveQuota(ctx, { scope: 'counterparty', ownerKey: '中石化股份有限公司', limitAmount: 1, createdBy: 'u1' }, 'u1');
+    const res = await req(appAs('u1'), 'GET', '/api/reconcile/report');
+    expect(res.status).toBe(200);
+    const data = await res.json() as { generatedAt: string; quotas: unknown[]; projects: unknown[]; alerts: unknown[] };
+    expect(typeof data.generatedAt).toBe('string');
+    expect(Array.isArray(data.quotas)).toBe(true);
+    expect(Array.isArray(data.projects)).toBe(true);
+    expect(Array.isArray(data.alerts)).toBe(true);
+    expect(data.quotas).toHaveLength(1);
+  });
+
+  it('空库不 500: quotas=[] alerts=[]', async () => {
+    const res = await req(appAs('u1'), 'GET', '/api/reconcile/report');
+    expect(res.status).toBe(200);
+    const data = await res.json() as { quotas: unknown[]; alerts: unknown[] };
+    expect(data.quotas).toEqual([]);
+    expect(data.alerts).toEqual([]);
+  });
+});
