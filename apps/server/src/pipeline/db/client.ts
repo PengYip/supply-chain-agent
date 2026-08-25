@@ -652,6 +652,50 @@ export async function migratePostgres(pool: Pool): Promise<void> {
        ON project_memberships (project_code, user_id)`,
     `CREATE INDEX IF NOT EXISTS project_memberships_contract_idx
        ON project_memberships (contract_no, user_id)`,
+    // Graph links(spec 2026-08-25 方案A §3.3): pg mirror of the SQLite
+    // graph_links。props/graph_status 为 TEXT(JSON 字符串)与 SQLite 对齐;
+    // confidence numeric(5,4) 沿用 pg 惯例; triple 唯一支撑幂等 upsert。
+    `CREATE TABLE IF NOT EXISTS graph_links (
+       id TEXT PRIMARY KEY,
+       kind TEXT NOT NULL,
+       src_kind TEXT NOT NULL,
+       src_key TEXT NOT NULL,
+       src_label TEXT NOT NULL DEFAULT '',
+       dst_kind TEXT NOT NULL,
+       dst_key TEXT NOT NULL,
+       dst_label TEXT NOT NULL DEFAULT '',
+       props TEXT NOT NULL DEFAULT '{}',
+       confidence numeric(5,4) NOT NULL DEFAULT 0,
+       status TEXT NOT NULL DEFAULT 'proposed',
+       confirmation_source TEXT,
+       created_by TEXT NOT NULL,
+       user_id TEXT NOT NULL DEFAULT '',
+       created_at timestamptz NOT NULL DEFAULT NOW(),
+       graph_status TEXT
+     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_graph_links_triple ON graph_links (kind, src_key, dst_key, user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_graph_links_user ON graph_links (user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_graph_links_src ON graph_links (src_kind, src_key)`,
+    // Quotas(spec 2026-08-25 方案A §3.1): pg mirror of the SQLite quotas。
+    // limit/used 用 double precision(SQLite REAL 对应); used/computed_at 只经
+    // updateQuotaUsed 写入(对账桥物化)。
+    `CREATE TABLE IF NOT EXISTS quotas (
+       id TEXT PRIMARY KEY,
+       scope TEXT NOT NULL,
+       owner_key TEXT NOT NULL,
+       owner_label TEXT NOT NULL DEFAULT '',
+       limit_amount double precision NOT NULL,
+       currency TEXT,
+       period TEXT,
+       used_amount double precision NOT NULL DEFAULT 0,
+       computed_at TEXT,
+       status TEXT NOT NULL DEFAULT 'active',
+       created_by TEXT NOT NULL,
+       user_id TEXT NOT NULL DEFAULT '',
+       created_at timestamptz NOT NULL DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_quotas_owner ON quotas (scope, owner_key, user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_quotas_user ON quotas (user_id)`,
     // L4 FTS fix (2026-08-17): drizzle migration 0000 created doc_chunk.fts_vector
     // as a PLAIN tsvector column (no GENERATED), so it stays NULL forever and
     // every FTS query silently returns 0 hits. Recreate it as a GENERATED column
