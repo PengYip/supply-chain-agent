@@ -7,13 +7,12 @@ function artifact(partial: Partial<EpisodeArtifact>): EpisodeArtifact {
   return {
     scenarioId: 'x', runIndex: 1, sessionId: 's', startedAt: '', wallMs: 0, turnsUsed: 1,
     transcript: [], toolCalls: [], approvals: [],
-    envSnapshot: { contractLinked: {} },
     finalAssistantText: '', totalUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
     ...partial,
   };
 }
 
-const noChecks = { contractLinked: [], mustAppear: [], forbidden: [], keywordInReply: [], keywordInTranscript: [] };
+const noChecks = { mustAppear: [], forbidden: [], keywordInReply: [], keywordInTranscript: [] };
 
 describe('runVerifiers', () => {
   it('passes when all checks hold', () => {
@@ -86,13 +85,6 @@ describe('runVerifiers', () => {
       }),
     );
     expect(r.failures[0]!.check).toBe('keywordInTranscript');
-  });
-  it('fails a missing contract link', () => {
-    const r = runVerifiers(
-      { ...noChecks, contractLinked: [{ contractNo: 'HT-2024-001', documentId: 'FP-2024-0920-009' }] },
-      artifact({ envSnapshot: { contractLinked: { 'HT-2024-001': ['BL-2024-0815-001'] } } }),
-    );
-    expect(r.failures[0]!.check).toBe('contractLinked');
   });
   it('simError episodes still get verified (state checks apply)', () => {
     const r = runVerifiers(

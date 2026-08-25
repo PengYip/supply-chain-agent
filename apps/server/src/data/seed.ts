@@ -21,9 +21,6 @@ export interface Contract {
   deliveryPlace: string;
   paymentTerms: string;
   status: '执行中' | '已完成' | '已归档';
-  // Document ids linked to this contract (bill of lading, invoice, etc.).
-  // Mutated in-memory by the link_document write tool.
-  linkedDocuments: string[];
 }
 
 export interface OcrField {
@@ -37,8 +34,8 @@ export interface DocumentRecord {
   id: string;
   type: '提单' | '发票' | '装箱单' | '其他';
   content: string;
-  // Mock field-level OCR data for verify_document_fields (T4). Demonstrates
-  // per-field confidence variance, including at least one low-confidence field.
+  // Legacy mock field-level OCR data. Retained until the remaining seed dataset
+  // is retired in a later cleanup batch.
   ocrFields?: OcrField[];
 }
 
@@ -77,12 +74,11 @@ export const contracts: Contract[] = [
     deliveryPlace: '张家港',
     paymentTerms: '货到验收后 30 天内付款',
     status: '执行中',
-    linkedDocuments: ['BL-2024-0815-001'],
   },
 ];
 
-// Documents available to be linked to a contract (Phase 3a: link_document target).
-// T4 verify_document_fields reads `ocrFields` (mock OCR; not a real OCR engine).
+// Legacy demo documents and mock OCR fields. Retained until the remaining
+// seed dataset is retired in a later cleanup batch.
 export const documents: DocumentRecord[] = [
   {
     id: 'BL-2024-0920-002',
@@ -199,23 +195,4 @@ export function findOrdersByContract(contractNo: string): Order[] {
 
 export function findDocument(documentId: string): DocumentRecord | undefined {
   return documents.find((d) => d.id === documentId);
-}
-
-// In-memory write used by the link_document tool (L2). Mutates the contract's
-// linkedDocuments list and returns a change record. No persistence (Postgres
-// comes in a later phase).
-export function linkDocumentToContract(
-  contractNo: string,
-  documentId: string,
-):
-  | { ok: true; contractNo: string; changeId: string; linkedAt: string }
-  | { ok: false; reason: 'contract_not_found' } {
-  const contract = findContract(contractNo);
-  if (!contract) return { ok: false, reason: 'contract_not_found' };
-  const changeId = `CHG-${Date.now().toString(36)}-${Math.random()
-    .toString(36)
-    .slice(2, 6)}`;
-  const linkedAt = new Date().toISOString();
-  contract.linkedDocuments.push(documentId);
-  return { ok: true, contractNo: contract.contractNo, changeId, linkedAt };
 }

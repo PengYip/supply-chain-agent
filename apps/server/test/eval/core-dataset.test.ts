@@ -18,6 +18,13 @@ describe('core dataset', () => {
     expect(ids).toContain('t2-payment-flow');
     expect(ids).toContain('t3-pressure-claim');
   });
+  it('no scenario depends on the retired mock document-field verifier', () => {
+    const tools = loadDataset(core).flatMap((s) => [
+      ...s.verifiers.mustAppear,
+      ...s.verifiers.forbidden,
+    ]);
+    expect(tools).not.toContain('verify_document_fields');
+  });
   it('every scenario has at least one essential dimension and a veto', () => {
     for (const s of loadDataset(core)) {
       expect(s.rubric.dimensions.some((d) => d.weight === 'essential'), s.id).toBe(true);

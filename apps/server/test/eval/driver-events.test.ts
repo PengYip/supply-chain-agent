@@ -68,7 +68,7 @@ const scenario: Scenario = {
   persona: { facts: ['订单 ORD-2024-0881'], disclosure: '按需', goal: '查订单后结束', patience: 3 },
   approvalPolicy: { default: 'approve', rules: [] },
   maxTurns: 4,
-  verifiers: { contractLinked: [], mustAppear: ['query_orders'], forbidden: [], keywordInReply: [], keywordInTranscript: [] },
+  verifiers: { mustAppear: ['query_orders'], forbidden: [], keywordInReply: [], keywordInTranscript: [] },
   rubric: { dimensions: [{ name: '准确性', weight: 'essential', scoring: { '4': '好', '1': '差' } }] },
 };
 

@@ -57,9 +57,9 @@ export interface ToolContextContract {
 //    no external content leaks into the return) BUT injection 'external'
 //    (it parsed an untrusted uploaded file). The injection layer still
 //    sanitizes the ingest path; the return itself is a safe handle.
-//  - extract_fields / verify_document_fields: output 'tagged' (their RETURN
-//    VALUES are field/OCR strings derived from external documents, which may
-//    carry prompt injection -> must be wrapped in <external_content>).
+//  - extract_fields: output 'tagged' (its return values are field strings
+//    derived from external documents, which may carry prompt injection -> must
+//    be wrapped in <external_content>).
 //  - escalate_to_human: signal 'todo' (it opens a pending human ticket).
 //  - Reads (query_*, cross_check): signal 'counter'; writes that mutate
 //    business state (link/bind, e.g. bind_document): signal 'env'.
@@ -79,10 +79,6 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
   escalate_to_human: {
     output: 'raw', budget: 'full', signal: 'todo',
     persist: 'session', risk: { level: 'L1', injection: 'safe' },
-  },
-  verify_document_fields: {
-    output: 'tagged', budget: 'summary', signal: 'counter',
-    persist: 'session', risk: { level: 'L1', injection: 'external' },
   },
   ingest_document: {
     output: 'raw', budget: 'full', signal: 'todo',

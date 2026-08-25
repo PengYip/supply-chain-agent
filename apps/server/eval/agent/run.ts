@@ -42,10 +42,9 @@ function hydrateIngestRoot(s: Scenario, root: string): Scenario {
 function seedFixturesIntoIngestRoot(): string {
   const root = resolve(env.INGEST_ROOT);
   mkdirSync(root, { recursive: true });
-  copyFileSync(
-    resolve(here, '..', 'contracts', 'sample-clean-digital.txt'),
-    resolve(root, 'sample-clean-digital.txt'),
-  );
+  for (const fixture of ['sample-clean-digital.txt', 'sample-ambiguous-quantity.txt']) {
+    copyFileSync(resolve(here, '..', 'contracts', fixture), resolve(root, fixture));
+  }
   return root;
 }
 

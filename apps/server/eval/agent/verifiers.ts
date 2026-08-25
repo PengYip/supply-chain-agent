@@ -15,15 +15,6 @@ export function runVerifiers(checks: VerifierChecks, artifact: EpisodeArtifact):
   const toolNames = artifact.toolCalls.map((t) => t.toolName);
   const reply = artifact.finalAssistantText;
 
-  for (const want of checks.contractLinked) {
-    const linked = artifact.envSnapshot.contractLinked[want.contractNo] ?? [];
-    if (!linked.includes(want.documentId)) {
-      failures.push({
-        check: 'contractLinked',
-        detail: `期望合同 ${want.contractNo} 已挂接 ${want.documentId}, 实际: ${JSON.stringify(linked)}`,
-      });
-    }
-  }
   for (const name of checks.mustAppear) {
     if (!toolNames.includes(name)) {
       failures.push({

@@ -124,7 +124,7 @@ streamText + 后台运行时（非 ToolLoopAgent；loop 在后端 runSession 内
 
 | 等级 | 语义 | 触发机制 | 实际工具（permissionGate.ts 注册表） |
 |---|---|---|---|
-| **L1 只读自动** | 无副作用查询 | 自动执行，不询问 | query_contract / query_orders / cross_check / recall_documents / execute_code / ingest_document / extract_fields / inspect_extraction / present_document_review / graph_find_entity / graph_query / list_binding_proposals / query_execution_flows / project_rollup / escalate_to_human / verify_document_fields |
+| **L1 只读自动** | 无副作用查询 | 自动执行，不询问 | query_contract / query_orders / cross_check / recall_documents / execute_code / ingest_document / extract_fields / inspect_extraction / present_document_review / graph_find_entity / graph_query / list_binding_proposals / query_execution_flows / project_rollup / escalate_to_human |
 | **L2 写需确认** | 内部写操作 | 软门：per-tool `needsApproval`（v6），前端 SoftGateCard 确认后经 `/api/approval/callback` 回灌续跑 | bind_document / tag_document / update_document_fields / create_entity / link_entities |
 | **L3 双人审批** | 资金/合同不可逆 | 硬门：系统内不提供资金类工具，经 escalate_to_human（L1）落库工单转人工复核，前端 HumanReviewCard approve/deny 后续跑 | （无系统内工具） |
 
@@ -158,7 +158,7 @@ streamText + 后台运行时（非 ToolLoopAgent；loop 在后端 runSession 内
 | 计划确认 | 复杂副作用前先出计划 | （原 Plan 卡片） | ❌ 未实现（软门由 L2 确认卡承担） |
 | 写确认软门 | L2 工具调用 | SoftGateCard（RealMessageItem）：工具名+参数+确认/取消 → `/api/approval/callback` 回灌续跑 | ✅ 真实链路，409 幂等/单飞防护 |
 | 硬审批门（不确定回退） | 模型置信低/数据缺失/L3 工单 | escalate_to_human 落库工单 + HumanReviewCard（approve/deny + note） | ✅ 真实链路（简化版；原「黄色卡+4 actions」未保留） |
-| 单据核验 | 抽取字段低置信 | present_document_review + DocumentReviewCard（逐字段修正，update_document_fields L2 回写） | ✅ 真实链路（无「重OCR」入口；T4 verify_document_fields 仍读 seed mock） |
+| 单据核验 | 抽取字段低置信 | present_document_review + DocumentReviewCard（逐字段修正，update_document_fields L2 回写） | ✅ 真实链路（无「重OCR」入口） |
 
 **典型 HITL 全流程（真实链路）**：上传文档 → 按需解析（digital/MinerU/VLM 三分流）→ 抽取回写台账 → 低置信字段 DocumentReviewCard 核验/修正（L2 回写）→ 绑定建议 list_binding_proposals → bind_document（L2 软门确认）→ 不确定时 escalate_to_human 工单 → HumanReviewCard 审批 → 回调续跑。原 mock 版 T1-T6 demo（`HITL_DEMO_FLOW`）已随旧原型删除。
 
@@ -185,11 +185,11 @@ streamText + 后台运行时（非 ToolLoopAgent；loop 在后端 runSession 内
 
 ### 工具清单（实际，按业务域）
 
-**读工具（L1，16 个）**：query_contract（台账优先）/ query_orders / cross_check / query_execution_flows / project_rollup / list_binding_proposals / graph_find_entity / graph_query / recall_documents / execute_code（CubeSandbox 隔离执行）/ ingest_document / extract_fields / inspect_extraction / present_document_review / escalate_to_human / verify_document_fields
+**读工具（L1，15 个）**：query_contract（台账优先）/ query_orders / cross_check / query_execution_flows / project_rollup / list_binding_proposals / graph_find_entity / graph_query / recall_documents / execute_code（CubeSandbox 隔离执行）/ ingest_document / extract_fields / inspect_extraction / present_document_review / escalate_to_human
 
 **写工具（L2，5 个）**：bind_document / tag_document / update_document_fields / create_entity / link_entities
 
-**数据源现状**：合同台账（contract_ledger）与执行流水（execution_flows）为真实 DB 源；query_orders / cross_check / verify_document_fields 仍读 `data/seed.ts` 演示种子（半 mock，待退役）；仓储/行情/风控敞口工具未建。
+**数据源现状**：合同台账（contract_ledger）与执行流水（execution_flows）为真实 DB 源；query_orders / cross_check 仍读 `data/seed.ts` 演示种子（半 mock，待退役）；仓储/行情/风控敞口工具未建。
 
 ### 工作量分解（6 桶，历史估算，保留供后续域扩展参考）
 
@@ -377,10 +377,10 @@ supply-chain-agent-prototype/
   - 实测全过：curl **L2/L3 双向 round-trip 均 work**（L2 link_document→approval-request→callback→resume→executed CHG-xxx；L3 create_payment→blocked+ticketId→callback→resume→executed PAY-xxx）+ **进程重启状态存活**（杀进程→重启→同 session-id 问付款单号→模型从 SQLite 回溯正确回答）+ 零幻觉回归
   - 浏览器可视化：前端「模拟审批通过」调试按钮（RealChatView，POST /api/approval/callback），L3 round-trip 浏览器可验
 - 飞书审批连接器（回灌打通）——**仍未实现**，当前仅应用内 HTTP 回调（/api/approval/callback）
-- T3 escalate_to_human + T4 verify_document_fields 已实现（`apps/server/src/tools/hitl.ts`，L1），HITL T1-T6 后端全流程可测
+- T3 escalate_to_human 已实现（`apps/server/src/tools/hitl.ts`，L1）；原 T4 mock 核验工具已退役，字段复核走真实文档管线
   - T3（不确定回退）：模型遇数据冲突/置信低/缺失→调 escalate_to_human→返 ESC-xxx 工单（不编造）
-  - T4（OCR 核验）：调 verify_document_fields→返 per-field 置信度 + needsReview（低置信字段如实告知；仍读 seed mock OCR，待接真管线）
-  - 实测：T3 金额冲突→ESC 工单 ✓ / T4 提单字段核验→49X0@0.61 needsReview ✓ / 零幻觉回归 ✓
+  - T4（字段复核）：present_document_review 返字段置信度与复核状态；人工修正走 update_document_fields（L2）
+  - 实测：T3 金额冲突→ESC 工单 ✓ / 零幻觉回归 ✓
   - 仅剩飞书真实回灌（需凭据）—— 后端 mock round-trip 已全通
 
 **阶段 3+：MVP 内核之后已落地的追加模块**（原蓝图未列，现状校订）：

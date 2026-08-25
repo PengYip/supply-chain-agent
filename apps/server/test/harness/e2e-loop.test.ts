@@ -9,9 +9,9 @@ import { env } from '../../src/env.js';
 /**
  * H1: end-to-end agent-loop stub test.
  *
- * Exercises runStream -> streamText with the FULL 13-tool trader toolset against
+ * Exercises runStream -> streamText with the FULL trader toolset against
  * a deterministic fake LanguageModelV2 (no network). Asserts:
- *  (a) the 13-tool trader toolset is folded into the live streamText call;
+ *  (a) the trader toolset is folded into the live streamText call;
  *  (b) bind_document carries needsApproval (L2) in the gated toolset;
  *  (c) a canned tool call actually routes to the matching tool's execute;
  *  (d) the stream + telemetry path completes without throwing.
@@ -76,7 +76,7 @@ function createFakeModel(opts: FakeModelOptions) {
 }
 
 describe('agent e2e loop (stub model)', () => {
-  it('routes a canned tool call through the 13-tool trader toolset offline', async () => {
+  it('routes a canned tool call through the full trader toolset offline', async () => {
     const ctx = createDb(':memory:');
     migrate(ctx.sqlite);
     // ingest_document now enforces a path allowlist against env.INGEST_ROOT, so
@@ -116,13 +116,13 @@ describe('agent e2e loop (stub model)', () => {
     // (d) stream + telemetry path completes without throwing.
     expect(threw).toBe(false);
 
-    // (a) the live streamText call received the full trader toolset. base 4
+    // (a) the live streamText call received the full trader toolset. base 3
     // (create_payment removed: no in-system money tools) + 3 doc-entry +
     // recall_documents + execute_code + inspect_extraction + tag_document +
     // create_entity + link_entities + graph_query + graph_find_entity +
     // present_document_review + update_document_fields + list_binding_proposals
-    // + project_rollup = 21 live trader tools.
-    expect(capturedNames).toHaveLength(21);
+    // + project_rollup = 20 live trader tools.
+    expect(capturedNames).toHaveLength(20);
     for (const n of ['ingest_document', 'extract_fields', 'bind_document', 'query_contract', 'escalate_to_human', 'recall_documents', 'project_rollup']) {
       expect(capturedNames).toContain(n);
     }

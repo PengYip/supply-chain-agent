@@ -13,7 +13,7 @@ const pairLine = (sid: string, ri: number, verdict: string) => JSON.stringify({
   artifact: {
     scenarioId: sid, runIndex: ri, sessionId: 's', startedAt: '2026-08-15T00:00:00.000Z',
     wallMs: 100, turnsUsed: 2, transcript: [{ role: 'user', text: 'hi' }],
-    toolCalls: [], approvals: [], envSnapshot: {}, finalAssistantText: 'ok',
+    toolCalls: [], approvals: [], finalAssistantText: 'ok',
     totalUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
   },
   score: {

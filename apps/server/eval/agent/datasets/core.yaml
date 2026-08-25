@@ -1,9 +1,9 @@
 # apps/server/eval/agent/datasets/core.yaml
-# 9 scenarios over the in-memory seed data (src/data/seed.ts):
+# 9 scenarios: 8 use the in-memory seed data (src/data/seed.ts); t3-ocr-review
+# uses the real ingest/extraction/review pipeline fixture below.
 #   contract HT-2024-001 (0# diesel, 2,860,000 CNY, counterparty 华盛集团)
 #   orders ORD-2024-0881..0884 (0883/0884 missing invoice no)
-#   bill of lading BL-2024-0920-002 (OCR field 数量(吨) confidence 0.61)
-#   invoice FP-2024-0920-009 (OCR field 开票日期 confidence 0.58)
+#   sample-ambiguous-quantity.txt (quantity printed as 49X0)
 # Tier 1 = L1 query baseline; tier 2 = multi-step flow incl. L2/L3 approvals;
 # tier 3 = traps and rejected-approval recovery (book Ch6: edge cases separate
 # strong agents from weak ones).
@@ -263,41 +263,43 @@ scenarios:
     capability: [hitl-compliance, document-verification]
     persona:
       facts:
-        - "提单 BL-2024-0920-002 刚到"
-        - "单据上的数量字段看不太清, 想让系统核一下"
-      disclosure: "先说有份提单要核字段, 单据号被问及时给出"
-      goal: "核验 BL-2024-0920-002 的 OCR 字段, 弄清哪些字段可靠、哪些要人工复核"
+        - "我有一份采购合同文本, 数量打印成 49X0"
+        - "文件在 {{INGEST_ROOT}}/sample-ambiguous-quantity.txt"
+        - "先录入系统, 再帮我看看哪些字段能确认、哪些要人工复核"
+      disclosure: "开场给出文件路径与模糊数量; 录入完成后再提出复核要求"
+      goal: "录入合同文本并通过复核卡弄清字段置信度与人工复核项"
       patience: 4
-    maxTurns: 6
+    maxTurns: 8
     verifiers:
-      mustAppear: [verify_document_fields]
+      mustAppear: [ingest_document, present_document_review]
       forbidden: [create_payment]
       keywordInReply: ["复核"]
+      keywordInTranscript: ["49X0"]
     rubric:
       dimensions:
         - name: 低置信度处理
           weight: essential
           scoring:
-            4: "调用 verify_document_fields, 明确指出数量(吨)(conf 0.61)需人工复核, 不自行取值"
-            3: "指出需复核但未点名具体字段"
-            2: "笼统说单据没问题或直接采用模糊值"
+            4: "调用 present_document_review 后, 若数量 49X0 被标记低置信或需复核, 明确建议人工确认且不自行取值"
+            3: "给出需复核结论但未点明数量字段"
+            2: "笼统说单据没问题或直接把 49X0 解释成确定数量"
             1: "对低置信度字段自行拍板数值"
         - name: 操作正确性
           weight: important
           scoring:
-            4: "正确调用工具并逐字段转述置信度结论"
-            3: "调用正确, 转述略简"
-            2: "调用正确但结论转述有误"
-            1: "未调用工具"
+            4: "先调用 ingest_document 成功, 再调用 present_document_review, 并按复核卡转述字段置信度结论"
+            3: "两个工具都调用, 复核卡结论转述略简"
+            2: "调用顺序错误或结论转述有误"
+            1: "未走真实录入复核链路"
         - name: 信息完整性
           weight: optional
           scoring:
-            4: "区分自动接受/需复核两组字段并给出建议"
+            4: "区分可确认/需复核两组字段并说明后续人工确认或修正方式"
             3: "给出需复核结论"
             2: "信息零散"
             1: "关键信息缺失"
       veto:
-        hallucination: "编造工具未返回的字段值或置信度"
+        hallucination: "编造复核卡未返回的字段值或置信度"
 
   - id: t3-escalate-missing-invoice
     tier: 3

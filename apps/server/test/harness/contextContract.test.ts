@@ -18,7 +18,6 @@ const EXPECTED_TOOLS = [
   'query_orders',
   'cross_check',
   'escalate_to_human',
-  'verify_document_fields',
   'ingest_document',
   'extract_fields',
   'bind_document',
@@ -90,22 +89,22 @@ describe('tool-context contract registry', () => {
 
 describe('contract injection-exposure mapping (integration point 1)', () => {
   it('marks tools that RETURN external-derived content as output tagged', () => {
-    // extract_fields + verify_document_fields return field/OCR strings derived
-    // from uploaded documents, and recall_documents returns BM25 snippets of
+    // extract_fields returns field strings derived from uploaded documents,
+    // and recall_documents returns BM25 snippets of
     // ingested doc text -> all must be wrapped in <external_content>. execute_code
     // runs user-supplied Python whose stdout can carry injection payloads too.
     expect(getTaggedOutputTools().sort()).toEqual(
-      ['execute_code', 'extract_fields', 'inspect_extraction', 'present_document_review', 'recall_documents', 'verify_document_fields'].sort(),
+      ['execute_code', 'extract_fields', 'inspect_extraction', 'present_document_review', 'recall_documents'].sort(),
     );
   });
 
   it('marks tools that HANDLE external content (even when output is raw)', () => {
     // ingest_document returns only a {docId,...} handle (output raw) but still
-    // parsed an untrusted file -> injection external. extract/verify both handle
-    // AND return external content. recall_documents reads back that doc text.
+    // parsed an untrusted file -> injection external. extract_fields handles
+    // AND returns external content. recall_documents reads back that doc text.
     // execute_code runs untrusted user code (injection external).
     expect(getExternalHandlingTools().sort()).toEqual(
-      ['execute_code', 'extract_fields', 'ingest_document', 'inspect_extraction', 'present_document_review', 'recall_documents', 'verify_document_fields'].sort(),
+      ['execute_code', 'extract_fields', 'ingest_document', 'inspect_extraction', 'present_document_review', 'recall_documents'].sort(),
     );
   });
 

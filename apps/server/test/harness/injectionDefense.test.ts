@@ -13,7 +13,6 @@ import {
   buildIngestDocumentTool,
   buildExtractFieldsTool,
 } from '../../src/pipeline/tools/documentEntry.js';
-import { verifyDocumentFields } from '../../src/tools/hitl.js';
 
 describe('injectionDefense - tagExternal', () => {
   it('wraps non-empty content with open+close sentinels around the content', () => {
@@ -125,27 +124,5 @@ describe('injectionDefense - extract_fields wraps external-derived strings', () 
     const contract = (res.fields as Array<{ name: string; value: string | number }>)
       .find((x) => x.name === '合同号')!;
     expect(String(contract.value)).toBe(tagExternal('HT-2024-001'));
-  });
-});
-
-// Integration: verify_document_fields (HITL OCR tool) must also wrap its
-// external-derived strings. Uses the seeded bill-of-lading doc directly.
-describe('injectionDefense - verify_document_fields wraps OCR strings', () => {
-  it('wraps every ocrValue in <external_content>', async () => {
-    const res: any = await verifyDocumentFields.execute(
-      { documentId: 'BL-2024-0920-002' },
-      { messages: [], toolCallId: 't', abortSignal: undefined as any } as any,
-    );
-    expect(res.ok).toBe(true);
-    const values = (res.fields as Array<{ ocrValue: string }>).map((f) => f.ocrValue);
-    expect(values.length).toBeGreaterThan(0);
-    for (const v of values) {
-      expect(v).toContain('<external_content');
-      expect(v).toContain(EXTERNAL_CLOSE);
-    }
-    // Spot-check the full tagged form for a known seeded value.
-    const consignee = (res.fields as Array<{ name: string; ocrValue: string }>)
-      .find((f) => f.name === '收货人')!;
-    expect(consignee.ocrValue).toBe(tagExternal('华盛集团'));
   });
 });

@@ -7,7 +7,7 @@
 //
 //   (1) tagExternal  -- wraps a string leaf in <external_content>..</external_content>
 //                       sentinels. Applied to every external-derived STRING value a
-//                       'tagged' tool returns (extract_fields, verify_document_fields).
+//                       'tagged' tool returns (for example, extract_fields).
 //   (2) assertWithinRoot -- path allowlist for ingest_document. The tool may only
 //                       read files under INGEST_ROOT, blocking traversal
 //                       (../../etc/passwd) and absolute paths outside the root.

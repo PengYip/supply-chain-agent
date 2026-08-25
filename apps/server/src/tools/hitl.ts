@@ -1,12 +1,10 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
-import { findDocument, type OcrField } from '../data/seed.js';
-import { tagExternal } from '../harness/injectionDefense.js';
 import { recordPendingApproval } from '../harness/sessionStore.js';
 import { getSessionId } from '../harness/sessionContext.js';
 
-// HITL tools (T3 + T4). Both L1 (auto-execute, no approval gate).
+// HITL tool (T3). L1 (auto-execute, no approval gate).
 // AI SDK 6 uses `inputSchema` (not v5 `parameters`).
 //
 // H4: per-tool audit recording was removed -- every tool call is now wrapped
@@ -65,87 +63,6 @@ export const escalateToHuman = tool({
       issue,
       category,
       severity,
-    };
-    return result;
-  },
-});
-
-// ---- T4: verify_document_fields (document OCR field check, L1) --------------
-//
-// Mock field-level OCR verification. High confidence (>=0.9) auto-accept, low
-// (<0.7) flagged needsReview. Marked mock -- no real OCR engine.
-
-const VERIFY_REVIEW_THRESHOLD = 0.7;
-const VERIFY_AUTO_THRESHOLD = 0.9;
-
-const verifySchema = z.object({
-  documentId: z
-    .string()
-    .describe('单据号，如提单 BL-2024-0920-002 或发票 FP-2024-0920-009'),
-  expectedFields: z
-    .array(z.string())
-    .optional()
-    .describe('期望核验的字段名列表，不传则核验该单据所有已知字段'),
-});
-
-interface VerifiedField {
-  name: string;
-  ocrValue: string;
-  confidence: number;
-  needsReview: boolean;
-  autoAccepted: boolean;
-  note?: string;
-}
-
-export const verifyDocumentFields = tool({
-  description:
-    '单据字段 OCR 核验：对提单/发票等单据做字段级 OCR 置信度核验，高置信度字段自动接受，低置信度字段标记 needsReview 建议人工复核。',
-  inputSchema: verifySchema,
-  execute: async ({ documentId, expectedFields }) => {
-    const doc = findDocument(documentId);
-    if (!doc) {
-      const result = { ok: false as const, status: 'not_found' as const, documentId };
-      return result;
-    }
-
-    let ocr: OcrField[] = doc.ocrFields ?? [];
-    if (expectedFields && expectedFields.length > 0) {
-      const want = new Set(expectedFields);
-      ocr = ocr.filter((f) => want.has(f.name));
-    }
-
-    const fields: VerifiedField[] = ocr.map((f) => {
-      const verified: VerifiedField = {
-        name: f.name,
-        // Injection defense (output:tagged): ocrValue/note are strings read from
-        // an untrusted document via mock OCR -- wrap them as DATA so embedded
-        // prompt-injection text cannot be executed by the model. confidence/name
-        // are not document text and are left untouched.
-        ocrValue: tagExternal(f.ocrValue),
-        confidence: f.confidence,
-        needsReview: f.confidence < VERIFY_REVIEW_THRESHOLD,
-        autoAccepted: f.confidence >= VERIFY_AUTO_THRESHOLD,
-      };
-      if (f.note) verified.note = tagExternal(f.note);
-      return verified;
-    });
-
-    const overallConfidence =
-      fields.length === 0
-        ? 0
-        : Math.round(
-            (fields.reduce((sum, f) => sum + f.confidence, 0) / fields.length) *
-              100,
-          ) / 100;
-
-    const result = {
-      ok: true as const,
-      status: 'verified' as const,
-      documentId,
-      docType: doc.type,
-      overallConfidence,
-      fields,
-      needsManualReview: fields.some((f) => f.needsReview),
     };
     return result;
   },

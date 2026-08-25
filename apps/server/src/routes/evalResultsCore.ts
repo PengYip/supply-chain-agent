@@ -17,7 +17,6 @@ export interface ArtifactJson {
   transcript: Array<{ role: string; text: string }>;
   toolCalls: Array<{ toolName: string; args: unknown; result: unknown; durationMs: number }>;
   approvals: Array<{ id: string; level: string; toolName: string; input: unknown; decision: string; reason: string; matchedRule?: string }>;
-  envSnapshot: unknown;
   finalAssistantText: string;
   totalUsage: UsageJson;
   simError?: string;

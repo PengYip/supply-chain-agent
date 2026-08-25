@@ -41,8 +41,6 @@ export const PersonaSchema = z.object({
 export type Persona = z.infer<typeof PersonaSchema>;
 
 export const VerifierChecksSchema = z.object({
-  /** Contract.linkedDocuments must contain the documentId. */
-  contractLinked: z.array(z.object({ contractNo: z.string(), documentId: z.string() })).default([]),
   /** Tool names that MUST appear in the episode (flow-compliance check). */
   mustAppear: z.array(z.string()).default([]),
   /** Tool names that MUST NOT appear. */
@@ -70,7 +68,6 @@ export const ScenarioSchema = z.object({
   approvalPolicy: ApprovalPolicySchema.default({ default: 'approve', rules: [] }),
   maxTurns: z.number().int().min(1).max(20).default(8),
   verifiers: VerifierChecksSchema.default({
-    contractLinked: [],
     mustAppear: [], forbidden: [], keywordInReply: [], keywordInTranscript: [],
   }),
   rubric: RubricSchema,
@@ -96,10 +93,6 @@ export interface ApprovalObservation {
   matchedRule?: string;
 }
 
-export interface EnvSnapshot {
-  contractLinked: Record<string, string[]>;
-}
-
 export interface TranscriptEntry {
   role: 'user' | 'assistant' | 'system-note';
   text: string;
@@ -121,7 +114,6 @@ export interface EpisodeArtifact {
   transcript: TranscriptEntry[];
   toolCalls: ToolCallObservation[];
   approvals: ApprovalObservation[];
-  envSnapshot: EnvSnapshot;
   finalAssistantText: string;
   totalUsage: UsageSummary;
   simError?: string;

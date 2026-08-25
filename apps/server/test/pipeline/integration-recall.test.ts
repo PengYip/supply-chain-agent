@@ -272,12 +272,12 @@ describe('integration: document-entry -> hybrid recall chain', () => {
       embedder,
     });
     const names = tools.map((t) => t.name);
-    // base 4 (create_payment removed: no in-system money tools) + 3 doc-entry +
+    // base 3 (create_payment removed: no in-system money tools) + 3 doc-entry +
     // recall_documents + execute_code + inspect_extraction + tag_document +
     // create_entity + link_entities + graph_query + graph_find_entity +
     // present_document_review + update_document_fields + list_binding_proposals
-    // + project_rollup = 21 live trader tools.
-    expect(names).toHaveLength(21);
+    // + project_rollup = 20 live trader tools.
+    expect(names).toHaveLength(20);
     expect(names).toContain('recall_documents');
     expect(names).toContain('ingest_document');
     expect(names).toContain('extract_fields');

@@ -53,7 +53,6 @@ registerPermission('query_contract', 'L1');
 registerPermission('query_orders', 'L1');
 registerPermission('cross_check', 'L1');
 registerPermission('escalate_to_human', 'L1'); // T3: uncertainty fallback
-registerPermission('verify_document_fields', 'L1'); // T4: document OCR check
 // T9: document-entry pipeline tools
 registerPermission('ingest_document', 'L1'); // T9: parse + persist BlockModel
 registerPermission('extract_fields', 'L1'); // T9: grounded field extraction

@@ -164,7 +164,7 @@ function StringListField({ doc, path, readOnly, onChange, label, placeholder }: 
   )
 }
 
-// 结构化行表格 (verifiers 的 payments/paymentsAbsent/contractLinked, 审批 rules 复用)。
+// 结构化行表格 (verifiers 的 payments/paymentsAbsent, 审批 rules 复用)。
 function RowsTable({ doc, path, readOnly, onChange, columns, newRow }: {
   doc: Document
   path: (string | number)[]
@@ -338,12 +338,6 @@ function VerifiersSection({ doc, index, readOnly, onChange }: { doc: Document; i
         <RowsTable doc={doc} path={[...base, 'paymentsAbsent']} readOnly={readOnly} onChange={onChange}
           columns={[{ key: 'contractNo', label: 'contractNo' }]}
           newRow={{ contractNo: '' }} />
-      </div>
-      <div>
-        <div className="text-xs text-ink-soft mb-1">contractLinked</div>
-        <RowsTable doc={doc} path={[...base, 'contractLinked']} readOnly={readOnly} onChange={onChange}
-          columns={[{ key: 'contractNo', label: 'contractNo' }, { key: 'documentId', label: 'documentId' }]}
-          newRow={{ contractNo: '', documentId: '' }} />
       </div>
       <TagGroup doc={doc} path={[...base, 'mustAppear']} readOnly={readOnly} onChange={onChange} label="mustAppear" />
       <TagGroup doc={doc} path={[...base, 'forbidden']} readOnly={readOnly} onChange={onChange} label="forbidden" />

@@ -25,7 +25,6 @@ import { getTaxonomy, bindingRelationFor } from '../../domain/tradeSemantics.js'
 import { classifyDocument, classifyDocumentWithoutModel, type ClassifierDeps } from '../classifier.js';
 import { deriveAutoTags } from '../tagging.js';
 import { chunkBlockModel } from '../chunking.js';
-import { linkDocumentToContract } from '../../data/seed.js';
 import { tagExternal, assertWithinRoot } from '../../harness/injectionDefense.js';
 import type { Embedder } from '../embedder.js';
 import { isVecReady, saveChunkVectors } from '../db/vecStore.js';
@@ -1375,10 +1374,9 @@ export function buildBindDocumentTool(deps: ToolDeps) {
         } catch (e) {
           console.warn('[executionFlow] 绑定确认物化执行流水失败:', (e as Error).message);
         }
-        const linkRes = linkDocumentToContract(contractNo, documentId);
         return {
           ok: true as const, bindingId: existing.id, contractNo, documentId,
-          confirmedProposal: true as const, linkedToContract: linkRes.ok,
+          confirmedProposal: true as const,
         };
       }
 
@@ -1400,10 +1398,7 @@ export function buildBindDocumentTool(deps: ToolDeps) {
       } catch (e) {
         console.warn('[executionFlow] 绑定确认物化执行流水失败:', (e as Error).message);
       }
-      // T8 deviation (per cross-task directive): bind extends the existing
-      // link_document — also reflect the binding in the in-memory contract graph.
-      const linkRes = linkDocumentToContract(contractNo, documentId);
-      return { ok: true as const, bindingId, contractNo, documentId, linkedToContract: linkRes.ok };
+      return { ok: true as const, bindingId, contractNo, documentId };
     },
   });
 }

@@ -3,7 +3,7 @@
 // approvalCallback.ts loop semantics minus HTTP: user sim -> runStream ->
 // pending-approval simulation (L2 transient tool-approval-response, L3
 // authorized-ticket instruction) -> resume. Collects the full episode
-// artifact (transcript, tool calls, approvals, env snapshot, usage).
+// artifact (transcript, tool calls, approvals, usage).
 import { randomUUID } from 'node:crypto';
 import { convertToModelMessages, type LanguageModel, type ModelMessage, type UIMessage } from 'ai';
 import { runStream, recordL2PendingFromResponse } from '../../src/harness/agent.js';
@@ -17,7 +17,6 @@ import { createDb, migrate } from '../../src/pipeline/db/client.js';
 import type { HarnessDeps } from '../../src/harness/roleToolRegistry.js';
 import { simulateUserTurn, SimError } from './userSim.js';
 import { decideApproval } from './approver.js';
-import { resetSeedForEval, snapshotEnv } from './seedEnv.js';
 import type { EvalRunEvent } from './events.js';
 import type {
   EpisodeArtifact, Scenario, TranscriptEntry, ToolCallObservation, UsageSummary,
@@ -132,7 +131,6 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
   const { scenario, runIndex } = opts;
   const startedAt = new Date().toISOString();
   const start = Date.now();
-  resetSeedForEval();
 
   const ctx = opts.deps?.ctx ?? createDb(':memory:');
   if (!opts.deps?.ctx) migrate((ctx as ReturnType<typeof createDb>).sqlite);
@@ -307,7 +305,6 @@ export async function runEpisode(opts: DriverOpts): Promise<EpisodeArtifact> {
     transcript,
     toolCalls,
     approvals,
-    envSnapshot: snapshotEnv(),
     finalAssistantText,
     totalUsage,
     simError,

@@ -21,7 +21,6 @@ function artifact(partial: Partial<EpisodeArtifact> = {}): EpisodeArtifact {
     ],
     toolCalls: [{ toolName: 'query_orders', args: { contractNo: 'HT-2024-001' }, result: { count: 4 }, durationMs: 10 }],
     approvals: [],
-    envSnapshot: { contractLinked: {} },
     finalAssistantText: '共 4 笔订单',
     totalUsage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
     ...partial,

@@ -19,7 +19,6 @@ const artifact = (scenarioId: string, runIndex: number) => ({
   ],
   toolCalls: [{ toolName: 'query_orders', args: { no: 'ORD-2024-0881' }, result: { ok: true }, durationMs: 12 }],
   approvals: [{ id: 'p1', level: 'L3', toolName: 'escalate_to_human', input: {}, decision: 'approved', reason: '人工已复核', matchedRule: undefined }],
-  envSnapshot: { contractLinked: {} },
   finalAssistantText: '已查到', totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
 });
 const score = (scenarioId: string, runIndex: number, verdict: string, rubricScore: number | null) => ({

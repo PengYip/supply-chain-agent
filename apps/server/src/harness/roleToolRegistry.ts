@@ -1,6 +1,6 @@
 import type { Tool } from 'ai';
 import { buildQueryContractTool, buildProjectRollupTool, queryOrders, crossCheck } from '../tools/queries.js';
-import { escalateToHuman, verifyDocumentFields } from '../tools/hitl.js';
+import { escalateToHuman } from '../tools/hitl.js';
 import {
   buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool, buildInspectExtractionTool,
   buildTagDocumentTool, buildPresentDocumentReviewTool, buildUpdateDocumentFieldsTool,
@@ -45,10 +45,10 @@ export type GatedTool = Tool<any, any> & { name: string };
 
 // role -> tool subset.
 //
-// Trader's static BASE set is 4 tools (2 L1 reads: query_orders / cross_check +
-// 2 L1 HITL/doc tools: escalate_to_human / verify_document_fields). All L2
-// writes (bind_document / tag_document / create_entity / ...) are the
-// DbContext-dependent builders appended in getToolsForRole(deps) below.
+// Trader's static BASE set is 3 tools (2 L1 reads: query_orders / cross_check +
+// 1 L1 HITL tool: escalate_to_human). All L2 writes (bind_document /
+// tag_document / create_entity / ...) are DbContext-dependent builders
+// appended in getToolsForRole(deps) below.
 //
 // T9: trader gains three doc-entry tools (ingest_document L1, extract_fields L1,
 // bind_document L2). Their INSTANCES need a DbContext, so they are appended in
@@ -67,7 +67,6 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
     { ...queryOrders, name: 'query_orders' },
     { ...crossCheck, name: 'cross_check' },
     { ...escalateToHuman, name: 'escalate_to_human' },
-    { ...verifyDocumentFields, name: 'verify_document_fields' },
   ],
 };
 

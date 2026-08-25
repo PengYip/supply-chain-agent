@@ -99,8 +99,8 @@ describe('compressByBudget - summary budget', () => {
     const lookup: ContractLookup = () => 'summary';
     const small = { type: 'json', value: { ok: true, status: 'verified' } };
     const messages: ModelMessage[] = [
-      assistantToolCallMessage('verify_document_fields'),
-      toolMessage('verify_document_fields', small),
+      assistantToolCallMessage('inspect_extraction'),
+      toolMessage('inspect_extraction', small),
     ];
     const out = compressByBudget(messages, { contractLookup: lookup });
     expect(firstOutput(out)).toEqual(small);
