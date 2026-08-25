@@ -709,15 +709,15 @@ export const RealChatView: React.FC<{
               </div>
               <h3 className="text-base font-medium text-ink mb-2">真实 DeepSeek 工具调用</h3>
               <p className="text-sm text-ink-soft mb-6 max-w-md">
-                下方输入查询，AI 将自动调用后端真实工具（query_contract / query_orders / cross_check），所有数字来自工具返回，不编造。
+                下方输入查询，AI 将自动调用后端真实工具，数字来自合同台账与执行流水聚合，不编造。
               </p>
               <div className="flex flex-wrap justify-center gap-2">
                 {[
                   '查合同 HT-2024-001',
-                  '挂提单 BL-2024-0920-002 到合同 HT-2024-001',
+                  '汇总 HT-2024-001 执行流水',
                   '发起付款 50 万',
-                  'HT-2024-001 和 HT-2024-002 金额对不上',
-                  '核验提单 BL-2024-0920-002 字段',
+                  '核对 HT-2024-001 台账与执行流水',
+                  '上传合同并生成复核卡',
                 ].map((prompt) => (
                   <button
                     key={prompt}

@@ -7,6 +7,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import { env } from '../../src/env.js';
 import { defaultEmbedder } from '../../src/pipeline/ingestModel.js';
+import { seedCoreBusinessState } from './businessSeed.js';
 import { loadDataset } from './datasets.js';
 import { runEpisode } from './driver.js';
 import { runVerifiers } from './verifiers.js';
@@ -51,6 +52,7 @@ function seedFixturesIntoIngestRoot(): string {
 async function main() {
   const emit = (e: EvalRunEvent) => process.stdout.write(formatEventLine(e) + '\n');
   const datasetArg = arg('dataset') ?? 'datasets/core.yaml';
+  const dsName = datasetArg.split('/').pop()!.replace(/\.yaml$/, '');
   const runs = Number(arg('runs') ?? 3);
   const filter = arg('filter');
   const datasetPath = datasetArg.startsWith('/') || /^[A-Za-z]:/.test(datasetArg)
@@ -101,6 +103,9 @@ async function main() {
       const ctx = createDb(':memory:');
       migrate(ctx.sqlite);
       enableVec(ctx.sqlite);
+      // Core scenarios exercise the DB-only query tools. Doc-entry datasets stay
+      // untouched so their scenarios must ingest their own fixtures.
+      if (dsName === 'core') await seedCoreBusinessState(ctx);
       const artifact = await runEpisode({
         scenario,
         runIndex: run,
@@ -123,7 +128,6 @@ async function main() {
     }
   }
 
-  const dsName = datasetArg.split('/').pop()!.replace(/\.yaml$/, '');
   // EVAL_RUN_ID mode: the server-assigned runId already embeds the stamp +
   // dataset tag, so outDir uses it verbatim (no re-appended dsName). Plain CLI
   // (no EVAL_RUN_ID) keeps the legacy stamp-dsName directory.

@@ -189,7 +189,7 @@ streamText + 后台运行时（非 ToolLoopAgent；loop 在后端 runSession 内
 
 **写工具（L2，5 个）**：bind_document / tag_document / update_document_fields / create_entity / link_entities
 
-**数据源现状**：合同台账（contract_ledger）与执行流水（execution_flows）为真实 DB 源；query_orders / cross_check 仍读 `data/seed.ts` 演示种子（半 mock，待退役）；仓储/行情/风控敞口工具未建。
+**数据源现状**：`data/seed.ts` 已退役。合同、执行视图与对账均走真实 DB：query_contract 读 `contract_ledger`；query_orders 聚合 `execution_flows`（无 orders 表，不虚构订单行）；cross_check 用 `contract_ledger` 对照 `execution_flows` 汇总。仓储/行情/风控敞口工具未建。
 
 ### 工作量分解（6 桶，历史估算，保留供后续域扩展参考）
 
@@ -314,7 +314,6 @@ supply-chain-agent-prototype/
 │       │   ├── domain/         # 合同类型/资金方向/贸易语义
 │       │   ├── tools/          # 静态工具（queries/hitl）
 │       │   ├── lib/            # auth / auth-middleware / minio
-│       │   ├── data/           # seed.ts（演示种子，待退役）
 │       │   └── telemetry/      # genAiEnricher（Langfuse I/O 桥接）
 │       ├── test/               # vitest（115 个测试文件）
 │       ├── eval/               # 评测（agent 级 + 管线级）
@@ -345,8 +344,8 @@ supply-chain-agent-prototype/
 - 依赖：hono@4.13 / @hono/node-server@2 / ai@6.0.241 / @ai-sdk/openai@2.0.117 / zod@3.25 / dotenv@16 / tsx@4.23 / typescript@5.9
 
 **阶段 2a：Thin Slice 真数据打通（后端）** — ✅ **已完成**（内存数据版）
-- 内存播种 `apps/server/src/data/seed.ts`（合同 HT-2024-001 柴油采购 ¥2,860,000 / 华盛集团 + 4 笔订单 + 库存；ORD-0883/0884 缺发票号）
-- 3 读工具 `apps/server/src/tools/queries.ts`：queryContract / queryOrders / crossCheck（AI SDK 6 `tool()`）
+- 早期内存播种 `apps/server/src/data/seed.ts`（历史 Thin Slice 实现；已于 2026-08-25 第 3 批清理退役）
+- 3 个早期读工具已演进为 `apps/server/src/tools/queries.ts` 中的 DB builder（query_contract / query_orders / cross_check；seed 退役后无内存回退）
 - `apps/server/src/harness/roleToolRegistry.ts`（trader → 3 工具）+ `auditRecorder.ts`（结构化 JSON 日志）
 - **实测**：DeepSeek 可靠调用工具 + 多工具智能编排（按需跳过 cross_check）+ **零幻觉确认**（HT-9999 假合同 → notFound → 如实说"数据不可得"不编造）
 - Postgres+Drizzle 推迟（内存版已验证核心闭环）

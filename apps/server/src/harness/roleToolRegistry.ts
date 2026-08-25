@@ -1,5 +1,10 @@
 import type { Tool } from 'ai';
-import { buildQueryContractTool, buildProjectRollupTool, queryOrders, crossCheck } from '../tools/queries.js';
+import {
+  buildQueryContractTool,
+  buildProjectRollupTool,
+  buildQueryOrdersTool,
+  buildCrossCheckTool,
+} from '../tools/queries.js';
 import { escalateToHuman } from '../tools/hitl.js';
 import {
   buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool, buildInspectExtractionTool,
@@ -45,10 +50,8 @@ export type GatedTool = Tool<any, any> & { name: string };
 
 // role -> tool subset.
 //
-// Trader's static BASE set is 3 tools (2 L1 reads: query_orders / cross_check +
-// 1 L1 HITL tool: escalate_to_human). All L2 writes (bind_document /
-// tag_document / create_entity / ...) are DbContext-dependent builders
-// appended in getToolsForRole(deps) below.
+// Trader's static BASE set is 1 L1 HITL tool: escalate_to_human. All DB reads
+// and L2 writes are DbContext-dependent builders appended in getToolsForRole.
 //
 // T9: trader gains three doc-entry tools (ingest_document L1, extract_fields L1,
 // bind_document L2). Their INSTANCES need a DbContext, so they are appended in
@@ -59,13 +62,11 @@ export type GatedTool = Tool<any, any> & { name: string };
 // only sees the tools it is allowed to call. For now we hand the role its full
 // toolset and let the model pick.
 //
-// 接线闭环: query_contract 已从静态 BASE 表移除 -- 它是台账优先的 builder
-// (buildQueryContractTool), 需要可选 DbContext, 所以在 getToolsForRole 中对
-// trader 无条件 push(无 ctx 时降级为纯 seed 行为)。
+// 接线闭环: query_contract 已从静态 BASE 表移除 -- 它是台账 builder
+// (buildQueryContractTool), 在 getToolsForRole 中对 trader 无条件 push；
+// 无 ctx 时 execute 返回 notConfigured。
 const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
   trader: [
-    { ...queryOrders, name: 'query_orders' },
-    { ...crossCheck, name: 'cross_check' },
     { ...escalateToHuman, name: 'escalate_to_human' },
   ],
 };
@@ -74,19 +75,23 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
 // though constructing their instances requires a DbContext (see getToolsForRole).
 // query_contract is listed here too: after the BASE removal above its name would
 // otherwise drop out of listToolNames (it is still always registered for trader).
-const TRADER_CTX_TOOL_NAMES = ['query_contract', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'query_execution_flows', 'project_rollup'] as const;
+const TRADER_CTX_TOOL_NAMES = ['query_contract', 'query_orders', 'cross_check', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'query_execution_flows', 'project_rollup'] as const;
 
 export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
   const base: GatedTool[] = (BASE_TOOLS_FOR_ROLE[role] ?? []).map((t) => ({ ...t }));
   if (role === 'trader') {
     const { userId } = deps ?? {};
-    // query_contract 无条件注册(台账优先; deps.ctx 缺省时降级纯 seed)。
+    // query_contract 无条件注册；deps.ctx 缺省时返回 notConfigured。
     base.push({ ...buildQueryContractTool({ ctx: deps?.ctx, userId }), name: 'query_contract' });
     // project_rollup 同款无条件注册(L1 只读; 无 ctx 时 execute 返回 notConfigured)。
     base.push({ ...buildProjectRollupTool({ ctx: deps?.ctx, userId }), name: 'project_rollup' });
     if (deps?.ctx) {
       const { ctx, extraction, embedder, classifier, tagger, userId } = deps;
       base.push(
+        // query_orders / cross_check aggregate contract_ledger + execution_flows;
+        // both are DB-only and therefore require a DbContext.
+        { ...buildQueryOrdersTool({ ctx, userId }), name: 'query_orders' },
+        { ...buildCrossCheckTool({ ctx, userId }), name: 'cross_check' },
         { ...buildIngestDocumentTool({ ctx, embedder, classifier, extraction, tagger, userId }), name: 'ingest_document' },
         { ...buildExtractFieldsTool({ ctx, extraction, userId }), name: 'extract_fields' },
         // present_document_review is L1: read-only 5-dim review card (业务类型/字段/关系/TAG/向量化).

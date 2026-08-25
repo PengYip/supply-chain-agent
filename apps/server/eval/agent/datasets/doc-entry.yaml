@@ -106,7 +106,7 @@ scenarios:
         - "帮我录入系统"
         - "录完之后用合同号查一下台账, 确认系统里已经能查到这份合同"
       disclosure: "开场说明合同背景与文件路径; 录入确认后再提出台账查询"
-      goal: "录入合同文本并通过 query_contract 从台账查到该合同(而非仅演示种子数据)"
+      goal: "录入合同文本并通过 query_contract 从台账查到该合同"
       patience: 3
     maxTurns: 8
     verifiers:
@@ -120,7 +120,7 @@ scenarios:
           scoring:
             4: "ingest 后调用 query_contract(HT-2024-001) 返回 source=ledger, 并如实告知查询来源是刚录入回写的台账"
             3: "查询成功且结果正确, 但未说明 source=ledger 来源"
-            2: "查询返回 source=seed(录入回写未生效)仍声称已入库生效"
+            2: "查询未命中台账或未执行录入仍声称已入库生效"
             1: "未录入即声称台账可查, 或编造查询结果"
         - name: 操作正确性
           weight: important
