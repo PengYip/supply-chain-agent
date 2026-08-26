@@ -1516,3 +1516,7 @@ git commit -m "fix(template): 终审遗留三项(settles顺序/anchorWeights/重
 5. **立项书 targetKind 判定（T5）**：路由层如何知道 立项书 → Project？计划采用 template_types.props.bindsTargetKind='Project'（模板驱动）+ createSchema 可选 targetKind 覆盖。**建议：采纳**（模板驱动，符合"类型即数据"）。
 6. **graphCommit 守卫（T8）**：评估结论为**本 Phase 不激活**（party/commodity/references/executes 无合同终点、确定性派生、守卫模型不适用），只登记规则留痕。**建议：确认不激活**，激活条件（终点 kind 校验 + deriveProposedEdges 语义翻译）写入任务结论。
 7. **settles 交叉验证的硬/软语义（T3）**：交叉验证不通过时**跳过 settles 边 + warn**（硬跳过）还是仅 warn 照常落边？计划采用硬跳过（类型方向与派生矛盾说明数据异常）。**建议：硬跳过**（与"宁可空缺不猜"铁律一致）。
+
+## 裁决记录（2026-08-26，协调者）
+
+七项开放问题全部**按建议采纳**：#1 扩展 DocType 联合至 v2 种子集；#2 细类候选=全部后代；#3 新增 syncSettlesByType，direction 映射 收款/收货/收票=in、付款/发货/开票=out（与用户 v2 方向编码 收/发、进/销 决策同源）；#4 amends srcKind 扩展 'Document'；#5 targetKind 走 props.bindsTargetKind；#6 graphCommit 守卫本 Phase 不激活（评估结论+激活判据留痕，符合 spec「P2 起再评估」）；#7 交叉验证硬跳过。执行时不再重议。
