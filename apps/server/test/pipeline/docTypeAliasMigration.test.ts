@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createDb, migrate } from '../../src/pipeline/db/client.js';
-import { ensureTemplateSeed, migrateDocTypeAliases } from '../../src/pipeline/templateSeed.js';
-import { ensureTemplateType, listTemplateTypes } from '../../src/pipeline/db/repositories.js';
+import { ensureTemplateSeed } from '../../src/pipeline/templateSeed.js';
+import { ensureTemplateType, listTemplateTypes, migrateDocTypeAliases } from '../../src/pipeline/db/repositories.js';
 import { createDocumentStub } from '../../src/pipeline/db/repositories.js';
 import { buildClassifierVocab } from '../../src/pipeline/classifier.js';
 

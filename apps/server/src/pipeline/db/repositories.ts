@@ -119,6 +119,7 @@ import {
   listActiveEdgeRulesPg,
   ensureTemplateTypePg,
   ensureEdgeRulePg,
+  migrateDocTypeAliasesPg,
 } from './postgres-repositories.js';
 
 // Phase 2 business-data isolation: a normalized userId is '' / undefined when the
@@ -3289,4 +3290,18 @@ export async function ensureEdgeRule(
        is_active = excluded.is_active`,
   ).run(input.id, input.sourceTypeId, input.targetTypeId ?? '', input.edgeType,
     JSON.stringify(input.allowedVocab), input.isActive === false ? 0 : 1);
+}
+
+/** 存量数据幂等迁移(spec §3.1): 提单/装箱单并入货转单(别名)。重复执行无副作用。 */
+export async function migrateDocTypeAliases(ctx: DbContext): Promise<number> {
+  if (ctx.backend === 'postgres') return migrateDocTypeAliasesPg(ctx);
+  const aliasMap: Array<[string, string]> = [['提单', '货转单'], ['装箱单', '货转单']];
+  let total = 0;
+  for (const [from, to] of aliasMap) {
+    for (const tbl of ['documents', 'extractions', 'classifications']) {
+      const res = ctx.sqlite.prepare(`UPDATE ${tbl} SET doc_type = ? WHERE doc_type = ?`).run(to, from);
+      total += res.changes;
+    }
+  }
+  return total;
 }

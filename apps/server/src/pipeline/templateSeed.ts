@@ -2,7 +2,6 @@
 // 修改这些行 = 修改绑定协议, 需带测试走。Phase 2 起模板经 /api/templates 演化。
 import type { DbContext } from './db/client.js';
 import { ensureEdgeRule, ensureTemplateType } from './db/repositories.js';
-import { migrateDocTypeAliasesPg } from './db/postgres-repositories.js';
 
 /** doc_type 种子——类型划分 v2(spec 2026-08-26 §3.1, 业务确认 2026-08-26)。
  *  Phase 1 登记全树(类型是被动注册表, 不影响行为); 新类型的边规则登记不启用。
@@ -105,18 +104,4 @@ export async function ensureTemplateSeed(ctx: DbContext): Promise<void> {
       edgeType: r.edge, allowedVocab: r.vocab, isActive: r.active !== false,
     });
   }
-}
-
-/** 存量数据幂等迁移(spec §3.1): 提单/装箱单并入货转单(别名)。重复执行无副作用。 */
-export async function migrateDocTypeAliases(ctx: DbContext): Promise<number> {
-  if (ctx.backend === 'postgres') return migrateDocTypeAliasesPg(ctx);
-  const aliasMap: Array<[string, string]> = [['提单', '货转单'], ['装箱单', '货转单']];
-  let total = 0;
-  for (const [from, to] of aliasMap) {
-    for (const tbl of ['documents', 'extractions', 'classifications']) {
-      const res = ctx.sqlite.prepare(`UPDATE ${tbl} SET doc_type = ? WHERE doc_type = ?`).run(to, from);
-      total += res.changes;
-    }
-  }
-  return total;
 }
