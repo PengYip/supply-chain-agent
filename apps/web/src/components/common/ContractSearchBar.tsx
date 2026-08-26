@@ -1,6 +1,6 @@
 // 合同搜索组合框(spec 2026-08-26 §4.3): 防抖 200ms -> /api/contracts/search,
 // 下拉按 matchedField 分组(合同编号/买方/卖方/标题), 键盘导航, 竞态取最后请求。
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { Loader2, Search } from 'lucide-react';
 import { fetchContractSearch, type ContractSearchItem } from '../../api/contractSearch';
@@ -87,6 +87,24 @@ export function ContractSearchBar({
 
   const flatItems = text.trim() ? items : (idleItems ?? []);
 
+  // 单一有序列表：按 GROUP_ORDER 分组排序，与下拉渲染顺序完全一致。
+  // 键盘导航的 activeIndex 与 Enter 选中都基于这份列表，避免「高亮项」与
+  // 「回车提交项」因 API 原始顺序与分组渲染顺序不一致而错位。
+  const orderedItems = useMemo(() => {
+    const out: ContractSearchItem[] = [];
+    for (const { field } of GROUP_ORDER) {
+      for (const it of flatItems) {
+        if (it.matchedField === field) out.push(it);
+      }
+    }
+    return out;
+  }, [flatItems]);
+
+  // 列表变化时把 activeIndex 收敛到有效范围(新结果/清空时避免越界)。
+  useEffect(() => {
+    setActiveIndex((i) => (orderedItems.length === 0 ? 0 : Math.min(i, orderedItems.length - 1)));
+  }, [orderedItems.length]);
+
   const choose = (item: ContractSearchItem) => {
     onSelect(item);
     setText('');
@@ -94,25 +112,25 @@ export function ContractSearchBar({
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // 中文输入法组合期间不响应导航/选中(Enter 用于上屏候选)。
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (!open && (e.key === 'ArrowDown' || e.key === 'Enter')) {
       setOpen(true);
       return;
     }
-    if (e.key === 'ArrowDown' && flatItems.length > 0) {
+    if (e.key === 'ArrowDown' && orderedItems.length > 0) {
       e.preventDefault();
-      setActiveIndex((i) => (i + 1) % flatItems.length);
-    } else if (e.key === 'ArrowUp' && flatItems.length > 0) {
+      setActiveIndex((i) => (i + 1) % orderedItems.length);
+    } else if (e.key === 'ArrowUp' && orderedItems.length > 0) {
       e.preventDefault();
-      setActiveIndex((i) => (i - 1 + flatItems.length) % flatItems.length);
-    } else if (e.key === 'Enter' && open && flatItems[activeIndex]) {
+      setActiveIndex((i) => (i - 1 + orderedItems.length) % orderedItems.length);
+    } else if (e.key === 'Enter' && open && orderedItems[activeIndex]) {
       e.preventDefault();
-      choose(flatItems[activeIndex]!);
+      choose(orderedItems[activeIndex]!);
     } else if (e.key === 'Escape') {
       setOpen(false);
     }
   };
-
-  let runningIndex = -1;
 
   return (
     <div ref={rootRef} className={clsx('relative', className)}>
@@ -143,48 +161,45 @@ export function ContractSearchBar({
             </div>
           )}
           {!error &&
-            GROUP_ORDER.map(({ field, label }) => {
-              const group = flatItems.filter((it) => it.matchedField === field);
-              if (group.length === 0) return null;
+            orderedItems.map((it, idx) => {
+              // 分组头：字段切换时插入(与 orderedItems 顺序一致)。
+              const showHeader = idx === 0 || orderedItems[idx - 1]!.matchedField !== it.matchedField;
+              const note = itemNote?.(it) ?? null;
               return (
-                <div key={field}>
-                  <div className="bg-surface px-3 py-1 text-[10px] font-medium text-ink-soft">{label}</div>
-                  {group.map((it) => {
-                    runningIndex += 1;
-                    const idx = runningIndex;
-                    const note = itemNote?.(it) ?? null;
-                    return (
-                      <button
-                        key={it.contractNo}
-                        type="button"
-                        onMouseEnter={() => setActiveIndex(idx)}
-                        onClick={() => choose(it)}
-                        className={clsx(
-                          'block w-full px-3 py-1.5 text-left',
-                          idx === activeIndex ? 'bg-primary/10' : 'hover:bg-surface',
-                        )}
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="max-w-[220px] truncate text-[12px] font-medium text-ink">
-                            {it.displayContractNo || it.contractNo}
-                          </span>
-                          {it.title && (
-                            <span className="max-w-[90px] truncate text-[11px] text-ink-soft">{it.title}</span>
-                          )}
-                          {note && (
-                            <span className="ml-auto shrink-0 rounded border border-line bg-surface px-1 py-px text-[10px] text-ink-soft">
-                              {note}
-                            </span>
-                          )}
-                        </div>
-                        {(it.buyer || it.seller) && (
-                          <div className="mt-0.5 truncate text-[11px] text-ink-soft">
-                            {[it.buyer, it.seller].filter(Boolean).join(' -> ')}
-                          </div>
-                        )}
-                      </button>
-                    );
-                  })}
+                <div key={it.contractNo}>
+                  {showHeader && (
+                    <div className="bg-surface px-3 py-1 text-[10px] font-medium text-ink-soft">
+                      {GROUP_ORDER.find((g) => g.field === it.matchedField)?.label}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onMouseEnter={() => setActiveIndex(idx)}
+                    onClick={() => choose(it)}
+                    className={clsx(
+                      'block w-full px-3 py-1.5 text-left',
+                      idx === activeIndex ? 'bg-primary/10' : 'hover:bg-surface',
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="max-w-[220px] truncate text-[12px] font-medium text-ink">
+                        {it.displayContractNo || it.contractNo}
+                      </span>
+                      {it.title && (
+                        <span className="max-w-[90px] truncate text-[11px] text-ink-soft">{it.title}</span>
+                      )}
+                      {note && (
+                        <span className="ml-auto shrink-0 rounded border border-line bg-surface px-1 py-px text-[10px] text-ink-soft">
+                          {note}
+                        </span>
+                      )}
+                    </div>
+                    {(it.buyer || it.seller) && (
+                      <div className="mt-0.5 truncate text-[11px] text-ink-soft">
+                        {[it.buyer, it.seller].filter(Boolean).join(' -> ')}
+                      </div>
+                    )}
+                  </button>
                 </div>
               );
             })}
