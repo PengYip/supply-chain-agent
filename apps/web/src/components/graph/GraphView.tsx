@@ -97,7 +97,23 @@ export function GraphView({
       .catch(() => { bindingCountsLoadedRef.current = false; });
   }, []);
 
+  // docId -> 文件名/业务类型 兜底解析：老图谱 Document 节点缺 sourceUri/docType 时，
+  // 用文档列表补齐展示（画布节点卡/详情/边端点名共用，经 context 下发到节点卡）。
+  const docMetaResolver = useMemo(() => buildDocMetaResolver(documents), [documents]);
+
+  const query = useCallback(
+    (id: string, label: string, fromDocument: boolean, d: number, dir: GraphDirection) => {
+      setCenter({ id, label, fromDocument });
+      setPinned(null);
+      setHovered(null);
+      setSearchNotice(null);
+      void loadSubgraph(id, d, dir);
+    },
+    [loadSubgraph],
+  );
+
   // 合同搜索选中: resolve 定位合同节点 -> 以它为中心查询; 未入图给出提示。
+  // 依赖 query, 故声明在 query 之后。
   const handleSearchSelect = useCallback(
     async (item: { contractNo: string; displayContractNo: string }) => {
       setSearchNotice(null);
@@ -116,21 +132,6 @@ export function GraphView({
       }
     },
     [query, depth, direction],
-  );
-
-  // docId -> 文件名/业务类型 兜底解析：老图谱 Document 节点缺 sourceUri/docType 时，
-  // 用文档列表补齐展示（画布节点卡/详情/边端点名共用，经 context 下发到节点卡）。
-  const docMetaResolver = useMemo(() => buildDocMetaResolver(documents), [documents]);
-
-  const query = useCallback(
-    (id: string, label: string, fromDocument: boolean, d: number, dir: GraphDirection) => {
-      setCenter({ id, label, fromDocument });
-      setPinned(null);
-      setHovered(null);
-      setSearchNotice(null);
-      void loadSubgraph(id, d, dir);
-    },
-    [loadSubgraph],
   );
 
   // 外部定位（绑定工作台跳入）：以合同节点为中心重新查询，替换原有中心。

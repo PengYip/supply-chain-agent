@@ -2,7 +2,7 @@
 // GraphView 以 key={center-depth-direction} 重挂载本组件, 内部不做增量 diff,
 // 只在 hiddenKinds 变化时 setData 重绘。@xyflow/react 退役(本期仅 BindingMiniGraph 仍用)。
 import { useEffect, useMemo, useRef } from 'react';
-import { Graph as G6Graph, type EdgeData, type NodeData } from '@antv/g6';
+import { Graph as G6Graph, type EdgeData, type IElementEvent, type NodeData } from '@antv/g6';
 import type { GraphEdge, GraphNode, InspectTarget, Subgraph } from '../../hooks/useGraph';
 import { EDGE_STYLE_OVERRIDES, businessTypeOf, edgeLabel, nodeDisplayName } from './businessTypes';
 import { useDocMeta } from './docMeta';
@@ -26,6 +26,8 @@ interface CanvasDatum {
   props: Record<string, unknown> | null;
   rawNode?: GraphNode;
   rawEdge?: GraphEdge;
+  // G6 NodeData/EdgeData 的 data 字段要求 Record<string, unknown> 索引签名。
+  [key: string]: unknown;
 }
 
 export function GraphCanvas({
@@ -97,25 +99,25 @@ export function GraphCanvas({
     graphRef.current = graph;
 
     // G6 v5 事件对象 target 是元素实例(带 id), 数据经 graph.getElementData(id) 取回。
-    graph.on('node:click', (ev) => {
+    graph.on<IElementEvent>('node:click', (ev) => {
       const datum = graph.getElementData(ev.target.id) as NodeData;
-      const raw = (datum.data as CanvasDatum | undefined)?.rawNode;
+      const raw = (datum.data as unknown as CanvasDatum | undefined)?.rawNode;
       if (raw) onNodeSelect(raw);
     });
-    graph.on('edge:click', (ev) => {
+    graph.on<IElementEvent>('edge:click', (ev) => {
       const datum = graph.getElementData(ev.target.id) as EdgeData;
-      const raw = (datum.data as CanvasDatum | undefined)?.rawEdge;
+      const raw = (datum.data as unknown as CanvasDatum | undefined)?.rawEdge;
       if (raw) onEdgeSelect(raw);
     });
     graph.on('canvas:click', () => onPaneSelect());
-    graph.on('node:dblclick', (ev) => {
+    graph.on<IElementEvent>('node:dblclick', (ev) => {
       const datum = graph.getElementData(ev.target.id) as NodeData;
-      const raw = (datum.data as CanvasDatum | undefined)?.rawNode;
+      const raw = (datum.data as unknown as CanvasDatum | undefined)?.rawNode;
       if (raw) onNodeDoubleClick(raw);
     });
-    graph.on('node:pointerenter', (ev) => {
+    graph.on<IElementEvent>('node:pointerenter', (ev) => {
       const datum = graph.getElementData(ev.target.id) as NodeData;
-      const raw = (datum.data as CanvasDatum | undefined)?.rawNode;
+      const raw = (datum.data as unknown as CanvasDatum | undefined)?.rawNode;
       if (raw) onHover({ type: 'node', node: raw });
     });
     graph.on('node:pointerleave', () => onHover(null));
