@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { Graph as G6Graph, type EdgeData, type IElementEvent, type NodeData } from '@antv/g6';
 import type { GraphEdge, GraphNode, InspectTarget, Subgraph } from '../../hooks/useGraph';
 import { EDGE_STYLE_OVERRIDES, businessTypeOf, edgeLabel, nodeDisplayName } from './businessTypes';
+import { fitCaption } from './captionFit';
 import { useDocMeta } from './docMeta';
 
 interface GraphCanvasProps {
@@ -42,57 +43,78 @@ export function GraphCanvas({
   // 已应用的类型过滤集合: 建图 effect 已按初始值渲染, hiddenKinds effect 跳过首次。
   const appliedKindsRef = useRef<ReadonlySet<string> | null>(null);
 
-  const toNodes = (nodes: GraphNode[]) =>
-    nodes
-      .filter((n) => !hiddenKinds.has(n.kind))
-      .map((n) => {
-        const bt = businessTypeOf(n.kind);
-        const isCenter = n.elementId === centerElementId;
-        return {
-          id: n.elementId,
-          data: { kind: n.kind, name: n.name, props: n.props, rawNode: n } as CanvasDatum,
-          style: {
-            size: isCenter ? 44 : 30,
-            fill: bt.color,
-            // Document=空心(描边家族区分), 实体=实心, 对齐原画布视觉
-            ...(n.kind === 'Document' ? { fill: '#FFFFFF', lineWidth: 2, stroke: bt.color } : {}),
-            labelText: nodeDisplayName(n, docMeta),
-            labelPlacement: 'bottom' as const,
-            labelFill: '#374151',
-            labelFontSize: 11,
-          },
-        };
-      });
-
-  const toEdges = (edges: GraphEdge[], visibleNodeIds: Set<string>) =>
-    edges
-      .filter((e) => visibleNodeIds.has(e.srcId) && visibleNodeIds.has(e.dstId))
-      .map((e) => {
-        const override = EDGE_STYLE_OVERRIDES[e.type];
-        return {
-          id: e.elementId,
-          source: e.srcId,
-          target: e.dstId,
-          data: { kind: e.type, name: e.type, props: e.props, rawEdge: e } as CanvasDatum,
-          style: {
-            stroke: override?.color ?? '#94A3B8',
-            lineWidth: 1,
-            ...(override?.dashed ? { lineDash: [4, 3] } : {}),
-            labelText: edgeLabel(e.type),
-            labelFontSize: 10,
-            labelFill: '#6B7280',
-            endArrow: true,
-          },
-        };
-      });
+  // 度数自适应 + label 画入圆内(spec 2026-08-26 §2): 度数高=连接多=节点大,
+  // 大节点装得下更多文字且给布局留出物理间距(Neo4j Browser 同款行为)。
+  // label 原本悬浮在节点下方(labelPlacement:'bottom'), radial 布局节点密集时
+  // 相邻 label 互相覆盖且 G6 preventOverlap 只约束节点圆形、不管文本。
+  const buildData = (nodes: GraphNode[], edges: GraphEdge[]) => {
+    const visibleNodes = nodes.filter((n) => !hiddenKinds.has(n.kind));
+    const visibleIds = new Set(visibleNodes.map((n) => n.elementId));
+    const visibleEdges = edges.filter(
+      (e) => visibleIds.has(e.srcId) && visibleIds.has(e.dstId),
+    );
+    const degree = new Map<string, number>();
+    for (const e of visibleEdges) {
+      degree.set(e.srcId, (degree.get(e.srcId) ?? 0) + 1);
+      degree.set(e.dstId, (degree.get(e.dstId) ?? 0) + 1);
+    }
+    const sizeOf = (n: GraphNode): number => {
+      const base = Math.min(Math.max(16 + (degree.get(n.elementId) ?? 0) * 1.8, 16), 34);
+      return n.elementId === centerElementId ? Math.max(base, 44) : base;
+    };
+    const g6Nodes = visibleNodes.map((n) => {
+      const bt = businessTypeOf(n.kind);
+      const size = sizeOf(n);
+      // Document=空心(描边家族区分, 深色文字), 实体=实心(白色文字)
+      const hollow = n.kind === 'Document';
+      return {
+        id: n.elementId,
+        // data.size 供 radial 布局的 nodeSize 回调读取(碰撞检测按真实尺寸)
+        data: { kind: n.kind, name: n.name, props: n.props, rawNode: n, size } as CanvasDatum,
+        style: {
+          size,
+          fill: bt.color,
+          ...(hollow ? { fill: '#FFFFFF', lineWidth: 2, stroke: bt.color } : {}),
+          labelText: fitCaption(nodeDisplayName(n, docMeta), { diameter: size, fontSize: 11 }),
+          labelPlacement: 'center' as const,
+          labelFill: hollow ? '#374151' : '#FFFFFF',
+          labelFontSize: 11,
+          labelLineHeight: 1.1,
+          labelTextAlign: 'center' as const,
+        },
+      };
+    });
+    const g6Edges = visibleEdges.map((e) => {
+      const override = EDGE_STYLE_OVERRIDES[e.type];
+      return {
+        id: e.elementId,
+        source: e.srcId,
+        target: e.dstId,
+        data: { kind: e.type, name: e.type, props: e.props, rawEdge: e } as CanvasDatum,
+        style: {
+          stroke: override?.color ?? '#94A3B8',
+          lineWidth: 1,
+          ...(override?.dashed ? { lineDash: [4, 3] } : {}),
+          labelText: edgeLabel(e.type),
+          labelFontSize: 10,
+          labelFill: '#6B7280',
+          // 白色衬底: 边文字不再被线穿过(label shape 的 background 系列样式)
+          labelBackground: true,
+          labelBackgroundFill: '#FFFFFF',
+          labelBackgroundRadius: 2,
+          labelBackgroundOpacity: 0.85,
+          endArrow: true,
+        },
+      };
+    });
+    return { nodes: g6Nodes, edges: g6Edges };
+  };
 
   // 建图(重挂载时全量重建)
   useEffect(() => {
     if (!containerRef.current) return;
     appliedKindsRef.current = hiddenKinds;
-    const nodes = toNodes(subgraph.nodes);
-    const nodeIds = new Set(nodes.map((n) => n.id));
-    const edges = toEdges(subgraph.edges, nodeIds);
+    const { nodes, edges } = buildData(subgraph.nodes, subgraph.edges);
     const graph = new G6Graph({
       container: containerRef.current,
       autoFit: 'view',
@@ -105,7 +127,10 @@ export function GraphCanvas({
         unitRadius: 110,
         linkDistance: 90,
         preventOverlap: true,
-        nodeSize: 30,
+        // 防重叠按各节点真实直径(data.size) + 24px 最小间距计算;
+        // 原来固定 nodeSize:30 与实际尺寸脱节, 大节点仍会被挤到一起。
+        nodeSpacing: 24,
+        nodeSize: (d: NodeData) => (d.data as CanvasDatum | undefined)?.size ?? 30,
       },
       behaviors: ['drag-canvas', 'zoom-canvas', 'drag-element', 'click-select'],
       plugins: [{ type: 'minimap', size: [140, 90] }],
@@ -175,9 +200,7 @@ export function GraphCanvas({
     if (!graph) return;
     if (appliedKindsRef.current === hiddenKinds) return;
     appliedKindsRef.current = hiddenKinds;
-    const nodes = toNodes(subgraph.nodes);
-    const nodeIds = new Set(nodes.map((n) => n.id));
-    const edges = toEdges(subgraph.edges, nodeIds);
+    const { nodes, edges } = buildData(subgraph.nodes, subgraph.edges);
     renderChainRef.current = renderChainRef.current
       .then(() => {
         if (graphRef.current !== graph) return; // 实例已被销毁/替换
