@@ -24,7 +24,7 @@ export interface FitCaptionOptions {
   fontSize: number;
   /** 行数上限, 默认 3。 */
   maxLines?: number;
-  /** 行高倍数, 默认 1.1(与 G6 labelLineHeight 保持一致)。 */
+  /** 行高倍数, 默认 1.1(倍数语义; G6 的 labelLineHeight 是 px 绝对值、当前设 12, 0.1px 差由弦宽内边距吸收, 勿将两者混同)。 */
   lineHeight?: number;
 }
 
