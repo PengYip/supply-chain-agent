@@ -52,8 +52,8 @@
 - 节点直径 = `clamp(16 + degree * 1.8, 16, 34)`，degree = 当前可见边中该节点出现次数；中心节点 `max(size, 44)`（44 为现状值，保持中心视觉突出）。
 - 度数高的节点更大 → 装得下更多文字（Neo4j 同款行为），也天然给布局留出物理间距。
 - radial 布局配置（`GraphCanvas.tsx:102-109`）：
-  - `preventOverlapPadding: 24`（Neo4j 的 radius+25 思路）。
-  - `nodeSize` 由常量 30 改为回调/预计算映射，返回各节点真实直径，保证防重叠按真实尺寸计算。
+  - `nodeSpacing: 24`（节点最小间距，与 nodeSize 相加参与碰撞检测；radial 无 `preventOverlapPadding`，该字段属 d3-force 布局——已对照 `@antv/layout` 5.1 类型定义修正）。
+  - `nodeSize` 由常量 30 改为回调，返回各节点真实直径（`nodeSize?: Size | ((node: NodeData) => Size)`），保证防重叠按真实尺寸计算。
 
 ### 3. 边 label 白色衬底（诀窍 3 的本地化）
 
