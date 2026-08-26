@@ -28,6 +28,10 @@ export interface ExtractionDeps {
 export interface ExtractionInput {
   blockModel: BlockModel;
   docType: DocType;
+  /** 模板 props 驱动: 必填字段清单(缺省 [] = 现状合同特判)。 */
+  requiredFields?: string[];
+  /** 模板 props 驱动: 字段提示(别名/取值说明), 拼进提示词。 */
+  fieldHints?: Record<string, string>;
 }
 
 export interface ExtractionResult {
@@ -199,10 +203,19 @@ export async function extractGroundedFields(
   deps: ExtractionDeps,
   input: ExtractionInput,
 ): Promise<ExtractionResult> {
+  // 模板 props 驱动提示词: 必填字段清单 + 字段提示(别名/取值说明)动态拼接;
+  // 无 props 时走原静态 prompt(缺省行为不变)。
+  const required = input.requiredFields ?? (input.docType === '合同' ? (REQUIRED_CONTRACT_FIELDS as readonly string[]) : []);
+  const hints = input.fieldHints ?? {};
+  const dynamicPrompt = [
+    ...(required.length ? [`必填字段: ${required.join('、')}。缺失时在 missingRequired 中列出。`] : []),
+    ...(Object.keys(hints).length ? [`字段提示: ${Object.entries(hints).map(([k, v]) => `${k}(${v})`).join('; ')}。`] : []),
+  ].join('\n');
+  const system = dynamicPrompt ? `${GROUNDED_EXTRACTION_PROMPT}\n${dynamicPrompt}` : GROUNDED_EXTRACTION_PROMPT;
   const { object } = await generateObject({
     model: deps.model,
     schema: GroundedExtractionSchema,
-    system: GROUNDED_EXTRACTION_PROMPT,
+    system,
     prompt: blocksToPrompt(input.blockModel),
     // DeepSeek's OpenAI-compatible API rejects response_format=json_schema
     // ("This response_format type is unavailable now"). Force JSON mode
@@ -223,10 +236,6 @@ export async function extractGroundedFields(
     ? fields.reduce((s, f) => s + f.confidence, 0) / fields.length
     : 0;
 
-  const required =
-    input.docType === '合同'
-      ? (REQUIRED_CONTRACT_FIELDS as readonly string[])
-      : [];
   const present = new Set(fields.map((f) => f.name));
   const missingRequired = required.filter((r) => !present.has(r));
 

@@ -8,7 +8,7 @@ import { ensureEdgeRule, ensureTemplateType } from './db/repositories.js';
  *  旧 8 类全部保留(分类器仍在用, 行为零变化); 提单/装箱单挂货转单下待 Phase 2 并入;
  *  化验报告→质检报告更名, 旧名保留; 发票保留为发票凭证的合法粗类。 */
 const DOC_TYPE_SEED: Array<{ name: string; parent?: string; props?: Record<string, unknown> }> = [
-  { name: '合同' },
+  { name: '合同', props: { requiredFields: ['合同号', '甲方', '乙方', '标的物', '数量', '单位', '金额', '签订日'], fieldHints: { 合同号: '合同编号/合同号', 甲方: '买方/甲方', 乙方: '卖方/乙方' } } },
   { name: '补充合同', parent: '合同' },
   { name: '立项书', props: { bindsTargetKind: 'Project' } },
   { name: '履约凭证' },

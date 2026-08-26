@@ -15,7 +15,7 @@
 import type { BlockModel, DocType, SourceSpan } from './types.js';
 import type { SpanMatchStrength } from './spanValidator.js';
 import type { DbContext } from './db/client.js';
-import { saveExtraction, setExtractionStatus, type ProposedRelationship } from './db/repositories.js';
+import { saveExtraction, setExtractionStatus, listTemplateTypes, type ProposedRelationship } from './db/repositories.js';
 import { extractGroundedFields, type ExtractionDeps, type ExtractionResult } from './extraction.js';
 
 /**
@@ -215,9 +215,13 @@ export function buildAutoExtractionDeps(args: {
 
   return {
     extract: async (blockModel) => {
+      const templateTypes = await listTemplateTypes(args.ctx);
+      const typeRow = templateTypes.find((t) => t.kind === 'doc_type' && t.name === blockModel.docType);
       const result = await extractGroundedFields(args.extraction, {
         blockModel,
         docType: blockModel.docType,
+        requiredFields: Array.isArray(typeRow?.props.requiredFields) ? (typeRow.props.requiredFields as string[]) : undefined,
+        fieldHints: typeof typeRow?.props.fieldHints === 'object' ? (typeRow.props.fieldHints as Record<string, string>) : undefined,
       });
       stashed = { result, docType: blockModel.docType };
 

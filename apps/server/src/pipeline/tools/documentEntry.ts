@@ -1159,7 +1159,13 @@ export function buildExtractFieldsTool(deps: ToolDeps) {
       if (!deps.extraction) {
         return { status: 'error' as const, reason: 'extraction_model_not_configured' };
       }
-      const result = await extractGroundedFields(deps.extraction, { blockModel, docType: docType as DocType });
+      const templateTypes = await listTemplateTypes(deps.ctx);
+      const typeRow = templateTypes.find((t) => t.kind === 'doc_type' && t.name === docType);
+      const result = await extractGroundedFields(deps.extraction, {
+        blockModel, docType: docType as DocType,
+        requiredFields: Array.isArray(typeRow?.props.requiredFields) ? (typeRow.props.requiredFields as string[]) : undefined,
+        fieldHints: typeof typeRow?.props.fieldHints === 'object' ? (typeRow.props.fieldHints as Record<string, string>) : undefined,
+      });
       const fieldMeta: Record<string, { strength: SpanMatchStrength; confidence: number }> = {};
       const fields: Record<string, { value: string | number; sourceSpans: SourceSpan[] }> = {};
       for (const f of result.fields) {
