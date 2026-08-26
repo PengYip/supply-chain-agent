@@ -34,11 +34,6 @@ describe('template seed', () => {
   it('种子规则覆盖现状硬编码语义 + 兜底通配', async () => {
     await ensureTemplateSeed(ctx);
     const rules = await listActiveEdgeRules(ctx);
-    const by = (srcName: string, edge: string) => {
-      const types = rules; // rules 引用 sourceTypeId, 需要名字映射
-      return types;
-    };
-    void by;
     const typeById = new Map((await listTemplateTypes(ctx)).map((t) => [t.id, t.name]));
     const vocabOf = (src: string, edge: string) =>
       rules.filter((r) => typeById.get(r.sourceTypeId) === src && r.edgeType === edge)

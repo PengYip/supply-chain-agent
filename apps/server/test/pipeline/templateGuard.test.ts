@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createDb, migrate } from '../../src/pipeline/db/client.js';
 import { ensureTemplateSeed } from '../../src/pipeline/templateSeed.js';
 import {
-  ensureEdgeRule, ensureTemplateType, listActiveEdgeRules, listTemplateTypes,
+  ensureTemplateType, listActiveEdgeRules, listTemplateTypes,
 } from '../../src/pipeline/db/repositories.js';
 import { ancestorChain, matchEdgeRule, validateEdge } from '../../src/pipeline/templateGuard.js';
 

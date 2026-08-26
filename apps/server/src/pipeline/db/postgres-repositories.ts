@@ -2443,12 +2443,15 @@ export async function updateQuotaUsedPg(
 // ---- 模板层仓储 Pg 版(列名与 SQLite 对齐) -----------------------------------
 export async function listTemplateTypesPg(ctx: PostgresDbContext): Promise<TemplateTypeRow[]> {
   const { rows } = await ctx.pool.query(`SELECT id, kind, name, parent_id, props, is_active FROM template_types ORDER BY kind, name`);
-  return rows.map((r: Record<string, unknown>) => ({
-    id: String(r.id), kind: (r.kind === 'contract_type' ? 'contract_type' : 'doc_type'),
-    name: String(r.name), parentId: r.parent_id ? String(r.parent_id) : null,
-    props: typeof r.props === 'string' ? JSON.parse(r.props) as Record<string, unknown> : (r.props ?? {}) as Record<string, unknown>,
-    isActive: Number(r.is_active) === 1,
-  }));
+  return rows.map((r: Record<string, unknown>) => {
+    let props: Record<string, unknown> = {};
+    try { props = typeof r.props === 'string' ? JSON.parse(r.props) as Record<string, unknown> : (r.props ?? {}) as Record<string, unknown>; } catch { /* 损坏按空 */ }
+    return {
+      id: String(r.id), kind: (r.kind === 'contract_type' ? 'contract_type' : 'doc_type'),
+      name: String(r.name), parentId: r.parent_id ? String(r.parent_id) : null,
+      props, isActive: Number(r.is_active) === 1,
+    };
+  });
 }
 
 export async function findTemplateTypeByNamePg(ctx: PostgresDbContext, kind: string, name: string): Promise<TemplateTypeRow | null> {
@@ -2456,26 +2459,31 @@ export async function findTemplateTypeByNamePg(ctx: PostgresDbContext, kind: str
     'SELECT id, kind, name, parent_id, props, is_active FROM template_types WHERE kind = $1 AND name = $2', [kind, name]);
   if (rows.length === 0) return null;
   const r = rows[0] as Record<string, unknown>;
+  let props: Record<string, unknown> = {};
+  try { props = typeof r.props === 'string' ? JSON.parse(r.props) as Record<string, unknown> : (r.props ?? {}) as Record<string, unknown>; } catch { /* 损坏按空 */ }
   return {
     id: String(r.id), kind: (r.kind === 'contract_type' ? 'contract_type' : 'doc_type'),
     name: String(r.name), parentId: r.parent_id ? String(r.parent_id) : null,
-    props: typeof r.props === 'string' ? JSON.parse(r.props) as Record<string, unknown> : (r.props ?? {}) as Record<string, unknown>,
-    isActive: Number(r.is_active) === 1,
+    props, isActive: Number(r.is_active) === 1,
   };
 }
 
 export async function listActiveEdgeRulesPg(ctx: PostgresDbContext): Promise<TemplateEdgeRuleRow[]> {
   const { rows } = await ctx.pool.query(
     'SELECT id, source_type_id, target_type_id, edge_type, allowed_vocab, anchor_weights, is_active, template_version FROM template_edge_rules WHERE is_active = 1');
-  return rows.map((r: Record<string, unknown>) => ({
-    id: String(r.id), sourceTypeId: String(r.source_type_id),
-    targetTypeId: String(r.target_type_id ?? ''), edgeType: String(r.edge_type),
-    allowedVocab: typeof r.allowed_vocab === 'string' ? JSON.parse(r.allowed_vocab) as string[] : (r.allowed_vocab ?? []) as string[],
-    anchorWeights: r.anchor_weights
-      ? (typeof r.anchor_weights === 'string' ? JSON.parse(r.anchor_weights) as TemplateAnchorWeights : r.anchor_weights as TemplateAnchorWeights)
-      : null,
-    isActive: Number(r.is_active) === 1, templateVersion: Number(r.template_version ?? 1),
-  }));
+  return rows.map((r: Record<string, unknown>) => {
+    let allowedVocab: string[] = [];
+    try { allowedVocab = typeof r.allowed_vocab === 'string' ? JSON.parse(r.allowed_vocab) as string[] : (r.allowed_vocab ?? []) as string[]; } catch { /* 损坏按空 */ }
+    let anchorWeights: TemplateAnchorWeights | null = null;
+    if (r.anchor_weights) {
+      try { anchorWeights = typeof r.anchor_weights === 'string' ? JSON.parse(r.anchor_weights) as TemplateAnchorWeights : r.anchor_weights as TemplateAnchorWeights; } catch { /* 忽略 */ }
+    }
+    return {
+      id: String(r.id), sourceTypeId: String(r.source_type_id),
+      targetTypeId: String(r.target_type_id ?? ''), edgeType: String(r.edge_type),
+      allowedVocab, anchorWeights, isActive: Number(r.is_active) === 1, templateVersion: Number(r.template_version ?? 1),
+    };
+  });
 }
 
 export async function ensureTemplateTypePg(
