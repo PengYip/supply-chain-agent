@@ -76,4 +76,16 @@ describe('GET /api/contracts/search', () => {
     expect(res.status).toBe(200);
     expect(((await res.json()) as { items: unknown[] }).items).toEqual([]);
   });
+
+  it('DB 层抛错 -> 500 且 body 为 { error: ... }', async () => {
+    // 用抛错的假 DbContext 替换真实 ctx, 触发 searchContractLedger 内部异常。
+    ctxHolder.current = {
+      backend: 'sqlite',
+      sqlite: { prepare: () => ({ all: () => { throw new Error('boom'); } }) },
+    } as never;
+    const res = await appAs('u1').request('/api/contracts/search?q=x');
+    expect(res.status).toBe(500);
+    const body = await res.json() as { error?: string };
+    expect(body.error).toBe('search failed');
+  });
 });
