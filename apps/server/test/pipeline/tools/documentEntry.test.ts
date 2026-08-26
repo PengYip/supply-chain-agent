@@ -9,6 +9,7 @@ import {
   processDocument, ensureDocumentParsed, ensureDocumentExtracted,
 } from '../../../src/pipeline/tools/documentEntry.js';
 import { writeDocxFixture } from '../fixtures/makeDocx.js';
+import { writeXlsxFixture } from '../fixtures/makeXlsx.js';
 
 let ctx: ReturnType<typeof createDb>;
 let dir: string;
@@ -596,6 +597,34 @@ describe('processDocument (on-demand parse of an existing stub)', () => {
     // Header + GFM separator + 1 data row = 3 pipe-row blocks.
     expect(tableRows.length).toBeGreaterThanOrEqual(2);
     expect(tableRows[0].text).toContain('品名');
+    expect(tableRows.some((b) => b.text.includes('甲醇'))).toBe(true);
+  });
+
+  it('parses a .xlsx stub end-to-end: sheet heading + table rows persisted', async () => {
+    const f = join(dir, 'proc.xlsx');
+    await writeXlsxFixture(f, [
+      {
+        name: '明细',
+        rows: [
+          ['品名', '单价', '数量'],
+          ['甲醇', 2450, 500],
+        ],
+      },
+    ]);
+    const { createDocumentStub, loadDocument } = await import(
+      '../../../src/pipeline/db/repositories.js'
+    );
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f, docType: '装箱单' });
+
+    const res = await processDocument(ctx, docId, { docType: '装箱单', modality: 'digital' });
+
+    expect(res.parseStatus).toBe('parsed');
+    expect(res.blockCount).toBeGreaterThan(0);
+    const model = await loadDocument(ctx, docId);
+    const texts = model!.blocks.map((b) => b.text);
+    expect(texts.some((t) => t === '## Sheet: 明细')).toBe(true);
+    const tableRows = model!.blocks.filter((b) => b.type === 'table_row');
+    expect(tableRows.some((b) => b.text.includes('品名'))).toBe(true);
     expect(tableRows.some((b) => b.text.includes('甲醇'))).toBe(true);
   });
 
