@@ -58,9 +58,11 @@ export function GraphCanvas({
       degree.set(e.srcId, (degree.get(e.srcId) ?? 0) + 1);
       degree.set(e.dstId, (degree.get(e.dstId) ?? 0) + 1);
     }
+    // 直径 34-56: 弦宽上限 = 直径 - 字号(11px), 34px 恰好容纳 2 个 CJK 字,
+    // 保证外围节点至少显示两字而非退化为省略号(Neo4j 比例: 直径~50/字号10)。
     const sizeOf = (n: GraphNode): number => {
-      const base = Math.min(Math.max(16 + (degree.get(n.elementId) ?? 0) * 1.8, 16), 34);
-      return n.elementId === centerElementId ? Math.max(base, 44) : base;
+      const base = Math.min(Math.max(34 + (degree.get(n.elementId) ?? 0) * 3, 34), 56);
+      return n.elementId === centerElementId ? Math.max(base, 56) : base;
     };
     const g6Nodes = visibleNodes.map((n) => {
       const bt = businessTypeOf(n.kind);
@@ -79,7 +81,12 @@ export function GraphCanvas({
           labelPlacement: 'center' as const,
           labelFill: hollow ? '#374151' : '#FFFFFF',
           labelFontSize: 11,
-          labelLineHeight: 1.1,
+          // labelLineHeight 是 px 而非倍数(@antv/g-lite PropertySyntax.LENGTH):
+          // 1.1 会被当作 1.1px 行距导致多行挤成一团, 12px 约等于 11px 字号的 1.1 倍。
+          labelLineHeight: 12,
+          // G6 Label.defaultStyleProps.maxLines=1 会把 \n 多行 labelText 截成一行,
+          // 显式放开到 3 行与 fitCaption 的 maxLines 对齐。
+          labelMaxLines: 3,
           labelTextAlign: 'center' as const,
         },
       };
@@ -98,11 +105,14 @@ export function GraphCanvas({
           labelText: edgeLabel(e.type),
           labelFontSize: 10,
           labelFill: '#6B7280',
-          // 白色衬底: 边文字不再被线穿过(label shape 的 background 系列样式)
+          // 白色衬底: 边文字不再被线穿过(label shape 的 background 系列样式)。
+          // opacity 必须为 1(半透明会让边线透出, G6 #7341), padding 默认 0
+          // 会让衬底紧贴文字而不可见, 显式给 [2,4] 留出呼吸空间。
           labelBackground: true,
           labelBackgroundFill: '#FFFFFF',
           labelBackgroundRadius: 2,
-          labelBackgroundOpacity: 0.85,
+          labelBackgroundOpacity: 1,
+          labelPadding: [2, 4],
           endArrow: true,
         },
       };
