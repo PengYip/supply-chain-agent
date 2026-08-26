@@ -103,4 +103,20 @@ describe('bindings template guard', () => {
     const call = syncCalls.find((c) => c.bindingId);
     expect(call?.templateVersion).toBeGreaterThanOrEqual(1);
   });
+
+  it('词表外 relation 软校验: 放行不阻断且 console.warn 被调用', async () => {
+    await establishContract('HT-4');
+    const { docId } = await createDocumentStub(ctx, { sourceUri: 'file:///h4.pdf', docType: '化验报告' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const res = await appAs('u1').request('/api/bindings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documentId: docId, contractNo: 'HT-4', relation: '运费分摊' }),
+      });
+      expect(res.status).toBe(200);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('relation 在词表外'));
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });

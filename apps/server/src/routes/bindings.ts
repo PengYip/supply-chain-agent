@@ -216,7 +216,7 @@ async function syncSettlesAfterFlow(
  *  relation 软校验: 词表外仅 console.warn, Phase 2 转硬。 */
 async function templateGate(
   db: DbContext, userId: string,
-  input: { documentId: string; contractNo: string },
+  input: { documentId: string; contractNo: string; relation?: string | null },
 ): Promise<{ ok: true; templateVersion: number | null } | { ok: false; reason: string }> {
   let meta: Awaited<ReturnType<typeof getDocumentMeta>> = null;
   try { meta = await getDocumentMeta(db, input.documentId, userId); } catch { /* 缺 meta 放行 */ }
@@ -226,7 +226,7 @@ async function templateGate(
     const ledgerRow = await findContractLedgerByNo(db, input.contractNo);
     contractType = ledgerRow?.contractType ?? null;
   } catch { contractType = null; }
-  const g = await validateEdge(db, { docType: meta.docType, contractType, edgeType: 'binds' });
+  const g = await validateEdge(db, { docType: meta.docType, contractType, edgeType: 'binds', relation: input.relation ?? undefined });
   if (!g.ok) return { ok: false, reason: g.reason };
   if (g.relationInVocab === false) {
     console.warn(`[templateGuard] relation 在词表外(软校验, 不阻断): doc=${input.documentId} contract=${input.contractNo}`);
@@ -239,7 +239,7 @@ async function confirmOne(db: DbContext, userId: string, bindingId: string) {
   const row = await findBindingById(db, bindingId, userId);
   if (!row) return { status: 404 as const, body: { error: 'binding not found', bindingId } };
   if (row.status !== 'proposed') return { status: 409 as const, body: { error: `binding status is ${row.status}, expected proposed`, bindingId } };
-  const gate = await templateGate(db, userId, { documentId: row.documentId, contractNo: row.contractNo });
+  const gate = await templateGate(db, userId, { documentId: row.documentId, contractNo: row.contractNo, relation: row.relation });
   if (!gate.ok) {
     return { status: 409 as const, body: { error: gate.reason, guard: 'template' as const, bindingId } };
   }
@@ -331,7 +331,7 @@ bindingsRoute.post('/', async (c) => {
     }
   }
   // 模板门禁(spec 2026-08-26 §4.3): 类型组合校验, 拒绝 409 + guard:'template'。
-  const gate = await templateGate(db, user.id, { documentId, contractNo });
+  const gate = await templateGate(db, user.id, { documentId, contractNo, relation });
   if (!gate.ok) {
     return c.json({ error: gate.reason, guard: 'template' }, 409);
   }
