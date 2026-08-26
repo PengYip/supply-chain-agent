@@ -83,6 +83,7 @@ interface BusinessType {
 - 交互：双击节点 = 增量展开（已有 depth=1 query 合并进图，Bloom 核心交互）；`focus-element` 行为支持搜索跳转定位。
 - 顶部 SearchBar：选中合同 → `GET /api/graph/resolve?contractNo=` 定位节点 → depth=1 `query` 展开邻域 → focus + fitView。resolve 未命中时 toast 提示"该合同尚未入图"。
 - 保留三栏骨架（DocumentListPanel | 画布 | DetailPanel→Inspector，沿用 PropsTable）与 depth/direction 工具栏。
+- **绑定薄互通（评估决策：不合并两页面）**：Inspector 显示文档节点的绑定状态（已绑 N / 待审 M，数据来自 overview 已有结构）；提供"去审核"深链跳转绑定页并定位该文档（复用 `openInGraph` 的反向机制，hash 路由 + focus 参数）。绑定审核仍是任务队列 UI，不进画布。
 - `BindingMiniGraph` 本期不动（仍用 @xyflow/react；@xyflow/react 依赖保留至下期迁移）。
 
 ### 4.5 绑定页接线（不重设计，只加搜索）
@@ -128,6 +129,7 @@ SearchBar(防抖200ms) ──► GET /api/contracts/search?q=
 
 ## 8. 明确不做（YAGNI）
 
+- **不合并绑定工作台进图谱浏览器**（已评估决策）：绑定审核是任务队列 UI（批量确认/证据链/审计写操作），画布是探索 UI；拖拽连边式绑定明确不做（批量效率、审计、误操作风险）。互通仅走 Inspector 绑定状态 + 深链（§4.4）。v2 预留：图谱页右键文档节点"绑定到合同…"复用确认弹窗。
 - 不做 Neo4j fulltext 索引、pg_trgm 索引（预留：repo 函数签名不变即可加）。
 - 不做保存搜索短语（Bloom search phrases）——后续可加服务端表。
 - 不做 BindingMiniGraph 的 G6 迁移（下期）。
