@@ -17,6 +17,9 @@ export interface FileEntry {
   docId?: string;      // document ID from backend
   directory: string;   // directory path (e.g. "/" or "/合同文件")
   parseStatus: FileParseStatus | null;
+  /* Optional because synthetic FileEntry literals elsewhere (e.g. the preview
+   * trace in ExecutionFlowPanel) don't carry it; undefined reads as not bound. */
+  bound?: boolean;     // true once the file is bound to a contract ledger row
 }
 
 export interface FileFolder {
@@ -38,6 +41,7 @@ type RawFile = {
   docId?: unknown;
   directory?: unknown;
   parseStatus?: unknown;
+  bound?: unknown;
 };
 
 type RawFolder = {
@@ -82,6 +86,7 @@ function normalizeFile(raw: RawFile): FileEntry {
       typeof raw.parseStatus === 'string' && FILE_PARSE_STATUSES.includes(raw.parseStatus)
         ? (raw.parseStatus as FileParseStatus)
         : null,
+    bound: raw.bound === true,
   };
 }
 
