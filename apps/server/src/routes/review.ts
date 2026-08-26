@@ -21,12 +21,12 @@ import {
   getReviewSnapshot,
   setReviewStatus,
   updateDocumentType,
+  listTemplateTypes,
 } from '../pipeline/db/repositories.js';
 import { ensureDocumentExtracted } from '../pipeline/tools/documentEntry.js';
 import { refreshExecutionFlowsForDocument } from '../pipeline/executionFlow.js';
 import { commitDocumentGraph, syncDocumentTypeToGraph } from '../pipeline/graphCommit.js';
 import { buildIngestDeps } from '../pipeline/ingestModel.js';
-import { DOC_TYPES } from '../pipeline/classifier.js';
 import type { DocType, Modality } from '../pipeline/types.js';
 
 export const reviewRoute = new Hono<AuthEnv>();
@@ -251,7 +251,9 @@ reviewRoute.patch('/:docId/type', async (c) => {
     return c.json({ ok: false, error: 'invalid_body' }, 400);
   }
   const docType = parsed.data.docType;
-  if (!(DOC_TYPES as readonly string[]).includes(docType)) {
+  const templateTypes = await listTemplateTypes(ctx());
+  const valid = templateTypes.some((t) => t.kind === 'doc_type' && t.isActive && t.name === docType);
+  if (!valid) {
     return c.json({ ok: false, error: 'invalid_doc_type' }, 400);
   }
 

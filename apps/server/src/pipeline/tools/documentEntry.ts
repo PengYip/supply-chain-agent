@@ -15,14 +15,14 @@ import {
   getExtractionStatus, loadLatestExtractionByDocId,
   // Phase B bindings state machine.
   listContractLedgerEntries, findBindingByDocAndContract, listBindingProposals,
-  updateBindingStatus,
+  updateBindingStatus, listTemplateTypes,
 } from '../db/repositories.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
 import { runAutoExtraction, buildAutoExtractionDeps, type AutoExtractionDeps } from '../autoExtraction.js';
 import { tagChunks, type ChunkTagger } from '../chunkTagging.js';
 import { getTaxonomy, bindingRelationFor } from '../../domain/tradeSemantics.js';
-import { classifyDocument, classifyDocumentWithoutModel, type ClassifierDeps } from '../classifier.js';
+import { classifyDocument, classifyDocumentWithoutModel, buildClassifierVocab, type ClassifierDeps } from '../classifier.js';
 import { deriveAutoTags } from '../tagging.js';
 import { chunkBlockModel } from '../chunking.js';
 import { linkDocumentToContract } from '../../data/seed.js';
@@ -570,8 +570,10 @@ export async function ingestFile(opts: IngestOptions): Promise<{
 
   // Classify (Phase 2 routing-classify): parsed blocks -> effective docType.
   // Degrades to the hint when no classifier is wired (tests / dev offline).
+  const types = await listTemplateTypes(ctx);
+  const vocab = buildClassifierVocab(types);
   const cls = classifier
-    ? await classifyDocument(classifier, { blocks: blockModel.blocks, hint: docType })
+    ? await classifyDocument(classifier, { blocks: blockModel.blocks, hint: docType, vocab })
     : classifyDocumentWithoutModel({ blocks: blockModel.blocks, hint: docType });
   // The classified docType is the source of truth from here on (design §6:
   // routing-classify picks the docType used downstream).
@@ -842,8 +844,10 @@ export async function processDocument(
   // (no throw — process-layer failures are states, not exceptions).
   try {
     // 4. Classify (Phase 2 routing-classify): parsed blocks -> effective docType.
+    const types = await listTemplateTypes(ctx);
+    const vocab = buildClassifierVocab(types);
     const cls = opts.classifier
-      ? await classifyDocument(opts.classifier, { blocks: blockModel.blocks, hint: opts.docType })
+      ? await classifyDocument(opts.classifier, { blocks: blockModel.blocks, hint: opts.docType, vocab })
       : classifyDocumentWithoutModel({ blocks: blockModel.blocks, hint: opts.docType });
     blockModel.docType = cls.docType;
 

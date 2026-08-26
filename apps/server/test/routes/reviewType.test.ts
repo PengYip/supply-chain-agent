@@ -5,6 +5,7 @@ import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.
 import {
   createDocumentStub, getDocumentMeta, saveExtraction,
 } from '../../src/pipeline/db/repositories.js';
+import { ensureTemplateSeed } from '../../src/pipeline/templateSeed.js';
 import type { DocType } from '../../src/pipeline/types.js';
 
 // reviewRoute 的 DbContext 经 getDbContext(dbBackend) 解析。逐测试注入内存 ctx。
@@ -66,9 +67,10 @@ async function seedDoc(ctx: DbContext, overrides: { userId?: string; docType?: s
 describe('PATCH /api/documents/:docId/type', () => {
   // reviewRoute 的 ctx() 是模块级懒单例(首个 getDbContext 结果缓存), 因此
   // 全文件共享一个内存库(路由始终落在同一个 ctxHolder 上); 每测试重置 mock。
-  beforeAll(() => {
+  beforeAll(async () => {
     const ctx = createDb(':memory:');
     migrate(ctx.sqlite);
+    await ensureTemplateSeed(ctx); // PATCH /type 校验改模板派生, 需种子在位
     ctxHolder.current = ctx;
   });
   beforeEach(() => {

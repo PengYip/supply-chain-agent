@@ -29,13 +29,17 @@ const blocks = (text: string): Block[] => [
 ];
 
 describe('classifyDocument', () => {
-  it('returns the LLM-classified docType + confidence', async () => {
-    const model = stubModel({ docType: '发票', confidence: 0.93 });
+  it('returns the LLM-classified docType + confidence (两阶段: 粗类->细类)', async () => {
+    // 两阶段: 粗类(履约凭证) -> 细类(发票)。发票非粗类, 需经细类阶段产出。
+    const model = stubModel({ docType: '履约凭证', confidence: 0.93 });
     const res = await classifyDocument(
       { model },
-      { blocks: blocks('这是发票号码 INV-001 的文档'), hint: '其他' },
+      {
+        blocks: blocks('这是发票号码 INV-001 的文档'), hint: '其他',
+        vocab: { coarse: ['合同', '立项书', '履约凭证', '其他'], fineByCoarse: { '履约凭证': ['发票', '收货单'] } },
+      },
     );
-    expect(res.docType).toBe('发票');
+    expect(res.docType).toBe('履约凭证');
     expect(res.confidence).toBeCloseTo(0.93, 5);
     expect(res.source).toBe('classified');
   });

@@ -10,14 +10,13 @@ import {
   findBindingById, updateBindingStatus, saveBinding, findBindingByDocAndContract,
   listBindingsForContract, setBindingGraphStatus, getDocumentMeta, type BindingGraphStatus,
   listExecutionFlows, summarizeExecutionFlows, getDocumentSourcesByIds, hasContractDocBinding,
-  findContractLedgerByNo,
+  findContractLedgerByNo, listTemplateTypes,
 } from '../pipeline/db/repositories.js';
 import { buildBindingCandidates } from '../pipeline/bindingCandidates.js';
 import { syncBindingEdge, removeBindingEdge, type GraphSyncOutcome } from '../pipeline/bindingGraphSync.js';
 import { syncSettlesEdge, removeSettlesEdge } from '../pipeline/settlesGraphSync.js';
 import { settlesRelationFor } from '../domain/tradeSemantics.js';
 import { materializeExecutionFlow, retractExecutionFlow, getEffectiveSelfPartyNames } from '../pipeline/executionFlow.js';
-import { DOC_TYPES } from '../pipeline/classifier.js';
 import { validateEdge } from '../pipeline/templateGuard.js';
 import { parseFileKey } from './files.js';
 
@@ -61,9 +60,11 @@ bindingsRoute.get('/overview', async (c) => {
       bindings: byDoc.get(d.id) ?? [],
     };
   });
-  // 单据类型词汇表(SSOT: pipeline/classifier DOC_TYPES), 前端据此渲染 docType
+  // 单据类型词汇表(模板派生: 激活的 doc_type 类型名), 前端据此渲染 docType
   // 下拉/徽章, 不必硬编码。
-  return c.json({ documents, docTypes: [...DOC_TYPES] });
+  const templateTypes = await listTemplateTypes(ctx());
+  const docTypes = templateTypes.filter((t) => t.kind === 'doc_type' && t.isActive).map((t) => t.name);
+  return c.json({ documents, docTypes });
 });
 
 /** GET /proposals — 现有 status=proposed 建议行。 */

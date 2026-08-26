@@ -63,8 +63,8 @@ describe('tradeSemantics (L1 行业词汇表)', () => {
   });
 
   describe('CHUNK_TAG_TAXONOMY / getTaxonomy', () => {
-    it('covers all 8 docType keys', () => {
-      expect(Object.keys(CHUNK_TAG_TAXONOMY).length).toBe(8);
+    it('covers all docType keys (v2 扩展后 24 类)', () => {
+      expect(Object.keys(CHUNK_TAG_TAXONOMY).length).toBe(24);
     });
 
     it('returns 13 tags for 合同', () => {
