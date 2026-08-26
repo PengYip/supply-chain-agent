@@ -243,9 +243,10 @@ graphRoute.get('/schema', async (c) => {
 // 永不阻塞业务写: outcome 落 graph_status(前端角标/重试)。服务端按 kind 强制
 // 节点类型(correlates=Contract/Contract, relates=Project/Project), 防乱配。
 
-const LINK_KINDS: Record<GraphLinkKind, { srcKind: 'Contract' | 'Project'; dstKind: 'Contract' | 'Project' }> = {
+const LINK_KINDS: Record<GraphLinkKind, { srcKind: 'Contract' | 'Project' | 'Document'; dstKind: 'Contract' | 'Project' | 'Document' }> = {
   correlates: { srcKind: 'Contract', dstKind: 'Contract' },
   relates: { srcKind: 'Project', dstKind: 'Project' },
+  amends: { srcKind: 'Document', dstKind: 'Contract' },
 };
 
 /** props 白名单: share/type/note + Phase 3 分摊键。其余键在路由层剥离。 */
@@ -258,7 +259,7 @@ const linkPropsSchema = z.object({
 }).strip();
 
 const linkCreateSchema = z.object({
-  kind: z.enum(['correlates', 'relates']),
+  kind: z.enum(['correlates', 'relates', 'amends']),
   srcKey: z.string().min(1, 'srcKey 必填'),
   srcLabel: z.string().optional(),
   dstKey: z.string().min(1, 'dstKey 必填'),

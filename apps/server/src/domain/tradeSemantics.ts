@@ -179,6 +179,7 @@ export const QUOTA_SCOPES: readonly QuotaScope[] = ['counterparty', 'project'];
 export const GRAPH_TRADE_EDGES = {
   correlates: 'correlates',
   relates: 'relates',
+  amends: 'amends',
   trades: 'trades',
   settles: 'settles',
   granted: 'granted',

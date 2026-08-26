@@ -25,9 +25,9 @@ export interface GraphLinkToolDeps {
 async function upsertLinkAndSync(
   deps: GraphLinkToolDeps,
   input: {
-    kind: 'correlates' | 'relates';
-    srcKind: 'Contract' | 'Project'; srcKey: string;
-    dstKind: 'Contract' | 'Project'; dstKey: string;
+    kind: 'correlates' | 'relates' | 'amends';
+    srcKind: 'Contract' | 'Project' | 'Document'; srcKey: string;
+    dstKind: 'Contract' | 'Project' | 'Document'; dstKey: string;
     props: Record<string, unknown>;
   },
 ): Promise<{ linkId: string; graphSync: string }> {
@@ -117,6 +117,31 @@ export function buildLinkProjectsTool(deps: GraphLinkToolDeps) {
         kind: 'relates',
         srcKind: 'Project', srcKey: srcProjectCode,
         dstKind: 'Project', dstKey: dstProjectCode,
+        props,
+      });
+      return { status: 'ok' as const, linkId, graphSync };
+    },
+  });
+}
+
+/** link_amends — L2 工具: 补充合同文档 -> 基础合同 amends 边(修订关系)。 */
+export function buildLinkAmendsTool(deps: GraphLinkToolDeps) {
+  return tool({
+    description:
+      '登记补充合同对基础合同的修订关系(amends)。什么时候用: 用户说"这份补充合同是对合同X的补充修订"时调用。' +
+      'L2 操作: 调用需附带人工授权(needsApproval)。幂等: 同一对(补充合同文档, 基础合同)重复提交只更新属性。',
+    inputSchema: z.object({
+      docId: z.string().min(1).describe('补充合同文档 id(已入库的补充合同文件)'),
+      baseContractNo: z.string().min(1).describe('被修订的基础合同号(台账规范化形式)'),
+      note: z.string().max(500).optional().describe('修订说明'),
+    }),
+    execute: async ({ docId, baseContractNo, note }) => {
+      const props: Record<string, unknown> = {};
+      if (note !== undefined) props.note = note;
+      const { linkId, graphSync } = await upsertLinkAndSync(deps, {
+        kind: 'amends',
+        srcKind: 'Document', srcKey: docId,
+        dstKind: 'Contract', dstKey: baseContractNo,
         props,
       });
       return { status: 'ok' as const, linkId, graphSync };

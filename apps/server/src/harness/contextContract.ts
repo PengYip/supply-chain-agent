@@ -138,6 +138,12 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
   },
+  // 2026-08-26 模板: 补充合同修订关系(amends)。Agent 传入 docId/合同号为可信
+  // 输入, 落 graph_links SSOT + 图边投影 -> persist 'business'。L2 软门控。
+  link_amends: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'business', risk: { level: 'L2', injection: 'safe' },
+  },
   // 2026-08-25 方案A §6: 两层额度管控。manage_quota 落 quotas SSOT + granted
   // 投影 + 即时占用重算 -> persist 'business'。query_quota_usage 只读 DB 物化
   // 结果 -> persist 'business'(读路由同源), injection 'safe'。金额/限额为可信数值输入。

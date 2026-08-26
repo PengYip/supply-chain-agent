@@ -37,6 +37,7 @@ const EXPECTED_TOOLS = [
   'project_rollup',
   'link_contracts',
   'link_projects',
+  'link_amends',
   'manage_quota',
   'query_quota_usage',
 ] as const;

@@ -15,7 +15,7 @@ import { GRAPH_TRADE_EDGES } from '../domain/tradeSemantics.js';
 export const CORRELATES_EDGE = GRAPH_TRADE_EDGES.correlates;
 export const RELATES_EDGE = GRAPH_TRADE_EDGES.relates;
 
-export type GraphLinkKind = 'correlates' | 'relates';
+export type GraphLinkKind = 'correlates' | 'relates' | 'amends';
 
 export interface GraphLinkSyncIo {
   createEntity(i: { kind: string; name: string; props?: Record<string, unknown> }): Promise<{ elementId: string }>;
@@ -42,16 +42,17 @@ async function ensureNode(
   return io.createEntity({ kind, name });
 }
 
-/** kind -> 节点键归一化(correlates=合同号双归一, relates=项目码)。空串 = 不可用键。 */
+/** kind -> 节点键归一化(correlates/amends=合同号双归一, relates=项目码; amends src 为 docId 原样)。空串 = 不可用键。 */
 function normalizeKey(kind: GraphLinkKind, key: string): string {
-  return kind === 'correlates' ? normalizeName(normalizeContractNo(key)) : normalizeProjectCode(key);
+  if (kind === 'relates') return normalizeProjectCode(key);
+  return normalizeName(normalizeContractNo(key));
 }
 
 export interface SyncGraphLinkEdgeInput {
   kind: GraphLinkKind;
-  srcKind: 'Contract' | 'Project';
+  srcKind: 'Contract' | 'Project' | 'Document';
   srcKey: string;
-  dstKind: 'Contract' | 'Project';
+  dstKind: 'Contract' | 'Project' | 'Document';
   dstKey: string;
   props: Record<string, unknown>;
   confirmationSource: 'human' | 'agent';
@@ -76,7 +77,7 @@ export async function syncGraphLinkEdge(
     const dstNode = await ensureNode(io, input.dstKind, dstName);
     await io.mergeEdge({
       srcId: srcNode.elementId, dstId: dstNode.elementId,
-      kind: input.kind === 'correlates' ? CORRELATES_EDGE : RELATES_EDGE,
+      kind: input.kind === 'correlates' ? CORRELATES_EDGE : input.kind === 'relates' ? RELATES_EDGE : 'amends',
       confidence: input.confidence,
       props: { ...input.props, confirmationSource: input.confirmationSource, source: 'link_workbench' },
     });
@@ -108,7 +109,7 @@ export async function removeGraphLinkEdge(
     if (!srcNode || !dstNode) return { outcome: 'ok', reason: 'nodes missing (nothing to remove)' };
     await io.removeEdge({
       srcId: srcNode.elementId,
-      kind: input.kind === 'correlates' ? CORRELATES_EDGE : RELATES_EDGE,
+      kind: input.kind === 'correlates' ? CORRELATES_EDGE : input.kind === 'relates' ? RELATES_EDGE : 'amends',
       dstId: dstNode.elementId,
     });
     return edgeResult();

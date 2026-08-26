@@ -75,7 +75,7 @@ const EDGE_RULE_SEED: Array<{
   // 质检报告(化验报告更名目标): 词表对齐旧 化验报告
   { id: 'er-bind-zhijian', src: '质检报告', edge: 'binds', vocab: ['质检'], active: false },
   // 补充合同: amends 修订关系(新边类型, Phase 2 激活 L2 工具)
-  { id: 'er-amend-buchong', src: '补充合同', edge: 'amends', vocab: [], active: false },
+  { id: 'er-amend-buchong', src: '补充合同', edge: 'amends', vocab: [] },
   // 立项书: binds 终点泛化到 Project(spec Phase 2 开绑定路径)
   { id: 'er-bind-lixiang', src: '立项书', edge: 'binds', vocab: ['立项'], active: false },
 ];

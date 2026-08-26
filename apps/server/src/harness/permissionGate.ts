@@ -74,6 +74,7 @@ registerPermission('create_entity', 'L2'); // Phase 4 §7: graph entity create
 registerPermission('link_entities', 'L2'); // Phase 4 §7: graph edge create
 registerPermission('link_contracts', 'L2'); // 2026-08-25 方案A: 背靠背购销对应(correlates)
 registerPermission('link_projects', 'L2'); // 2026-08-25 方案A: 项目级关联(relates)
+registerPermission('link_amends', 'L2'); // 2026-08-26 模板: 补充合同修订关系(amends)
 registerPermission('manage_quota', 'L2'); // 2026-08-25 方案A §6: 额度创建/调整/停用
 registerPermission('query_quota_usage', 'L1'); // 2026-08-25 方案A §6: 额度占用只读查询
 registerPermission('update_document_fields', 'L2'); // post-ingest field correction (write)
