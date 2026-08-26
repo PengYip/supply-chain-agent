@@ -49,6 +49,7 @@ function App() {
   // 中心覆盖用户操作（openInGraph 直接调 navigate，不清自己刚设置的 focus）。
   const handleNavigate = useCallback((v: ViewId) => {
     if (v === 'graph') setGraphFocus(null);
+    if (v === 'bindings') setBindingsFocus(null);
     navigate(v);
   }, [navigate]);
   // 执行流水页 -> 主体名单页的跳转(主体未配置导致流水为空时的引导)。

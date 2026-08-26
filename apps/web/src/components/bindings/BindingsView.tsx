@@ -76,7 +76,7 @@ export function BindingsView({
   focus?: { docId: string; nonce: number } | null;
 }) {
   const b = useBindings();
-  const { overview, proposals, candidates, contracts } = b;
+  const { overview, proposals, candidates, contracts, loading } = b;
 
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
   const [selected, setSelected] = useState<OverviewDoc | null>(null);
@@ -88,12 +88,14 @@ export function BindingsView({
   const handledFocusNonceRef = useRef(-1);
   useEffect(() => {
     if (!focus || focus.nonce === handledFocusNonceRef.current) return;
+    // overview 未就绪(首次加载中且列表为空)时不消费 nonce, 等数据到位后 effect 重跑再定位。
+    if (loading && overview.length === 0) return;
     handledFocusNonceRef.current = focus.nonce;
     const doc = overview.find((d) => d.docId === focus.docId);
     if (doc) handleSelectDoc(doc);
-    // handleSelectDoc 为普通函数, 直接引用; 依赖 overview 即可。
+    // handleSelectDoc 为普通函数, 直接引用; 依赖 overview/loading 即可。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus, overview]);
+  }, [focus, overview, loading]);
 
   // 合同过滤(spec 2026-08-26 §4.5): 选中合同 -> 左栏只显示绑定该合同的文档并定位首个。
   const [contractFilter, setContractFilter] = useState<ContractSearchItem | null>(null);
@@ -664,19 +666,26 @@ export function BindingsView({
       <div className="flex min-h-0 flex-1">
         <div
           className={clsx(
-            'flex min-h-0 shrink-0 overflow-hidden transition-[width] duration-200',
+            'flex min-h-0 shrink-0 flex-col overflow-hidden transition-[width] duration-200',
             docsCollapsed ? 'w-0' : 'w-80',
           )}
         >
-          <DocListPanel
-            docs={filteredOverview}
-            docTypes={b.docTypes}
-            loading={b.loading}
-            error={b.error}
-            selectedDocId={selectedDocId}
-            onSelect={handleSelectDoc}
-            onRetry={() => void b.refreshOverview()}
-          />
+          {contractFilter && filteredOverview.length === 0 && (
+            <div className="shrink-0 border-b border-line bg-surface px-3 py-1.5 text-[11px] text-ink-soft">
+              无绑定该合同的文档
+            </div>
+          )}
+          <div className="flex min-h-0 flex-1">
+            <DocListPanel
+              docs={filteredOverview}
+              docTypes={b.docTypes}
+              loading={b.loading}
+              error={b.error}
+              selectedDocId={selectedDocId}
+              onSelect={handleSelectDoc}
+              onRetry={() => void b.refreshOverview()}
+            />
+          </div>
         </div>
         <PanelRail
           collapsed={docsCollapsed}

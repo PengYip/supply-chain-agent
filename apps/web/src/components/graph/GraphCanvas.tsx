@@ -122,11 +122,14 @@ export function GraphCanvas({
     });
     graph.on('node:pointerleave', () => onHover(null));
 
-    void graph.render().then(() => {
-      if (centerElementId) {
-        try { void graph.focusElement(centerElementId); } catch { /* 中心节点被过滤时不定位 */ }
-      }
-    });
+    void graph.render()
+      .then(() => {
+        if (centerElementId) {
+          // focusElement 返回 Promise, 异步拒绝用 catch 吞掉(中心节点被过滤时不定位)。
+          graph.focusElement(centerElementId).catch(() => { /* 中心节点被过滤时不定位 */ });
+        }
+      })
+      .catch(console.error);
 
     return () => {
       graph.destroy();
