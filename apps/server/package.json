@@ -25,6 +25,7 @@
     "better-sqlite3": "^12.11.1",
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.45.2",
+    "exceljs": "^4.4.0",
     "hono": "^4.13.0",
     "mammoth": "^1.12.1",
     "minio": "^8.0.7",
