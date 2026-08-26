@@ -19,6 +19,7 @@ import { graphRoute } from './routes/graph.js';
 import { quotasRoute } from './routes/quotas.js';
 import { reconciliationRoute } from './routes/reconciliation.js';
 import { bindingsRoute } from './routes/bindings.js';
+import { contractsRoute } from './routes/contracts.js';
 import { partiesRoute } from './routes/parties.js';
 import { projectsRoute } from './routes/projects.js';
 import { reviewRoute } from './routes/review.js';
@@ -108,6 +109,7 @@ app.use('/api/graph/*', requireAuth);
 app.use('/api/quotas/*', requireAuth);
 app.use('/api/reconcile/*', requireAuth);
 app.use('/api/bindings/*', requireAuth);
+app.use('/api/contracts/*', requireAuth);
 app.use('/api/parties/*', requireAuth);
 app.use('/api/projects/*', requireAuth);
 
@@ -138,6 +140,9 @@ app.route('/api/reconcile', reconciliationRoute);
 
 // Bindings workbench (read-only, spec §5.1): overview / proposals / candidates / contracts.
 app.route('/api/bindings', bindingsRoute);
+
+// 合同搜索(spec 2026-08-26): 图谱/绑定页共用组合框。
+app.route('/api/contracts', contractsRoute);
 
 // Self-party list management (Task A): DB-backed 自主体名单 + candidates + backfill.
 app.route('/api/parties', partiesRoute);
