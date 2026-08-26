@@ -90,3 +90,13 @@
 - 不改数据流、API、后端。
 - 不加新交互（tooltip、label 开关等）。
 - 不处理超大图（depth=5 极端情况）性能优化。
+
+### 验收修订记录（2026-08-26，浏览器验收后）
+
+首轮浏览器验收失败，依据 @antv/g-lite 与 G6 5.1.1 源码查证（lib-2）修订固定值：
+
+- **`labelLineHeight` 是 px 绝对值**（g-lite PropertySyntax.LENGTH），非倍数。`1.1` 会被当作 1.1px 行距导致多行叠死。修订：节点 label 设 `labelLineHeight: 12`（11px 字号 + 1px leading；captionFit 的 `lineHeight: 1.1` 假设 12.1px，0.1px 误差由弦宽内边距吸收）。
+- **G6 `Label.defaultStyleProps.maxLines = 1`**（label.js:88），含 `\n` 的 labelText 未显式设置时被截为 1 行。修订：节点 label 显式 `labelMaxLines: 3`。
+- **节点直径 `clamp(16+degree*1.8, 16, 34)` 设计性偏小**：弦宽上限 = 直径 − fontSize，16px 节点连 1 个 CJK 都装不下，外围 label 全部退化成 `…`。对齐 Neo4j 的直径/字号比例（约 50/10）：修订为 `clamp(34 + degree*3, 34, 56)`，中心节点 `max(size, 56)`。radial 布局 `nodeSpacing: 24` 不变（`unitRadius: 110` 对 34-56px 节点仍有 ~54px 净距）。
+- **边 label 衬底**：`labelBackground*` 系列受支持（EdgeLabelStyleProps extends LabelStyleProps），但 padding 默认 0 使衬底紧贴文字不可辨、`opacity < 1` 会透出边线（G6 issue #7341）。修订：`labelPadding: [2, 4]`、`labelBackgroundOpacity: 1`（原 0.85 作废）、radius 2 不变。
+- 已知遗留：中心节点周围短边的 label 可能互相挤压（视觉上"履行用"/"绑定书"是两条边 label 重叠），节点增大+行高修复后复验，仍严重再调边 label placement。
