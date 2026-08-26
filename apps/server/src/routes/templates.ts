@@ -37,8 +37,16 @@ templatesRoute.get('/context', async (c) => {
   const sourceChain = ancestorChain(docTypeId, byId);
   const typeChain = sourceChain.map((id) => nameOf(id)!).filter(Boolean);
 
-  // binds 派生词: 现状 bindingRelationFor 语义(docType 不在映射 -> fallback)。
-  const bindsRelation = bindingRelationFor(docType as VoucherType);
+  // binds 派生词: 先取激活 binds 规则词表首词(规则驱动, 覆盖 立项书/付款单等
+  // 不在 bindingRelationByVoucherType 映射的类型), 无规则再回退 bindingRelationFor
+  // (兜底规则 er-bind-fallback vocab=['凭证'] 保证 legacy 行为不变)。
+  const bindsRule = matchEdgeRule({ rules, sourceChain, targetChain: [''], edgeType: 'binds' });
+  const bindsRelation = bindsRule && bindsRule.allowedVocab.length > 0
+    ? bindsRule.allowedVocab[0]!
+    : bindingRelationFor(docType as VoucherType);
+
+  // 绑定目标类型(裁决 #1): 读 dt-{docType} 的 props.bindsTargetKind, 缺省 'Contract'。
+  const bindsTargetKind = (byId.get(`dt-${docType}`)?.props.bindsTargetKind === 'Project') ? 'Project' : 'Contract';
 
   // settles 词表: 匹配激活 settles 规则。
   const settlesRule = matchEdgeRule({ rules, sourceChain, targetChain: [''], edgeType: 'settles' });
@@ -73,7 +81,7 @@ templatesRoute.get('/context', async (c) => {
     .map((l) => contractRow(l.contractNo, l.contractType ?? null));
 
   return c.json({
-    documentId, docType, typeChain, bindsRelation, settlesVocab,
+    documentId, docType, typeChain, bindsRelation, bindsTargetKind, settlesVocab,
     allowedContractTypes, projects: projectBlocks, unassignedContracts,
   });
 });

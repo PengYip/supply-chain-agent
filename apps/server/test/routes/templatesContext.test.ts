@@ -81,6 +81,24 @@ describe('GET /api/templates/context', () => {
     expect(body.settlesVocab).toEqual(['收款', '付款']);
   });
 
+  it('立项书: bindsRelation=立项(规则词表), bindsTargetKind=Project', async () => {
+    const { docId } = await createDocumentStub(ctx, { sourceUri: 'file:///l.pdf', docType: '立项书' });
+    const res = await appAs('u1').request(`/api/templates/context?documentId=${docId}`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { bindsRelation: string; bindsTargetKind: string };
+    expect(body.bindsRelation).toBe('立项');
+    expect(body.bindsTargetKind).toBe('Project');
+  });
+
+  it('货转单: bindsRelation=货权转移(规则词表回归)', async () => {
+    const { docId } = await createDocumentStub(ctx, { sourceUri: 'file:///h.pdf', docType: '货转单' });
+    const res = await appAs('u1').request(`/api/templates/context?documentId=${docId}`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { bindsRelation: string; bindsTargetKind: string };
+    expect(body.bindsRelation).toBe('货权转移');
+    expect(body.bindsTargetKind).toBe('Contract');
+  });
+
   it('多项目: 各项目 contracts 只含自己的成员合同, unassigned 不含已分配', async () => {
     const { docId } = await createDocumentStub(ctx, { sourceUri: 'file:///m.pdf', docType: '发票' });
     await seedLedger('HT-A', '采购');
