@@ -485,10 +485,15 @@ describe('template seed', () => {
     for (const ct of ['采购', '销售', '物流', '租赁', '服务', '其他', '买卖合同']) {
       expect(names('contract_type')).toContain(ct);
     }
-    // 层级: 发票 ⊂ 履约凭证; 采购 ⊂ 买卖合同
+    // 层级(v2 树): 发票 ⊂ 发票凭证 ⊂ 履约凭证; 采购 ⊂ 买卖合同
     const fapiao = types.find((t) => t.name === '发票')!;
+    const fapiaoPiao = types.find((t) => t.name === '发票凭证')!;
     const lvyue = types.find((t) => t.name === '履约凭证')!;
-    expect(fapiao.parentId).toBe(lvyue.id);
+    expect(fapiao.parentId).toBe(fapiaoPiao.id);
+    expect(fapiaoPiao.parentId).toBe(lvyue.id);
+    // v2 方向编码类型已登记
+    expect(names('doc_type')).toContain('收货单');
+    expect(names('doc_type')).toContain('销项票');
     const caigou = types.find((t) => t.name === '采购')!;
     const maimai = types.find((t) => t.name === '买卖合同')!;
     expect(caigou.parentId).toBe(maimai.id);
@@ -540,16 +545,34 @@ Expected: FAIL（模块不存在）
 import type { DbContext } from './db/client.js';
 import { ensureEdgeRule, ensureTemplateType } from './db/repositories.js';
 
-/** doc_type 种子(分类八类 + 履约凭证层级枢纽)。 */
+/** doc_type 种子——类型划分 v2(spec 2026-08-26 §3.1, 业务确认 2026-08-26)。
+ *  Phase 1 登记全树(类型是被动注册表, 不影响行为); 新类型的边规则登记不启用。
+ *  旧 8 类全部保留(分类器仍在用, 行为零变化); 提单/装箱单挂货转单下待 Phase 2 并入;
+ *  化验报告→质检报告更名, 旧名保留; 发票保留为发票凭证的合法粗类。 */
 const DOC_TYPE_SEED: Array<{ name: string; parent?: string }> = [
   { name: '合同' },
+  { name: '补充合同', parent: '合同' },
+  { name: '立项书' },
   { name: '履约凭证' },
-  { name: '发票', parent: '履约凭证' },
-  { name: '提单', parent: '履约凭证' },
-  { name: '装箱单', parent: '履约凭证' },
   { name: '货转单', parent: '履约凭证' },
-  { name: '付款凭证', parent: '履约凭证' },
-  { name: '化验报告', parent: '履约凭证' },
+  { name: '提单', parent: '货转单' },
+  { name: '装箱单', parent: '货转单' },
+  { name: '质检报告', parent: '履约凭证' },
+  { name: '化验报告', parent: '质检报告' },
+  { name: '结算单', parent: '履约凭证' },
+  { name: '运输凭证', parent: '履约凭证' },
+  { name: '收货单', parent: '运输凭证' },
+  { name: '发货单', parent: '运输凭证' },
+  { name: '汽运磅单', parent: '运输凭证' },
+  { name: '火运大票', parent: '运输凭证' },
+  { name: '派船通知单', parent: '运输凭证' },
+  { name: '资金凭证', parent: '履约凭证' },
+  { name: '付款单', parent: '资金凭证' },
+  { name: '付款凭证', parent: '资金凭证' },
+  { name: '发票凭证', parent: '履约凭证' },
+  { name: '发票', parent: '发票凭证' },
+  { name: '进项票', parent: '发票凭证' },
+  { name: '销项票', parent: '发票凭证' },
   { name: '其他', parent: '履约凭证' },
 ];
 
@@ -581,6 +604,22 @@ const EDGE_RULE_SEED: Array<{
   { id: 'er-exec-fapiao', src: '发票', edge: 'executes', vocab: [], active: false },
   { id: 'er-exec-tidan', src: '提单', edge: 'executes', vocab: [], active: false },
   { id: 'er-exec-zhuangxiang', src: '装箱单', edge: 'executes', vocab: [], active: false },
+  // ---- v2 类型划分(spec 2026-08-26 §3.1): 登记+激活节奏见 spec Phase 2, 全部 active:false ----
+  // 方向编码类型(spec v2): settles 方向由类型自带, 与 flowType×direction 派生交叉验证
+  { id: 'er-settle-shouhuo', src: '收货单', edge: 'settles', vocab: ['收货'], active: false },
+  { id: 'er-settle-fahuodan', src: '发货单', edge: 'settles', vocab: ['发货'], active: false },
+  { id: 'er-settle-jinxiang', src: '进项票', edge: 'settles', vocab: ['收票'], active: false },
+  { id: 'er-settle-xiaoxiang', src: '销项票', edge: 'settles', vocab: ['开票'], active: false },
+  // 付款单(申请单, 付款前): 登记不启用——不物化资金流(它不是支付证据)
+  { id: 'er-bind-fukuandan', src: '付款单', edge: 'binds', vocab: ['付款申请'], active: false },
+  // 结算单: 合同级结算凭证
+  { id: 'er-bind-jiesuan', src: '结算单', edge: 'binds', vocab: ['结算'], active: false },
+  // 质检报告(化验报告更名目标): 词表对齐旧 化验报告
+  { id: 'er-bind-zhijian', src: '质检报告', edge: 'binds', vocab: ['质检'], active: false },
+  // 补充合同: amends 修订关系(新边类型, Phase 2 激活 L2 工具)
+  { id: 'er-amend-buchong', src: '补充合同', edge: 'amends', vocab: [], active: false },
+  // 立项书: binds 终点泛化到 Project(spec Phase 2 开绑定路径)
+  { id: 'er-bind-lixiang', src: '立项书', edge: 'binds', vocab: ['立项'], active: false },
 ];
 
 /** 幂等灌入: 表空或部分存在都可重入(ensure* 均为 upsert)。 */
