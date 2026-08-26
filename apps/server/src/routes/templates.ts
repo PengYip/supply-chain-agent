@@ -62,8 +62,9 @@ templatesRoute.get('/context', async (c) => {
     const ms = await listMembershipsByProject(ctx, p.code, user.id, 'confirmed');
     const nos = ms.map((m) => m.contractNo);
     for (const n of nos) assigned.add(n);
+    // 当前项目自己的成员合同(全局 assigned 仅用于最后 unassignedContracts 计算)。
     const contracts = ledger
-      .filter((l) => assigned.has(l.contractNo))
+      .filter((l) => nos.includes(l.contractNo))
       .map((l) => contractRow(l.contractNo, l.contractType ?? null));
     projectBlocks.push({ code: p.code, name: p.name, contracts });
   }

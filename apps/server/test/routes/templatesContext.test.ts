@@ -80,4 +80,33 @@ describe('GET /api/templates/context', () => {
     expect(body.bindsRelation).toBe('付款');
     expect(body.settlesVocab).toEqual(['收款', '付款']);
   });
+
+  it('多项目: 各项目 contracts 只含自己的成员合同, unassigned 不含已分配', async () => {
+    const { docId } = await createDocumentStub(ctx, { sourceUri: 'file:///m.pdf', docType: '发票' });
+    await seedLedger('HT-A', '采购');
+    await seedLedger('HT-B', '销售');
+    await createProject(ctx, { code: 'P1', name: '项目一', userId: 'u1' });
+    await createProject(ctx, { code: 'P2', name: '项目二', userId: 'u1' });
+    await upsertProjectMembership(ctx, {
+      contractNo: 'HT-A', projectCode: 'P1', role: '采购', status: 'confirmed',
+      proposedBy: 'human', confirmationSource: 'human', createdBy: 'u1',
+    }, 'u1');
+    await upsertProjectMembership(ctx, {
+      contractNo: 'HT-B', projectCode: 'P2', role: '销售', status: 'confirmed',
+      proposedBy: 'human', confirmationSource: 'human', createdBy: 'u1',
+    }, 'u1');
+
+    const res = await appAs('u1').request(`/api/templates/context?documentId=${docId}`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      projects: Array<{ code: string; contracts: Array<{ contractNo: string }> }>;
+      unassignedContracts: Array<{ contractNo: string }>;
+    };
+    const p1 = body.projects.find((p) => p.code === 'P1');
+    const p2 = body.projects.find((p) => p.code === 'P2');
+    expect(p1?.contracts.map((c) => c.contractNo)).toEqual(['HT-A']);
+    expect(p2?.contracts.map((c) => c.contractNo)).toEqual(['HT-B']);
+    expect(body.unassignedContracts.map((c) => c.contractNo)).not.toContain('HT-A');
+    expect(body.unassignedContracts.map((c) => c.contractNo)).not.toContain('HT-B');
+  });
 });
