@@ -14,6 +14,7 @@ import { GRAPH_TRADE_EDGES } from '../domain/tradeSemantics.js';
 
 export const CORRELATES_EDGE = GRAPH_TRADE_EDGES.correlates;
 export const RELATES_EDGE = GRAPH_TRADE_EDGES.relates;
+export const AMENDS_EDGE = GRAPH_TRADE_EDGES.amends;
 
 export type GraphLinkKind = 'correlates' | 'relates' | 'amends';
 
@@ -42,7 +43,8 @@ async function ensureNode(
   return io.createEntity({ kind, name });
 }
 
-/** kind -> 节点键归一化(correlates/amends=合同号双归一, relates=项目码; amends src 为 docId 原样)。空串 = 不可用键。 */
+/** kind -> 节点键归一化(correlates/amends=合同号双归一, relates=项目码)。空串 = 不可用键。
+ *  注: amends 的 srcKey 为 docId, 经合同归一后原样保留(docId 为 [A-Z0-9-] 字符集)。 */
 function normalizeKey(kind: GraphLinkKind, key: string): string {
   if (kind === 'relates') return normalizeProjectCode(key);
   return normalizeName(normalizeContractNo(key));
@@ -77,7 +79,7 @@ export async function syncGraphLinkEdge(
     const dstNode = await ensureNode(io, input.dstKind, dstName);
     await io.mergeEdge({
       srcId: srcNode.elementId, dstId: dstNode.elementId,
-      kind: input.kind === 'correlates' ? CORRELATES_EDGE : input.kind === 'relates' ? RELATES_EDGE : 'amends',
+      kind: input.kind === 'correlates' ? CORRELATES_EDGE : input.kind === 'relates' ? RELATES_EDGE : AMENDS_EDGE,
       confidence: input.confidence,
       props: { ...input.props, confirmationSource: input.confirmationSource, source: 'link_workbench' },
     });
@@ -89,9 +91,9 @@ export async function syncGraphLinkEdge(
 
 export interface RemoveGraphLinkEdgeInput {
   kind: GraphLinkKind;
-  srcKind: 'Contract' | 'Project';
+  srcKind: 'Contract' | 'Project' | 'Document';
   srcKey: string;
-  dstKind: 'Contract' | 'Project';
+  dstKind: 'Contract' | 'Project' | 'Document';
   dstKey: string;
 }
 
@@ -109,7 +111,7 @@ export async function removeGraphLinkEdge(
     if (!srcNode || !dstNode) return { outcome: 'ok', reason: 'nodes missing (nothing to remove)' };
     await io.removeEdge({
       srcId: srcNode.elementId,
-      kind: input.kind === 'correlates' ? CORRELATES_EDGE : input.kind === 'relates' ? RELATES_EDGE : 'amends',
+      kind: input.kind === 'correlates' ? CORRELATES_EDGE : input.kind === 'relates' ? RELATES_EDGE : AMENDS_EDGE,
       dstId: dstNode.elementId,
     });
     return edgeResult();

@@ -6,7 +6,7 @@
 //   GET /entities  — kind+name entity search (CONTAINS / exact)
 //   GET /resolve   — docId + contractNo -> graph nodes (binding workbench link)
 // Link workbench writes (spec 2026-08-25 方案A §6, graph_links 是 SSOT):
-//   GET/POST /links* — correlates/relates 提案-确认 + props 分摊录入通道
+//   GET/POST /links* — correlates/relates/amends 提案-确认 + props 分摊录入通道
 // Neo4j unconfigured (NEO4J_PASSWORD unset) or unreachable -> 503 with a clear
 // Chinese message; the frontend surfaces it as "graph service unavailable".
 // Link writes NEVER hard-fail on graph sync: outcome 落 graph_status 供重试。
@@ -289,8 +289,8 @@ function linkRowJson(r: GraphLinkRow) {
 async function syncLinkEdgeForRow(db: DbContext, userId: string, row: GraphLinkRow) {
   const sync = await syncGraphLinkEdge({
     kind: row.kind as GraphLinkKind,
-    srcKind: row.srcKind as 'Contract' | 'Project', srcKey: row.srcKey,
-    dstKind: row.dstKind as 'Contract' | 'Project', dstKey: row.dstKey,
+    srcKind: row.srcKind as 'Contract' | 'Project' | 'Document', srcKey: row.srcKey,
+    dstKind: row.dstKind as 'Contract' | 'Project' | 'Document', dstKey: row.dstKey,
     props: row.props,
     confirmationSource: (row.confirmationSource === 'agent' ? 'agent' : 'human'),
     confidence: row.confidence,
@@ -403,8 +403,8 @@ graphRoute.post('/links/remove', async (c) => {
   try {
     const sync = await removeGraphLinkEdge({
       kind: row.kind as GraphLinkKind,
-      srcKind: row.srcKind as 'Contract' | 'Project', srcKey: row.srcKey,
-      dstKind: row.dstKind as 'Contract' | 'Project', dstKey: row.dstKey,
+      srcKind: row.srcKind as 'Contract' | 'Project' | 'Document', srcKey: row.srcKey,
+      dstKind: row.dstKind as 'Contract' | 'Project' | 'Document', dstKey: row.dstKey,
     });
     graphSync = sync.outcome;
   } catch (e) {
