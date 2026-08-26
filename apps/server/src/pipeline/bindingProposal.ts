@@ -365,7 +365,9 @@ export function buildAnchorsFromFields(
   return anchors;
 }
 
-const WEIGHTS = { party: 0.5, time: 0.25, amount: 0.15, qty: 0.1 } as const;
+export interface AnchorWeights { party: number; time: number; amount: number; qty: number }
+
+const WEIGHTS: AnchorWeights = { party: 0.5, time: 0.25, amount: 0.15, qty: 0.1 } as const;
 
 /** 评分阈值: >= 0.75 且与次高差 >= 0.05 -> human。 */
 const HUMAN_SCORE_THRESHOLD = 0.75;
@@ -380,6 +382,7 @@ const HUMAN_SCORE_GAP = 0.05;
 export function generateBindingProposals(
   anchors: VoucherAnchors,
   ledgerEntries: LedgerEntryLike[],
+  weights: AnchorWeights = WEIGHTS,
 ): BindingProposal[] {
   // 合同号精确命中(归一化): ledger.contract_no 已是 normalizeContractNo 后的值。
   const normalized = normalizeContractNo(anchors.contractNo ?? '');
@@ -416,10 +419,10 @@ export function generateBindingProposals(
     const amount = scoreAmount(anchors, entry.fields);
     const qty = scoreQty(anchors, entry.fields);
     const score =
-      WEIGHTS.party * party.score +
-      WEIGHTS.time * time.score +
-      WEIGHTS.amount * amount.score +
-      WEIGHTS.qty * qty.score;
+      weights.party * party.score +
+      weights.time * time.score +
+      weights.amount * amount.score +
+      weights.qty * qty.score;
     return {
       contractNo: entry.contractNo,
       score,
