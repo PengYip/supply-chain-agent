@@ -1,0 +1,3 @@
+# npm always writes LF; core.autocrlf=true on Windows otherwise causes phantom
+# CRLF diffs on package-lock.json that block pull/merge.
+package-lock.json eol=lf

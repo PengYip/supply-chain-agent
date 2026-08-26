@@ -39,6 +39,7 @@ import {
   deleteDocument,
   createDocumentStub,
   getDocumentParseStatus,
+  listDocumentIdsWithConfirmedBindings,
 } from '../pipeline/db/repositories.js';
 import type { DocType } from '../pipeline/types.js';
 
@@ -227,7 +228,8 @@ filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
   }
 });
 
-/** List the current user's uploaded files + virtual folders. */
+/** List the current user's uploaded files + virtual folders. Each file carries
+ *  `bound` (docId 是否有 confirmed 绑定) for the file-manager badge. */
 // Phase 4 RBAC: admin/trader/viewer may list (read-only access for viewer).
 filesRoute.get('/', requireRole('admin', 'trader', 'viewer'), async (c) => {
   const user = c.get('user');
@@ -278,9 +280,12 @@ filesRoute.get('/', requireRole('admin', 'trader', 'viewer'), async (c) => {
       parseStatusByDoc.set(f.docId, status ?? null);
     }),
   );
+  // bound: docId 是否存在 ≥1 条 status='confirmed' 的绑定（仅有 proposed 不算）。
+  const boundDocIds = new Set(await listDocumentIdsWithConfirmedBindings(ctx(), user.id));
   const filesWithStatus = files.map((f) => ({
     ...f,
     parseStatus: f.docId ? (parseStatusByDoc.get(f.docId) ?? null) : null,
+    bound: f.docId ? boundDocIds.has(f.docId) : false,
   }));
 
   // Virtual folders (presentational only; file objects live in MinIO regardless).

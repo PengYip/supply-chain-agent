@@ -8,6 +8,7 @@ import {
   buildTagDocumentTool,
   processDocument, ensureDocumentParsed, ensureDocumentExtracted,
 } from '../../../src/pipeline/tools/documentEntry.js';
+import { writeDocxFixture } from '../fixtures/makeDocx.js';
 
 let ctx: ReturnType<typeof createDb>;
 let dir: string;
@@ -566,6 +567,36 @@ describe('processDocument (on-demand parse of an existing stub)', () => {
     const model = await loadDocument(ctx, docId);
     expect(model?.blocks.length).toBeGreaterThan(0);
     expect(model?.docType).toBe('合同');
+  });
+
+  it('parses a .docx stub end-to-end: Chinese paragraphs + table rows persisted', async () => {
+    const f = join(dir, 'proc.docx');
+    await writeDocxFixture(f, {
+      paragraphs: ['合同编号：HT-2026-009', '甲方：华盛集团有限公司'],
+      table: [
+        ['品名', '单价', '数量'],
+        ['甲醇', '2450', '500'],
+      ],
+    });
+    const { createDocumentStub, getDocumentParseStatus, loadDocument } = await import(
+      '../../../src/pipeline/db/repositories.js'
+    );
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f, docType: '合同' });
+
+    const res = await processDocument(ctx, docId, { docType: '合同', modality: 'digital' });
+
+    // docx is born-digital: parses cleanly without any MinerU OCR detour.
+    expect(res.parseStatus).toBe('parsed');
+    expect(res.blockCount).toBeGreaterThan(0);
+    expect(await getDocumentParseStatus(ctx, docId)).toBe('parsed');
+    const model = await loadDocument(ctx, docId);
+    const texts = model!.blocks.map((b) => b.text);
+    expect(texts.some((t) => t.includes('华盛集团有限公司'))).toBe(true);
+    const tableRows = model!.blocks.filter((b) => b.type === 'table_row');
+    // Header + GFM separator + 1 data row = 3 pipe-row blocks.
+    expect(tableRows.length).toBeGreaterThanOrEqual(2);
+    expect(tableRows[0].text).toContain('品名');
+    expect(tableRows.some((b) => b.text.includes('甲醇'))).toBe(true);
   });
 
   it('returns needs_ocr (does NOT throw) when the file yields 0 blocks', async () => {

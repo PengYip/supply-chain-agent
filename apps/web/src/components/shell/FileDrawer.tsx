@@ -81,6 +81,29 @@ function actionLinkClass(tone: 'primary' | 'danger' = 'primary') {
   );
 }
 
+/** 文件/文件夹名列：两行截断显示，hover 即时浮出完整名称气泡。
+ *  气泡锚定在名称列自身的相对定位容器内（left-0 + top-full），宽度上限
+ *  240px，横向不会超出抽屉；滚动容器底缘的极端裁剪场景由保留的原生
+ *  title 兜底。气泡为主交互，无 hover 延迟，带 100ms 淡入缩放过渡。 */
+function FileNameText({ name, className }: { name: string; className?: string }) {
+  return (
+    <div className="group/name relative ml-2 min-w-0 flex-1">
+      <span title={name} className={clsx('line-clamp-2 [overflow-wrap:anywhere]', className)}>
+        {name}
+      </span>
+      <span
+        aria-hidden
+        className={clsx(
+          'pointer-events-none absolute left-0 top-full z-30 mt-1 w-max max-w-[240px] origin-top-left scale-95 rounded-md border border-line bg-white px-2 py-1.5 text-xs text-ink opacity-0 shadow-pop transition duration-100 [overflow-wrap:anywhere]',
+          'group-hover/name:scale-100 group-hover/name:opacity-100',
+        )}
+      >
+        {name}
+      </span>
+    </div>
+  );
+}
+
 function MoveDropdown({
   file,
   folders,
@@ -232,17 +255,23 @@ function FileRow(props: {
       <div className="flex w-[18px] shrink-0 items-center justify-center text-ink-soft">
         <FileText className="h-4 w-4" aria-hidden />
       </div>
-      <span
-        title={file.name}
-        className="line-clamp-2 ml-2 min-w-0 flex-1 [overflow-wrap:anywhere]"
-      >
-        {file.name}
-      </span>
-      {badge && (
-        <span className={clsx('shrink-0 whitespace-nowrap rounded px-1.5 py-px text-[10px]', badge.className)}>
-          {badge.text}
+      <FileNameText name={file.name} />
+      <div className="ml-2 flex shrink-0 items-center gap-1">
+        <span
+          title={file.bound === true ? '已绑定到合同台账' : '尚未绑定合同'}
+          className={clsx(
+            'whitespace-nowrap rounded px-1.5 py-px text-[10px]',
+            file.bound === true ? 'bg-success/10 text-success' : 'bg-surface text-ink-soft',
+          )}
+        >
+          {file.bound === true ? '已绑定' : '未绑定'}
         </span>
-      )}
+        {badge && (
+          <span className={clsx('whitespace-nowrap rounded px-1.5 py-px text-[10px]', badge.className)}>
+            {badge.text}
+          </span>
+        )}
+      </div>
       <span className="mr-2 hidden shrink-0 whitespace-nowrap text-[11px] text-ink-soft group-hover:inline">
         {formatSize(file.size)}
       </span>
@@ -361,9 +390,7 @@ function TreeFolder(props: TreeFolderProps) {
         ) : (
           <Folder className="h-4 w-4 shrink-0 text-warning" aria-hidden />
         )}
-        <span title={name} className="line-clamp-2 ml-2 min-w-0 flex-1 font-medium [overflow-wrap:anywhere]">
-          {name}
-        </span>
+        <FileNameText name={name} className="font-medium" />
         <span
           onClick={(e) => { e.stopPropagation(); setDeletingFolderPath(fullPath); }}
           className="hidden cursor-pointer rounded px-1 py-0.5 text-[11px] text-danger transition-colors hover:bg-danger/5 group-hover:inline"
