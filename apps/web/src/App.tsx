@@ -37,6 +37,14 @@ function App() {
     setGraphFocus({ ...target, nonce: graphFocusNonceRef.current });
     navigate('graph');
   }, [navigate]);
+  // 图谱 Inspector -> 绑定工作台深链(薄互通, spec 2026-08-26 §4.4)。
+  const [bindingsFocus, setBindingsFocus] = useState<{ docId: string; nonce: number } | null>(null);
+  const bindingsFocusNonceRef = useRef(0);
+  const openInBindings = useCallback((docId: string) => {
+    bindingsFocusNonceRef.current += 1;
+    setBindingsFocus({ docId, nonce: bindingsFocusNonceRef.current });
+    navigate('bindings');
+  }, [navigate]);
   // 导航入口的统一跳转：手动进入图谱页时清掉旧的外部定位，避免残留合同
   // 中心覆盖用户操作（openInGraph 直接调 navigate，不清自己刚设置的 focus）。
   const handleNavigate = useCallback((v: ViewId) => {
@@ -160,7 +168,7 @@ function App() {
           }}
         />
       ) : view === 'bindings' ? (
-        <BindingsView onOpenInGraph={openInGraph} />
+        <BindingsView focus={bindingsFocus} onOpenInGraph={openInGraph} />
       ) : view === 'flows' ? (
         <FlowsView onOpenParties={openParties} />
       ) : view === 'parties' ? (
@@ -168,7 +176,7 @@ function App() {
       ) : view === 'favorites' ? (
         <FavoritesView onOpenSession={(id) => navigate('chat', { session: id })} />
       ) : view === 'graph' ? (
-        <GraphView focus={graphFocus} />
+        <GraphView focus={graphFocus} onOpenInBindings={openInBindings} />
       ) : view === 'projects' ? (
         <ProjectsView />
       ) : view === 'eval' ? (

@@ -68,7 +68,13 @@ const DOC_TYPE_ERROR_TEXT: Record<string, string> = {
   document_not_found: '文档不存在或已删除',
 };
 
-export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: GraphFocusTarget) => void }) {
+export function BindingsView({
+  onOpenInGraph,
+  focus = null,
+}: {
+  onOpenInGraph?: (target: GraphFocusTarget) => void;
+  focus?: { docId: string; nonce: number } | null;
+}) {
   const b = useBindings();
   const { overview, proposals, candidates, contracts } = b;
 
@@ -77,6 +83,17 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
   const [docsCollapsed, setDocsCollapsed] = useState(false);
   const [detailCollapsed, setDetailCollapsed] = useState(false);
+
+  // 图谱 Inspector -> 绑定工作台深链: nonce 保证重复跳转同一文档也触发。
+  const handledFocusNonceRef = useRef(-1);
+  useEffect(() => {
+    if (!focus || focus.nonce === handledFocusNonceRef.current) return;
+    handledFocusNonceRef.current = focus.nonce;
+    const doc = overview.find((d) => d.docId === focus.docId);
+    if (doc) handleSelectDoc(doc);
+    // handleSelectDoc 为普通函数, 直接引用; 依赖 overview 即可。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus, overview]);
 
   // 合同过滤(spec 2026-08-26 §4.5): 选中合同 -> 左栏只显示绑定该合同的文档并定位首个。
   const [contractFilter, setContractFilter] = useState<ContractSearchItem | null>(null);

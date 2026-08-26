@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { AlertTriangle, Network, RefreshCw } from 'lucide-react';
 import { useGraph, type GraphDirection, type GraphDocument, type GraphEdge, type GraphNode, type InspectTarget } from '../../hooks/useGraph';
+import { fetchGraphSchema, type GraphLabelCount } from '../../api/contractSearch';
+import { ContractSearchBar } from '../common/ContractSearchBar';
 import { PanelRail } from '../shell/PanelRail';
 import { DocumentListPanel } from './DocumentListPanel';
 import { GraphCanvas } from './GraphCanvas';
 import { DetailPanel } from './DetailPanel';
-import { KIND_STYLES, nodeDisplayName, prettyDocName } from './businessTypes';
+import { BUSINESS_TYPES, nodeDisplayName, prettyDocName } from './businessTypes';
 import { DocMetaProvider, buildDocMetaResolver } from './docMeta';
 import type { GraphFocus } from './focus';
 
@@ -18,8 +20,6 @@ const DIRECTION_OPTIONS: Array<{ value: GraphDirection; label: string }> = [
   { value: 'in', label: '入边' },
 ];
 
-const LEGEND_KINDS = ['Document', 'Party', 'Commodity', 'Contract'] as const;
-
 interface CenterState {
   id: string;
   label: string;
@@ -27,7 +27,13 @@ interface CenterState {
   fromDocument: boolean;
 }
 
-export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
+export function GraphView({
+  focus = null,
+  onOpenInBindings,
+}: {
+  focus?: GraphFocus | null;
+  onOpenInBindings?: (docId: string) => void;
+}) {
   const {
     documents,
     docsLoading,
@@ -50,6 +56,68 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
   const [docsCollapsed, setDocsCollapsed] = useState(false);
   const [detailCollapsed, setDetailCollapsed] = useState(false);
 
+  // 节点类型过滤(spec 2026-08-26 §4.4): 空集合 = 全部可见; 图例计数来自 /api/graph/schema。
+  const [hiddenKinds, setHiddenKinds] = useState<ReadonlySet<string>>(new Set());
+  const [labelCounts, setLabelCounts] = useState<GraphLabelCount[]>([]);
+  // 合同搜索跳转的临时提示(合同在台账但未入图等), 下次查询自动清除。
+  const [searchNotice, setSearchNotice] = useState<string | null>(null);
+  // Inspector 薄互通: docId -> 绑定计数(懒加载一次 overview)。
+  const [docBindingCounts, setDocBindingCounts] = useState<Map<string, { confirmed: number; proposed: number }> | null>(null);
+  const bindingCountsLoadedRef = useRef(false);
+
+  const toggleKind = useCallback((kind: string) => {
+    setHiddenKinds((prev) => {
+      const next = new Set(prev);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    void fetchGraphSchema().then(setLabelCounts);
+  }, []);
+
+  const loadBindingCounts = useCallback(() => {
+    if (bindingCountsLoadedRef.current) return;
+    bindingCountsLoadedRef.current = true;
+    void fetch('/api/bindings/overview', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { documents?: Array<{ docId: string; bindings: Array<{ status: string }> }> } | null) => {
+        if (!data?.documents) return;
+        const map = new Map<string, { confirmed: number; proposed: number }>();
+        for (const d of data.documents) {
+          map.set(d.docId, {
+            confirmed: d.bindings.filter((b) => b.status === 'confirmed').length,
+            proposed: d.bindings.filter((b) => b.status === 'proposed').length,
+          });
+        }
+        setDocBindingCounts(map);
+      })
+      .catch(() => { bindingCountsLoadedRef.current = false; });
+  }, []);
+
+  // 合同搜索选中: resolve 定位合同节点 -> 以它为中心查询; 未入图给出提示。
+  const handleSearchSelect = useCallback(
+    async (item: { contractNo: string; displayContractNo: string }) => {
+      setSearchNotice(null);
+      try {
+        const res = await fetch(`/api/graph/resolve?contractNo=${encodeURIComponent(item.contractNo)}`, { credentials: 'include' });
+        if (!res.ok) throw new Error('resolve failed');
+        const data = (await res.json()) as { contract?: { elementId?: string } | null };
+        const elementId = data.contract?.elementId;
+        if (!elementId) {
+          setSearchNotice(`合同 ${item.displayContractNo} 尚未同步到图谱（无合同节点）`);
+          return;
+        }
+        query(elementId, item.displayContractNo, false, depth, direction);
+      } catch {
+        setSearchNotice('图谱定位失败，请稍后重试');
+      }
+    },
+    [query, depth, direction],
+  );
+
   // docId -> 文件名/业务类型 兜底解析：老图谱 Document 节点缺 sourceUri/docType 时，
   // 用文档列表补齐展示（画布节点卡/详情/边端点名共用，经 context 下发到节点卡）。
   const docMetaResolver = useMemo(() => buildDocMetaResolver(documents), [documents]);
@@ -59,6 +127,7 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
       setCenter({ id, label, fromDocument });
       setPinned(null);
       setHovered(null);
+      setSearchNotice(null);
       void loadSubgraph(id, d, dir);
     },
     [loadSubgraph],
@@ -139,6 +208,12 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
     <div className="flex h-full flex-col bg-surface">
       {/* 二级工具条（视图标题由 AppTopbar 承担） */}
       <div className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-white px-4">
+        <ContractSearchBar className="w-[300px]" onSelect={(it) => void handleSearchSelect(it)} />
+        {searchNotice && (
+          <span className="max-w-[260px] truncate rounded-md bg-warning/15 px-2 py-1 text-[11px] text-warning" title={searchNotice}>
+            {searchNotice}
+          </span>
+        )}
         {center && (
           <div className="flex min-w-0 items-center gap-2 rounded-md bg-surface px-2.5 py-1">
             <span className="shrink-0 text-[11px] text-ink-soft">当前中心</span>
@@ -201,21 +276,30 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
           </button>
 
           <div className="hidden items-center gap-2.5 border-l border-line pl-3 xl:flex">
-            {LEGEND_KINDS.map((kind) => (
-              <span key={kind} className="flex items-center gap-1 text-[11px] text-ink-soft">
-                {kind === 'Document' ? (
-                  // 文档=空心圆、实体=实心圆，与画布上纸片/色块的家族区分呼应
-                  <span
-                    className="h-2 w-2 rounded-full border-2 bg-white"
-                    style={{ borderColor: KIND_STYLES[kind].color }}
-                    aria-hidden
-                  />
-                ) : (
-                  <span className="h-2 w-2 rounded-full" style={{ background: KIND_STYLES[kind].color }} aria-hidden />
-                )}
-                {KIND_STYLES[kind].label}
-              </span>
-            ))}
+            {Object.values(BUSINESS_TYPES).map((bt) => {
+              const hidden = hiddenKinds.has(bt.label);
+              const count = labelCounts.find((x) => x.label === bt.label)?.count;
+              return (
+                <button
+                  key={bt.label}
+                  type="button"
+                  onClick={() => toggleKind(bt.label)}
+                  title={hidden ? `显示${bt.displayName}` : `隐藏${bt.displayName}`}
+                  className={clsx(
+                    'flex items-center gap-1 rounded px-1 text-[11px] transition-opacity',
+                    hidden ? 'text-ink-soft/50 opacity-50 line-through' : 'text-ink-soft hover:bg-surface',
+                  )}
+                >
+                  {bt.label === 'Document' ? (
+                    <span className="h-2 w-2 rounded-full border-2 bg-white" style={{ borderColor: bt.color }} aria-hidden />
+                  ) : (
+                    <span className="h-2 w-2 rounded-full" style={{ background: bt.color }} aria-hidden />
+                  )}
+                  {bt.displayName}
+                  {typeof count === 'number' && <span className="tabular-nums">({count})</span>}
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -289,10 +373,15 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
               key={`${center?.id ?? ''}-${depth}-${direction}`}
               subgraph={subgraph}
               centerElementId={center?.id ?? null}
+              hiddenKinds={hiddenKinds}
               onHover={setHovered}
-              onNodeSelect={(node: GraphNode) => setPinned({ type: 'node', node })}
+              onNodeSelect={(node: GraphNode) => {
+                setPinned({ type: 'node', node });
+                if (node.kind === 'Document') loadBindingCounts();
+              }}
               onEdgeSelect={(edge: GraphEdge) => setPinned({ type: 'edge', edge })}
               onPaneSelect={() => setPinned(null)}
+              onNodeDoubleClick={handleExpandNode}
             />
           )}
 
@@ -329,6 +418,9 @@ export function GraphView({ focus = null }: { focus?: GraphFocus | null }) {
             isCenter={isCenter}
             resolveName={resolveName}
             onExpand={handleExpandNode}
+            docBindingCounts={docBindingCounts}
+            onLoadBindingCounts={loadBindingCounts}
+            onOpenInBindings={onOpenInBindings}
           />
         </div>
       </div>
