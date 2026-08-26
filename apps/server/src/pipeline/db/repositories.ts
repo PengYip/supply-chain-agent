@@ -2084,8 +2084,12 @@ export async function searchContractLedger(
     params.push(like);
   }
   if (nq) {
+    const escNq = nq.replace(/[\\%_]/g, (m) => `\\${m}`);
     ors.push(`contract_no LIKE ? ESCAPE '\\'`);
-    params.push(`${nq.replace(/[\\%_]/g, (m) => `\\${m}`)}%`);
+    params.push(`${escNq}%`);
+    // 中段片段查询(JS 精排 0.9 分路径)也需 SQL 粗筛放行, 否则永远到不了精排。
+    ors.push(`contract_no LIKE ? ESCAPE '\\'`);
+    params.push(`%${escNq}%`);
   }
   const userWhere = uid ? '(user_id = ? OR user_id = \'\' OR user_id IS NULL) AND ' : '';
   const userParams = uid ? [uid] : [];

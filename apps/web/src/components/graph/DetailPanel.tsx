@@ -51,10 +51,12 @@ interface DocBindingCounts {
 function BindingStatusSection({
   docId,
   counts,
+  failed,
   onOpenInBindings,
 }: {
   docId: string;
   counts: DocBindingCounts | null;
+  failed: boolean;
   onOpenInBindings?: (docId: string) => void;
 }) {
   return (
@@ -65,6 +67,8 @@ function BindingStatusSection({
           {' · 待审 '}
           <span className="font-semibold tabular-nums text-warning">{counts.proposed}</span>
         </span>
+      ) : failed ? (
+        <span className="text-danger">绑定状态加载失败</span>
       ) : (
         <span>绑定状态加载中…</span>
       )}
@@ -87,6 +91,7 @@ interface DetailPanelProps {
   resolveName: (elementId: string) => string;
   onExpand: (node: GraphNode) => void;
   docBindingCounts?: Map<string, DocBindingCounts> | null;
+  bindingCountsFailed?: boolean;
   onLoadBindingCounts?: () => void;
   onOpenInBindings?: (docId: string) => void;
 }
@@ -97,6 +102,7 @@ export function DetailPanel({
   resolveName,
   onExpand,
   docBindingCounts,
+  bindingCountsFailed = false,
   onLoadBindingCounts,
   onOpenInBindings,
 }: DetailPanelProps) {
@@ -121,6 +127,7 @@ export function DetailPanel({
             isCenter={isCenter(inspect.node.elementId)}
             onExpand={onExpand}
             docBindingCounts={docBindingCounts}
+            bindingCountsFailed={bindingCountsFailed}
             onLoadBindingCounts={onLoadBindingCounts}
             onOpenInBindings={onOpenInBindings}
           />
@@ -137,6 +144,7 @@ function NodeDetail({
   isCenter,
   onExpand,
   docBindingCounts,
+  bindingCountsFailed,
   onLoadBindingCounts,
   onOpenInBindings,
 }: {
@@ -144,6 +152,7 @@ function NodeDetail({
   isCenter: boolean;
   onExpand: (node: GraphNode) => void;
   docBindingCounts?: Map<string, DocBindingCounts> | null;
+  bindingCountsFailed?: boolean;
   onLoadBindingCounts?: () => void;
   onOpenInBindings?: (docId: string) => void;
 }) {
@@ -182,6 +191,7 @@ function NodeDetail({
         <BindingStatusSection
           docId={docId}
           counts={docBindingCounts?.get(docId) ?? null}
+          failed={bindingCountsFailed ?? false}
           onOpenInBindings={onOpenInBindings}
         />
       )}

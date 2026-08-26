@@ -18,6 +18,10 @@ const searchSchema = z.object({
   limit: z.coerce.number().int().min(1).max(20).default(10),
 });
 
+function errDetail(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 /** GET /search?q=&limit= — 台账模糊搜索(编号/买方/卖方/标题), 分组字段 matchedField。 */
 contractsRoute.get('/search', async (c) => {
   const user = c.get('user')!;
@@ -29,6 +33,11 @@ contractsRoute.get('/search', async (c) => {
     );
   }
   const { q, limit } = parsed.data;
-  const items = await searchContractLedger(getDbContext(), q, user.id, limit);
-  return c.json({ items });
+  try {
+    const items = await searchContractLedger(getDbContext(), q, user.id, limit);
+    return c.json({ items });
+  } catch (e) {
+    console.error('[contracts] search failed:', errDetail(e));
+    return c.json({ error: 'search failed', detail: errDetail(e) }, 500);
+  }
 });

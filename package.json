@@ -13,7 +13,7 @@
     "build": "npm run build --workspace apps/web && npm run build --workspace apps/server",
     "lint": "oxlint",
     "preview": "npm run preview --workspace apps/web",
-    "test": "npm test --workspace apps/server"
+    "test": "npm test --workspace apps/server && npm test --workspace apps/web"
   },
   "devDependencies": {
     "concurrently": "^10.0.4",

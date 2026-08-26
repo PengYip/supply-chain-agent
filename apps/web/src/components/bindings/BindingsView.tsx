@@ -267,18 +267,28 @@ export function BindingsView({
   );
 
   // 外部定位（文件抽屉「未绑定」徽标跳转）：overview 尚在加载时先等待，加载
-  // 完成后按 docId 选中并载入候选；列表里找不到（已删除等）则静默放弃。
+  // 完成后按 docId 选中并载入候选；列表里找不到（已删除等）或加载失败时，
+  // 不消费 nonce（保留以便重试），并给出一次临时提示。
   // nonce ref 防重复消费——effect 因 overview/loading/handleSelectDoc 身份变化
   // 重跑时直接短路，不会重复选中。
   const handledDocFocusNonceRef = useRef(0);
+  const docFocusNotifiedRef = useRef(0);
   useEffect(() => {
     if (!docFocus || docFocus.nonce === handledDocFocusNonceRef.current) return;
     if (b.loading) return;
-    handledDocFocusNonceRef.current = docFocus.nonce;
     const doc = overview.find((d) => d.docId === docFocus.docId);
-    if (doc) handleSelectDoc(doc);
+    if (doc) {
+      handledDocFocusNonceRef.current = docFocus.nonce;
+      handleSelectDoc(doc);
+      return;
+    }
+    // overview 已加载但目标文档缺失, 或加载失败: 保留 nonce 以便重试, 仅提示一次。
+    if (docFocusNotifiedRef.current !== docFocus.nonce) {
+      docFocusNotifiedRef.current = docFocus.nonce;
+      pushToast('error', b.error ? `定位文档失败：${b.error}` : '未找到该文档（可能已删除或尚未同步），请刷新后重试');
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 见上注释
-  }, [docFocus, overview, b.loading]);
+  }, [docFocus, overview, b.loading, b.error]);
 
   const handleClearDoc = () => {
     setSelectedDocId(null);

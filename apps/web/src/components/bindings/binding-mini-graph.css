@@ -1,0 +1,37 @@
+/* 绑定迷你图谱画布：把 React Flow 默认视觉对齐到应用色板（token 见 index.css / tailwind.config.js）。
+   仅被 BindingMiniGraph 引用，作用域天然限定在该组件。类名沿用 sca-flow* 使 markup 无需改动。 */
+.sca-flow {
+  --xy-background-color: rgb(var(--c-surface));
+}
+
+.sca-flow .react-flow__node {
+  cursor: pointer;
+}
+
+/* 连线悬停/选中：加深为 primary 主色（#0F3A5C，与 tailwind primary 同值） */
+.sca-flow .react-flow__edge:hover .react-flow__edge-path,
+.sca-flow .react-flow__edge.selected .react-flow__edge-path {
+  stroke: #0f3a5c;
+  stroke-width: 2;
+}
+
+.sca-flow .react-flow__edge:hover .react-flow__edge-text {
+  fill: #0f3a5c;
+  font-weight: 500;
+}
+
+.sca-flow .react-flow__edge-text {
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sca-flow .react-flow__edge-textbg {
+  cursor: pointer;
+}
+
+.sca-flow .react-flow__attribution {
+  background: transparent;
+  color: rgb(var(--c-ink-soft));
+  opacity: 0.6;
+  font-size: 9px;
+}

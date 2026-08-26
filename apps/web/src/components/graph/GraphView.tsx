@@ -64,6 +64,8 @@ export function GraphView({
   // Inspector 薄互通: docId -> 绑定计数(懒加载一次 overview)。
   const [docBindingCounts, setDocBindingCounts] = useState<Map<string, { confirmed: number; proposed: number }> | null>(null);
   const bindingCountsLoadedRef = useRef(false);
+  // 绑定计数加载失败标记: 详情面板据此显示失败而非一直「加载中」。
+  const [bindingCountsFailed, setBindingCountsFailed] = useState(false);
 
   const toggleKind = useCallback((kind: string) => {
     setHiddenKinds((prev) => {
@@ -82,9 +84,18 @@ export function GraphView({
     if (bindingCountsLoadedRef.current) return;
     bindingCountsLoadedRef.current = true;
     void fetch('/api/bindings/overview', { credentials: 'include' })
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => {
+        if (!r.ok) {
+          // 失败: 重置 ref 允许后续重试, 并标记失败态(详情面板显示失败而非一直加载)。
+          bindingCountsLoadedRef.current = false;
+          setBindingCountsFailed(true);
+          return null;
+        }
+        return r.json();
+      })
       .then((data: { documents?: Array<{ docId: string; bindings: Array<{ status: string }> }> } | null) => {
         if (!data?.documents) return;
+        setBindingCountsFailed(false);
         const map = new Map<string, { confirmed: number; proposed: number }>();
         for (const d of data.documents) {
           map.set(d.docId, {
@@ -94,7 +105,7 @@ export function GraphView({
         }
         setDocBindingCounts(map);
       })
-      .catch(() => { bindingCountsLoadedRef.current = false; });
+      .catch(() => { bindingCountsLoadedRef.current = false; setBindingCountsFailed(true); });
   }, []);
 
   // docId -> 文件名/业务类型 兜底解析：老图谱 Document 节点缺 sourceUri/docType 时，
@@ -420,6 +431,7 @@ export function GraphView({
             resolveName={resolveName}
             onExpand={handleExpandNode}
             docBindingCounts={docBindingCounts}
+            bindingCountsFailed={bindingCountsFailed}
             onLoadBindingCounts={loadBindingCounts}
             onOpenInBindings={onOpenInBindings}
           />

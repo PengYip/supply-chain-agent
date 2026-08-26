@@ -388,6 +388,9 @@ export async function searchContractLedgerPg(
   if (nq) {
     params.push(`${nq}%`);
     ors.push(`contract_no ILIKE $${params.length}`);
+    // 中段片段查询(JS 精排 0.9 分路径)也需 SQL 粗筛放行, 否则永远到不了精排。
+    params.push(`%${nq}%`);
+    ors.push(`contract_no ILIKE $${params.length}`);
   }
   const where = uid
     ? `(user_id = $${params.length + 1} OR user_id = '' OR user_id IS NULL) AND (${ors.join(' OR ')})`
