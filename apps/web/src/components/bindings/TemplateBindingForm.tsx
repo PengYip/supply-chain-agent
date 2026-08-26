@@ -86,6 +86,8 @@ export function TemplateBindingForm({
     // 中文输入法组合期间不响应导航/选中。
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (!listOpen && (e.key === 'ArrowDown' || e.key === 'Enter')) {
+      // 触发按钮上 Enter 会继续触发原生 click(toggle), 必须 preventDefault 防双触发。
+      e.preventDefault();
       setListOpen(true);
       return;
     }
