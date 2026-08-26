@@ -8,17 +8,13 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  X,
 } from 'lucide-react';
 import type { Anchors, ContractOption, OverviewDoc } from '../../hooks/useBindings';
+import type { TemplateContext } from '../../api/templateContext';
 import type { WorkbenchRow } from './BindingsView';
-import { ContractSearchBar } from '../common/ContractSearchBar';
-
-/** 关系类型常用值(对应服务端 bindingRelationFor 映射), 支持自定义。
- *  「引用」用于把合同类型文件挂到合同实体上——绑定链条的第一步。 */
-const RELATION_PRESETS = ['引用', '货权转移', '付款', '质检', '凭证'];
-
-const inputCls =
-  'mt-1 h-8 w-full rounded-md border border-line bg-white px-2.5 text-[12px] text-ink focus:border-primary focus:outline-none';
+import { TemplateBindingForm } from './TemplateBindingForm';
+import { LegacyManualForm } from './LegacyManualForm';
 
 function RouteBadge({ route }: { route: 'auto_rule' | 'human' | 'none' }) {
   const cfg =
@@ -57,6 +53,11 @@ interface CandidatePanelProps {
   onBatchConfirm: (bindingIds: string[]) => void;
   onManualCreate: (p: { contractNo: string; relation: string; note?: string }) => Promise<boolean>;
   onRetryLoad: () => void;
+  /** 模板上下文(双下拉数据源): 仅最新文档的; 加载/失败降级由本组件按模式渲染。 */
+  templateContext: TemplateContext | null;
+  templateLoading: boolean;
+  templateError: { docId: string; message: string } | null;
+  onRetryTemplate: () => void;
 }
 
 export function CandidatePanel({
@@ -78,6 +79,10 @@ export function CandidatePanel({
   onBatchConfirm,
   onManualCreate,
   onRetryLoad,
+  templateContext,
+  templateLoading,
+  templateError,
+  onRetryTemplate,
 }: CandidatePanelProps) {
   // 批量多选：文档/候选变化时回到默认(仅 auto_rule 默认勾选)。
   const [checked, setChecked] = useState<Set<string>>(new Set());
@@ -89,11 +94,7 @@ export function CandidatePanel({
 
   // 手动创建绑定表单(收起态只保留入口按钮)。
   const [manualOpen, setManualOpen] = useState(false);
-  const [manualContract, setManualContract] = useState('');
-  const [manualRelation, setManualRelation] = useState('');
-  const [manualCustomRelation, setManualCustomRelation] = useState('');
-  const [manualNote, setManualNote] = useState('');
-  const [formError, setFormError] = useState<string | null>(null);
+  const [compatNoticeDismissed, setCompatNoticeDismissed] = useState(false);
   const manualPending = pending.has('manual');
 
   const confirmable = useMemo(
@@ -112,42 +113,6 @@ export function CandidatePanel({
       else next.add(id);
       return next;
     });
-  };
-
-  const resetManualForm = () => {
-    setManualContract('');
-    setManualRelation('');
-    setManualCustomRelation('');
-    setManualNote('');
-    setFormError(null);
-  };
-
-  const submitManual = async () => {
-    if (!doc) return;
-    const relation = manualRelation === '__custom' ? manualCustomRelation.trim() : manualRelation;
-    if (!manualContract) {
-      setFormError('请选择合同');
-      return;
-    }
-    if (!relation) {
-      setFormError('请选择或输入关系类型');
-      return;
-    }
-    // 业务顺序门禁(2026-08-25): 执行类单据只能绑定到已挂合同文件的合同。
-    if (doc && doc.docType !== '合同' && !establishedContracts.has(manualContract)) {
-      setFormError('该合同尚未绑定合同类型文件：请先将合同文件绑定到该合同（关系=引用），再绑定执行类单据');
-      return;
-    }
-    setFormError(null);
-    const ok = await onManualCreate({
-      contractNo: manualContract,
-      relation,
-      note: manualNote.trim() || undefined,
-    });
-    if (ok) {
-      resetManualForm();
-      setManualOpen(false);
-    }
   };
 
   const anchorsEmpty =
@@ -337,112 +302,60 @@ export function CandidatePanel({
               <div className="rounded-md bg-surface px-3 py-2 text-[12px] leading-5 text-ink-soft">
                 合同台账为空，请先上传合同类文档并完成抽取
               </div>
-            ) : (
+            ) : templateError && templateError.docId === doc?.docId ? (
               <>
-                <div>
-                  <label className="text-[11px] font-medium text-ink-soft">搜索合同</label>
-                  <ContractSearchBar
-                    placeholder="按合同编号 / 买方 / 卖方 / 标题搜索"
-                    idleItems={contracts.slice(0, 20).map((c) => ({
-                      contractNo: c.contractNo,
-                      displayContractNo: c.displayContractNo,
-                      title: c.title,
-                      buyer: null,
-                      seller: null,
-                      docType: c.docType,
-                      overallConfidence: c.overallConfidence,
-                      matchedField: 'contractNo' as const,
-                    }))}
-                    itemNote={(it) =>
-                      establishedContracts.has(it.contractNo)
-                        ? '已挂合同文件'
-                        : isExecutionDoc
-                          ? '未挂合同文件（不可选）'
-                          : '未挂合同文件'
-                    }
-                    onSelect={(it) => {
-                      if (isExecutionDoc && !establishedContracts.has(it.contractNo)) {
-                        setFormError('执行类单据只能绑定「已挂合同文件」的合同；请先把合同类型文件绑定到该合同（关系选「引用」）');
-                        return;
-                      }
-                      setFormError(null);
-                      setManualContract(it.contractNo);
-                    }}
-                  />
-                  {manualContract && (
-                    <div className="mt-1 flex items-center gap-1 text-[11px] text-ink-soft">
-                      <span className="truncate">
-                        已选 {contracts.find((c) => c.contractNo === manualContract)?.displayContractNo ?? manualContract}
-                      </span>
-                      <button type="button" onClick={() => setManualContract('')} className="text-danger hover:underline">
-                        清除
-                      </button>
-                    </div>
-                  )}
-                  {isExecutionDoc && (
-                    <div className="mt-1 text-[11px] leading-4 text-ink-soft">
-                      执行类单据只能绑定到「已挂合同文件」的合同；请先把合同类型文件绑定到该合同（关系选「引用」）
-                    </div>
-                  )}
-                </div>
-                <div>
-                  <label className="text-[11px] font-medium text-ink-soft">关系类型</label>
-                  <select
-                    value={manualRelation}
-                    onChange={(e) => setManualRelation(e.target.value)}
-                    className={inputCls}
-                  >
-                    <option value="">请选择关系</option>
-                    {RELATION_PRESETS.map((r) => (
-                      <option key={r} value={r}>
-                        {r}
-                      </option>
-                    ))}
-                    <option value="__custom">自定义</option>
-                  </select>
-                  {manualRelation === '__custom' && (
-                    <input
-                      type="text"
-                      value={manualCustomRelation}
-                      onChange={(e) => setManualCustomRelation(e.target.value)}
-                      placeholder="输入自定义关系类型"
-                      className={inputCls}
-                    />
-                  )}
-                </div>
-                <div>
-                  <label className="text-[11px] font-medium text-ink-soft">备注（选填）</label>
-                  <input
-                    type="text"
-                    value={manualNote}
-                    onChange={(e) => setManualNote(e.target.value)}
-                    placeholder="补充说明，便于后续审计"
-                    className={inputCls}
-                  />
-                </div>
-                {formError && <div className="text-[12px] text-danger">{formError}</div>}
-                <div className="flex items-center justify-end gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setManualOpen(false);
-                      setFormError(null);
-                    }}
-                    className="h-7 rounded-md border border-line bg-white px-3 text-[12px] text-ink-soft hover:bg-surface"
-                  >
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void submitManual()}
-                    disabled={manualPending}
-                    className="flex h-7 items-center gap-1 rounded-md bg-primary px-3 text-[12px] font-medium text-white transition-colors hover:bg-primary-800 disabled:opacity-50"
-                  >
-                    {manualPending && <Loader2 className="h-3 w-3 animate-spin" aria-hidden />}
-                    创建绑定
-                  </button>
-                </div>
+                {!compatNoticeDismissed && (
+                  <div className="flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-ink">
+                    <span className="min-w-0 flex-1">模板上下文加载失败，已切换到兼容模式</span>
+                    <button
+                      type="button"
+                      onClick={onRetryTemplate}
+                      className="shrink-0 text-primary hover:underline"
+                    >
+                      重试
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCompatNoticeDismissed(true)}
+                      aria-label="关闭通知"
+                      className="shrink-0 text-ink-soft hover:text-ink"
+                    >
+                      <X className="h-3.5 w-3.5" aria-hidden />
+                    </button>
+                  </div>
+                )}
+                <LegacyManualForm
+                  contracts={contracts}
+                  establishedContracts={establishedContracts}
+                  isExecutionDoc={isExecutionDoc}
+                  pending={manualPending}
+                  onManualCreate={onManualCreate}
+                  onCancel={() => setManualOpen(false)}
+                />
               </>
+            ) : templateLoading ? (
+              <div className="space-y-2">
+                {[0, 1, 2].map((i) => (
+                  <div key={i} className="h-8 animate-pulse rounded-md bg-surface" />
+                ))}
+                <div className="pt-1 text-center text-[12px] text-ink-soft">模板上下文加载中</div>
+              </div>
+            ) : templateContext && doc && templateContext.documentId === doc.docId ? (
+              <TemplateBindingForm
+                doc={doc}
+                context={templateContext}
+                establishedContracts={establishedContracts}
+                pending={manualPending}
+                onSubmit={onManualCreate}
+                onCancel={() => setManualOpen(false)}
+              />
+            ) : (
+              <div className="space-y-2">
+                {[0, 1, 2].map((i) => (
+                  <div key={i} className="h-8 animate-pulse rounded-md bg-surface" />
+                ))}
+                <div className="pt-1 text-center text-[12px] text-ink-soft">模板上下文加载中</div>
+              </div>
             )}
           </div>
         )}

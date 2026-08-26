@@ -254,6 +254,7 @@ export function BindingsView({
     setFocusedKey(null);
     setBatchErrors({});
     void b.loadCandidates(doc.docId);
+    void b.loadTemplateContext(doc.docId);
   };
 
   // 搜索选中合同 -> 设置过滤并自动定位首个绑定该合同的文档(handleSelectDoc 为普通函数, 直接引用)。
@@ -731,6 +732,10 @@ export function BindingsView({
           onBatchConfirm={requestBatchConfirm}
           onManualCreate={handleManualCreate}
           onRetryLoad={() => selectedDocId && void b.loadCandidates(selectedDocId)}
+          templateContext={b.templateContext}
+          templateLoading={b.templateContextLoading}
+          templateError={b.templateContextError}
+          onRetryTemplate={() => selectedDocId && void b.loadTemplateContext(selectedDocId)}
         />
 
         <PanelRail
