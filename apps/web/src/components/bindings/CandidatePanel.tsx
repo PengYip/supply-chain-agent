@@ -298,11 +298,7 @@ export function CandidatePanel({
         </button>
         {manualOpen && (
           <div className="animate-fade-in space-y-3 border-t border-line/60 px-4 pb-4 pt-3">
-            {contracts.length === 0 ? (
-              <div className="rounded-md bg-surface px-3 py-2 text-[12px] leading-5 text-ink-soft">
-                合同台账为空，请先上传合同类文档并完成抽取
-              </div>
-            ) : templateError && templateError.docId === doc?.docId ? (
+            {templateError && templateError.docId === doc?.docId ? (
               <>
                 {!compatNoticeDismissed && (
                   <div className="flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-ink">
@@ -324,14 +320,21 @@ export function CandidatePanel({
                     </button>
                   </div>
                 )}
-                <LegacyManualForm
-                  contracts={contracts}
-                  establishedContracts={establishedContracts}
-                  isExecutionDoc={isExecutionDoc}
-                  pending={manualPending}
-                  onManualCreate={onManualCreate}
-                  onCancel={() => setManualOpen(false)}
-                />
+                {/* Legacy 降级路径: 旧表单只能绑合同, 台账空仍应提示 */}
+                {contracts.length === 0 ? (
+                  <div className="rounded-md bg-surface px-3 py-2 text-[12px] leading-5 text-ink-soft">
+                    合同台账为空，请先上传合同类文档并完成抽取
+                  </div>
+                ) : (
+                  <LegacyManualForm
+                    contracts={contracts}
+                    establishedContracts={establishedContracts}
+                    isExecutionDoc={isExecutionDoc}
+                    pending={manualPending}
+                    onManualCreate={onManualCreate}
+                    onCancel={() => setManualOpen(false)}
+                  />
+                )}
               </>
             ) : templateLoading ? (
               <div className="space-y-2">
@@ -341,14 +344,30 @@ export function CandidatePanel({
                 <div className="pt-1 text-center text-[12px] text-ink-soft">模板上下文加载中</div>
               </div>
             ) : templateContext && doc && templateContext.documentId === doc.docId ? (
-              <TemplateBindingForm
-                doc={doc}
-                context={templateContext}
-                establishedContracts={establishedContracts}
-                pending={manualPending}
-                onSubmit={onManualCreate}
-                onCancel={() => setManualOpen(false)}
-              />
+              /* Project 分支(立项书)只消费 context.projects, 绕过合同台账门禁 */
+              templateContext.bindsTargetKind === 'Project' ? (
+                <TemplateBindingForm
+                  doc={doc}
+                  context={templateContext}
+                  establishedContracts={establishedContracts}
+                  pending={manualPending}
+                  onSubmit={onManualCreate}
+                  onCancel={() => setManualOpen(false)}
+                />
+              ) : contracts.length === 0 ? (
+                <div className="rounded-md bg-surface px-3 py-2 text-[12px] leading-5 text-ink-soft">
+                  合同台账为空，请先上传合同类文档并完成抽取
+                </div>
+              ) : (
+                <TemplateBindingForm
+                  doc={doc}
+                  context={templateContext}
+                  establishedContracts={establishedContracts}
+                  pending={manualPending}
+                  onSubmit={onManualCreate}
+                  onCancel={() => setManualOpen(false)}
+                />
+              )
             ) : (
               <div className="space-y-2">
                 {[0, 1, 2].map((i) => (
