@@ -82,7 +82,7 @@ export function TemplateBindingForm({
     setListOpen(false);
   };
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const onKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
     // 中文输入法组合期间不响应导航/选中。
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (!listOpen && (e.key === 'ArrowDown' || e.key === 'Enter')) {
@@ -113,6 +113,18 @@ export function TemplateBindingForm({
     setFilterText('');
     setListOpen(false);
   };
+
+  // 切文档时重置全部选择态(QA #8: 不残留旧文档的项目/合同/方向)。
+  useEffect(() => {
+    setProjectCode('');
+    setSelectedProjectKey('');
+    setSelectedContract('');
+    setChosenWord('');
+    setNote('');
+    setFormError(null);
+    setFilterText('');
+    setListOpen(false);
+  }, [context.documentId]);
 
   const submit = async () => {
     if (isProjectTarget) {
@@ -233,6 +245,7 @@ export function TemplateBindingForm({
               <button
                 type="button"
                 onClick={() => setListOpen((v) => !v)}
+                onKeyDown={onKeyDown}
                 className={clsx(inputCls, 'text-left')}
               >
                 {selectedContract || '请选择合同'}
