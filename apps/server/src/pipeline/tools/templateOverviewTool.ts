@@ -22,7 +22,14 @@ export function buildTemplateOverviewTool(deps: TemplateOverviewToolDeps) {
       docType: z.string().optional().describe('单据类型名(如 收货单/发票); 缺省返回全层级'),
     }),
     execute: async ({ docType }) => {
-      const [types, rules] = await Promise.all([listTemplateTypes(deps.ctx), listActiveEdgeRules(deps.ctx)]);
+      let types: Awaited<ReturnType<typeof listTemplateTypes>>;
+      let rules: Awaited<ReturnType<typeof listActiveEdgeRules>>;
+      try {
+        [types, rules] = await Promise.all([listTemplateTypes(deps.ctx), listActiveEdgeRules(deps.ctx)]);
+      } catch (e) {
+        // 模板表读取失败返回可读错误而非抛异常(工具读取失败不阻塞主流程)。
+        return { status: 'error' as const, error: `模板数据读取失败: ${e instanceof Error ? e.message : String(e)}` };
+      }
       const byId = new Map(types.map((t) => [t.id, t]));
       const nameOf = (id: string) => byId.get(id)?.name ?? null;
       const docTypes = types.filter((t) => t.kind === 'doc_type');
