@@ -304,6 +304,7 @@ async function confirmOne(db: DbContext, userId: string, bindingId: string) {
     docId: row.documentId, contractNo: row.contractNo, relation: row.relation,
     bindingId: row.id, confidence: row.confidence,
     templateVersion: gate.templateVersion ?? undefined,
+    dstKind: row.targetKind,
   });
   const gs = await graphStatusFor(sync.outcome, sync.reason);
   await setBindingGraphStatus(db, bindingId, gs, userId);
@@ -373,7 +374,8 @@ bindingsRoute.post('/', async (c) => {
     const typeRow = templateTypes.find((t) => t.kind === 'doc_type' && t.name === srcMeta.docType);
     if (typeRow?.props.bindsTargetKind === 'Project') targetKind = 'Project';
   }
-  if (srcMeta && srcMeta.docType !== '合同') {
+  // Project 目标(立项书 binds->Project)豁免合同锚点门禁: contractNo 实为项目码。
+  if (srcMeta && srcMeta.docType !== '合同' && targetKind !== 'Project') {
     const established = await hasContractDocBinding(db, contractNo, user.id);
     if (!established) {
       return c.json(
@@ -435,7 +437,7 @@ bindingsRoute.post('/unbind', async (c) => {
     .filter((b) => b.documentId === row.documentId && b.id !== row.id && b.status === 'confirmed');
   let graphSync: GraphSyncOutcome = 'ok';
   if (siblings.length === 0) {
-    const sync = await removeBindingEdge({ docId: row.documentId, contractNo: row.contractNo });
+    const sync = await removeBindingEdge({ docId: row.documentId, contractNo: row.contractNo, dstKind: row.targetKind });
     graphSync = sync.outcome;
     // settles 边同款守卫下删除(失败仅告警, 不影响解绑结果)。
     try {

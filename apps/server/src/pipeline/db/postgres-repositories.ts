@@ -188,7 +188,7 @@ export async function listBindingsForContractPg(
 ): Promise<BindingRow[]> {
   const res = await ctx.pool.query(
     `SELECT id, document_id, contract_no, relation, source_refs, confidence, created_by,
-            status, confirmation_source, proposed_by, evidence, graph_status
+            status, confirmation_source, proposed_by, evidence, graph_status, target_kind
      FROM bindings WHERE contract_no = $1`,
     [contractNo],
   );
@@ -207,7 +207,7 @@ export async function findBindingByDocAndContractPg(
   const res = uid
     ? await ctx.pool.query(
         `SELECT id, document_id, contract_no, relation, source_refs, confidence, created_by,
-                status, confirmation_source, proposed_by, evidence, graph_status
+                status, confirmation_source, proposed_by, evidence, graph_status, target_kind
          FROM bindings
          WHERE document_id = $1 AND contract_no = $2
            AND (user_id = $3 OR user_id = '' OR user_id IS NULL)
@@ -216,7 +216,7 @@ export async function findBindingByDocAndContractPg(
       )
     : await ctx.pool.query(
         `SELECT id, document_id, contract_no, relation, source_refs, confidence, created_by,
-                status, confirmation_source, proposed_by, evidence, graph_status
+                status, confirmation_source, proposed_by, evidence, graph_status, target_kind
          FROM bindings
          WHERE document_id = $1 AND contract_no = $2
          ORDER BY created_at DESC LIMIT 1`,
@@ -235,7 +235,7 @@ export async function listBindingProposalsPg(
   const res = uid
     ? await ctx.pool.query(
         `SELECT b.id, b.document_id, b.contract_no, b.relation, b.source_refs, b.confidence,
-                b.created_by, b.status, b.confirmation_source, b.proposed_by, b.evidence, b.graph_status,
+                b.created_by, b.status, b.confirmation_source, b.proposed_by, b.evidence, b.graph_status, b.target_kind,
                 d.doc_type AS "docType", d.source_uri AS "sourceUri"
          FROM bindings AS b
          JOIN documents AS d ON d.id = b.document_id
@@ -245,7 +245,7 @@ export async function listBindingProposalsPg(
       )
     : await ctx.pool.query(
         `SELECT b.id, b.document_id, b.contract_no, b.relation, b.source_refs, b.confidence,
-                b.created_by, b.status, b.confirmation_source, b.proposed_by, b.evidence, b.graph_status,
+                b.created_by, b.status, b.confirmation_source, b.proposed_by, b.evidence, b.graph_status, b.target_kind,
                 d.doc_type AS "docType", d.source_uri AS "sourceUri"
          FROM bindings AS b
          JOIN documents AS d ON d.id = b.document_id

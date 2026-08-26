@@ -77,17 +77,20 @@ export async function syncBindingEdge(
 }
 
 export async function removeBindingEdge(
-  input: { docId: string; contractNo: string },
+  input: { docId: string; contractNo: string; dstKind?: 'Contract' | 'Project' },
   io: BindingGraphSyncIo = defaultBindingGraphSyncIo,
 ): Promise<BindingGraphSyncResult> {
   if (!process.env.NEO4J_PASSWORD) return { outcome: 'skipped', reason: 'NEO4J_PASSWORD not set' };
   try {
-    const contractName = normalizeName(input.contractNo);
-    if (!contractName) return { outcome: 'failed', reason: 'contractNo normalized to empty' };
+    const dstKind = input.dstKind ?? 'Contract';
+    const dstName = dstKind === 'Project'
+      ? normalizeProjectCode(input.contractNo)
+      : normalizeName(input.contractNo);
+    if (!dstName) return { outcome: 'failed', reason: 'dst key normalized to empty' };
     const docNode = await io.findEntityByName('Document', input.docId);
-    const contractNode = await io.findEntityByName('Contract', contractName);
-    if (!docNode || !contractNode) return { outcome: 'ok', reason: 'nodes missing (nothing to remove)' };
-    await io.removeEdge({ srcId: docNode.elementId, kind: BINDS_EDGE, dstId: contractNode.elementId });
+    const dstNode = await io.findEntityByName(dstKind, dstName);
+    if (!docNode || !dstNode) return { outcome: 'ok', reason: 'nodes missing (nothing to remove)' };
+    await io.removeEdge({ srcId: docNode.elementId, kind: BINDS_EDGE, dstId: dstNode.elementId });
     return { outcome: 'ok' };
   } catch (e) {
     return { outcome: 'failed', reason: e instanceof Error ? e.message : String(e) };
