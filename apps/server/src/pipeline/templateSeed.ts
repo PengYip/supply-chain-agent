@@ -64,10 +64,10 @@ const EDGE_RULE_SEED: Array<{
   { id: 'er-exec-zhuangxiang', src: '装箱单', edge: 'executes', vocab: [], active: false },
   // ---- v2 类型划分(spec 2026-08-26 §3.1): 登记+激活节奏见 spec Phase 2, 全部 active:false ----
   // 方向编码类型(spec v2): settles 方向由类型自带, 与 flowType×direction 派生交叉验证
-  { id: 'er-settle-shouhuo', src: '收货单', edge: 'settles', vocab: ['收货'], active: false },
-  { id: 'er-settle-fahuodan', src: '发货单', edge: 'settles', vocab: ['发货'], active: false },
-  { id: 'er-settle-jinxiang', src: '进项票', edge: 'settles', vocab: ['收票'], active: false },
-  { id: 'er-settle-xiaoxiang', src: '销项票', edge: 'settles', vocab: ['开票'], active: false },
+  { id: 'er-settle-shouhuo', src: '收货单', edge: 'settles', vocab: ['收货'] },
+  { id: 'er-settle-fahuodan', src: '发货单', edge: 'settles', vocab: ['发货'] },
+  { id: 'er-settle-jinxiang', src: '进项票', edge: 'settles', vocab: ['收票'] },
+  { id: 'er-settle-xiaoxiang', src: '销项票', edge: 'settles', vocab: ['开票'] },
   // 付款单(申请单, 付款前): 登记不启用——不物化资金流(它不是支付证据)
   { id: 'er-bind-fukuandan', src: '付款单', edge: 'binds', vocab: ['付款申请'], active: false },
   // 结算单: 合同级结算凭证

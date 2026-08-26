@@ -10,14 +10,14 @@ import {
   findBindingById, updateBindingStatus, saveBinding, findBindingByDocAndContract,
   listBindingsForContract, setBindingGraphStatus, getDocumentMeta, type BindingGraphStatus,
   listExecutionFlows, summarizeExecutionFlows, getDocumentSourcesByIds, hasContractDocBinding,
-  findContractLedgerByNo, listTemplateTypes,
+  findContractLedgerByNo, listTemplateTypes, listActiveEdgeRules,
 } from '../pipeline/db/repositories.js';
 import { buildBindingCandidates } from '../pipeline/bindingCandidates.js';
 import { syncBindingEdge, removeBindingEdge, type GraphSyncOutcome } from '../pipeline/bindingGraphSync.js';
 import { syncSettlesEdge, removeSettlesEdge } from '../pipeline/settlesGraphSync.js';
 import { settlesRelationFor } from '../domain/tradeSemantics.js';
 import { materializeExecutionFlow, retractExecutionFlow, getEffectiveSelfPartyNames } from '../pipeline/executionFlow.js';
-import { validateEdge } from '../pipeline/templateGuard.js';
+import { validateEdge, ancestorChain, matchEdgeRule } from '../pipeline/templateGuard.js';
 import { parseFileKey } from './files.js';
 
 export const bindingsRoute = new Hono<AuthEnv>();
@@ -189,6 +189,30 @@ async function syncSettlesEdgeWithMeta(
   });
 }
 
+/** 方向编码类型: 类型自带 settles 方向(单方向词表), 确认后直接落 settles 边。 */
+async function syncSettlesByType(
+  db: DbContext, userId: string,
+  input: { documentId: string; contractNo: string; confidence: number },
+): Promise<void> {
+  let meta: Awaited<ReturnType<typeof getDocumentMeta>> = null;
+  try { meta = await getDocumentMeta(db, input.documentId, userId); } catch { return; }
+  if (!meta?.docType) return;
+  const [types, rules] = await Promise.all([listTemplateTypes(db), listActiveEdgeRules(db)]);
+  const byId = new Map(types.map((t) => [t.id, t]));
+  const chain = ancestorChain(byId.get(`dt-${meta.docType}`)?.id ?? null, byId);
+  const rule = matchEdgeRule({ rules, sourceChain: chain, targetChain: [''], edgeType: 'settles' });
+  if (!rule || rule.allowedVocab.length !== 1) return; // 仅单方向类型走此路径
+  const relation = rule.allowedVocab[0]!; // length===1 保证非空
+  const direction = (relation === '收款' || relation === '收货' || relation === '收票') ? 'in' : 'out';
+  const sync = await syncSettlesEdgeWithMeta(db, userId, {
+    docId: input.documentId, contractNo: input.contractNo, relation,
+    direction: direction as 'in' | 'out', confidence: input.confidence,
+  });
+  if (sync.outcome === 'failed') {
+    console.warn('[settlesGraphSync] settles 边同步失败:', sync.reason);
+  }
+}
+
 /**
  * 执行流水物化成功后的 settles 边同步(spec 方案A §3.3): 六向 relation 由
  * (flowType, direction)确定性派生; 白名单外/方向未判出(返回 null 或 relation
@@ -202,6 +226,20 @@ async function syncSettlesAfterFlow(
 ) {
   const relation = settlesRelationFor(settled.flowType, settled.direction);
   if (!relation) return;
+  // 交叉验证(spec v2): 类型自带 settles 方向 × flowType×direction 派生。
+  // 派生 relation 不在该 docType 激活 settles 词表内 -> 类型方向与派生矛盾, 跳过。
+  let meta: Awaited<ReturnType<typeof getDocumentMeta>> = null;
+  try { meta = await getDocumentMeta(db, input.documentId, userId); } catch { /* 缺 meta 放行 */ }
+  if (meta?.docType) {
+    const [types, rules] = await Promise.all([listTemplateTypes(db), listActiveEdgeRules(db)]);
+    const byId = new Map(types.map((t) => [t.id, t]));
+    const chain = ancestorChain(byId.get(`dt-${meta.docType}`)?.id ?? null, byId);
+    const rule = matchEdgeRule({ rules, sourceChain: chain, targetChain: [''], edgeType: 'settles' });
+    if (rule && rule.allowedVocab.length > 0 && !rule.allowedVocab.includes(relation)) {
+      console.warn(`[templateGuard] settles 交叉验证不通过(跳过): doc=${input.documentId} relation=${relation} 不在 ${meta.docType} 词表 ${rule.allowedVocab.join('/')}`);
+      return;
+    }
+  }
   const sync = await syncSettlesEdgeWithMeta(db, userId, {
     docId: input.documentId, contractNo: input.contractNo, relation,
     direction: settled.direction as 'in' | 'out', amount: settled.amount,
@@ -259,6 +297,9 @@ async function confirmOne(db: DbContext, userId: string, bindingId: string) {
   } catch (e) {
     console.warn('[executionFlow] 确认绑定物化执行流水失败:', (e as Error).message);
   }
+  // 方向编码类型(白名单外, 无流水物化): 类型自带 settles 方向, 直接落 settles 边。
+  await syncSettlesByType(db, userId,
+    { documentId: row.documentId, contractNo: row.contractNo, confidence: row.confidence });
   const sync = await syncBindingEdgeWithMeta(db, userId, {
     docId: row.documentId, contractNo: row.contractNo, relation: row.relation,
     bindingId: row.id, confidence: row.confidence,
@@ -354,6 +395,8 @@ bindingsRoute.post('/', async (c) => {
   } catch (e) {
     console.warn('[executionFlow] 手动创建绑定物化执行流水失败:', (e as Error).message);
   }
+  // 方向编码类型(白名单外, 无流水物化): 类型自带 settles 方向, 直接落 settles 边。
+  await syncSettlesByType(db, user.id, { documentId, contractNo, confidence: 1 });
   const sync = await syncBindingEdgeWithMeta(db, user.id, { docId: documentId, contractNo, relation, bindingId, confidence: 1, templateVersion: gate.templateVersion ?? undefined });
   const gs = await graphStatusFor(sync.outcome, sync.reason);
   await setBindingGraphStatus(db, bindingId, gs, user.id);
