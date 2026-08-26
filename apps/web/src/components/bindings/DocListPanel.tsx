@@ -2,7 +2,7 @@ import clsx from 'clsx';
 import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, FileStack, RefreshCw } from 'lucide-react';
 import type { OverviewDoc } from '../../hooks/useBindings';
-import { prettyDocName } from '../graph/kinds';
+import { prettyDocName } from '../graph/businessTypes';
 
 function formatDate(iso: string): string {
   if (!iso) return '';

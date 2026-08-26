@@ -13,7 +13,9 @@ import {
   type ProposalItem,
 } from '../../hooks/useBindings';
 import { formatFlowSkipLines } from '../../lib/flowSkip';
-import { prettyDocName } from '../graph/kinds';
+import type { ContractSearchItem } from '../../api/contractSearch';
+import { ContractSearchBar } from '../common/ContractSearchBar';
+import { prettyDocName } from '../graph/businessTypes';
 import type { GraphFocusTarget } from '../graph/focus';
 import { PanelRail } from '../shell/PanelRail';
 import { DocListPanel } from './DocListPanel';
@@ -66,7 +68,21 @@ const DOC_TYPE_ERROR_TEXT: Record<string, string> = {
   document_not_found: '文档不存在或已删除',
 };
 
-export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: GraphFocusTarget) => void }) {
+/** 外部定位请求（App 分配）：文件抽屉「未绑定」徽标跳转时按 docId 选中。
+ *  nonce 变化即视为一次新请求（同一文件重复点击也重新选中）。 */
+export interface DocFocus {
+  docId: string;
+  nonce: number;
+}
+
+export function BindingsView({
+  onOpenInGraph,
+  docFocus,
+}: {
+  onOpenInGraph?: (target: GraphFocusTarget) => void;
+  /** 外部定位深链（图谱 Inspector「去审核」与文件抽屉徽标共用，App 统一注入）。 */
+  docFocus?: DocFocus | null;
+}) {
   const b = useBindings();
   const { overview, proposals, candidates, contracts } = b;
 
@@ -75,6 +91,12 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
   const [docsCollapsed, setDocsCollapsed] = useState(false);
   const [detailCollapsed, setDetailCollapsed] = useState(false);
+
+  const [contractFilter, setContractFilter] = useState<ContractSearchItem | null>(null);
+  const filteredOverview = useMemo(() => {
+    if (!contractFilter) return overview;
+    return overview.filter((d) => d.bindings.some((b) => b.contractNo === contractFilter.contractNo));
+  }, [overview, contractFilter]);
 
   const [confirmReq, setConfirmReq] = useState<ConfirmRequest | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
@@ -233,6 +255,30 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
     setBatchErrors({});
     void b.loadCandidates(doc.docId);
   };
+
+  // 搜索选中合同 -> 设置过滤并自动定位首个绑定该合同的文档(handleSelectDoc 为普通函数, 直接引用)。
+  const handleContractSelect = useCallback(
+    (item: ContractSearchItem) => {
+      setContractFilter(item);
+      const first = overview.find((d) => d.bindings.some((b) => b.contractNo === item.contractNo));
+      if (first) handleSelectDoc(first);
+    },
+    [overview],
+  );
+
+  // 外部定位（文件抽屉「未绑定」徽标跳转）：overview 尚在加载时先等待，加载
+  // 完成后按 docId 选中并载入候选；列表里找不到（已删除等）则静默放弃。
+  // nonce ref 防重复消费——effect 因 overview/loading/handleSelectDoc 身份变化
+  // 重跑时直接短路，不会重复选中。
+  const handledDocFocusNonceRef = useRef(0);
+  useEffect(() => {
+    if (!docFocus || docFocus.nonce === handledDocFocusNonceRef.current) return;
+    if (b.loading) return;
+    handledDocFocusNonceRef.current = docFocus.nonce;
+    const doc = overview.find((d) => d.docId === docFocus.docId);
+    if (doc) handleSelectDoc(doc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 见上注释
+  }, [docFocus, overview, b.loading]);
 
   const handleClearDoc = () => {
     setSelectedDocId(null);
@@ -569,6 +615,20 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
     <div className="flex h-full flex-col bg-surface">
       {/* 二级工具条（视图标题由 AppTopbar 承担） */}
       <div className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-white px-4">
+        <ContractSearchBar className="w-[300px]" onSelect={handleContractSelect} />
+        {contractFilter && (
+          <span className="flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-[11px] text-primary-500">
+            <span className="max-w-[160px] truncate">合同 {contractFilter.displayContractNo}</span>
+            <button
+              type="button"
+              aria-label="清除合同过滤"
+              onClick={() => setContractFilter(null)}
+              className="text-primary-500 hover:text-danger"
+            >
+              <X className="h-3 w-3" aria-hidden />
+            </button>
+          </span>
+        )}
         {selected && (
           <div className="flex min-w-0 items-center gap-2 rounded-md bg-surface px-2.5 py-1">
             <span className="shrink-0 text-[11px] text-ink-soft">当前文档</span>
@@ -614,19 +674,26 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
       <div className="flex min-h-0 flex-1">
         <div
           className={clsx(
-            'flex min-h-0 shrink-0 overflow-hidden transition-[width] duration-200',
+            'flex min-h-0 shrink-0 flex-col overflow-hidden transition-[width] duration-200',
             docsCollapsed ? 'w-0' : 'w-80',
           )}
         >
-          <DocListPanel
-            docs={overview}
-            docTypes={b.docTypes}
-            loading={b.loading}
-            error={b.error}
-            selectedDocId={selectedDocId}
-            onSelect={handleSelectDoc}
-            onRetry={() => void b.refreshOverview()}
-          />
+          {contractFilter && filteredOverview.length === 0 && (
+            <div className="shrink-0 border-b border-line bg-surface px-3 py-1.5 text-[11px] text-ink-soft">
+              无绑定该合同的文档
+            </div>
+          )}
+          <div className="flex min-h-0 flex-1">
+            <DocListPanel
+              docs={filteredOverview}
+              docTypes={b.docTypes}
+              loading={b.loading}
+              error={b.error}
+              selectedDocId={selectedDocId}
+              onSelect={handleSelectDoc}
+              onRetry={() => void b.refreshOverview()}
+            />
+          </div>
         </div>
         <PanelRail
           collapsed={docsCollapsed}

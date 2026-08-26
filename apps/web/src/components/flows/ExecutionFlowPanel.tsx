@@ -13,7 +13,7 @@ import {
   type ExecutionFlowsResponse,
   type FlowSummary,
 } from '../../api/flows';
-import { prettyDocName } from '../graph/kinds';
+import { prettyDocName } from '../graph/businessTypes';
 import type { FileEntry } from '../../hooks/useFiles';
 
 export interface ExecutionFlowPanelProps {

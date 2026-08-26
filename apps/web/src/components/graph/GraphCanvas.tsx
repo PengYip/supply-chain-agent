@@ -1,215 +1,206 @@
-import { useState } from 'react';
-import {
-  ReactFlow,
-  Background,
-  BackgroundVariant,
-  Controls,
-  MiniMap,
-  MarkerType,
-  useNodesState,
-  type Edge,
-  type NodeMouseHandler,
-  type NodeTypes,
-} from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
-import './graph-canvas.css';
-import { GraphFlowNode, type ScaFlowNode } from './GraphFlowNode';
-import { edgeLabel, kindStyle, EDGE_STYLE_OVERRIDES } from './kinds';
+// G6 v5 画布(spec 2026-08-26 §4.4): 命令式生命周期 + 稳定 props 契约。
+// GraphView 以 key={center-depth-direction} 重挂载本组件, 内部不做增量 diff,
+// 只在 hiddenKinds 变化时 setData 重绘。@xyflow/react 退役(本期仅 BindingMiniGraph 仍用)。
+import { useEffect, useMemo, useRef } from 'react';
+import { Graph as G6Graph, type EdgeData, type IElementEvent, type NodeData } from '@antv/g6';
 import type { GraphEdge, GraphNode, InspectTarget, Subgraph } from '../../hooks/useGraph';
-
-/* ---------- 径向布局：中心在原点，其余按 BFS 深度分层成环 ---------- */
-
-interface Point {
-  x: number;
-  y: number;
-}
-
-const GOLDEN_ANGLE = 2.39996; // 相邻环错开黄金角，避免径向对齐呆板
-const EDGE_STROKE = '#9DB0C3';
-
-/** 从中心节点出发做无向 BFS，得到每个节点的环深度。 */
-function bfsDepths(subjectId: string, edges: GraphEdge[]): Map<string, number> {
-  const adj = new Map<string, string[]>();
-  for (const e of edges) {
-    if (!e.srcId || !e.dstId) continue;
-    let list = adj.get(e.srcId);
-    if (!list) adj.set(e.srcId, (list = []));
-    list.push(e.dstId);
-    let rlist = adj.get(e.dstId);
-    if (!rlist) adj.set(e.dstId, (rlist = []));
-    rlist.push(e.srcId);
-  }
-  const depths = new Map<string, number>();
-  depths.set(subjectId, 0);
-  const queue: string[] = [subjectId];
-  while (queue.length > 0) {
-    const cur = queue.shift() as string;
-    const d = depths.get(cur) ?? 0;
-    for (const next of adj.get(cur) ?? []) {
-      if (!depths.has(next)) {
-        depths.set(next, d + 1);
-        queue.push(next);
-      }
-    }
-  }
-  return depths;
-}
-
-function radialLayout(subjectId: string, nodes: GraphNode[], edges: GraphEdge[]): Map<string, Point> {
-  const depths = bfsDepths(subjectId, edges);
-  const maxDepth = nodes.reduce((m, n) => Math.max(m, depths.get(n.elementId) ?? 0), 0);
-  const positions = new Map<string, Point>();
-  positions.set(subjectId, { x: 0, y: 0 });
-
-  const rings = new Map<number, string[]>();
-  for (const node of nodes) {
-    if (node.elementId === subjectId) continue;
-    // 未与中心连通的节点兜底放到最外圈
-    const d = depths.get(node.elementId) ?? Math.min(maxDepth + 1, 6);
-    const ring = rings.get(d);
-    if (ring) ring.push(node.elementId);
-    else rings.set(d, [node.elementId]);
-  }
-
-  for (const [depth, ringIds] of rings) {
-    // 环内按 id 排序，保证同样数据多次刷新布局稳定
-    const sorted = [...ringIds].sort();
-    // 节点多了自动放大半径，避免卡片互相压盖
-    const radius = Math.max(220 + (depth - 1) * 190, sorted.length * 26);
-    const base = depth * GOLDEN_ANGLE;
-    sorted.forEach((id, i) => {
-      const theta = base + (2 * Math.PI * i) / sorted.length;
-      positions.set(id, { x: radius * Math.cos(theta), y: radius * Math.sin(theta) });
-    });
-  }
-  return positions;
-}
-
-/** 按两端相对方位挑选锚点：水平主导走左右，垂直主导走上下。 */
-function handlePairFor(src: Point, dst: Point): { sourceHandle: string; targetHandle: string } {
-  const dx = dst.x - src.x;
-  const dy = dst.y - src.y;
-  if (Math.abs(dx) >= Math.abs(dy)) {
-    return dx >= 0
-      ? { sourceHandle: 'right-s', targetHandle: 'left-t' }
-      : { sourceHandle: 'left-s', targetHandle: 'right-t' };
-  }
-  return dy >= 0
-    ? { sourceHandle: 'bottom-s', targetHandle: 'top-t' }
-    : { sourceHandle: 'top-s', targetHandle: 'bottom-t' };
-}
-
-interface CanvasLayout {
-  flowNodes: ScaFlowNode[];
-  flowEdges: Edge[];
-  edgeMap: Map<string, GraphEdge>;
-}
-
-function buildLayout(subgraph: Subgraph, centerId: string): CanvasLayout {
-  const positions = radialLayout(centerId, subgraph.nodes, subgraph.edges);
-  const flowNodes: ScaFlowNode[] = subgraph.nodes.map((node) => ({
-    id: node.elementId,
-    type: 'sca' as const,
-    position: positions.get(node.elementId) ?? { x: 0, y: 0 },
-    data: { graph: node, isCenter: node.elementId === centerId },
-  }));
-  const flowEdges: Edge[] = subgraph.edges.map((edge) => {
-    const src = positions.get(edge.srcId) ?? { x: 0, y: 0 };
-    const dst = positions.get(edge.dstId) ?? { x: 0, y: 0 };
-    const { sourceHandle, targetHandle } = handlePairFor(src, dst);
-    const override = EDGE_STYLE_OVERRIDES[edge.type];
-    const stroke = override?.color ?? EDGE_STROKE;
-    return {
-      id: edge.elementId,
-      source: edge.srcId,
-      target: edge.dstId,
-      sourceHandle,
-      targetHandle,
-      label: edgeLabel(edge.type),
-      style: { stroke, strokeWidth: 1.5, ...(override?.dashed ? { strokeDasharray: '6 4' } : {}) },
-      labelStyle: { fill: '#4B5563', fontSize: 11 },
-      labelBgStyle: { fill: '#FFFFFF', stroke: '#E5E7EB', strokeWidth: 1 },
-      labelBgPadding: [5, 2] as [number, number],
-      labelBgBorderRadius: 4,
-      markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: stroke },
-    };
-  });
-  const edgeMap = new Map<string, GraphEdge>();
-  for (const e of subgraph.edges) edgeMap.set(e.elementId, e);
-  return { flowNodes, flowEdges, edgeMap };
-}
-
-const nodeTypes: NodeTypes = { sca: GraphFlowNode };
+import { EDGE_STYLE_OVERRIDES, businessTypeOf, edgeLabel, nodeDisplayName } from './businessTypes';
+import { useDocMeta } from './docMeta';
 
 interface GraphCanvasProps {
   subgraph: Subgraph;
   centerElementId: string | null;
-  onHover: (target: InspectTarget | null) => void;
+  /** 隐藏的节点类型(图例点选过滤), 空集合 = 全部可见。 */
+  hiddenKinds: ReadonlySet<string>;
+  onHover: (t: InspectTarget | null) => void;
   onNodeSelect: (node: GraphNode) => void;
   onEdgeSelect: (edge: GraphEdge) => void;
   onPaneSelect: () => void;
+  /** 双击节点 = 增量展开(以该节点为新中心, Bloom 核心交互)。 */
+  onNodeDoubleClick: (node: GraphNode) => void;
 }
 
-/** 每次查询父层都用新 key 重建本组件，因此布局只需在挂载时计算一次。 */
-export function GraphCanvas({ subgraph, centerElementId, onHover, onNodeSelect, onEdgeSelect, onPaneSelect }: GraphCanvasProps) {
-  const effectiveCenter = centerElementId ?? subgraph.subject?.elementId ?? subgraph.nodes[0]?.elementId ?? '';
+interface CanvasDatum {
+  kind: string;
+  name: string;
+  props: Record<string, unknown> | null;
+  rawNode?: GraphNode;
+  rawEdge?: GraphEdge;
+  // G6 NodeData/EdgeData 的 data 字段要求 Record<string, unknown> 索引签名。
+  [key: string]: unknown;
+}
 
-  const [layout] = useState<CanvasLayout>(() => buildLayout(subgraph, effectiveCenter));
-  const [nodes, , onNodesChange] = useNodesState<ScaFlowNode>(layout.flowNodes);
+export function GraphCanvas({
+  subgraph, centerElementId, hiddenKinds, onHover, onNodeSelect, onEdgeSelect, onPaneSelect, onNodeDoubleClick,
+}: GraphCanvasProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const graphRef = useRef<G6Graph | null>(null);
+  const docMeta = useDocMeta();
+  // 渲染串行化: 所有 render/setData 排队执行, 避免并发渲染交错
+  // (StrictMode 双挂载、快速切换类型过滤时 render 仍在途)。
+  const renderChainRef = useRef<Promise<void>>(Promise.resolve());
+  // 已应用的类型过滤集合: 建图 effect 已按初始值渲染, hiddenKinds effect 跳过首次。
+  const appliedKindsRef = useRef<ReadonlySet<string> | null>(null);
 
-  const handleNodeEnter: NodeMouseHandler<ScaFlowNode> = (_event, node) => {
-    onHover({ type: 'node', node: node.data.graph });
-  };
-  const handleNodeLeave = () => onHover(null);
-  const handleNodeClick: NodeMouseHandler<ScaFlowNode> = (_event, node) => {
-    onNodeSelect(node.data.graph);
-  };
+  const toNodes = (nodes: GraphNode[]) =>
+    nodes
+      .filter((n) => !hiddenKinds.has(n.kind))
+      .map((n) => {
+        const bt = businessTypeOf(n.kind);
+        const isCenter = n.elementId === centerElementId;
+        return {
+          id: n.elementId,
+          data: { kind: n.kind, name: n.name, props: n.props, rawNode: n } as CanvasDatum,
+          style: {
+            size: isCenter ? 44 : 30,
+            fill: bt.color,
+            // Document=空心(描边家族区分), 实体=实心, 对齐原画布视觉
+            ...(n.kind === 'Document' ? { fill: '#FFFFFF', lineWidth: 2, stroke: bt.color } : {}),
+            labelText: nodeDisplayName(n, docMeta),
+            labelPlacement: 'bottom' as const,
+            labelFill: '#374151',
+            labelFontSize: 11,
+          },
+        };
+      });
+
+  const toEdges = (edges: GraphEdge[], visibleNodeIds: Set<string>) =>
+    edges
+      .filter((e) => visibleNodeIds.has(e.srcId) && visibleNodeIds.has(e.dstId))
+      .map((e) => {
+        const override = EDGE_STYLE_OVERRIDES[e.type];
+        return {
+          id: e.elementId,
+          source: e.srcId,
+          target: e.dstId,
+          data: { kind: e.type, name: e.type, props: e.props, rawEdge: e } as CanvasDatum,
+          style: {
+            stroke: override?.color ?? '#94A3B8',
+            lineWidth: 1,
+            ...(override?.dashed ? { lineDash: [4, 3] } : {}),
+            labelText: edgeLabel(e.type),
+            labelFontSize: 10,
+            labelFill: '#6B7280',
+            endArrow: true,
+          },
+        };
+      });
+
+  // 建图(重挂载时全量重建)
+  useEffect(() => {
+    if (!containerRef.current) return;
+    appliedKindsRef.current = hiddenKinds;
+    const nodes = toNodes(subgraph.nodes);
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const edges = toEdges(subgraph.edges, nodeIds);
+    const graph = new G6Graph({
+      container: containerRef.current,
+      autoFit: 'view',
+      data: { nodes, edges },
+      // 力导布局在 animation:false 下节点堆叠原点(实测 G6 5.1.1), 改用径向布局:
+      // 中心节点置中、其余按环半径展开, 契合"以查询节点为中心"的探索语义。
+      layout: {
+        type: 'radial',
+        focusNode: centerElementId ?? undefined,
+        unitRadius: 110,
+        linkDistance: 90,
+        preventOverlap: true,
+        nodeSize: 30,
+      },
+      behaviors: ['drag-canvas', 'zoom-canvas', 'drag-element', 'click-select'],
+      plugins: [{ type: 'minimap', size: [140, 90] }],
+      animation: false,
+    });
+    graphRef.current = graph;
+    // 本实例销毁标记: StrictMode 卸载后, 排队的异步渲染续体不得再触碰该实例。
+    let disposed = false;
+
+    // G6 v5 事件对象 target 是元素实例(带 id), 数据经 graph.getElementData(id) 取回。
+    graph.on<IElementEvent>('node:click', (ev) => {
+      const datum = graph.getElementData(ev.target.id) as NodeData;
+      const raw = (datum.data as unknown as CanvasDatum | undefined)?.rawNode;
+      if (raw) onNodeSelect(raw);
+    });
+    graph.on<IElementEvent>('edge:click', (ev) => {
+      const datum = graph.getElementData(ev.target.id) as EdgeData;
+      const raw = (datum.data as unknown as CanvasDatum | undefined)?.rawEdge;
+      if (raw) onEdgeSelect(raw);
+    });
+    graph.on('canvas:click', () => onPaneSelect());
+    graph.on<IElementEvent>('node:dblclick', (ev) => {
+      const datum = graph.getElementData(ev.target.id) as NodeData;
+      const raw = (datum.data as unknown as CanvasDatum | undefined)?.rawNode;
+      if (raw) onNodeDoubleClick(raw);
+    });
+    graph.on<IElementEvent>('node:pointerenter', (ev) => {
+      const datum = graph.getElementData(ev.target.id) as NodeData;
+      const raw = (datum.data as unknown as CanvasDatum | undefined)?.rawNode;
+      if (raw) onHover({ type: 'node', node: raw });
+    });
+    graph.on('node:pointerleave', () => onHover(null));
+
+    // 渲染入队: 销毁后跳过, 避免 G6 render 续体访问已清空的 context 抛 TypeError。
+    // 首帧延迟到 requestAnimationFrame: StrictMode 双挂载在提交阶段同步完成,
+    // 实例 A 会在 RAF 前被销毁(disposed=true), 其渲染根本不启动, 消除 G6 内部
+    // "instance has been destroyed" 中断日志。
+    renderChainRef.current = renderChainRef.current
+      .then(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          }),
+      )
+      .then(() => {
+        if (disposed) return;
+        return graph.render();
+      })
+      .catch((e) => {
+        if (!disposed) console.error(e);
+      });
+    // 注: 不调用 focusElement — 它会把视口缩放到单个节点(实测 G6 5.1.1),
+    // autoFit:'view' + radial focusNode 已让中心节点居中, 无需二次定位。
+
+    return () => {
+      disposed = true;
+      graph.destroy();
+      graphRef.current = null;
+    };
+    // 重挂载键在 GraphView 控制, 本 effect 只在挂载时执行一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // hiddenKinds 变化: 过滤重绘(不重建实例); 首次挂载已由建图 effect 渲染, 跳过避免并发 render。
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph) return;
+    if (appliedKindsRef.current === hiddenKinds) return;
+    appliedKindsRef.current = hiddenKinds;
+    const nodes = toNodes(subgraph.nodes);
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const edges = toEdges(subgraph.edges, nodeIds);
+    renderChainRef.current = renderChainRef.current
+      .then(() => {
+        if (graphRef.current !== graph) return; // 实例已被销毁/替换
+        graph.setData({ nodes, edges });
+        return graph.render();
+      })
+      .catch((e) => {
+        if (graphRef.current === graph) console.error(e);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hiddenKinds]);
+
+  const tip = useMemo(
+    () => `双击节点向外展开 · 已隐藏类型 ${hiddenKinds.size || '无'}`,
+    [hiddenKinds],
+  );
 
   return (
-    <ReactFlow<ScaFlowNode>
-      className="sca-flow"
-      nodes={nodes}
-      edges={layout.flowEdges}
-      onNodesChange={onNodesChange}
-      nodeTypes={nodeTypes}
-      onNodeClick={handleNodeClick}
-      onNodeMouseEnter={handleNodeEnter}
-      onNodeMouseLeave={handleNodeLeave}
-      onEdgeMouseEnter={(_event, edge) => {
-        const graphEdge = layout.edgeMap.get(edge.id);
-        if (graphEdge) onHover({ type: 'edge', edge: graphEdge });
-      }}
-      onEdgeMouseLeave={handleNodeLeave}
-      onEdgeClick={(_event, edge) => {
-        const graphEdge = layout.edgeMap.get(edge.id);
-        if (graphEdge) onEdgeSelect(graphEdge);
-      }}
-      onPaneMouseEnter={handleNodeLeave}
-      onPaneClick={onPaneSelect}
-      fitView
-      fitViewOptions={{ padding: 0.25, maxZoom: 1.1 }}
-      minZoom={0.15}
-      zoomOnDoubleClick={false}
-      nodesConnectable={false}
-    >
-      <Background variant={BackgroundVariant.Dots} gap={22} size={1.3} color="#CBD5E1" />
-      <Controls showInteractive={false} position="bottom-left" />
-      <MiniMap
-        pannable
-        zoomable
-        position="bottom-right"
-        maskColor="rgba(245, 247, 250, 0.78)"
-        // 小地图与画布同语言：文档=白底描边（纸片），实体=类别色实心（色块）
-        nodeColor={(n) => {
-          const data = (n as ScaFlowNode).data as { graph?: GraphNode } | undefined;
-          return data?.graph?.kind === 'Document' ? '#FFFFFF' : kindStyle(data?.graph?.kind ?? '').color;
-        }}
-        nodeStrokeColor={(n) => {
-          const data = (n as ScaFlowNode).data as { graph?: GraphNode } | undefined;
-          return kindStyle(data?.graph?.kind ?? '').color;
-        }}
-        nodeStrokeWidth={2}
-      />
-    </ReactFlow>
+    <div className="h-full w-full">
+      <div ref={containerRef} className="h-full w-full" data-testid="g6-canvas" />
+      <div className="pointer-events-none absolute bottom-3 left-3 z-10 rounded-md border border-line bg-white/90 px-2 py-1 text-[10px] text-ink-soft">
+        {tip}
+      </div>
+    </div>
   );
 }

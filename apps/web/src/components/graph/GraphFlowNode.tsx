@@ -2,7 +2,7 @@ import { Fragment } from 'react';
 import clsx from 'clsx';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { FileText } from 'lucide-react';
-import { KIND_ICONS, docTypeName, kindStyle, nodeDisplayName, type DocMetaResolver } from './kinds';
+import { KIND_ICONS, docTypeName, kindStyle, nodeDisplayName, type DocMetaResolver } from './businessTypes';
 import { useDocMeta } from './docMeta';
 import type { GraphNode } from '../../hooks/useGraph';
 

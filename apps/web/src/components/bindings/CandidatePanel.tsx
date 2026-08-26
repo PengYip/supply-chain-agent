@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import type { Anchors, ContractOption, OverviewDoc } from '../../hooks/useBindings';
 import type { WorkbenchRow } from './BindingsView';
+import { ContractSearchBar } from '../common/ContractSearchBar';
 
 /** 关系类型常用值(对应服务端 bindingRelationFor 映射), 支持自定义。
  *  「引用」用于把合同类型文件挂到合同实体上——绑定链条的第一步。 */
@@ -88,7 +89,6 @@ export function CandidatePanel({
 
   // 手动创建绑定表单(收起态只保留入口按钮)。
   const [manualOpen, setManualOpen] = useState(false);
-  const [manualSearch, setManualSearch] = useState('');
   const [manualContract, setManualContract] = useState('');
   const [manualRelation, setManualRelation] = useState('');
   const [manualCustomRelation, setManualCustomRelation] = useState('');
@@ -102,24 +102,8 @@ export function CandidatePanel({
   );
   const checkedCount = confirmable.filter((r) => checked.has(r.bindingId!)).length;
 
-  const filteredContracts = useMemo(() => {
-    const q = manualSearch.trim().toLowerCase();
-    if (!q) return contracts;
-    return contracts.filter(
-      (c) =>
-        c.displayContractNo.toLowerCase().includes(q) ||
-        c.contractNo.toLowerCase().includes(q) ||
-        c.title.toLowerCase().includes(q),
-    );
-  }, [contracts, manualSearch]);
-
   // 业务顺序(2026-08-25): 已挂合同文件的合同排前; 执行类单据(非合同文件)只能选已挂的。
   const isExecutionDoc = doc != null && doc.docType !== '合同';
-  const { establishedOptions, unestablishedOptions } = useMemo(() => {
-    const est = filteredContracts.filter((c) => establishedContracts.has(c.contractNo));
-    const unest = filteredContracts.filter((c) => !establishedContracts.has(c.contractNo));
-    return { establishedOptions: est, unestablishedOptions: unest };
-  }, [filteredContracts, establishedContracts]);
 
   const toggleChecked = (id: string) => {
     setChecked((prev) => {
@@ -131,7 +115,6 @@ export function CandidatePanel({
   };
 
   const resetManualForm = () => {
-    setManualSearch('');
     setManualContract('');
     setManualRelation('');
     setManualCustomRelation('');
@@ -358,39 +341,43 @@ export function CandidatePanel({
               <>
                 <div>
                   <label className="text-[11px] font-medium text-ink-soft">搜索合同</label>
-                  <input
-                    type="text"
-                    value={manualSearch}
-                    onChange={(e) => setManualSearch(e.target.value)}
-                    placeholder="按合同号或名称过滤"
-                    className={inputCls}
+                  <ContractSearchBar
+                    placeholder="按合同编号 / 买方 / 卖方 / 标题搜索"
+                    idleItems={contracts.slice(0, 20).map((c) => ({
+                      contractNo: c.contractNo,
+                      displayContractNo: c.displayContractNo,
+                      title: c.title,
+                      buyer: null,
+                      seller: null,
+                      docType: c.docType,
+                      overallConfidence: c.overallConfidence,
+                      matchedField: 'contractNo' as const,
+                    }))}
+                    itemNote={(it) =>
+                      establishedContracts.has(it.contractNo)
+                        ? '已挂合同文件'
+                        : isExecutionDoc
+                          ? '未挂合同文件（不可选）'
+                          : '未挂合同文件'
+                    }
+                    onSelect={(it) => {
+                      if (isExecutionDoc && !establishedContracts.has(it.contractNo)) {
+                        setFormError('执行类单据只能绑定「已挂合同文件」的合同；请先把合同类型文件绑定到该合同（关系选「引用」）');
+                        return;
+                      }
+                      setFormError(null);
+                      setManualContract(it.contractNo);
+                    }}
                   />
-                </div>
-                <div>
-                  <label className="text-[11px] font-medium text-ink-soft">选择合同</label>
-                  <select
-                    value={manualContract}
-                    onChange={(e) => setManualContract(e.target.value)}
-                    className={inputCls}
-                  >
-                    <option value="">请选择合同</option>
-                    {establishedOptions.map((c) => (
-                      <option key={c.contractNo} value={c.contractNo}>
-                        {c.displayContractNo}
-                        {c.title ? ` · ${c.title}` : ''}
-                        {' · 已挂合同文件'}
-                      </option>
-                    ))}
-                    {unestablishedOptions.map((c) => (
-                      <option key={c.contractNo} value={c.contractNo} disabled={isExecutionDoc}>
-                        {c.displayContractNo}
-                        {c.title ? ` · ${c.title}` : ''}
-                        {isExecutionDoc ? ' · 未挂合同文件（不可选）' : ' · 未挂合同文件'}
-                      </option>
-                    ))}
-                  </select>
-                  {filteredContracts.length === 0 && (
-                    <div className="mt-1 text-[11px] text-ink-soft">没有匹配「{manualSearch}」的合同</div>
+                  {manualContract && (
+                    <div className="mt-1 flex items-center gap-1 text-[11px] text-ink-soft">
+                      <span className="truncate">
+                        已选 {contracts.find((c) => c.contractNo === manualContract)?.displayContractNo ?? manualContract}
+                      </span>
+                      <button type="button" onClick={() => setManualContract('')} className="text-danger hover:underline">
+                        清除
+                      </button>
+                    </div>
                   )}
                   {isExecutionDoc && (
                     <div className="mt-1 text-[11px] leading-4 text-ink-soft">

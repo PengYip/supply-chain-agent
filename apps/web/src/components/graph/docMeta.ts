@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import { prettyDocName, type DocMeta, type DocMetaResolver } from './kinds';
+import { prettyDocName, type DocMeta, type DocMetaResolver } from './businessTypes';
 
 /**
  * docId -> 展示元数据 的跨层传递。

@@ -1,5 +1,6 @@
+import { useEffect } from 'react';
 import { ArrowRight, Crosshair, MousePointerClick } from 'lucide-react';
-import { docTypeName, edgeLabel, kindStyle, nodeDisplayName } from './kinds';
+import { docIdOf, docTypeName, edgeLabel, kindStyle, nodeDisplayName } from './businessTypes';
 import { useDocMeta } from './docMeta';
 import type { GraphEdge, GraphNode, InspectTarget } from '../../hooks/useGraph';
 
@@ -42,14 +43,63 @@ function PropsTable({ props }: { props: Record<string, unknown> | null }) {
   );
 }
 
+interface DocBindingCounts {
+  confirmed: number;
+  proposed: number;
+}
+
+function BindingStatusSection({
+  docId,
+  counts,
+  onOpenInBindings,
+}: {
+  docId: string;
+  counts: DocBindingCounts | null;
+  onOpenInBindings?: (docId: string) => void;
+}) {
+  return (
+    <div className="mt-2 flex items-center gap-2 text-[11px] text-ink-soft">
+      {counts ? (
+        <span>
+          已绑定 <span className="font-semibold tabular-nums text-ink">{counts.confirmed}</span>
+          {' · 待审 '}
+          <span className="font-semibold tabular-nums text-warning">{counts.proposed}</span>
+        </span>
+      ) : (
+        <span>绑定状态加载中…</span>
+      )}
+      {onOpenInBindings && (
+        <button
+          type="button"
+          onClick={() => onOpenInBindings(docId)}
+          className="text-primary underline underline-offset-2 hover:text-primary-800"
+        >
+          去审核
+        </button>
+      )}
+    </div>
+  );
+}
+
 interface DetailPanelProps {
   inspect: InspectTarget | null;
   isCenter: (elementId: string) => boolean;
   resolveName: (elementId: string) => string;
   onExpand: (node: GraphNode) => void;
+  docBindingCounts?: Map<string, DocBindingCounts> | null;
+  onLoadBindingCounts?: () => void;
+  onOpenInBindings?: (docId: string) => void;
 }
 
-export function DetailPanel({ inspect, isCenter, resolveName, onExpand }: DetailPanelProps) {
+export function DetailPanel({
+  inspect,
+  isCenter,
+  resolveName,
+  onExpand,
+  docBindingCounts,
+  onLoadBindingCounts,
+  onOpenInBindings,
+}: DetailPanelProps) {
   return (
     <aside className="flex w-72 shrink-0 flex-col border-l border-line bg-white">
       <div className="shrink-0 border-b border-line px-4 py-3 text-[15px] font-semibold text-ink">
@@ -66,7 +116,14 @@ export function DetailPanel({ inspect, isCenter, resolveName, onExpand }: Detail
             </div>
           </div>
         ) : inspect.type === 'node' ? (
-          <NodeDetail node={inspect.node} isCenter={isCenter(inspect.node.elementId)} onExpand={onExpand} />
+          <NodeDetail
+            node={inspect.node}
+            isCenter={isCenter(inspect.node.elementId)}
+            onExpand={onExpand}
+            docBindingCounts={docBindingCounts}
+            onLoadBindingCounts={onLoadBindingCounts}
+            onOpenInBindings={onOpenInBindings}
+          />
         ) : (
           <EdgeDetail edge={inspect.edge} resolveName={resolveName} />
         )}
@@ -79,10 +136,16 @@ function NodeDetail({
   node,
   isCenter,
   onExpand,
+  docBindingCounts,
+  onLoadBindingCounts,
+  onOpenInBindings,
 }: {
   node: GraphNode;
   isCenter: boolean;
   onExpand: (node: GraphNode) => void;
+  docBindingCounts?: Map<string, DocBindingCounts> | null;
+  onLoadBindingCounts?: () => void;
+  onOpenInBindings?: (docId: string) => void;
 }) {
   const docMeta = useDocMeta();
   const style = kindStyle(node.kind);
@@ -90,6 +153,13 @@ function NodeDetail({
   const displayProps = node.props
     ? Object.fromEntries(Object.entries(node.props).filter(([key]) => key !== 'name'))
     : null;
+  const docId = docIdOf(node);
+
+  // Document 节点展示绑定状态: 懒加载一次 overview(幂等, 悬停/点击都会触发)。
+  useEffect(() => {
+    if (node.kind === 'Document') onLoadBindingCounts?.();
+  }, [node.kind, node.elementId, onLoadBindingCounts]);
+
   return (
     <div className="animate-fade-in">
       <div className="flex items-center gap-1.5">
@@ -108,6 +178,13 @@ function NodeDetail({
       </div>
       <div className="mt-2 break-all text-[14px] font-medium leading-5 text-ink">{nodeDisplayName(node, docMeta)}</div>
       <div className="mt-1 break-all font-mono text-[10px] leading-4 text-ink-soft">{node.elementId}</div>
+      {node.kind === 'Document' && (
+        <BindingStatusSection
+          docId={docId}
+          counts={docBindingCounts?.get(docId) ?? null}
+          onOpenInBindings={onOpenInBindings}
+        />
+      )}
       <PropsTable props={displayProps} />
       {!isCenter && (
         <button

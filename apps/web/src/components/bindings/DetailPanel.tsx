@@ -4,7 +4,7 @@ import { Check, ChevronDown, Link2, Loader2, MousePointerClick, Network, Refresh
 import type { Anchors, BindingListItem, OverviewDoc } from '../../hooks/useBindings';
 import type { GraphFocusTarget } from '../graph/focus';
 import { buildDocMetaResolver } from '../graph/docMeta';
-import { prettyDocName, type DocMetaResolver } from '../graph/kinds';
+import { prettyDocName, type DocMetaResolver } from '../graph/businessTypes';
 import type { WorkbenchRow } from './BindingsView';
 import { BindingMiniGraph } from './BindingMiniGraph';
 

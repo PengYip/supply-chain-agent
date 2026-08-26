@@ -351,3 +351,37 @@ export async function updateNodeProps(input: UpdateNodePropsInput): Promise<void
     await session.close();
   }
 }
+
+// ---- 图 schema(图例计数, spec 2026-08-26 §4.1) --------------------------------
+//
+// 单条 Cypher 聚合全部 label 计数; 进程内缓存 60s(图例徽标轮询代价可控)。
+// 部署侧 Neo4j 5.26, count() 返回 Integer, 统一转 number。
+
+let labelCountsCache: { at: number; labels: Array<{ label: string; count: number }> } | null = null;
+const LABEL_COUNTS_TTL_MS = 60_000;
+
+/** 测试钩子: 清空 schema 缓存。 */
+export function __resetLabelCountsCacheForTests(): void {
+  labelCountsCache = null;
+}
+
+export async function graphLabelCounts(): Promise<Array<{ label: string; count: number }>> {
+  if (labelCountsCache && Date.now() - labelCountsCache.at < LABEL_COUNTS_TTL_MS) {
+    return labelCountsCache.labels;
+  }
+  const session = getDriver().session();
+  try {
+    const result = await session.run(
+      'MATCH (n) UNWIND labels(n) AS label RETURN label, count(n) AS count ORDER BY count DESC',
+    );
+    const labels = result.records.map((r) => {
+      const v = r.get('count');
+      const count = typeof v === 'number' ? v : (v as { toNumber(): number }).toNumber();
+      return { label: String(r.get('label')), count };
+    });
+    labelCountsCache = { at: Date.now(), labels };
+    return labels;
+  } finally {
+    await session.close();
+  }
+}

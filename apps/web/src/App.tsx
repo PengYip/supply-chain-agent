@@ -37,10 +37,32 @@ function App() {
     setGraphFocus({ ...target, nonce: graphFocusNonceRef.current });
     navigate('graph');
   }, [navigate]);
-  // 导航入口的统一跳转：手动进入图谱页时清掉旧的外部定位，避免残留合同
-  // 中心覆盖用户操作（openInGraph 直接调 navigate，不清自己刚设置的 focus）。
+  // 跨视图定位 -> 绑定工作台：图谱 Inspector「去审核」(spec 2026-08-26 §4.4)
+  // 与文件抽屉「未绑定」徽标两条入口共用同一 focus 状态。nonce 自增保证重复
+  // 跳转同一文档也会重新选中。
+  const [bindingsFocus, setBindingsFocus] = useState<{ docId: string; nonce: number } | null>(null);
+  const bindingsFocusNonceRef = useRef(0);
+  const openInBindings = useCallback((docId: string) => {
+    bindingsFocusNonceRef.current += 1;
+    setBindingsFocus({ docId, nonce: bindingsFocusNonceRef.current });
+    navigate('bindings');
+  }, [navigate]);
+  // 文件抽屉「未绑定」徽标 -> 绑定工作台（跳转即关抽屉）。
+  const openBindingsForDoc = useCallback(
+    (docId: string) => {
+      bindingsFocusNonceRef.current += 1;
+      setBindingsFocus({ docId, nonce: bindingsFocusNonceRef.current });
+      setFileDrawerOpen(false);
+      navigate('bindings');
+    },
+    [navigate],
+  );
+  // 导航入口的统一跳转：手动进入图谱/绑定页时清掉旧的外部定位，避免残留
+  // 定位覆盖用户操作（openInGraph/openInBindings/openBindingsForDoc 直接调
+  // navigate，不清自己刚设置的 focus）。
   const handleNavigate = useCallback((v: ViewId) => {
     if (v === 'graph') setGraphFocus(null);
+    if (v === 'bindings') setBindingsFocus(null);
     navigate(v);
   }, [navigate]);
   // 执行流水页 -> 主体名单页的跳转(主体未配置导致流水为空时的引导)。
@@ -160,7 +182,7 @@ function App() {
           }}
         />
       ) : view === 'bindings' ? (
-        <BindingsView onOpenInGraph={openInGraph} />
+        <BindingsView onOpenInGraph={openInGraph} docFocus={bindingsFocus} />
       ) : view === 'flows' ? (
         <FlowsView onOpenParties={openParties} />
       ) : view === 'parties' ? (
@@ -168,7 +190,7 @@ function App() {
       ) : view === 'favorites' ? (
         <FavoritesView onOpenSession={(id) => navigate('chat', { session: id })} />
       ) : view === 'graph' ? (
-        <GraphView focus={graphFocus} />
+        <GraphView focus={graphFocus} onOpenInBindings={openInBindings} />
       ) : view === 'projects' ? (
         <ProjectsView />
       ) : view === 'eval' ? (
@@ -180,6 +202,7 @@ function App() {
         onAddToConversation={addToConversation}
         contextFileKeys={contextFileKeys}
         filesApi={filesApi}
+        onOpenBindings={openBindingsForDoc}
       />
     </AppShell>
   );

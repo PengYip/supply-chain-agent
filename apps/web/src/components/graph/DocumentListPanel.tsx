@@ -1,7 +1,7 @@
 import clsx from 'clsx';
 import { FileText, RefreshCw } from 'lucide-react';
 import type { GraphDocument } from '../../hooks/useGraph';
-import { prettyDocName } from './kinds';
+import { prettyDocName } from './businessTypes';
 
 function formatDate(iso: string): string {
   if (!iso) return '';

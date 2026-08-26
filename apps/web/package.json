@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@ai-sdk/react": "^4.0.53",
+    "@antv/g6": "^5.1.1",
     "@file-viewer/preset-lite": "^2.2.9",
     "@file-viewer/preset-office": "^2.2.9",
     "@file-viewer/react": "^2.2.9",
