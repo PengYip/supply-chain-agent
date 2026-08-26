@@ -62,7 +62,13 @@ const EDGE_RULE_SEED: Array<{
   { id: 'er-exec-fapiao', src: '发票', edge: 'executes', vocab: [], active: false },
   { id: 'er-exec-tidan', src: '提单', edge: 'executes', vocab: [], active: false },
   { id: 'er-exec-zhuangxiang', src: '装箱单', edge: 'executes', vocab: [], active: false },
-  // ---- v2 类型划分(spec 2026-08-26 §3.1): 登记+激活节奏见 spec Phase 2, 全部 active:false ----
+  // ---- graphCommit 派生边(spec §3.2 Phase 1 校验范围外, Phase 2 评估后登记不激活) ----
+  // party/commodity/references 由 deriveProposedRelationships/deriveProposedEdges 确定性派生,
+  // 无合同终点, 守卫模型不适用; 登记留痕, 激活待 Phase 3(manage_template 后)。
+  { id: 'er-party-fapiao', src: '发票', edge: 'party', vocab: [], active: false },
+  { id: 'er-commodity-fapiao', src: '发票', edge: 'commodity', vocab: [], active: false },
+  { id: 'er-references-hetong', src: '合同', edge: 'references', vocab: [], active: false },
+  // ---- v2 类型划分(spec 2026-08-26 §3.1): 方向编码类型已激活(T3), 其余登记不启用 ----
   // 方向编码类型(spec v2): settles 方向由类型自带, 与 flowType×direction 派生交叉验证
   { id: 'er-settle-shouhuo', src: '收货单', edge: 'settles', vocab: ['收货'] },
   { id: 'er-settle-fahuodan', src: '发货单', edge: 'settles', vocab: ['发货'] },
