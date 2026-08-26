@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { ChevronRight, FileText, Folder, FolderOpen, X } from 'lucide-react';
 import { type FileEntry, type FileFolder, type FilesApi } from '../../hooks/useFiles';
+import { processDocument } from '../../api/process';
 import { FilePreviewModal } from '../FilePreviewModal';
 
 interface FileDrawerProps {
@@ -11,6 +12,8 @@ interface FileDrawerProps {
   contextFileKeys: Set<string>;
   /** Shared file list owned by App (upload + drawer share one useFiles). */
   filesApi: FilesApi;
+  /** 「未绑定」徽标跳转绑定工作台的通道（App 分配 nonce 并导航）。 */
+  onOpenBindings?: (docId: string) => void;
 }
 
 interface TreeNode {
@@ -220,6 +223,9 @@ function FileRow(props: {
   onDelete: (key: string) => void;
   deletingFilePath: string | null;
   setDeletingFilePath: (key: string | null) => void;
+  onOpenBindings?: (docId: string) => void;
+  onTriggerParse?: (docId: string) => void;
+  parsingDocIds: Set<string>;
 }) {
   const {
     file,
@@ -238,10 +244,89 @@ function FileRow(props: {
     onDelete,
     deletingFilePath,
     setDeletingFilePath,
+    onOpenBindings,
+    onTriggerParse,
+    parsingDocIds,
   } = props;
   const badge = parseBadge(file.parseStatus);
   // 动作区在 hover / 移动中 / 删除确认中保持可见
   const showActions = moving || deletingFilePath === file.key;
+
+  // 绑定徽标：未绑定且有 docId 时可点击跳转绑定工作台（孤儿对象/已绑定纯展示）。
+  const unbound = file.bound !== true;
+  const boundBadgeNode = !unbound ? (
+    <span
+      title="已绑定到合同台账"
+      className="whitespace-nowrap rounded bg-success/10 px-1.5 py-px text-[10px] text-success"
+    >
+      已绑定
+    </span>
+  ) : file.docId && onOpenBindings ? (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        if (file.docId) onOpenBindings(file.docId);
+      }}
+      title="尚未绑定合同，点击前往绑定"
+      aria-label="尚未绑定合同，点击前往绑定"
+      className="cursor-pointer whitespace-nowrap rounded bg-surface px-1.5 py-px text-[10px] text-ink-soft transition-colors hover:bg-ink-soft/15 hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+    >
+      未绑定
+    </button>
+  ) : (
+    <span
+      title="尚未绑定合同"
+      className="whitespace-nowrap rounded bg-surface px-1.5 py-px text-[10px] text-ink-soft"
+    >
+      未绑定
+    </span>
+  );
+
+  // 解析徽标：本地触发中或后端 parsing -> 「解析中」纯展示（带脉冲提示活动）；
+  // uploaded / failed 且有 docId -> 可点击触发（failed 为重试语义）；其余纯展示。
+  const parseInFlight =
+    (file.docId ? parsingDocIds.has(file.docId) : false) || file.parseStatus === 'parsing';
+  const canTriggerParse =
+    !!file.docId &&
+    !!onTriggerParse &&
+    !parseInFlight &&
+    (file.parseStatus === 'uploaded' || file.parseStatus === 'failed');
+  let parseBadgeNode: ReactNode;
+  if (parseInFlight) {
+    parseBadgeNode = (
+      <span className="animate-pulse whitespace-nowrap rounded bg-surface px-1.5 py-px text-[10px] text-ink-soft">
+        解析中
+      </span>
+    );
+  } else if (canTriggerParse && badge) {
+    const isRetry = file.parseStatus === 'failed';
+    parseBadgeNode = (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (file.docId && onTriggerParse) onTriggerParse(file.docId);
+        }}
+        title={isRetry ? '解析失败，点击重试' : '点击触发解析'}
+        aria-label={isRetry ? '解析失败，点击重试' : '点击触发解析'}
+        className={clsx(
+          'cursor-pointer whitespace-nowrap rounded px-1.5 py-px text-[10px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary',
+          isRetry
+            ? 'bg-danger/10 text-danger hover:bg-danger/20'
+            : 'bg-surface text-ink-soft hover:bg-ink-soft/15 hover:text-ink',
+        )}
+      >
+        {badge.text}
+      </button>
+    );
+  } else {
+    parseBadgeNode = badge ? (
+      <span className={clsx('whitespace-nowrap rounded px-1.5 py-px text-[10px]', badge.className)}>
+        {badge.text}
+      </span>
+    ) : null;
+  }
 
   return (
     <div
@@ -255,23 +340,13 @@ function FileRow(props: {
       <div className="flex w-[18px] shrink-0 items-center justify-center text-ink-soft">
         <FileText className="h-4 w-4" aria-hidden />
       </div>
-      <FileNameText name={file.name} />
+      {/* 徽标容器锚定在行首（图标后、文件名前）：hover 时大小/操作区入场只
+          压窄文件名（唯一 flex-1 可收缩项），徽标不再左移导致点击落空。 */}
       <div className="ml-2 flex shrink-0 items-center gap-1">
-        <span
-          title={file.bound === true ? '已绑定到合同台账' : '尚未绑定合同'}
-          className={clsx(
-            'whitespace-nowrap rounded px-1.5 py-px text-[10px]',
-            file.bound === true ? 'bg-success/10 text-success' : 'bg-surface text-ink-soft',
-          )}
-        >
-          {file.bound === true ? '已绑定' : '未绑定'}
-        </span>
-        {badge && (
-          <span className={clsx('whitespace-nowrap rounded px-1.5 py-px text-[10px]', badge.className)}>
-            {badge.text}
-          </span>
-        )}
+        {boundBadgeNode}
+        {parseBadgeNode}
       </div>
+      <FileNameText name={file.name} />
       <span className="mr-2 hidden shrink-0 whitespace-nowrap text-[11px] text-ink-soft group-hover:inline">
         {formatSize(file.size)}
       </span>
@@ -336,6 +411,9 @@ interface TreeFolderProps {
   onDelete: (key: string) => void;
   deletingFilePath: string | null;
   setDeletingFilePath: (key: string | null) => void;
+  onOpenBindings?: (docId: string) => void;
+  onTriggerParse?: (docId: string) => void;
+  parsingDocIds: Set<string>;
 }
 
 function TreeFolder(props: TreeFolderProps) {
@@ -361,6 +439,9 @@ function TreeFolder(props: TreeFolderProps) {
     onDelete,
     deletingFilePath,
     setDeletingFilePath,
+    onOpenBindings,
+    onTriggerParse,
+    parsingDocIds,
   } = props;
   const isOpen = expanded.has(fullPath);
   const hasChildren = node.files.length > 0 || Object.keys(node.subdirs).length > 0;
@@ -429,6 +510,9 @@ function TreeFolder(props: TreeFolderProps) {
               onDelete={onDelete}
               deletingFilePath={deletingFilePath}
               setDeletingFilePath={setDeletingFilePath}
+              onOpenBindings={onOpenBindings}
+              onTriggerParse={onTriggerParse}
+              parsingDocIds={parsingDocIds}
             />
           ))}
           {Object.entries(node.subdirs).map(([subname, subnode]) => (
@@ -455,6 +539,9 @@ function TreeFolder(props: TreeFolderProps) {
               onDelete={onDelete}
               deletingFilePath={deletingFilePath}
               setDeletingFilePath={setDeletingFilePath}
+              onOpenBindings={onOpenBindings}
+              onTriggerParse={onTriggerParse}
+              parsingDocIds={parsingDocIds}
             />
           ))}
         </div>
@@ -466,8 +553,8 @@ function TreeFolder(props: TreeFolderProps) {
 /** 全局文件抽屉：右侧滑入 + 遮罩，任意视图可从 AppTopbar 唤起。
  *  内容迁移自 FilePanel（树形列表/移动/删除/预览逻辑不变，样式 Tailwind 化）。 */
 export function FileDrawer(props: FileDrawerProps) {
-  const { open, onClose, onAddToConversation, contextFileKeys, filesApi } = props;
-  const { files, folders, loading, downloadFile, moveFile, createFolder, removeFolder, deleteFile } = filesApi;
+  const { open, onClose, onAddToConversation, contextFileKeys, filesApi, onOpenBindings } = props;
+  const { files, folders, loading, downloadFile, moveFile, createFolder, removeFolder, deleteFile, refresh } = filesApi;
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [movingFileKey, setMovingFileKey] = useState<string | null>(null);
@@ -476,6 +563,32 @@ export function FileDrawer(props: FileDrawerProps) {
   const [deletingFolderPath, setDeletingFolderPath] = useState<string | null>(null);
   const [deletingFilePath, setDeletingFilePath] = useState<string | null>(null);
   const [previewingFile, setPreviewingFile] = useState<FileEntry | null>(null);
+  // 徽标点击触发的解析：processDocument 是同步 HTTP（跑完返回终态），期间用
+  // 该集合把对应行的徽标翻成「解析中」；无论成败都 refresh 反映落库状态。
+  const [parsingDocIds, setParsingDocIds] = useState<Set<string>>(() => new Set());
+
+  const triggerParse = useCallback(
+    async (docId: string) => {
+      setParsingDocIds((prev) => {
+        const next = new Set(prev);
+        next.add(docId);
+        return next;
+      });
+      try {
+        await processDocument(docId);
+      } catch (e) {
+        console.error('triggerParse failed:', e);
+      } finally {
+        setParsingDocIds((prev) => {
+          const next = new Set(prev);
+          next.delete(docId);
+          return next;
+        });
+        void refresh();
+      }
+    },
+    [refresh],
+  );
 
   const tree = useMemo(() => buildTree(files, folders), [files, folders]);
 
@@ -616,6 +729,9 @@ export function FileDrawer(props: FileDrawerProps) {
                   onDelete={deleteFile}
                   deletingFilePath={deletingFilePath}
                   setDeletingFilePath={setDeletingFilePath}
+                  onOpenBindings={onOpenBindings}
+                  onTriggerParse={triggerParse}
+                  parsingDocIds={parsingDocIds}
                 />
               ))}
               {Object.entries(tree.subdirs).map(([subname, subnode]) => (
@@ -642,6 +758,9 @@ export function FileDrawer(props: FileDrawerProps) {
                   onDelete={deleteFile}
                   deletingFilePath={deletingFilePath}
                   setDeletingFilePath={setDeletingFilePath}
+                  onOpenBindings={onOpenBindings}
+                  onTriggerParse={triggerParse}
+                  parsingDocIds={parsingDocIds}
                 />
               ))}
             </>
