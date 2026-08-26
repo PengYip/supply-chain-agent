@@ -65,4 +65,20 @@ describe('searchContractLedger(SQLite)', () => {
     expect(await searchContractLedger(ctx, 'CJXC', 'u1', 0)).toEqual([]);
     expect(await searchContractLedger(ctx, '不存在词', 'u1', 10)).toEqual([]);
   });
+
+  it('LIKE 通配符注入: % _ \\ 不匹配全部(转义端到端生效)', async () => {
+    for (const q of ['%', '_', '\\']) {
+      const items = await searchContractLedger(ctx, q, 'u1', 10);
+      expect(items, `query=${JSON.stringify(q)}`).toEqual([]);
+    }
+  });
+
+  it('全角中段合同号片段命中(粗筛 contains 放行到 JS 精排)', async () => {
+    await upsertContractLedgerEntry(ctx, mk({ contractNo: 'CJXC-131-2024', title: '中段片段合同' }));
+    // 全角中段片段 '１３１' 归一化为 '131', 命中 contract_no 中段 -> 0.9 分路径。
+    const items = await searchContractLedger(ctx, '１３１', 'u1', 10);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.contractNo).toBe('CJXC-131-2024');
+    expect(items[0]?.matchedField).toBe('contractNo');
+  });
 });

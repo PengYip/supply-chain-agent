@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 /** 节点类别（/api/graph 契约）：Document / Party / Commodity / Contract。 */
 export type GraphKind = 'Document' | 'Party' | 'Commodity' | 'Contract';
@@ -147,6 +147,8 @@ export function useGraph() {
   const [subgraph, setSubgraph] = useState<Subgraph | null>(null);
   const [graphLoading, setGraphLoading] = useState(false);
   const [graphError, setGraphError] = useState<string | null>(null);
+  // 子图请求序号: 用于丢弃过期响应(慢的旧查询晚到时不覆盖新结果)。
+  const subgraphReqIdRef = useRef(0);
 
   const refreshDocuments = useCallback(async () => {
     setDocsLoading(true);
@@ -170,6 +172,8 @@ export function useGraph() {
   useEffect(() => { void refreshDocuments(); }, [refreshDocuments]);
 
   const loadSubgraph = useCallback(async (subject: string, depth: number, direction: GraphDirection) => {
+    // 请求序号守卫: 慢的旧查询晚到时不覆盖新查询的结果(center 已反映新查询)。
+    const reqId = ++subgraphReqIdRef.current;
     setGraphLoading(true);
     setGraphError(null);
     try {
@@ -177,6 +181,7 @@ export function useGraph() {
       const data = await getJson<{ subject?: unknown; nodes?: unknown[]; edges?: unknown[] }>(
         `/api/graph/query?${qs.toString()}`,
       );
+      if (reqId !== subgraphReqIdRef.current) return;
       const rawNodes = Array.isArray(data?.nodes) ? data.nodes : [];
       const rawEdges = Array.isArray(data?.edges) ? data.edges : [];
       const nodes = rawNodes
@@ -196,10 +201,11 @@ export function useGraph() {
       }
       setSubgraph({ subject: subjectNode?.elementId ? subjectNode : null, nodes, edges });
     } catch (e) {
+      if (reqId !== subgraphReqIdRef.current) return;
       setSubgraph(null);
       setGraphError(e instanceof Error ? e.message : '图谱加载失败');
     } finally {
-      setGraphLoading(false);
+      if (reqId === subgraphReqIdRef.current) setGraphLoading(false);
     }
   }, []);
 

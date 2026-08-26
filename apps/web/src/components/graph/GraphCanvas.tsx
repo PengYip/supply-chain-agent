@@ -128,6 +128,8 @@ export function GraphCanvas({
     const graph = new G6Graph({
       container: containerRef.current,
       autoFit: 'view',
+      // 侧栏折叠/窗口缩放时自动跟随容器尺寸重排, 避免画布被裁剪。
+      autoResize: true,
       data: { nodes, edges },
       // 力导布局在 animation:false 下节点堆叠原点(实测 G6 5.1.1), 改用径向布局:
       // 中心节点置中、其余按环半径展开, 契合"以查询节点为中心"的探索语义。

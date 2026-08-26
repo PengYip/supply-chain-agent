@@ -11,6 +11,7 @@ import {
   type NodeTypes,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import './binding-mini-graph.css';
 import { AlertTriangle, Network, RefreshCw } from 'lucide-react';
 import {
   EDGE_STYLE_OVERRIDES,
