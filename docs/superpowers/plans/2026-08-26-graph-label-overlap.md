@@ -20,6 +20,7 @@
 - `apps/web` 的 tsc 构建 `include: ["src"]`，`verbatimModuleSyntax` + `erasableSyntaxOnly` 开启：src 下新文件不得用 enum/namespace，类型导入必须 `import type`。
 - 测试文件放 `apps/web/test/`（对齐 apps/server 的 test/ 惯例，且不进 tsc 构建）。
 - 注释风格沿用现有文件：中文、说明"为什么"。
+- **本机环境（SDD 台账 env note，上一支特性已验证）**：`npm install` 在本机损坏（better-sqlite3 原生构建失败）。依赖变更 = 手动编辑 package.json（CI 用 `npm install`，无需 lockfile 同步——仓库惯例，前例见 Task 8 备注）；跑测试用 `node node_modules/vitest/vitest.mjs run <file>`（仓库根执行）；server 侧套件需 `OPENAI_API_KEY=ci-dummy-key`。
 
 ---
 
@@ -38,17 +39,17 @@
   - `charEmWidth(ch: string): number` — 单字符宽度（em 倍数）：CJK/全角 = 1.0，其余 = 0.62
   - Task 2 的 GraphCanvas 将消费这两个函数。
 
-- [ ] **Step 1: 给 apps/web 安装 vitest 并加 test script**
+- [ ] **Step 1: 确认 hoisted vitest 可用并登记依赖**
 
-在仓库根执行：
+本机 `npm install` 损坏（见 Global Constraints），不能用它装包。vitest 已由 apps/server devDep hoist 到根 node_modules，直接复用：
 
 ```bash
-npm install -D vitest@^4.1.10 --workspace apps/web
+ls node_modules/vitest/vitest.mjs node_modules/.bin/vitest
 ```
 
-Expected: 安装成功，无 peer 冲突（web 已有 vite ^8.1.1，vitest 4 自带兼容 vite）。
+Expected: 两个路径都存在。若不存在 → BLOCKED，报告给控制器。
 
-编辑 `apps/web/package.json` scripts，加一行（dev 之前即可）：
+手动编辑 `apps/web/package.json`：devDependencies 加 `"vitest": "^4.1.10"`（与 apps/server 对齐；CI 的 `npm install` 会正常安装）；scripts 加 test（dev 之前）：
 
 ```json
 "scripts": {
@@ -62,7 +63,7 @@ Expected: 安装成功，无 peer 冲突（web 已有 vite ^8.1.1，vitest 4 自
 "test": "npm test --workspace apps/server && npm test --workspace apps/web",
 ```
 
-（CI 跑根 `npm test`，这样 web 测试进 CI。）
+（CI 跑根 `npm test`，这样 web 测试进 CI。不产生 lockfile 变更——CI `npm install` 自行恢复，与前例一致。）
 
 - [ ] **Step 2: 写失败测试**
 
@@ -97,14 +98,15 @@ describe('fitCaption', () => {
     expect(fitCaption('一二三', { diameter: 44, fontSize: 11 })).toBe('一二三');
   });
 
-  it('超长文本断行为多行', () => {
-    // 直径44: L=1 装 3 字装不下 9 字, L=2 每行仅 2 字(31.3px), L=3 装下 7 字(2+3+2)
+  it('超长文本断行为多行并截断', () => {
+    // 直径44 三行布局: 行偏移 ±12.1/0/±12.1 → cap = 25.75/33/25.75 → 容量 2+3+2=7 字 < 9 字
+    // → 截断模式, 末行 cap=14.75 只装 1 字 + 省略号
     const out = fitCaption('一二三四五六七八九', { diameter: 44, fontSize: 11 });
     const lines = out.split('\n');
     expect(lines.length).toBe(3);
     expect(lines[0]).toBe('一二');
     expect(lines[1]).toBe('三四五');
-    expect(lines[2]).toBe('六七');
+    expect(lines[2]).toBe('六…');
   });
 
   it('装不下时行数不超过上限且末行以省略号结尾', () => {
@@ -185,12 +187,6 @@ function chordWidth(radius: number, offset: number): number {
   return sq <= 0 ? 0 : 2 * Math.sqrt(sq);
 }
 
-/** lineCount 行布局下第 i 行的可用宽度(px): 行中心偏移处的弦宽减两侧内边距。 */
-function lineWidthAt(radius: number, fontSize: number, lineCount: number, i: number): number {
-  const offset = Math.abs(i - (lineCount - 1) / 2) * fontSize * (lineCount > 1 ? 1.1 : 1);
-  return Math.max(chordWidth(radius, offset) - fontSize, 0);
-}
-
 /**
  * 按每行宽度上限把文本贪心分批成行。
  * @param reserveEllipsis 末行为省略号预留 1em 宽度(截断模式); false 用于试探能否完整容纳。
@@ -266,29 +262,31 @@ export function fitCaption(name: string, options: FitCaptionOptions): string {
 - [ ] **Step 5: 跑测试确认通过**
 
 ```bash
-npm test --workspace apps/web
+node node_modules/vitest/vitest.mjs run apps/web/test/captionFit.test.ts
 ```
+
+（本机验证过的直调路径；`npm test --workspace apps/web` 是 CI 侧等价命令。）
 
 Expected: PASS — `Test Files  1 passed`, 8 个用例全绿。
 
 若 `一二三四五六七八九`（直径44）用例失败，手算复核：L=1 行宽 33(3字) 不够；L=2 偏移 ±6.05 弦宽 42.3-11=31.3(2字)；L=3 偏移 0/±12.1 → 33/25.76/25.76 → 2+3+2=7 字 < 9 → 截断模式 best=3，末行 cap=25.76-11=14.76 → 1 字 + …。即期望 `一二\n三四五\n六…`。**以手算为准修正测试断言**（断言 `lines[2]` 为 `'六…'`），算法常数不动。
 
-- [ ] **Step 6: 确认根测试链与类型构建**
+- [ ] **Step 6: 确认根测试链**
 
 ```bash
-npm test
+OPENAI_API_KEY=ci-dummy-key node node_modules/vitest/vitest.mjs run apps/web/test/captionFit.test.ts apps/server/test
 ```
 
-Expected: server 全部测试 + web 8 个用例全绿（web 的 captionFit.ts 在 `src/` 内会进 tsc，但本步只跑测试；类型检查在 Task 2 的 build 里覆盖——captionFit.ts 无外部依赖，`tsc -b` 应直接通过）。
+Expected: web 8 个用例 + server 全部套件全绿（`OPENAI_API_KEY` 供 import `env.ts` 的套件；server 套件若因缺 Neo4j/Postgres 跳过属正常，计数 skip 不算失败）。类型检查在 Task 2 的 build 里覆盖——captionFit.ts 无外部依赖，`tsc -b` 应直接通过。
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add apps/web/package.json apps/web/package-lock.json package.json package-lock.json apps/web/src/components/graph/captionFit.ts apps/web/test/captionFit.test.ts
+git add apps/web/package.json package.json apps/web/src/components/graph/captionFit.ts apps/web/test/captionFit.test.ts
 git commit -m "test(web): 引入 vitest 与 captionFit 弦宽截断纯函数(Neo4j Browser 圆内文字思路)"
 ```
 
-（若根目录无独立 package-lock 变更则去掉对应路径；workspaces 共享一个 lock 文件时通常会有。）
+（无 lockfile 变更——本机不跑 npm install，CI 侧 `npm install` 自行恢复，与前例一致。）
 
 ---
 
@@ -442,10 +440,10 @@ Expected: web `tsc -b && vite build` 与 server `tsc` 均成功。若 `nodeSize`
 
 ```bash
 npm run lint
-npm test
+OPENAI_API_KEY=ci-dummy-key node node_modules/vitest/vitest.mjs run apps/web/test apps/server/test
 ```
 
-Expected: oxlint 0 错误；server + web 测试全绿。
+Expected: oxlint 0 错误；web + server 测试全绿（Postgres/Neo4j 集成套件 skip 属正常）。
 
 - [ ] **Step 6: 浏览器目检（验收标准）**
 
