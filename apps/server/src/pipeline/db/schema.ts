@@ -244,8 +244,8 @@ export const templateTypes = sqliteTable('template_types', {
   parentId: text('parent_id'),
   props: text('props').notNull().default('{}'),
   isActive: integer('is_active').notNull().default(1),
-  createdAt: text('created_at').notNull(),
-  updatedAt: text('updated_at').notNull(),
+  createdAt: text('created_at').notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  updatedAt: text('updated_at').notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
 }, (t) => [
   uniqueIndex('template_types_kind_name_uq').on(t.kind, t.name),
   index('template_types_parent').on(t.parentId),
@@ -261,7 +261,7 @@ export const templateEdgeRules = sqliteTable('template_edge_rules', {
   anchorWeights: text('anchor_weights'),
   isActive: integer('is_active').notNull().default(1),
   templateVersion: integer('template_version').notNull().default(1),
-  createdAt: text('created_at').notNull(),
+  createdAt: text('created_at').notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
 }, (t) => [
   index('template_edge_rules_src').on(t.sourceTypeId, t.edgeType),
 ]);
@@ -271,5 +271,5 @@ export const templateVersions = sqliteTable('template_versions', {
   version: integer('version').primaryKey(),
   changedBy: text('changed_by').notNull(),
   changeSummary: text('change_summary').notNull(),
-  changedAt: text('changed_at').notNull(),
+  changedAt: text('changed_at').notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
 });

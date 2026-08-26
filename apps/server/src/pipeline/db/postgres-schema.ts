@@ -340,8 +340,8 @@ export const templateTypes = pgTable(
     parentId: text('parent_id'),
     props: text('props').notNull().default('{}'),
     isActive: integer('is_active').notNull().default(1),
-    createdAt: nowTs(),
-    updatedAt: nowTs(),
+    createdAt: text('created_at').notNull().default(sql`now()`),
+    updatedAt: text('updated_at').notNull().default(sql`now()`),
   },
   (t) => [
     uniqueIndex('template_types_kind_name_uq').on(t.kind, t.name),
@@ -360,7 +360,7 @@ export const templateEdgeRules = pgTable(
     anchorWeights: text('anchor_weights'),
     isActive: integer('is_active').notNull().default(1),
     templateVersion: integer('template_version').notNull().default(1),
-    createdAt: nowTs(),
+    createdAt: text('created_at').notNull().default(sql`now()`),
   },
   (t) => [
     index('template_edge_rules_src').on(t.sourceTypeId, t.edgeType),
@@ -371,7 +371,7 @@ export const templateVersions = pgTable('template_versions', {
   version: integer('version').primaryKey(),
   changedBy: text('changed_by').notNull(),
   changeSummary: text('change_summary').notNull(),
-  changedAt: nowTs(),
+  changedAt: text('changed_at').notNull().default(sql`now()`),
 });
 
 // ---- Harness session store (sessions/messages/approvals/events/favorites) ---
