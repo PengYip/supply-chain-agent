@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { createReadStream, readFileSync } from 'node:fs';
 import TurndownService from 'turndown';
 import * as turndownPluginGfm from 'turndown-plugin-gfm';
 import type { Block, BlockModel, DocType } from './types.js';
@@ -113,8 +113,116 @@ async function extractDocxText(sourceUri: string): Promise<string> {
 }
 
 /**
+ * Extract .xlsx text via exceljs: each sheet becomes a `## Sheet:` heading
+ * plus GFM pipe rows (table_row blocks downstream).
+ *
+ * Irregular headers (merged cells / multi-row headers, common in Chinese
+ * trade documents) are handled by EXPANDING merges: exceljs leaves every
+ * non-anchor cell of a merged range (e.g. A1:C1) null; we copy the anchor
+ * value into the whole range first, so every emitted row keeps a stable
+ * column count and multi-row headers keep their full information (each
+ * header row is emitted as its own pipe row instead of being flattened).
+ * Old binary .xls is NOT supported by exceljs and fails with a clear error.
+ */
+async function extractXlsxText(sourceUri: string): Promise<string> {
+  const ExcelJS = (await import('exceljs')).default;
+  const wb = new ExcelJS.Workbook();
+  // xlsx.read() is the documented Node path (streams); Buffer input hits a
+  // Buffer<ArrayBuffer> generic mismatch between this repo's @types/node and
+  // exceljs's bundled types, so use a read stream instead.
+  await wb.xlsx.read(createReadStream(sourceUri));
+  const lines: string[] = [];
+  for (const ws of wb.worksheets) {
+    // 1) Expand merged ranges: copy the anchor (top-left) value into every
+    //    covered cell so rows/columns stay aligned downstream.
+    const merges: Array<{ r1: number; c1: number; r2: number; c2: number }> = [];
+    for (const ref of ws.model.merges ?? []) {
+      const m = /^([A-Z]+)(\d+):([A-Z]+)(\d+)$/.exec(ref);
+      if (!m) continue;
+      const c1 = colToIndex(m[1]!);
+      const c2 = colToIndex(m[3]!);
+      merges.push({ r1: Number(m[2]), c1, r2: Number(m[4]), c2 });
+    }
+    const expanded = new Map<string, string>();
+    const cellAt = (r: number, c: number): string => {
+      const hit = expanded.get(`${r}:${c}`);
+      if (hit !== undefined) return hit;
+      return cellText(ws.getRow(r).getCell(c).value);
+    };
+    for (const { r1, c1, r2, c2 } of merges) {
+      const anchor = cellAt(r1, c1);
+      for (let r = r1; r <= r2; r++) {
+        for (let c = c1; c <= c2; c++) expanded.set(`${r}:${c}`, anchor);
+      }
+    }
+    // 2) Materialize rows (exceljs row values are 1-indexed sparse arrays).
+    let maxCols = 0;
+    const rows: string[][] = [];
+    for (let r = 1; r <= ws.rowCount; r++) {
+      const row: string[] = [];
+      let hasValue = false;
+      const width = Math.max(ws.columnCount, maxMergedWidth(merges, r));
+      for (let c = 1; c <= width; c++) {
+        const v = cellAt(r, c);
+        row.push(v);
+        if (v.length > 0) hasValue = true;
+      }
+      maxCols = Math.max(maxCols, row.length);
+      if (hasValue) rows.push(row);
+    }
+    if (rows.length === 0) continue;
+    lines.push(`## Sheet: ${ws.name}`);
+    rows.forEach((row, i) => {
+      const cells = [...row];
+      while (cells.length < maxCols) cells.push('');
+      lines.push(`| ${cells.join(' | ')} |`);
+      // GFM separator right after the first row (single-row header by
+      // convention; multi-row headers just continue as more pipe rows).
+      if (i === 0) lines.push(`| ${cells.map(() => '---').join(' | ')} |`);
+    });
+  }
+  if (lines.length === 0) throw new Error('xlsx 解析得到 0 个内容块：所有工作表均为空');
+  return lines.join('\n');
+}
+
+/** Normalize an exceljs cell value to display text ('' for empty). */
+function cellText(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return String(v);
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  const obj = v as Record<string, unknown>;
+  if (Array.isArray(obj.richText)) {
+    return (obj.richText as Array<{ text?: string }>).map((t) => t.text ?? '').join('');
+  }
+  // Formula cells: prefer the cached result, fall back to the formula text.
+  if ('result' in obj) return cellText(obj.result);
+  if ('text' in obj) return String(obj.text);
+  if ('error' in obj) return String(obj.error);
+  return String(v);
+}
+
+function colToIndex(col: string): number {
+  let n = 0;
+  for (const ch of col) n = n * 26 + (ch.charCodeAt(0) - 'A'.charCodeAt(0) + 1);
+  return n;
+}
+
+/** Widest merged range touching row r (so expanded rows don't get truncated). */
+function maxMergedWidth(
+  merges: Array<{ r1: number; c1: number; r2: number; c2: number }>,
+  r: number,
+): number {
+  let w = 0;
+  for (const m of merges) {
+    if (r >= m.r1 && r <= m.r2) w = Math.max(w, m.c2);
+  }
+  return w;
+}
+
+/**
  * Ingest a born-digital file. Supports .txt/.md/.json (direct utf-8 read),
- * .pdf (pdf-parse), and .docx (mammoth HTML -> GFM markdown; tables kept).
+ * .pdf (pdf-parse), .docx (mammoth HTML -> GFM markdown; tables kept) and
+ * .xlsx (exceljs; merges expanded, one pipe row per sheet row).
  */
 export async function ingestWithDigital(
   sourceUri: string,
@@ -128,6 +236,10 @@ export async function ingestWithDigital(
     text = (await pdfParse(buf)).text;
   } else if (/\.docx$/i.test(sourceUri)) {
     text = await extractDocxText(sourceUri);
+  } else if (/\.xlsx$/i.test(sourceUri)) {
+    text = await extractXlsxText(sourceUri);
+  } else if (/\.xls$/i.test(sourceUri)) {
+    throw new Error('旧版 .xls 不支持解析，请先在 Excel 中另存为 .xlsx 再上传');
   } else {
     text = readFileSync(sourceUri, 'utf-8');
   }

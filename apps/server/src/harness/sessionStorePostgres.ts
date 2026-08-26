@@ -44,7 +44,7 @@ import type {
   MessageRow,
   FavoriteRow,
 } from './sessionStore.js';
-import { normalizeToUIMessage, parseTitle } from './sessionStore.js';
+import { normalizeToUIMessage, parseTitle, parseMetadata } from './sessionStore.js';
 
 /** Same dev default as lib/auth.ts (sca-pgvector docker container). */
 const DEFAULT_AGENT_PG_URL =
@@ -206,6 +206,26 @@ export function createAgentSessionStore(pool: Pool): SessionStoreBackend {
       );
     },
 
+    async mergeSessionMetadata(sessionId: string, patch: Record<string, unknown>): Promise<void> {
+      await ensure();
+      const { rows } = await pool.query<SessionRow>(
+        'SELECT id, role, created_at, updated_at, metadata_json, user_id FROM sessions WHERE id = $1',
+        [sessionId],
+      );
+      const row = rows[0];
+      if (!row) return;
+      let meta: Record<string, unknown> = {};
+      try {
+        meta = row.metadata_json ? (JSON.parse(row.metadata_json) as Record<string, unknown>) : {};
+      } catch {
+        meta = {};
+      }
+      await pool.query(
+        'UPDATE sessions SET metadata_json = $1, updated_at = $2 WHERE id = $3',
+        [JSON.stringify({ ...meta, ...patch }), new Date().toISOString(), sessionId],
+      );
+    },
+
     async listSessionsForUser(userId: string): Promise<SessionListItem[]> {
       await ensure();
       const { rows } = await pool.query<{
@@ -308,7 +328,7 @@ export function createAgentSessionStore(pool: Pool): SessionStoreBackend {
         [id],
       );
       const messages = msgRes.rows.map((r) => normalizeToUIMessage(JSON.parse(r.model_message_json)));
-      return { id: row.id, role: row.role, messages, title: parseTitle(row.metadata_json) };
+      return { id: row.id, role: row.role, messages, title: parseTitle(row.metadata_json), metadata: parseMetadata(row.metadata_json) };
     },
 
     async deleteSession(id: string): Promise<boolean> {

@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { randomUUID } from 'node:crypto';
-import { convertToModelMessages, type ModelMessage, type UIMessage } from 'ai';
+import { type ModelMessage, type UIMessage } from 'ai';
 import { z } from 'zod';
 import {
   getPending,
@@ -12,6 +12,7 @@ import {
 } from '../harness/sessionStore.js';
 import { startSessionRun, isRunning } from '../harness/runManager.js';
 import { runSession } from '../harness/runSession.js';
+import { buildHistoryModelMessages } from '../harness/historyCompaction.js';
 import type { Role } from '../harness/roleToolRegistry.js';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 
@@ -102,9 +103,11 @@ approvalCallback.post('/approval/callback', async (c) => {
   const session = await loadSession(sessionId);
   const role: Role = (session?.role ?? 'trader') as Role;
   const uiMessages = (session?.messages ?? []) as UIMessage[];
-  const baseModelMessages = uiMessages.length > 0
-    ? await convertToModelMessages(uiMessages)
-    : ([] as ModelMessage[]);
+  // Compaction-aware history conversion: [summary + tail] when a plan exists.
+  // `originalMessages` below stays the FULL UI history -- the SDK's
+  // continuation-mode assembly is UI-side and must not see a synthetic
+  // summary message.
+  const baseModelMessages = await buildHistoryModelMessages(uiMessages, session?.metadata);
 
   // Assemble the resume input. `extraModelMessages` carries one-shot messages
   // appended AFTER the persisted history:
