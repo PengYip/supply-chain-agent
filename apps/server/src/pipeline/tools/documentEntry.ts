@@ -766,7 +766,10 @@ async function parseWithOcrRetry(
     lastError = e;
   }
   // digital failed (0 blocks or threw): retry ONCE as scanned (MinerU OCR).
-  if (first === 'digital') {
+  // The OCR retry only applies to PDFs (a scanned doc is a PDF phenomenon);
+  // other formats (.txt/.md/.json/.docx) are born-digital by construction, so
+  // a MinerU retry would only burn a subprocess on a guaranteed failure.
+  if (first === 'digital' && /\.pdf$/i.test(sourceUri)) {
     try {
       const m = await attempt('scanned');
       if (m) return m;
