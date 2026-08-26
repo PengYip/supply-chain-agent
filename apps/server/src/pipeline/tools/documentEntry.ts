@@ -1159,12 +1159,20 @@ export function buildExtractFieldsTool(deps: ToolDeps) {
       if (!deps.extraction) {
         return { status: 'error' as const, reason: 'extraction_model_not_configured' };
       }
-      const templateTypes = await listTemplateTypes(deps.ctx);
-      const typeRow = templateTypes.find((t) => t.kind === 'doc_type' && t.name === docType);
+      let typeRow: { props: Record<string, unknown> } | undefined;
+      try {
+        const templateTypes = await listTemplateTypes(deps.ctx);
+        typeRow = templateTypes.find((t) => t.kind === 'doc_type' && t.name === docType);
+      } catch (e) {
+        // props 读取失败降级(不阻塞抽取): 按无 props 继续。
+        console.warn('[extraction] 模板 props 读取失败(降级为无 props):', e instanceof Error ? e.message : String(e));
+      }
       const result = await extractGroundedFields(deps.extraction, {
         blockModel, docType: docType as DocType,
         requiredFields: Array.isArray(typeRow?.props.requiredFields) ? (typeRow.props.requiredFields as string[]) : undefined,
-        fieldHints: typeof typeRow?.props.fieldHints === 'object' ? (typeRow.props.fieldHints as Record<string, string>) : undefined,
+        fieldHints: typeRow?.props.fieldHints !== null && typeof typeRow?.props.fieldHints === 'object' && !Array.isArray(typeRow.props.fieldHints)
+          ? (typeRow.props.fieldHints as Record<string, string>)
+          : undefined,
       });
       const fieldMeta: Record<string, { strength: SpanMatchStrength; confidence: number }> = {};
       const fields: Record<string, { value: string | number; sourceSpans: SourceSpan[] }> = {};
