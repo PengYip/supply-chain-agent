@@ -5,6 +5,7 @@ import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
 import type { SpanMatchStrength } from '../spanValidator.js';
 import { normalizeContractNo } from '../contractLedger.js';
 import type { ContractLedgerEntry } from '../contractLedger.js';
+import { rankContractSearch, type ContractSearchItem } from '../contractSearch.js';
 import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.js';
 import { normalizeCompanyName, parseSelfPartyNames } from '../../domain/flowDirection.js';
 import { deriveContractType, type ContractTypeDerivation } from '../../domain/contractType.js';
@@ -64,6 +65,7 @@ import {
   upsertContractLedgerEntryPg,
   findContractLedgerByNoPg,
   listContractLedgerEntriesPg,
+  searchContractLedgerPg,
   // Phase B bindings state machine: pg twins.
   findBindingByDocAndContractPg,
   listBindingProposalsPg,
@@ -2032,6 +2034,77 @@ export async function listContractLedgerEntries(
     needsReview: !!row.needs_review,
     userId: row.user_id,
   }));
+}
+
+/** LIKE 模式转义: %/_/\ 在 LIKE 中是通配符, 输入原样匹配时须转义。 */
+function likePattern(s: string): string {
+  return `%${s.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
+}
+
+const LEDGER_PARTY_KEYS = ['买方', '甲方', '卖方', '乙方'] as const;
+const LEDGER_COLS = `contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+                   overall_confidence, needs_review, user_id, contract_type`;
+type LedgerRow = {
+  contract_no: string; display_contract_no: string; doc_type: string; document_id: string;
+  title: string; fields: string; field_meta: string; overall_confidence: number;
+  needs_review: number; user_id: string; contract_type: string | null;
+};
+
+/**
+ * 合同台账搜索(spec 2026-08-26 §4.1): SQL LIKE 粗筛(LIMIT 200) + rankContractSearch
+ * JS 精排截断 limit。粗筛覆盖 编号(归一化前缀+原文包含)/标题/fields 四个主体键。
+ * user 过滤沿用 legacy 3-way OR。PG 走 searchContractLedgerPg。
+ */
+export async function searchContractLedger(
+  ctx: DbContext,
+  q: string,
+  userId?: string,
+  limit = 10,
+): Promise<ContractSearchItem[]> {
+  if (ctx.backend === 'postgres') return searchContractLedgerPg(ctx, q, userId, limit);
+  const raw = q.trim();
+  if (!raw) return [];
+  const uid = effectiveUserId(userId);
+  const like = likePattern(raw);
+  const nq = normalizeContractNo(raw);
+  const ors: string[] = [
+    'contract_no LIKE ? ESCAPE \'\\\'',
+    'display_contract_no LIKE ? ESCAPE \'\\\'',
+    'title LIKE ? ESCAPE \'\\\'',
+  ];
+  const params: unknown[] = [like, like, like];
+  for (const key of LEDGER_PARTY_KEYS) {
+    ors.push(`json_extract(fields, '$.${key}.value') LIKE ? ESCAPE '\\'`);
+    params.push(like);
+  }
+  if (nq) {
+    ors.push(`contract_no LIKE ? ESCAPE '\\'`);
+    params.push(`${nq.replace(/[\\%_]/g, (m) => `\\${m}`)}%`);
+  }
+  const userWhere = uid ? '(user_id = ? OR user_id = \'\' OR user_id IS NULL) AND ' : '';
+  const userParams = uid ? [uid] : [];
+  const rows = ctx.sqlite
+    .prepare(
+      `SELECT ${LEDGER_COLS} FROM contract_ledger
+       WHERE ${userWhere}(${ors.join(' OR ')})
+       ORDER BY updated_at DESC
+       LIMIT 200`,
+    )
+    .all(...userParams, ...params) as unknown as LedgerRow[];
+  const entries: ContractLedgerEntry[] = rows.map((row) => ({
+    contractNo: row.contract_no,
+    displayContractNo: row.display_contract_no,
+    docType: row.doc_type,
+    documentId: row.document_id,
+    title: row.title,
+    contractType: (row.contract_type as ContractLedgerEntry['contractType']) ?? null,
+    fields: JSON.parse(row.fields) as ContractLedgerEntry['fields'],
+    fieldMeta: JSON.parse(row.field_meta) as ContractLedgerEntry['fieldMeta'],
+    overallConfidence: row.overall_confidence,
+    needsReview: !!row.needs_review,
+    userId: row.user_id,
+  }));
+  return rankContractSearch(raw, entries, limit);
 }
 
 // ---- Execution flows (六向执行流水) ------------------------------------------

@@ -19,6 +19,7 @@ import type { PostgresDbContext } from './client.js';
 import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
 import { normalizeContractNo } from '../contractLedger.js';
 import type { ContractLedgerEntry } from '../contractLedger.js';
+import { rankContractSearch, type ContractSearchItem } from '../contractSearch.js';
 import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.js';
 import { normalizeCompanyName } from '../../domain/flowDirection.js';
 import { deriveContractType } from '../../domain/contractType.js';
@@ -360,6 +361,56 @@ export async function listContractLedgerEntriesPg(
     needsReview: !!r.needs_review,
     userId: r.user_id,
   }));
+}
+
+/** PG 版合同台账搜索: ILIKE 粗筛(fields 为 jsonb, 用 ->'键'->>'value') + JS 精排。 */
+export async function searchContractLedgerPg(
+  ctx: PostgresDbContext,
+  q: string,
+  userId?: string,
+  limit = 10,
+): Promise<ContractSearchItem[]> {
+  const raw = q.trim();
+  if (!raw) return [];
+  const uid = effectiveUserId(userId);
+  const esc = (s: string) => s.replace(/[\\%_]/g, (m) => `\\${m}`);
+  const like = `%${esc(raw)}%`;
+  const nq = esc(normalizeContractNo(raw));
+  const ors: string[] = [
+    'contract_no ILIKE $1', 'display_contract_no ILIKE $1', 'title ILIKE $1',
+    `fields->'买方'->>'value' ILIKE $1`, `fields->'甲方'->>'value' ILIKE $1`,
+    `fields->'卖方'->>'value' ILIKE $1`, `fields->'乙方'->>'value' ILIKE $1`,
+  ];
+  const params: unknown[] = [like];
+  if (nq) {
+    params.push(`${nq}%`);
+    ors.push(`contract_no ILIKE $${params.length}`);
+  }
+  const where = uid
+    ? `(user_id = $${params.length + 1} OR user_id = '' OR user_id IS NULL) AND (${ors.join(' OR ')})`
+    : `(${ors.join(' OR ')})`;
+  if (uid) params.push(uid);
+  const res = await ctx.pool.query(
+    `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+            overall_confidence, needs_review, user_id, contract_type
+     FROM contract_ledger WHERE ${where}
+     ORDER BY updated_at DESC LIMIT 200`,
+    params,
+  );
+  const entries: ContractLedgerEntry[] = res.rows.map((r) => ({
+    contractNo: r.contract_no,
+    displayContractNo: r.display_contract_no,
+    docType: r.doc_type,
+    documentId: r.document_id,
+    title: r.title,
+    contractType: (r.contract_type as ContractLedgerEntry['contractType']) ?? null,
+    fields: r.fields as ContractLedgerEntry['fields'],
+    fieldMeta: r.field_meta as ContractLedgerEntry['fieldMeta'],
+    overallConfidence: Number(r.overall_confidence),
+    needsReview: !!r.needs_review,
+    userId: r.user_id,
+  }));
+  return rankContractSearch(raw, entries, limit);
 }
 
 /**
