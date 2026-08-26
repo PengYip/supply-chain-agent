@@ -34,6 +34,7 @@ import {
   graphQuery,
   findEntities,
   listDocumentNodes,
+  graphLabelCounts,
   type GraphEntity,
 } from '../graph/repo.js';
 import { normalizeName } from '../graph/normalize.js';
@@ -217,6 +218,22 @@ graphRoute.get('/resolve', async (c) => {
     }
     console.error('[graph] resolve failed:', errDetail(e));
     return c.json({ error: 'resolve query failed', detail: errDetail(e) }, 500);
+  }
+});
+
+/** GET /api/graph/schema — 全部 label 计数(图例徽标, 60s 服务端缓存)。 */
+graphRoute.get('/schema', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  try {
+    const labels = await graphLabelCounts();
+    return c.json({ labels });
+  } catch (e) {
+    if (isGraphUnavailable(e)) {
+      return c.json({ error: '图谱服务未配置或不可用' }, 503);
+    }
+    console.error('[graph] graphLabelCounts failed:', errDetail(e));
+    return c.json({ error: 'schema query failed', detail: errDetail(e) }, 500);
   }
 });
 
