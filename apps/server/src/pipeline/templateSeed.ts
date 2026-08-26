@@ -10,7 +10,7 @@ import { ensureEdgeRule, ensureTemplateType } from './db/repositories.js';
 const DOC_TYPE_SEED: Array<{ name: string; parent?: string; props?: Record<string, unknown> }> = [
   { name: '合同' },
   { name: '补充合同', parent: '合同' },
-  { name: '立项书' },
+  { name: '立项书', props: { bindsTargetKind: 'Project' } },
   { name: '履约凭证' },
   { name: '货转单', parent: '履约凭证' },
   { name: '提单', parent: '货转单', props: { aliasOf: '货转单' } },
@@ -77,7 +77,7 @@ const EDGE_RULE_SEED: Array<{
   // 补充合同: amends 修订关系(新边类型, Phase 2 激活 L2 工具)
   { id: 'er-amend-buchong', src: '补充合同', edge: 'amends', vocab: [] },
   // 立项书: binds 终点泛化到 Project(spec Phase 2 开绑定路径)
-  { id: 'er-bind-lixiang', src: '立项书', edge: 'binds', vocab: ['立项'], active: false },
+  { id: 'er-bind-lixiang', src: '立项书', edge: 'binds', vocab: ['立项'] },
 ];
 
 /** 幂等灌入: 表空或部分存在都可重入(ensure* 均为 upsert)。 */

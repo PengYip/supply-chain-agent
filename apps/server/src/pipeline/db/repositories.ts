@@ -241,6 +241,8 @@ export interface BindingInput {
   confirmationSource?: ConfirmationSource | null;
   proposedBy?: BindingProposedBy;
   evidence?: BindingEvidence | null;
+  /** 绑定目标类型标记('Contract' | 'Project'), 缺省 'Contract'。 */
+  targetKind?: 'Contract' | 'Project';
 }
 
 export interface BindingRow {
@@ -258,6 +260,8 @@ export interface BindingRow {
   evidence: BindingEvidence | null;
   /** 工作台确认后图谱同步结果(JSON 落 bindings.graph_status)。 */
   graphStatus: BindingGraphStatus | null;
+  /** 绑定目标类型标记('Contract' | 'Project')。 */
+  targetKind: 'Contract' | 'Project';
 }
 
 // ---- Post-ingest review (Task 3) -------------------------------------------
@@ -689,6 +693,7 @@ export async function saveBinding(ctx: DbContext, input: BindingInput, userId?: 
     confirmationSource: input.confirmationSource ?? null,
     proposedBy: input.proposedBy ?? null,
     evidence: input.evidence ? JSON.stringify(input.evidence) : null,
+    targetKind: input.targetKind ?? 'Contract',
   }).run();
   return id;
 }
@@ -880,6 +885,7 @@ function rowToBinding(r: (typeof bindings)['$inferSelect']): BindingRow {
     proposedBy: (r.proposedBy ?? null) as BindingProposedBy | null,
     evidence: r.evidence ? (JSON.parse(r.evidence) as BindingEvidence) : null,
     graphStatus: parseGraphStatus(r.graphStatus ?? null),
+    targetKind: (r.targetKind ?? 'Contract') as 'Contract' | 'Project',
   };
 }
 

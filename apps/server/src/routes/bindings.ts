@@ -155,7 +155,7 @@ async function graphStatusFor(outcome: GraphSyncOutcome, reason?: string): Promi
 async function syncBindingEdgeWithMeta(
   db: DbContext,
   userId: string,
-  input: { docId: string; contractNo: string; relation: string; bindingId: string; confidence: number; templateVersion?: number },
+  input: { docId: string; contractNo: string; relation: string; bindingId: string; confidence: number; templateVersion?: number; dstKind?: 'Contract' | 'Project' },
 ) {
   let meta: Awaited<ReturnType<typeof getDocumentMeta>> = null;
   try {
@@ -336,6 +336,7 @@ const createSchema = z.object({
   contractNo: z.string().min(1),
   relation: z.string().min(1),
   note: z.string().optional(),
+  targetKind: z.enum(['Contract', 'Project']).optional(),
 });
 
 /** 手动创建绑定(upsert 语义, spec §7 幂等)。 */
@@ -353,6 +354,7 @@ bindingsRoute.post('/', async (c) => {
       const sync = await syncBindingEdgeWithMeta(db, user.id, {
         docId: documentId, contractNo, relation: existing.relation,
         bindingId: existing.id, confidence: existing.confidence,
+        dstKind: existing.targetKind,
       });
       const gs = await graphStatusFor(sync.outcome, sync.reason);
       await setBindingGraphStatus(db, existing.id, gs, user.id);
@@ -363,6 +365,14 @@ bindingsRoute.post('/', async (c) => {
   // 业务顺序门禁(2026-08-25): 执行类单据(非合同文件)绑定前, 目标合同必须已挂
   // 合同类型文件(先建立合同实体锚点)。合同文件本身不受限——它是链条第一步。
   const srcMeta = await getDocumentMeta(db, documentId, user.id);
+  // 目标类型判定(模板 props 驱动, 缺省 Contract): 读 docType 的 bindsTargetKind
+  // (裁决 #5: 非硬编码; 立项书种子 props.bindsTargetKind='Project')。
+  let targetKind: 'Contract' | 'Project' = parsed.data.targetKind ?? 'Contract';
+  if (srcMeta?.docType) {
+    const templateTypes = await listTemplateTypes(db);
+    const typeRow = templateTypes.find((t) => t.kind === 'doc_type' && t.name === srcMeta.docType);
+    if (typeRow?.props.bindsTargetKind === 'Project') targetKind = 'Project';
+  }
   if (srcMeta && srcMeta.docType !== '合同') {
     const established = await hasContractDocBinding(db, contractNo, user.id);
     if (!established) {
@@ -381,6 +391,7 @@ bindingsRoute.post('/', async (c) => {
     documentId, contractNo, relation, sourceRefs: [],
     confidence: 1, createdBy: user.id,
     status: 'confirmed', confirmationSource: 'human', proposedBy: 'agent',
+    targetKind,
   }, user.id);
   // 执行流水物化(hook): 手动创建 confirmed 绑定后物化; 失败仅告警, 绝不影响创建结果。
   try {
@@ -397,7 +408,7 @@ bindingsRoute.post('/', async (c) => {
   }
   // 方向编码类型(白名单外, 无流水物化): 类型自带 settles 方向, 直接落 settles 边。
   await syncSettlesByType(db, user.id, { documentId, contractNo, confidence: 1 });
-  const sync = await syncBindingEdgeWithMeta(db, user.id, { docId: documentId, contractNo, relation, bindingId, confidence: 1, templateVersion: gate.templateVersion ?? undefined });
+  const sync = await syncBindingEdgeWithMeta(db, user.id, { docId: documentId, contractNo, relation, bindingId, confidence: 1, templateVersion: gate.templateVersion ?? undefined, dstKind: targetKind });
   const gs = await graphStatusFor(sync.outcome, sync.reason);
   await setBindingGraphStatus(db, bindingId, gs, user.id);
   return c.json({ ok: true, bindingId, graphSync: sync.outcome, ...(sync.reason ? { graphReason: sync.reason } : {}) });

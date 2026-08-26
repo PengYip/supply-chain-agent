@@ -71,6 +71,8 @@ export const bindings = sqliteTable(
     evidence: text('evidence'),
     /** JSON(BindingGraphStatus): 工作台确认后图谱同步结果。 */
     graphStatus: text('graph_status'),
+    /** 绑定目标类型标记('Contract' | 'Project'): 立项书 binds->Project 泛化。 */
+    targetKind: text('target_kind').notNull().default('Contract'),
   },
   (t) => ({ userIdx: index('idx_bindings_user').on(t.userId) }),
 );

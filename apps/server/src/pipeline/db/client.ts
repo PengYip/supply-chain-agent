@@ -85,7 +85,9 @@ export function migrate(sqlite: Database.Database): void {
       status TEXT NOT NULL DEFAULT 'confirmed',
       confirmation_source TEXT,
       proposed_by TEXT,
-      evidence TEXT
+      evidence TEXT,
+      -- 立项书 binds->Project(spec 2026-08-26 §3.1): 绑定目标类型标记。
+      target_kind TEXT NOT NULL DEFAULT 'Contract'
     );
     CREATE INDEX IF NOT EXISTS idx_bindings_contract ON bindings(contract_no);
     CREATE INDEX IF NOT EXISTS idx_extractions_doc ON extractions(document_id);
@@ -455,6 +457,10 @@ export function migrate(sqlite: Database.Database): void {
     if (!has('graph_status')) {
       try { sqlite.exec('ALTER TABLE bindings ADD COLUMN graph_status TEXT'); } catch { /* concurrent */ }
     }
+    // 立项书 binds->Project(spec 2026-08-26 §3.1): 存量 dev 库补列, 同 guarded ALTER 模式。
+    if (!has('target_kind')) {
+      try { sqlite.exec("ALTER TABLE bindings ADD COLUMN target_kind TEXT NOT NULL DEFAULT 'Contract'"); } catch { /* concurrent */ }
+    }
   }
 
   // 合同类型维度(主体视角: 采购/销售/物流/租赁/服务/其他, spec 2026-08-20 §3):
@@ -543,6 +549,8 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     `ALTER TABLE bindings ADD COLUMN IF NOT EXISTS evidence TEXT`,
     // 绑定工作台: 确认后图谱同步结果(JSON(BindingGraphStatus))。
     `ALTER TABLE bindings ADD COLUMN IF NOT EXISTS graph_status TEXT`,
+    // 立项书 binds->Project(spec 2026-08-26 §3.1): 绑定目标类型标记。
+    `ALTER TABLE bindings ADD COLUMN IF NOT EXISTS target_kind TEXT NOT NULL DEFAULT 'Contract'`,
     `CREATE INDEX IF NOT EXISTS documents_user_id_idx ON documents(user_id)`,
     `CREATE INDEX IF NOT EXISTS extractions_user_id_idx ON extractions(user_id)`,
     `CREATE INDEX IF NOT EXISTS bindings_user_id_idx ON bindings(user_id)`,

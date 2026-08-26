@@ -161,8 +161,8 @@ export async function saveBindingPg(
   await ctx.pool.query(
     `INSERT INTO bindings
        (id, document_id, contract_no, relation, source_refs, confidence, created_by, user_id,
-        status, confirmation_source, proposed_by, evidence)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        status, confirmation_source, proposed_by, evidence, target_kind)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
     [
       id,
       input.documentId,
@@ -176,6 +176,7 @@ export async function saveBindingPg(
       input.confirmationSource ?? null,
       input.proposedBy ?? null,
       input.evidence ? JSON.stringify(input.evidence) : null,
+      input.targetKind ?? 'Contract',
     ],
   );
   return id;
@@ -297,6 +298,7 @@ function bindingRowFromPg(r: Record<string, unknown>): BindingRow {
     proposedBy: (r.proposed_by ?? null) as BindingProposedBy | null,
     evidence: r.evidence as BindingEvidence | null,
     graphStatus: parseGraphStatus((r.graph_status ?? null) as string | null),
+    targetKind: (r.target_kind ?? 'Contract') as 'Contract' | 'Project',
   };
 }
 

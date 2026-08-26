@@ -3,6 +3,7 @@
 // 落 bindings.graph_status 供前端角标/重试。io 可注入, 单测无需 Neo4j。
 import { createEntity, mergeEdge, removeEdge, findEntities } from '../graph/repo.js';
 import { normalizeName } from '../graph/normalize.js';
+import { normalizeProjectCode } from './db/repositories.js';
 
 export type GraphSyncOutcome = 'ok' | 'skipped' | 'failed';
 export interface BindingGraphSyncResult { outcome: GraphSyncOutcome; reason?: string }
@@ -36,14 +37,18 @@ async function ensureNode(
 }
 
 export async function syncBindingEdge(
-  input: { docId: string; docType?: string; sourceUri?: string | null; contractNo: string; relation: string; bindingId: string; confidence: number; templateVersion?: number },
+  input: { docId: string; docType?: string; sourceUri?: string | null; contractNo: string; relation: string; bindingId: string; confidence: number; templateVersion?: number; dstKind?: 'Contract' | 'Project' },
   io: BindingGraphSyncIo = defaultBindingGraphSyncIo,
 ): Promise<BindingGraphSyncResult> {
   if (!process.env.NEO4J_PASSWORD) return { outcome: 'skipped', reason: 'NEO4J_PASSWORD not set' };
   try {
-    // 节点名与 graphWriter 一致: Document.name = docId; Contract.name = normalizeName(合同号)。
-    const contractName = normalizeName(input.contractNo);
-    if (!contractName) return { outcome: 'failed', reason: 'contractNo normalized to empty' };
+    // 节点名与 graphWriter 一致: Document.name = docId; Contract.name = normalizeName(合同号);
+    // Project.name = normalizeProjectCode(项目码)。
+    const dstKind = input.dstKind ?? 'Contract';
+    const dstName = dstKind === 'Project'
+      ? normalizeProjectCode(input.contractNo)
+      : normalizeName(input.contractNo);
+    if (!dstName) return { outcome: 'failed', reason: 'dst key normalized to empty' };
     // Document 节点直接走 createEntity（MERGE 幂等）：ON MATCH SET 会把
     // sourceUri/docType 回填进既有节点——绑定先于抽取确认发生时，兜底节点缺
     // sourceUri，前端只能显示 docId；回填后自愈（2026-08-18）。
@@ -56,11 +61,11 @@ export async function syncBindingEdge(
         ...(input.sourceUri ? { sourceUri: input.sourceUri } : {}),
       },
     });
-    const contractNode = await ensureNode(io, 'Contract', contractName,
-      () => io.createEntity({ kind: 'Contract', name: contractName, props: { rawName: input.contractNo } }));
+    const dstNode = await ensureNode(io, dstKind, dstName,
+      () => io.createEntity({ kind: dstKind, name: dstName, props: { rawName: input.contractNo } }));
     await io.mergeEdge({
       srcId: docNode.elementId,
-      dstId: contractNode.elementId,
+      dstId: dstNode.elementId,
       kind: BINDS_EDGE,
       confidence: input.confidence,
       props: { bindingId: input.bindingId, relation: input.relation, source: 'workbench', ...(input.templateVersion ? { templateVersion: input.templateVersion } : {}) },
