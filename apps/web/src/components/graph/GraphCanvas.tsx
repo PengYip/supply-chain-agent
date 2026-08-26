@@ -36,6 +36,11 @@ export function GraphCanvas({
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<G6Graph | null>(null);
   const docMeta = useDocMeta();
+  // 渲染串行化: 所有 render/setData 排队执行, 避免并发渲染交错
+  // (StrictMode 双挂载、快速切换类型过滤时 render 仍在途)。
+  const renderChainRef = useRef<Promise<void>>(Promise.resolve());
+  // 已应用的类型过滤集合: 建图 effect 已按初始值渲染, hiddenKinds effect 跳过首次。
+  const appliedKindsRef = useRef<ReadonlySet<string> | null>(null);
 
   const toNodes = (nodes: GraphNode[]) =>
     nodes
@@ -84,6 +89,7 @@ export function GraphCanvas({
   // 建图(重挂载时全量重建)
   useEffect(() => {
     if (!containerRef.current) return;
+    appliedKindsRef.current = hiddenKinds;
     const nodes = toNodes(subgraph.nodes);
     const nodeIds = new Set(nodes.map((n) => n.id));
     const edges = toEdges(subgraph.edges, nodeIds);
@@ -91,12 +97,23 @@ export function GraphCanvas({
       container: containerRef.current,
       autoFit: 'view',
       data: { nodes, edges },
-      layout: { type: 'force', linkDistance: 90, nodeStrength: -120, collideStrength: 1 },
+      // 力导布局在 animation:false 下节点堆叠原点(实测 G6 5.1.1), 改用径向布局:
+      // 中心节点置中、其余按环半径展开, 契合"以查询节点为中心"的探索语义。
+      layout: {
+        type: 'radial',
+        focusNode: centerElementId ?? undefined,
+        unitRadius: 110,
+        linkDistance: 90,
+        preventOverlap: true,
+        nodeSize: 30,
+      },
       behaviors: ['drag-canvas', 'zoom-canvas', 'drag-element', 'click-select'],
       plugins: [{ type: 'minimap', size: [140, 90] }],
       animation: false,
     });
     graphRef.current = graph;
+    // 本实例销毁标记: StrictMode 卸载后, 排队的异步渲染续体不得再触碰该实例。
+    let disposed = false;
 
     // G6 v5 事件对象 target 是元素实例(带 id), 数据经 graph.getElementData(id) 取回。
     graph.on<IElementEvent>('node:click', (ev) => {
@@ -122,16 +139,29 @@ export function GraphCanvas({
     });
     graph.on('node:pointerleave', () => onHover(null));
 
-    void graph.render()
+    // 渲染入队: 销毁后跳过, 避免 G6 render 续体访问已清空的 context 抛 TypeError。
+    // 首帧延迟到 requestAnimationFrame: StrictMode 双挂载在提交阶段同步完成,
+    // 实例 A 会在 RAF 前被销毁(disposed=true), 其渲染根本不启动, 消除 G6 内部
+    // "instance has been destroyed" 中断日志。
+    renderChainRef.current = renderChainRef.current
+      .then(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          }),
+      )
       .then(() => {
-        if (centerElementId) {
-          // focusElement 返回 Promise, 异步拒绝用 catch 吞掉(中心节点被过滤时不定位)。
-          graph.focusElement(centerElementId).catch(() => { /* 中心节点被过滤时不定位 */ });
-        }
+        if (disposed) return;
+        return graph.render();
       })
-      .catch(console.error);
+      .catch((e) => {
+        if (!disposed) console.error(e);
+      });
+    // 注: 不调用 focusElement — 它会把视口缩放到单个节点(实测 G6 5.1.1),
+    // autoFit:'view' + radial focusNode 已让中心节点居中, 无需二次定位。
 
     return () => {
+      disposed = true;
       graph.destroy();
       graphRef.current = null;
     };
@@ -139,14 +169,24 @@ export function GraphCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // hiddenKinds 变化: 过滤重绘(不重建实例)
+  // hiddenKinds 变化: 过滤重绘(不重建实例); 首次挂载已由建图 effect 渲染, 跳过避免并发 render。
   useEffect(() => {
     const graph = graphRef.current;
     if (!graph) return;
+    if (appliedKindsRef.current === hiddenKinds) return;
+    appliedKindsRef.current = hiddenKinds;
     const nodes = toNodes(subgraph.nodes);
     const nodeIds = new Set(nodes.map((n) => n.id));
-    graph.setData({ nodes, edges: toEdges(subgraph.edges, nodeIds) });
-    void graph.render();
+    const edges = toEdges(subgraph.edges, nodeIds);
+    renderChainRef.current = renderChainRef.current
+      .then(() => {
+        if (graphRef.current !== graph) return; // 实例已被销毁/替换
+        graph.setData({ nodes, edges });
+        return graph.render();
+      })
+      .catch((e) => {
+        if (graphRef.current === graph) console.error(e);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hiddenKinds]);
 
