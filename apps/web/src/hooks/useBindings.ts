@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { normalizeFlowSkips } from '../lib/flowSkip';
+import { fetchTemplateContext, type TemplateContext } from '../api/templateContext';
 
 /* ---------- 契约(与 server routes/bindings.ts 一致) ---------- */
 
@@ -95,10 +96,10 @@ const DOC_TYPE_OPTIONS = ['合同', '发票', '提单', '装箱单', '货转单'
 
 /* ---------- 响应解析(照 useGraph.ts 模式: {ok,data} 信封兼容 + 中文错误) ---------- */
 
-async function getJson<T>(url: string): Promise<T> {
+async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(url, { credentials: 'include' });
+    res = await fetch(url, { credentials: 'include', signal });
   } catch {
     throw new Error('网络错误，请稍后重试');
   }
@@ -312,6 +313,12 @@ export function useBindings() {
   const [candidatesLoading, setCandidatesLoading] = useState(false);
   const [candidatesError, setCandidatesError] = useState<string | null>(null);
 
+  // 模板上下文(双下拉数据源): 仅最新文档的; 切档/清除文档时置 null。
+  const [templateContext, setTemplateContext] = useState<TemplateContext | null>(null);
+  const [templateContextLoading, setTemplateContextLoading] = useState(false);
+  const [templateContextError, setTemplateContextError] = useState<{ docId: string; message: string } | null>(null);
+  const templateContextAbortRef = useRef<AbortController | null>(null);
+
   const [contracts, setContracts] = useState<ContractOption[]>([]);
 
   // 文档类型可选值: 初始为兜底常量, overview 响应携带 docTypes 时以后端为准。
@@ -413,6 +420,26 @@ export function useBindings() {
     }
   }, []);
 
+  /** 加载模板上下文(双下拉数据源)。abort 竞态防护: 后发先至丢弃。 */
+  const loadTemplateContext = useCallback(async (docId: string) => {
+    templateContextAbortRef.current?.abort();
+    const ac = new AbortController();
+    templateContextAbortRef.current = ac;
+    setTemplateContextLoading(true);
+    setTemplateContextError(null);
+    try {
+      const data = await fetchTemplateContext(docId, ac.signal);
+      if (ac.signal.aborted) return;              // 后发先至丢弃
+      setTemplateContext({ ...data, documentId: data.documentId || docId });
+    } catch (e) {
+      if (ac.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) return;
+      setTemplateContext(null);
+      setTemplateContextError({ docId, message: e instanceof Error ? e.message : '模板上下文加载失败' });
+    } finally {
+      if (!ac.signal.aborted) setTemplateContextLoading(false);
+    }
+  }, []);
+
   /* ---------- 写操作(页面二次确认后调用; 乐观更新由视图层负责) ---------- */
 
   const confirmBinding = useCallback(
@@ -476,15 +503,18 @@ export function useBindings() {
     [],
   );
 
-  /** 写操作成功后的统一对账(总览 + 建议 + 当前文档候选)。 */
+  /** 写操作成功后的统一对账(总览 + 建议 + 当前文档候选 + 模板上下文)。 */
   const refreshAll = useCallback(
     (docId: string | null) => {
       void refreshOverview();
       void refreshProposals();
-      if (docId) void loadCandidates(docId);
+      if (docId) { void loadCandidates(docId); void loadTemplateContext(docId); }
     },
-    [refreshOverview, refreshProposals, loadCandidates],
+    [refreshOverview, refreshProposals, loadCandidates, loadTemplateContext],
   );
+
+  // 组件卸载时 abort 在途模板上下文请求。
+  useEffect(() => () => { templateContextAbortRef.current?.abort(); }, []);
 
   /** 视图层乐观更新入口：对 overview 应用补丁(失败时可用快照整体回滚)。 */
   const patchOverview = useCallback((fn: (prev: OverviewDoc[]) => OverviewDoc[]) => {
@@ -509,6 +539,10 @@ export function useBindings() {
     candidatesLoading,
     candidatesError,
     loadCandidates,
+    templateContext,
+    templateContextLoading,
+    templateContextError,
+    loadTemplateContext,
     contracts,
     docTypes,
     confirmBinding,
