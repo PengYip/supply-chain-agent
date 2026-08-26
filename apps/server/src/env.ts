@@ -51,6 +51,24 @@ const EnvSchema = z.object({
    *  returns a STRUCTURED {status:'error', reason:'tool_timeout'} result (not a
    *  throw) so the model can adapt next turn. CI-safe permissive default. */
   TOOL_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
+  /** Agent loop caps (2026-08: configurable after "stuck after tool call"
+   * reports). AGENT_MAX_STEPS caps streamText steps per user turn (stopWhen
+   * stepCountIs); on the last allowed step tools are disabled and the model
+   * is forced to produce a text closing (OpenCode MAX_STEPS_PROMPT pattern).
+   * AGENT_FAILURE_THRESHOLD is the circuit breaker threshold: consecutive
+   * tool failures OR identical (tool,args) repeat calls that trip it stop the
+   * loop early. */
+  AGENT_MAX_STEPS: z.coerce.number().int().positive().default(20),
+  AGENT_FAILURE_THRESHOLD: z.coerce.number().int().positive().default(3),
+  /** Conversation-level history compaction (Codex/Pi auto-compact pattern).
+   * When a run's total token usage crosses CONTEXT_WINDOW - RESERVE, old
+   * turns are LLM-summarized and the boundary is stored in session metadata;
+   * later turns send [summary + recent tail] instead of full history.
+   * Deliberately NO round cap -- context is capped by tokens, not rounds. */
+  AGENT_CONTEXT_WINDOW_TOKENS: z.coerce.number().int().positive().default(65536),
+  AGENT_COMPACT_RESERVE_TOKENS: z.coerce.number().int().positive().default(16384),
+  /** How many trailing messages survive a compaction verbatim. */
+  AGENT_COMPACT_KEEP_MESSAGES: z.coerce.number().int().min(0).default(20),
   // Neo4j graph store (Phase 4 §7). The ONLY graph store — dev/CI/prod all
   // connect to the ubuntu-server Neo4j over the network. PASSWORD defaults to
   // '' so env.ts zod-parses cleanly in CI (which only injects OPENAI_API_KEY)

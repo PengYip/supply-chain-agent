@@ -35,7 +35,7 @@ import type {
   MessageRow,
   FavoriteRow,
 } from './sessionStore.js';
-import { normalizeToUIMessage, parseTitle } from './sessionStore.js';
+import { normalizeToUIMessage, parseTitle, parseMetadata } from './sessionStore.js';
 
 // File-backed SQLite (WAL) for durable agent sessions + pending approvals.
 // Production swaps this for Postgres (sessionStorePostgres.ts) -- the facade
@@ -260,6 +260,18 @@ async function setSessionTitle(sessionId: string, title: string): Promise<void> 
   stmtUpdateMetadata.run(JSON.stringify(meta), new Date().toISOString(), sessionId);
 }
 
+async function mergeSessionMetadata(sessionId: string, patch: Record<string, unknown>): Promise<void> {
+  const row = stmtGetSession.get(sessionId) as SessionRow | undefined;
+  if (!row) return;
+  let meta: Record<string, unknown> = {};
+  try {
+    meta = row.metadata_json ? (JSON.parse(row.metadata_json) as Record<string, unknown>) : {};
+  } catch {
+    meta = {};
+  }
+  stmtUpdateMetadata.run(JSON.stringify({ ...meta, ...patch }), new Date().toISOString(), sessionId);
+}
+
 async function listSessionsForUser(userId: string) {
   const rows = stmtListSessionsForUser.all(userId, userId) as Array<{
     id: string;
@@ -332,7 +344,7 @@ async function loadSession(id: string) {
   if (!row) return null;
   const rows = stmtListMessages.all(id) as MessageRow[];
   const messages = rows.map((r) => normalizeToUIMessage(JSON.parse(r.model_message_json)));
-  return { id: row.id, role: row.role, messages, title: parseTitle(row.metadata_json) };
+  return { id: row.id, role: row.role, messages, title: parseTitle(row.metadata_json), metadata: parseMetadata(row.metadata_json) };
 }
 
 async function deleteSession(id: string): Promise<boolean> {
@@ -513,6 +525,7 @@ async function countPendingApprovals(sessionId: string): Promise<number> {
 export const sqliteSessionStore: SessionStoreBackend = {
   createSession,
   setSessionTitle,
+  mergeSessionMetadata,
   listSessionsForUser,
   purgeEmptySessionsForUser,
   setSessionStatus,

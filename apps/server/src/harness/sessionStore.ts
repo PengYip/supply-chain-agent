@@ -40,6 +40,9 @@ export interface LoadedSession {
   messages: UIMessage[];
   /** Auto-generated session title (Phase 5); stored in metadata_json. */
   title?: string;
+  /** Parsed sessions.metadata_json blob (title, historyCompaction, ...).
+   * Undefined when the row has no/invalid metadata. */
+  metadata?: Record<string, unknown>;
 }
 
 export type ApprovalLevel = 'L2' | 'L3';
@@ -164,6 +167,9 @@ export interface SessionStatusInfo {
 export interface SessionStoreBackend {
   createSession(role: Role, userId?: string | null): Promise<SessionInfo>;
   setSessionTitle(sessionId: string, title: string): Promise<void>;
+  /** Read-modify-write merge of keys into sessions.metadata_json (same
+   * pattern as setSessionTitle; used by historyCompaction). */
+  mergeSessionMetadata(sessionId: string, patch: Record<string, unknown>): Promise<void>;
   listSessionsForUser(userId: string): Promise<SessionListItem[]>;
   purgeEmptySessionsForUser(userId: string): Promise<number>;
   setSessionStatus(id: string, status: SessionStatus, runId?: string): Promise<void>;
@@ -206,6 +212,19 @@ export function parseTitle(metadataJson: string | null | undefined): string | un
   try {
     const meta = JSON.parse(metadataJson) as { title?: unknown };
     return typeof meta.title === 'string' ? meta.title : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Parse the full metadata_json blob into an object (defensive; undefined on
+ * missing/invalid JSON). Used by both backends' loadSession so callers get
+ * structured access to keys beyond `title` (e.g. historyCompaction). */
+export function parseMetadata(metadataJson: string | null | undefined): Record<string, unknown> | undefined {
+  if (!metadataJson) return undefined;
+  try {
+    const meta = JSON.parse(metadataJson) as Record<string, unknown>;
+    return meta && typeof meta === 'object' ? meta : undefined;
   } catch {
     return undefined;
   }
@@ -268,6 +287,18 @@ export async function createSession(role: Role, userId?: string | null): Promise
  */
 export async function setSessionTitle(sessionId: string, title: string): Promise<void> {
   return (await getBackend()).setSessionTitle(sessionId, title);
+}
+
+/**
+ * Merge `patch` into the session's metadata_json blob (shallow, {...meta,
+ * ...patch}). No schema migration; other metadata keys are preserved. No-op if
+ * the session does not exist.
+ */
+export async function mergeSessionMetadata(
+  sessionId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  return (await getBackend()).mergeSessionMetadata(sessionId, patch);
 }
 
 /** List chat sessions owned by a user (Phase 2 data isolation). Includes the

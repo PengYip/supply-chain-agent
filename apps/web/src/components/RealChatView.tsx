@@ -814,7 +814,7 @@ export const RealChatView: React.FC<{
               type="file"
               className="hidden"
               onChange={handleFileUpload}
-              accept=".pdf,.txt,.md,.docx,.json"
+              accept=".pdf,.txt,.md,.docx,.xlsx,.json"
             />
             <button
               type="button"

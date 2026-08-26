@@ -28,6 +28,7 @@ import { runStream, recordL2PendingFromResponse } from './agent.js';
 import { appendMessages, replaceMessage, setSessionTitle } from './sessionStore.js';
 import { emit } from './sessionEvents.js';
 import { generateSessionTitle, getTitleModel } from './titleGen.js';
+import { maybeCompactHistory } from './historyCompaction.js';
 import type { Role } from './roleToolRegistry.js';
 
 export interface RunSessionOpts {
@@ -96,6 +97,20 @@ export async function runSession(opts: RunSessionOpts): Promise<void> {
     skipStatusMessage,
   });
 
+  // History compaction trigger (B): after the turn, compare the run's TOTAL
+  // token usage against AGENT_CONTEXT_WINDOW_TOKENS - RESERVE; on breach,
+  // fire-and-forget an LLM summarization of older turns (fail-open inside).
+  result.totalUsage.then(
+    (u) => {
+      void maybeCompactHistory({ sessionId, totalTokens: u.totalTokens ?? 0 }).catch(() => {
+        /* compaction is best-effort; full history is the fallback */
+      });
+    },
+    () => {
+      /* stream errors surface via the consumed uiStream */
+    },
+  );
+
   // After the stream completes, record any L2 soft-gate approvals requested this
   // turn + fire title-gen on the first exchange. Same fire-and-forget pattern
   // chat.ts uses via result.response.then(...). result.response is a PromiseLike
@@ -135,6 +150,22 @@ export async function runSession(opts: RunSessionOpts): Promise<void> {
     // closes), so the message is durably persisted by the time the for-await
     // loop below exits.
     onFinish: async ({ responseMessage, isContinuation }) => {
+      // Step-cap closing fallback (A): if the turn ended WITHOUT any text
+      // part (circuit breaker tripped mid-tools, or the model ignored the
+      // closing instruction), append a deterministic closing text so the
+      // user never stares at a dangling tool result. Skipped when the
+      // message carries an approval-requested tool part -- that is the
+      // legitimate "waiting for user" terminal state, and the SDK must keep
+      // assembling it (extra text would confuse the L2 resume pairing).
+      const parts = (responseMessage as UIMessage).parts ?? [];
+      const hasText = parts.some((p) => p?.type === 'text' && String((p as { text?: string }).text ?? '').trim().length > 0);
+      const hasApprovalRequest = parts.some((p) => (p as { state?: string }).state === 'approval-requested');
+      if (!hasText && !hasApprovalRequest && !abortSignal.aborted) {
+        parts.push({
+          type: 'text',
+          text: '本轮对话已停止：工具调用连续失败或达到步数上限，未能生成完整回复。请稍后重试，或换一种问法分步提出请求。',
+        } as unknown as (typeof parts)[number]);
+      }
       if (isContinuation) {
         // Continuation run (L2 resume seeded from the approval-requested
         // assistant message): update that message IN PLACE — its tool part

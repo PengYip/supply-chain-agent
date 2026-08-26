@@ -68,15 +68,23 @@ const DOC_TYPE_ERROR_TEXT: Record<string, string> = {
   document_not_found: '文档不存在或已删除',
 };
 
+/** 外部定位请求（App 分配）：文件抽屉「未绑定」徽标跳转时按 docId 选中。
+ *  nonce 变化即视为一次新请求（同一文件重复点击也重新选中）。 */
+export interface DocFocus {
+  docId: string;
+  nonce: number;
+}
+
 export function BindingsView({
   onOpenInGraph,
-  focus = null,
+  docFocus,
 }: {
   onOpenInGraph?: (target: GraphFocusTarget) => void;
-  focus?: { docId: string; nonce: number } | null;
+  /** 外部定位深链（图谱 Inspector「去审核」与文件抽屉徽标共用，App 统一注入）。 */
+  docFocus?: DocFocus | null;
 }) {
   const b = useBindings();
-  const { overview, proposals, candidates, contracts, loading } = b;
+  const { overview, proposals, candidates, contracts } = b;
 
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
   const [selected, setSelected] = useState<OverviewDoc | null>(null);
@@ -84,20 +92,6 @@ export function BindingsView({
   const [docsCollapsed, setDocsCollapsed] = useState(false);
   const [detailCollapsed, setDetailCollapsed] = useState(false);
 
-  // 图谱 Inspector -> 绑定工作台深链: nonce 保证重复跳转同一文档也触发。
-  const handledFocusNonceRef = useRef(-1);
-  useEffect(() => {
-    if (!focus || focus.nonce === handledFocusNonceRef.current) return;
-    // overview 未就绪(首次加载中且列表为空)时不消费 nonce, 等数据到位后 effect 重跑再定位。
-    if (loading && overview.length === 0) return;
-    handledFocusNonceRef.current = focus.nonce;
-    const doc = overview.find((d) => d.docId === focus.docId);
-    if (doc) handleSelectDoc(doc);
-    // handleSelectDoc 为普通函数, 直接引用; 依赖 overview/loading 即可。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus, overview, loading]);
-
-  // 合同过滤(spec 2026-08-26 §4.5): 选中合同 -> 左栏只显示绑定该合同的文档并定位首个。
   const [contractFilter, setContractFilter] = useState<ContractSearchItem | null>(null);
   const filteredOverview = useMemo(() => {
     if (!contractFilter) return overview;
@@ -271,6 +265,20 @@ export function BindingsView({
     },
     [overview],
   );
+
+  // 外部定位（文件抽屉「未绑定」徽标跳转）：overview 尚在加载时先等待，加载
+  // 完成后按 docId 选中并载入候选；列表里找不到（已删除等）则静默放弃。
+  // nonce ref 防重复消费——effect 因 overview/loading/handleSelectDoc 身份变化
+  // 重跑时直接短路，不会重复选中。
+  const handledDocFocusNonceRef = useRef(0);
+  useEffect(() => {
+    if (!docFocus || docFocus.nonce === handledDocFocusNonceRef.current) return;
+    if (b.loading) return;
+    handledDocFocusNonceRef.current = docFocus.nonce;
+    const doc = overview.find((d) => d.docId === docFocus.docId);
+    if (doc) handleSelectDoc(doc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 见上注释
+  }, [docFocus, overview, b.loading]);
 
   const handleClearDoc = () => {
     setSelectedDocId(null);

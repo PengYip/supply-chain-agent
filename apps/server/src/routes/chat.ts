@@ -14,6 +14,7 @@ import {
 } from '../harness/sessionStore.js';
 import { startSessionRun } from '../harness/runManager.js';
 import { runSession, extractMessageText } from '../harness/runSession.js';
+import { buildHistoryModelMessages } from '../harness/historyCompaction.js';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
 import type { DbContext } from '../pipeline/db/client.js';
@@ -145,10 +146,14 @@ chatRoute.post('/chat', async (c) => {
     return c.json({ error: 'Failed to convert messages', detail: msg }, 400);
   }
   await appendMessages(sessionId, messages as UIMessage[]);
-  // Convert prior persisted UIMessages -> ModelMessages for streamText input.
-  const priorModelMessages = priorMessages.length > 0
-    ? (await convertToModelMessages(priorMessages as UIMessage[]))
-    : ([] as ModelMessage[]);
+  // Convert prior persisted UIMessages -> ModelMessages for streamText input,
+  // applying the stored history-compaction plan when present ([summary +
+  // recent tail] instead of full history). Identical to a plain conversion
+  // when no valid plan exists.
+  const priorModelMessages = await buildHistoryModelMessages(
+    priorMessages as UIMessage[],
+    loaded?.metadata,
+  );
 
   // Base conversation for this run (prior history + this turn's new messages).
   // When the user @-references files this turn, the file-parsing backstop
