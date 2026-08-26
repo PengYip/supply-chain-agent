@@ -38,6 +38,7 @@ const EXPECTED_TOOLS = [
   'link_contracts',
   'link_projects',
   'link_amends',
+  'template_overview',
   'manage_quota',
   'query_quota_usage',
 ] as const;

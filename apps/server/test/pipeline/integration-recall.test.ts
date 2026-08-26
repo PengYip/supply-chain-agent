@@ -276,9 +276,9 @@ describe('integration: document-entry -> hybrid recall chain', () => {
     // recall_documents + execute_code + inspect_extraction + tag_document +
     // create_entity + link_entities + graph_query + graph_find_entity +
     // present_document_review + update_document_fields + list_binding_proposals
-    // + project_rollup + link_contracts + link_projects + link_amends + manage_quota +
-    // query_quota_usage = 26 live trader tools.
-    expect(names).toHaveLength(26);
+    // + project_rollup + link_contracts + link_projects + link_amends + template_overview + manage_quota +
+    // query_quota_usage = 27 live trader tools.
+    expect(names).toHaveLength(27);
     expect(names).toContain('recall_documents');
     expect(names).toContain('ingest_document');
     expect(names).toContain('extract_fields');
