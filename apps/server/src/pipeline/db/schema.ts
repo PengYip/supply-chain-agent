@@ -235,3 +235,41 @@ export const quotas = sqliteTable(
     userIdx: index('idx_quotas_user').on(t.userId),
   }),
 );
+
+/** 模板类型注册表(spec 2026-08-26 §3.1): 全局本体, 无 user_id。 */
+export const templateTypes = sqliteTable('template_types', {
+  id: text('id').primaryKey(),
+  kind: text('kind').notNull(),
+  name: text('name').notNull(),
+  parentId: text('parent_id'),
+  props: text('props').notNull().default('{}'),
+  isActive: integer('is_active').notNull().default(1),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (t) => [
+  uniqueIndex('template_types_kind_name_uq').on(t.kind, t.name),
+  index('template_types_parent').on(t.parentId),
+]);
+
+/** 模板边规则(spec 2026-08-26 §3.2): target_type_id='' 通配任意合同类型。 */
+export const templateEdgeRules = sqliteTable('template_edge_rules', {
+  id: text('id').primaryKey(),
+  sourceTypeId: text('source_type_id').notNull(),
+  targetTypeId: text('target_type_id').notNull().default(''),
+  edgeType: text('edge_type').notNull(),
+  allowedVocab: text('allowed_vocab').notNull().default('[]'),
+  anchorWeights: text('anchor_weights'),
+  isActive: integer('is_active').notNull().default(1),
+  templateVersion: integer('template_version').notNull().default(1),
+  createdAt: text('created_at').notNull(),
+}, (t) => [
+  index('template_edge_rules_src').on(t.sourceTypeId, t.edgeType),
+]);
+
+/** 模板版本审计(spec 2026-08-26 §3.3)。 */
+export const templateVersions = sqliteTable('template_versions', {
+  version: integer('version').primaryKey(),
+  changedBy: text('changed_by').notNull(),
+  changeSummary: text('change_summary').notNull(),
+  changedAt: text('changed_at').notNull(),
+});

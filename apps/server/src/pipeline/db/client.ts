@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import {
   documents, extractions, bindings, fileFolders, classifications, documentTags, selfParties,
+  templateTypes, templateEdgeRules, templateVersions,
 } from './schema.js';
 // Type-only import: erased at emit, so SQLite-only hosts do not need pg installed
 // to RUN; only the Postgres path (postgres-client.ts) does a real `import { Pool }`.
@@ -34,7 +35,7 @@ export function createDb(path = ':memory:'): SqliteDbContext {
   const sqlite = new Database(path);
   sqlite.pragma('journal_mode = WAL');
   const db = drizzle(sqlite, {
-    schema: { documents, extractions, bindings, fileFolders, classifications, documentTags, selfParties },
+    schema: { documents, extractions, bindings, fileFolders, classifications, documentTags, selfParties, templateTypes, templateEdgeRules, templateVersions },
   });
   return { backend: 'sqlite', db, sqlite };
 }
@@ -295,6 +296,41 @@ export function migrate(sqlite: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_quotas_owner ON quotas(scope, owner_key, user_id);
     CREATE INDEX IF NOT EXISTS idx_quotas_user ON quotas(user_id);
+
+    -- 业务图谱模板(spec 2026-08-26 §3): 模板层 SSOT, 全局本体无 user_id。
+    -- target_type_id = '' 是通配(任意合同类型); allowed_vocab/anchor_weights 为 JSON。
+    CREATE TABLE IF NOT EXISTS template_types (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      name TEXT NOT NULL,
+      parent_id TEXT,
+      props TEXT NOT NULL DEFAULT '{}',
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS template_types_kind_name_uq ON template_types (kind, name);
+    CREATE INDEX IF NOT EXISTS template_types_parent ON template_types (parent_id);
+
+    CREATE TABLE IF NOT EXISTS template_edge_rules (
+      id TEXT PRIMARY KEY,
+      source_type_id TEXT NOT NULL,
+      target_type_id TEXT NOT NULL DEFAULT '',
+      edge_type TEXT NOT NULL,
+      allowed_vocab TEXT NOT NULL DEFAULT '[]',
+      anchor_weights TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      template_version INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS template_edge_rules_src ON template_edge_rules (source_type_id, edge_type);
+
+    CREATE TABLE IF NOT EXISTS template_versions (
+      version INTEGER PRIMARY KEY,
+      changed_by TEXT NOT NULL,
+      change_summary TEXT NOT NULL,
+      changed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
   `);
 
   // Phase 2 business-data isolation: add user_id to pre-existing dev databases.
@@ -696,6 +732,37 @@ export async function migratePostgres(pool: Pool): Promise<void> {
      )`,
     `CREATE INDEX IF NOT EXISTS idx_quotas_owner ON quotas (scope, owner_key, user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_quotas_user ON quotas (user_id)`,
+    // 模板三表(spec 2026-08-26)。TEXT(JSON) 与 SQLite 对齐。
+    `CREATE TABLE IF NOT EXISTS template_types (
+       id TEXT PRIMARY KEY,
+       kind TEXT NOT NULL,
+       name TEXT NOT NULL,
+       parent_id TEXT,
+       props TEXT NOT NULL DEFAULT '{}',
+       is_active INTEGER NOT NULL DEFAULT 1,
+       created_at TEXT NOT NULL DEFAULT now(),
+       updated_at TEXT NOT NULL DEFAULT now()
+     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS template_types_kind_name_uq ON template_types (kind, name)`,
+    `CREATE INDEX IF NOT EXISTS template_types_parent ON template_types (parent_id)`,
+    `CREATE TABLE IF NOT EXISTS template_edge_rules (
+       id TEXT PRIMARY KEY,
+       source_type_id TEXT NOT NULL,
+       target_type_id TEXT NOT NULL DEFAULT '',
+       edge_type TEXT NOT NULL,
+       allowed_vocab TEXT NOT NULL DEFAULT '[]',
+       anchor_weights TEXT,
+       is_active INTEGER NOT NULL DEFAULT 1,
+       template_version INTEGER NOT NULL DEFAULT 1,
+       created_at TEXT NOT NULL DEFAULT now()
+     )`,
+    `CREATE INDEX IF NOT EXISTS template_edge_rules_src ON template_edge_rules (source_type_id, edge_type)`,
+    `CREATE TABLE IF NOT EXISTS template_versions (
+       version INTEGER PRIMARY KEY,
+       changed_by TEXT NOT NULL,
+       change_summary TEXT NOT NULL,
+       changed_at TEXT NOT NULL DEFAULT now()
+     )`,
     // L4 FTS fix (2026-08-17): drizzle migration 0000 created doc_chunk.fts_vector
     // as a PLAIN tsvector column (no GENERATED), so it stays NULL forever and
     // every FTS query silently returns 0 hits. Recreate it as a GENERATED column

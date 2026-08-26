@@ -326,6 +326,54 @@ export const quotas = pgTable(
   }),
 );
 
+/**
+ * 模板三表(spec 2026-08-26 §3): 模板层 SSOT, 全局本体无 user_id。Mirrors SQLite
+ * schema.ts 列对列; TEXT(JSON) 与 SQLite 对齐(本文件 JSON-in-TEXT 惯例)。
+ * target_type_id='' 通配任意合同类型。
+ */
+export const templateTypes = pgTable(
+  'template_types',
+  {
+    id: text('id').primaryKey(),
+    kind: text('kind').notNull(),
+    name: text('name').notNull(),
+    parentId: text('parent_id'),
+    props: text('props').notNull().default('{}'),
+    isActive: integer('is_active').notNull().default(1),
+    createdAt: nowTs(),
+    updatedAt: nowTs(),
+  },
+  (t) => [
+    uniqueIndex('template_types_kind_name_uq').on(t.kind, t.name),
+    index('template_types_parent').on(t.parentId),
+  ],
+);
+
+export const templateEdgeRules = pgTable(
+  'template_edge_rules',
+  {
+    id: text('id').primaryKey(),
+    sourceTypeId: text('source_type_id').notNull(),
+    targetTypeId: text('target_type_id').notNull().default(''),
+    edgeType: text('edge_type').notNull(),
+    allowedVocab: text('allowed_vocab').notNull().default('[]'),
+    anchorWeights: text('anchor_weights'),
+    isActive: integer('is_active').notNull().default(1),
+    templateVersion: integer('template_version').notNull().default(1),
+    createdAt: nowTs(),
+  },
+  (t) => [
+    index('template_edge_rules_src').on(t.sourceTypeId, t.edgeType),
+  ],
+);
+
+export const templateVersions = pgTable('template_versions', {
+  version: integer('version').primaryKey(),
+  changedBy: text('changed_by').notNull(),
+  changeSummary: text('change_summary').notNull(),
+  changedAt: nowTs(),
+});
+
 // ---- Harness session store (sessions/messages/approvals/events/favorites) ---
 //
 // MIRRORS the runtime idempotent DDL in src/harness/sessionStorePostgres.ts
