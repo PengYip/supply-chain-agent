@@ -10,6 +10,7 @@ import {
   findBindingById, updateBindingStatus, saveBinding, findBindingByDocAndContract,
   listBindingsForContract, setBindingGraphStatus, getDocumentMeta, type BindingGraphStatus,
   listExecutionFlows, summarizeExecutionFlows, getDocumentSourcesByIds, hasContractDocBinding,
+  findContractLedgerByNo,
 } from '../pipeline/db/repositories.js';
 import { buildBindingCandidates } from '../pipeline/bindingCandidates.js';
 import { syncBindingEdge, removeBindingEdge, type GraphSyncOutcome } from '../pipeline/bindingGraphSync.js';
@@ -17,6 +18,7 @@ import { syncSettlesEdge, removeSettlesEdge } from '../pipeline/settlesGraphSync
 import { settlesRelationFor } from '../domain/tradeSemantics.js';
 import { materializeExecutionFlow, retractExecutionFlow, getEffectiveSelfPartyNames } from '../pipeline/executionFlow.js';
 import { DOC_TYPES } from '../pipeline/classifier.js';
+import { validateEdge } from '../pipeline/templateGuard.js';
 import { parseFileKey } from './files.js';
 
 export const bindingsRoute = new Hono<AuthEnv>();
@@ -152,7 +154,7 @@ async function graphStatusFor(outcome: GraphSyncOutcome, reason?: string): Promi
 async function syncBindingEdgeWithMeta(
   db: DbContext,
   userId: string,
-  input: { docId: string; contractNo: string; relation: string; bindingId: string; confidence: number },
+  input: { docId: string; contractNo: string; relation: string; bindingId: string; confidence: number; templateVersion?: number },
 ) {
   let meta: Awaited<ReturnType<typeof getDocumentMeta>> = null;
   try {
@@ -209,11 +211,38 @@ async function syncSettlesAfterFlow(
   }
 }
 
+/** 模板门禁(spec 2026-08-26 §4.1/§4.3): 绑定落库前校验类型组合。
+ *  文档 meta 缺失(已删)或 docType 未登记 -> passthrough(行为零变化)。
+ *  relation 软校验: 词表外仅 console.warn, Phase 2 转硬。 */
+async function templateGate(
+  db: DbContext, userId: string,
+  input: { documentId: string; contractNo: string },
+): Promise<{ ok: true; templateVersion: number | null } | { ok: false; reason: string }> {
+  let meta: Awaited<ReturnType<typeof getDocumentMeta>> = null;
+  try { meta = await getDocumentMeta(db, input.documentId, userId); } catch { /* 缺 meta 放行 */ }
+  if (!meta?.docType) return { ok: true, templateVersion: null };
+  let contractType: string | null | undefined;
+  try {
+    const ledgerRow = await findContractLedgerByNo(db, input.contractNo);
+    contractType = ledgerRow?.contractType ?? null;
+  } catch { contractType = null; }
+  const g = await validateEdge(db, { docType: meta.docType, contractType, edgeType: 'binds' });
+  if (!g.ok) return { ok: false, reason: g.reason };
+  if (g.relationInVocab === false) {
+    console.warn(`[templateGuard] relation 在词表外(软校验, 不阻断): doc=${input.documentId} contract=${input.contractNo}`);
+  }
+  return { ok: true, templateVersion: g.templateVersion > 0 ? g.templateVersion : null };
+}
+
 /** confirm 单条(内部, batch 复用)。前置: 行存在且 status='proposed'。 */
 async function confirmOne(db: DbContext, userId: string, bindingId: string) {
   const row = await findBindingById(db, bindingId, userId);
   if (!row) return { status: 404 as const, body: { error: 'binding not found', bindingId } };
   if (row.status !== 'proposed') return { status: 409 as const, body: { error: `binding status is ${row.status}, expected proposed`, bindingId } };
+  const gate = await templateGate(db, userId, { documentId: row.documentId, contractNo: row.contractNo });
+  if (!gate.ok) {
+    return { status: 409 as const, body: { error: gate.reason, guard: 'template' as const, bindingId } };
+  }
   const updated = await updateBindingStatus(db, bindingId, 'confirmed', 'human', userId);
   if (!updated) return { status: 409 as const, body: { error: 'concurrent state change', bindingId } };
   // 执行流水物化(hook): 确认成功后用最新抽取行落执行流水; 失败仅告警, 绝不影响确认结果。
@@ -232,6 +261,7 @@ async function confirmOne(db: DbContext, userId: string, bindingId: string) {
   const sync = await syncBindingEdgeWithMeta(db, userId, {
     docId: row.documentId, contractNo: row.contractNo, relation: row.relation,
     bindingId: row.id, confidence: row.confidence,
+    templateVersion: gate.templateVersion ?? undefined,
   });
   const gs = await graphStatusFor(sync.outcome, sync.reason);
   await setBindingGraphStatus(db, bindingId, gs, userId);
@@ -300,6 +330,11 @@ bindingsRoute.post('/', async (c) => {
       );
     }
   }
+  // 模板门禁(spec 2026-08-26 §4.3): 类型组合校验, 拒绝 409 + guard:'template'。
+  const gate = await templateGate(db, user.id, { documentId, contractNo });
+  if (!gate.ok) {
+    return c.json({ error: gate.reason, guard: 'template' }, 409);
+  }
   const bindingId = await saveBinding(db, {
     documentId, contractNo, relation, sourceRefs: [],
     confidence: 1, createdBy: user.id,
@@ -318,7 +353,7 @@ bindingsRoute.post('/', async (c) => {
   } catch (e) {
     console.warn('[executionFlow] 手动创建绑定物化执行流水失败:', (e as Error).message);
   }
-  const sync = await syncBindingEdgeWithMeta(db, user.id, { docId: documentId, contractNo, relation, bindingId, confidence: 1 });
+  const sync = await syncBindingEdgeWithMeta(db, user.id, { docId: documentId, contractNo, relation, bindingId, confidence: 1, templateVersion: gate.templateVersion ?? undefined });
   const gs = await graphStatusFor(sync.outcome, sync.reason);
   await setBindingGraphStatus(db, bindingId, gs, user.id);
   return c.json({ ok: true, bindingId, graphSync: sync.outcome, ...(sync.reason ? { graphReason: sync.reason } : {}) });

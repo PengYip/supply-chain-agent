@@ -36,7 +36,7 @@ async function ensureNode(
 }
 
 export async function syncBindingEdge(
-  input: { docId: string; docType?: string; sourceUri?: string | null; contractNo: string; relation: string; bindingId: string; confidence: number },
+  input: { docId: string; docType?: string; sourceUri?: string | null; contractNo: string; relation: string; bindingId: string; confidence: number; templateVersion?: number },
   io: BindingGraphSyncIo = defaultBindingGraphSyncIo,
 ): Promise<BindingGraphSyncResult> {
   if (!process.env.NEO4J_PASSWORD) return { outcome: 'skipped', reason: 'NEO4J_PASSWORD not set' };
@@ -63,7 +63,7 @@ export async function syncBindingEdge(
       dstId: contractNode.elementId,
       kind: BINDS_EDGE,
       confidence: input.confidence,
-      props: { bindingId: input.bindingId, relation: input.relation, source: 'workbench' },
+      props: { bindingId: input.bindingId, relation: input.relation, source: 'workbench', ...(input.templateVersion ? { templateVersion: input.templateVersion } : {}) },
     });
     return { outcome: 'ok' };
   } catch (e) {
