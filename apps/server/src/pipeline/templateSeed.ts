@@ -2,19 +2,20 @@
 // 修改这些行 = 修改绑定协议, 需带测试走。Phase 2 起模板经 /api/templates 演化。
 import type { DbContext } from './db/client.js';
 import { ensureEdgeRule, ensureTemplateType } from './db/repositories.js';
+import { migrateDocTypeAliasesPg } from './db/postgres-repositories.js';
 
 /** doc_type 种子——类型划分 v2(spec 2026-08-26 §3.1, 业务确认 2026-08-26)。
  *  Phase 1 登记全树(类型是被动注册表, 不影响行为); 新类型的边规则登记不启用。
  *  旧 8 类全部保留(分类器仍在用, 行为零变化); 提单/装箱单挂货转单下待 Phase 2 并入;
  *  化验报告→质检报告更名, 旧名保留; 发票保留为发票凭证的合法粗类。 */
-const DOC_TYPE_SEED: Array<{ name: string; parent?: string }> = [
+const DOC_TYPE_SEED: Array<{ name: string; parent?: string; props?: Record<string, unknown> }> = [
   { name: '合同' },
   { name: '补充合同', parent: '合同' },
   { name: '立项书' },
   { name: '履约凭证' },
   { name: '货转单', parent: '履约凭证' },
-  { name: '提单', parent: '货转单' },
-  { name: '装箱单', parent: '货转单' },
+  { name: '提单', parent: '货转单', props: { aliasOf: '货转单' } },
+  { name: '装箱单', parent: '货转单', props: { aliasOf: '货转单' } },
   { name: '质检报告', parent: '履约凭证' },
   { name: '化验报告', parent: '质检报告' },
   { name: '结算单', parent: '履约凭证' },
@@ -87,6 +88,7 @@ export async function ensureTemplateSeed(ctx: DbContext): Promise<void> {
     await ensureTemplateType(ctx, {
       id: typeId('dt', t.name), kind: 'doc_type', name: t.name,
       parentId: t.parent ? typeId('dt', t.parent) : null,
+      props: t.props,
     });
   }
   for (const t of CONTRACT_TYPE_SEED) {
@@ -103,4 +105,18 @@ export async function ensureTemplateSeed(ctx: DbContext): Promise<void> {
       edgeType: r.edge, allowedVocab: r.vocab, isActive: r.active !== false,
     });
   }
+}
+
+/** 存量数据幂等迁移(spec §3.1): 提单/装箱单并入货转单(别名)。重复执行无副作用。 */
+export async function migrateDocTypeAliases(ctx: DbContext): Promise<number> {
+  if (ctx.backend === 'postgres') return migrateDocTypeAliasesPg(ctx);
+  const aliasMap: Array<[string, string]> = [['提单', '货转单'], ['装箱单', '货转单']];
+  let total = 0;
+  for (const [from, to] of aliasMap) {
+    for (const tbl of ['documents', 'extractions', 'classifications']) {
+      const res = ctx.sqlite.prepare(`UPDATE ${tbl} SET doc_type = ? WHERE doc_type = ?`).run(to, from);
+      total += res.changes;
+    }
+  }
+  return total;
 }

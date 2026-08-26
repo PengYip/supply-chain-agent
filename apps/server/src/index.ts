@@ -29,7 +29,7 @@ import { evalRunRoute } from './routes/evalRun.js';
 import { evalDatasetsRoute } from './routes/evalDatasets.js';
 import { ensureBucket } from './lib/minio.js';
 import { migrateOnStartup, getDbContext } from './pipeline/db/dbBackend.js';
-import { ensureTemplateSeed } from './pipeline/templateSeed.js';
+import { ensureTemplateSeed, migrateDocTypeAliases } from './pipeline/templateSeed.js';
 import { runExtractionBackfill } from './pipeline/extractionBackfill.js';
 import { getDriver, closeNeo4j } from './graph/neo4j.js';
 import { listToolNames, type Role } from './harness/roleToolRegistry.js';
@@ -191,6 +191,12 @@ process.on('SIGINT', async () => { await closeNeo4j(); });
     await ensureTemplateSeed(getDbContext());
   } catch (e) {
     console.warn('[templateSeed] 模板种子灌入失败(不阻塞启动):', (e as Error).message);
+  }
+  // 存量 docType 别名迁移(幂等): 提单/装箱单 -> 货转单。失败仅告警不阻塞启动。
+  try {
+    await migrateDocTypeAliases(getDbContext());
+  } catch (e) {
+    console.warn('[templateSeed] docType 别名迁移失败(不阻塞启动):', (e as Error).message);
   }
   // Background session runtime: any session left 'busy' by a previous process
   // was interrupted by a crash/restart. Flip it to 'interrupted' so the UI can

@@ -3267,13 +3267,13 @@ export async function listActiveEdgeRules(ctx: DbContext): Promise<TemplateEdgeR
 }
 
 export async function ensureTemplateType(
-  ctx: DbContext, input: { id: string; kind: string; name: string; parentId?: string | null },
+  ctx: DbContext, input: { id: string; kind: string; name: string; parentId?: string | null; props?: Record<string, unknown> },
 ): Promise<void> {
   if (ctx.backend === 'postgres') return ensureTemplateTypePg(ctx, input);
   ctx.sqlite.prepare(
-    `INSERT INTO template_types (id, kind, name, parent_id) VALUES (?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id`,
-  ).run(input.id, input.kind, input.name, input.parentId ?? null);
+    `INSERT INTO template_types (id, kind, name, parent_id, props) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id, props = excluded.props`,
+  ).run(input.id, input.kind, input.name, input.parentId ?? null, JSON.stringify(input.props ?? {}));
 }
 
 export async function ensureEdgeRule(

@@ -2490,12 +2490,12 @@ export async function listActiveEdgeRulesPg(ctx: PostgresDbContext): Promise<Tem
 }
 
 export async function ensureTemplateTypePg(
-  ctx: PostgresDbContext, input: { id: string; kind: string; name: string; parentId?: string | null },
+  ctx: PostgresDbContext, input: { id: string; kind: string; name: string; parentId?: string | null; props?: Record<string, unknown> },
 ): Promise<void> {
   await ctx.pool.query(
-    `INSERT INTO template_types (id, kind, name, parent_id) VALUES ($1, $2, $3, $4)
-     ON CONFLICT (id) DO UPDATE SET parent_id = excluded.parent_id`,
-    [input.id, input.kind, input.name, input.parentId ?? null]);
+    `INSERT INTO template_types (id, kind, name, parent_id, props) VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (id) DO UPDATE SET parent_id = excluded.parent_id, props = excluded.props`,
+    [input.id, input.kind, input.name, input.parentId ?? null, JSON.stringify(input.props ?? {})]);
 }
 
 export async function ensureEdgeRulePg(
@@ -2510,4 +2510,17 @@ export async function ensureEdgeRulePg(
        is_active = excluded.is_active`,
     [input.id, input.sourceTypeId, input.targetTypeId ?? '', input.edgeType,
      JSON.stringify(input.allowedVocab), input.isActive === false ? 0 : 1]);
+}
+
+/** 存量数据幂等迁移 Pg 版: 提单/装箱单 -> 货转单(参数化 UPDATE, 重复执行无副作用)。 */
+export async function migrateDocTypeAliasesPg(ctx: PostgresDbContext): Promise<number> {
+  const aliasMap: Array<[string, string]> = [['提单', '货转单'], ['装箱单', '货转单']];
+  let total = 0;
+  for (const [from, to] of aliasMap) {
+    for (const tbl of ['documents', 'extractions', 'classifications']) {
+      const res = await ctx.pool.query(`UPDATE ${tbl} SET doc_type = $1 WHERE doc_type = $2`, [to, from]);
+      total += res.rowCount ?? 0;
+    }
+  }
+  return total;
 }

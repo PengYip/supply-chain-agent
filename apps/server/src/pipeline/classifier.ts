@@ -40,7 +40,8 @@ const DEFAULT_COARSE = ['合同', '立项书', '履约凭证', '其他'];
 /** 从模板类型树派生两阶段词表: 粗类固定四类, 细类 = 各粗类的全部后代(含中间层)。 */
 export function buildClassifierVocab(types: TemplateTypeRow[]): ClassifierVocab {
   const byId = new Map(types.map((t) => [t.id, t]));
-  const docTypes = types.filter((t) => t.kind === 'doc_type');
+  // 排除 alias 类型(props.aliasOf 标记, 如 提单/装箱单=货转单别名): 不进细类候选。
+  const docTypes = types.filter((t) => t.kind === 'doc_type' && !t.props.aliasOf);
   const childrenOf = (id: string | null) => docTypes.filter((t) => t.parentId === id).map((t) => t.name);
   const descendants = (name: string): string[] => {
     const out: string[] = [];
