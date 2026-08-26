@@ -13,6 +13,8 @@ import {
   type ProposalItem,
 } from '../../hooks/useBindings';
 import { formatFlowSkipLines } from '../../lib/flowSkip';
+import type { ContractSearchItem } from '../../api/contractSearch';
+import { ContractSearchBar } from '../common/ContractSearchBar';
 import { prettyDocName } from '../graph/businessTypes';
 import type { GraphFocusTarget } from '../graph/focus';
 import { PanelRail } from '../shell/PanelRail';
@@ -75,6 +77,13 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
   const [docsCollapsed, setDocsCollapsed] = useState(false);
   const [detailCollapsed, setDetailCollapsed] = useState(false);
+
+  // 合同过滤(spec 2026-08-26 §4.5): 选中合同 -> 左栏只显示绑定该合同的文档并定位首个。
+  const [contractFilter, setContractFilter] = useState<ContractSearchItem | null>(null);
+  const filteredOverview = useMemo(() => {
+    if (!contractFilter) return overview;
+    return overview.filter((d) => d.bindings.some((b) => b.contractNo === contractFilter.contractNo));
+  }, [overview, contractFilter]);
 
   const [confirmReq, setConfirmReq] = useState<ConfirmRequest | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
@@ -233,6 +242,16 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
     setBatchErrors({});
     void b.loadCandidates(doc.docId);
   };
+
+  // 搜索选中合同 -> 设置过滤并自动定位首个绑定该合同的文档(handleSelectDoc 为普通函数, 直接引用)。
+  const handleContractSelect = useCallback(
+    (item: ContractSearchItem) => {
+      setContractFilter(item);
+      const first = overview.find((d) => d.bindings.some((b) => b.contractNo === item.contractNo));
+      if (first) handleSelectDoc(first);
+    },
+    [overview],
+  );
 
   const handleClearDoc = () => {
     setSelectedDocId(null);
@@ -569,6 +588,20 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
     <div className="flex h-full flex-col bg-surface">
       {/* 二级工具条（视图标题由 AppTopbar 承担） */}
       <div className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-white px-4">
+        <ContractSearchBar className="w-[300px]" onSelect={handleContractSelect} />
+        {contractFilter && (
+          <span className="flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-[11px] text-primary-500">
+            <span className="max-w-[160px] truncate">合同 {contractFilter.displayContractNo}</span>
+            <button
+              type="button"
+              aria-label="清除合同过滤"
+              onClick={() => setContractFilter(null)}
+              className="text-primary-500 hover:text-danger"
+            >
+              <X className="h-3 w-3" aria-hidden />
+            </button>
+          </span>
+        )}
         {selected && (
           <div className="flex min-w-0 items-center gap-2 rounded-md bg-surface px-2.5 py-1">
             <span className="shrink-0 text-[11px] text-ink-soft">当前文档</span>
@@ -619,7 +652,7 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
           )}
         >
           <DocListPanel
-            docs={overview}
+            docs={filteredOverview}
             docTypes={b.docTypes}
             loading={b.loading}
             error={b.error}
