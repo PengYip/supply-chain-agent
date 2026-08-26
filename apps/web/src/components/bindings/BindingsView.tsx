@@ -13,7 +13,7 @@ import {
   type ProposalItem,
 } from '../../hooks/useBindings';
 import { formatFlowSkipLines } from '../../lib/flowSkip';
-import { prettyDocName } from '../graph/kinds';
+import { prettyDocName } from '../graph/businessTypes';
 import type { GraphFocusTarget } from '../graph/focus';
 import { PanelRail } from '../shell/PanelRail';
 import { DocListPanel } from './DocListPanel';

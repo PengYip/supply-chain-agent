@@ -14,7 +14,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import './graph-canvas.css';
 import { GraphFlowNode, type ScaFlowNode } from './GraphFlowNode';
-import { edgeLabel, kindStyle, EDGE_STYLE_OVERRIDES } from './kinds';
+import { edgeLabel, kindStyle, EDGE_STYLE_OVERRIDES } from './businessTypes';
 import type { GraphEdge, GraphNode, InspectTarget, Subgraph } from '../../hooks/useGraph';
 
 /* ---------- 径向布局：中心在原点，其余按 BFS 深度分层成环 ---------- */

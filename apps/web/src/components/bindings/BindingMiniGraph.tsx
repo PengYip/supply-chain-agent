@@ -20,7 +20,7 @@ import {
   kindStyle,
   nodeDisplayName,
   type DocMetaResolver,
-} from '../graph/kinds';
+} from '../graph/businessTypes';
 import { AllSideHandles } from '../graph/GraphFlowNode';
 import type { GraphFocusTarget } from '../graph/focus';
 import type { GraphEdge, GraphNode } from '../../hooks/useGraph';

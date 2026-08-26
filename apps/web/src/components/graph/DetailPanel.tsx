@@ -1,5 +1,5 @@
 import { ArrowRight, Crosshair, MousePointerClick } from 'lucide-react';
-import { docTypeName, edgeLabel, kindStyle, nodeDisplayName } from './kinds';
+import { docTypeName, edgeLabel, kindStyle, nodeDisplayName } from './businessTypes';
 import { useDocMeta } from './docMeta';
 import type { GraphEdge, GraphNode, InspectTarget } from '../../hooks/useGraph';
 

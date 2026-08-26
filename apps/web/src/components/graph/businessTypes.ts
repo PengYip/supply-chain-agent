@@ -128,3 +128,43 @@ export function prettyDocName(sourceUri: string): string {
   if (usersPrefix) return usersPrefix[1];
   return base;
 }
+
+/** 业务类型注册表(spec 2026-08-26 §4.2, Bloom Perspective 轻量版):
+ *  Neo4j 原始 label -> 展示名/配色/图标/默认可见。图谱图例、类型过滤、
+ *  Inspector 与搜索摘要共用这一份 SSOT。 */
+export interface BusinessType {
+  /** Neo4j 原始 label(= kind)。 */
+  label: string;
+  displayName: string;
+  color: string;
+  softBg: string;
+  softBorder: string;
+  icon: LucideIcon;
+  defaultVisible: boolean;
+}
+
+const FALLBACK_ICON: LucideIcon = FileText;
+
+export const BUSINESS_TYPES: Record<string, BusinessType> = Object.fromEntries(
+  Object.keys(KIND_STYLES).map((k) => {
+    const s = KIND_STYLES[k]!;
+    return [k, {
+      label: k,
+      displayName: s.label,
+      color: s.color,
+      softBg: s.softBg,
+      softBorder: s.softBorder,
+      icon: KIND_ICONS[k] ?? FALLBACK_ICON,
+      defaultVisible: true,
+    }];
+  }),
+) as Record<string, BusinessType>;
+
+const FALLBACK_BUSINESS_TYPE: BusinessType = {
+  label: '', displayName: '节点', color: '#6B7280', softBg: '#F3F4F6',
+  softBorder: '#E5E7EB', icon: FALLBACK_ICON, defaultVisible: true,
+};
+
+export function businessTypeOf(kind: string): BusinessType {
+  return BUSINESS_TYPES[kind] ?? { ...FALLBACK_BUSINESS_TYPE, label: kind };
+}

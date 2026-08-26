@@ -6,7 +6,7 @@ import { PanelRail } from '../shell/PanelRail';
 import { DocumentListPanel } from './DocumentListPanel';
 import { GraphCanvas } from './GraphCanvas';
 import { DetailPanel } from './DetailPanel';
-import { KIND_STYLES, nodeDisplayName, prettyDocName } from './kinds';
+import { KIND_STYLES, nodeDisplayName, prettyDocName } from './businessTypes';
 import { DocMetaProvider, buildDocMetaResolver } from './docMeta';
 import type { GraphFocus } from './focus';
 
