@@ -22,6 +22,7 @@ import { bindingsRoute } from './routes/bindings.js';
 import { contractsRoute } from './routes/contracts.js';
 import { partiesRoute } from './routes/parties.js';
 import { projectsRoute } from './routes/projects.js';
+import { templatesRoute } from './routes/templates.js';
 import { reviewRoute } from './routes/review.js';
 import { createEvalResultsRoute } from './routes/evalResults.js';
 import { evalRunRoute } from './routes/evalRun.js';
@@ -113,6 +114,7 @@ app.use('/api/bindings/*', requireAuth);
 app.use('/api/contracts/*', requireAuth);
 app.use('/api/parties/*', requireAuth);
 app.use('/api/projects/*', requireAuth);
+app.use('/api/templates/*', requireAuth);
 
 app.route('/api', chatRoute);
 app.route('/api', approvalCallback);
@@ -150,6 +152,9 @@ app.route('/api/parties', partiesRoute);
 
 // 项目维度工作台(spec 2026-08-20 §6.1): projects + memberships CRUD + 确认/拒绝。
 app.route('/api/projects', projectsRoute);
+
+// 模板上下文(spec 2026-08-26 §4.1): 绑定工作台双下拉数据源。
+app.route('/api/templates', templatesRoute);
 
 // Eval results viewer (read-only): scan/aggregate CLI-written results dirs.
 app.route('/api/eval', createEvalResultsRoute());
