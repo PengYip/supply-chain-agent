@@ -3284,18 +3284,20 @@ export async function ensureTemplateType(
 }
 
 export async function ensureEdgeRule(
-  ctx: DbContext, input: { id: string; sourceTypeId: string; targetTypeId?: string; edgeType: string; allowedVocab: string[]; isActive?: boolean },
+  ctx: DbContext, input: { id: string; sourceTypeId: string; targetTypeId?: string; edgeType: string; allowedVocab: string[]; isActive?: boolean; anchorWeights?: TemplateAnchorWeights | null },
 ): Promise<void> {
   if (ctx.backend === 'postgres') return ensureEdgeRulePg(ctx, input);
   ctx.sqlite.prepare(
-    `INSERT INTO template_edge_rules (id, source_type_id, target_type_id, edge_type, allowed_vocab, is_active)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO template_edge_rules (id, source_type_id, target_type_id, edge_type, allowed_vocab, is_active, anchor_weights)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        target_type_id = excluded.target_type_id,
        allowed_vocab = excluded.allowed_vocab,
-       is_active = excluded.is_active`,
+       is_active = excluded.is_active,
+       anchor_weights = excluded.anchor_weights`,
   ).run(input.id, input.sourceTypeId, input.targetTypeId ?? '', input.edgeType,
-    JSON.stringify(input.allowedVocab), input.isActive === false ? 0 : 1);
+    JSON.stringify(input.allowedVocab), input.isActive === false ? 0 : 1,
+    input.anchorWeights ? JSON.stringify(input.anchorWeights) : null);
 }
 
 /** 存量数据幂等迁移(spec §3.1): 提单/装箱单并入货转单(别名)。重复执行无副作用。 */

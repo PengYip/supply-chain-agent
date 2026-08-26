@@ -37,6 +37,8 @@ import { extractVoucher, mimeForExtension, type VlmResult } from '../vlmAdapter.
 import { VOUCHER_SCHEMAS, validateVoucher, type VoucherType } from '../schemas/vouchers.js';
 import { extractAnchors } from '../schemas/vouchers.js';
 import { generateBindingProposals, type BindingRoute } from '../bindingProposal.js';
+import { ancestorChain, matchEdgeRule } from '../templateGuard.js';
+import { listActiveEdgeRules } from '../db/repositories.js';
 import { materializeExecutionFlow, refreshExecutionFlowsForDocument, getEffectiveSelfPartyNames } from '../executionFlow.js';
 import { deriveContractType, type ContractTypeDerivation } from '../../domain/contractType.js';
 import type { ContractType } from '../../domain/tradeSemantics.js';
@@ -426,7 +428,14 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
     try {
       const anchors = extractAnchors(result.voucherType, result.fields);
       const ledger = await listContractLedgerEntries(ctx, userId);
-      const proposals = generateBindingProposals(anchors, ledger);
+      // anchorWeights 接线(终审遗留②): 读 docType 激活 binds 规则的 anchorWeights,
+      // 非空传第三参, null 回退缺省(不传 = WEIGHTS 缺省行为)。
+      const [types, rules] = await Promise.all([listTemplateTypes(ctx), listActiveEdgeRules(ctx)]);
+      const byId = new Map(types.map((t) => [t.id, t]));
+      const chain = ancestorChain(byId.get(`dt-${result.voucherType}`)?.id ?? null, byId);
+      const rule = matchEdgeRule({ rules, sourceChain: chain, targetChain: [''], edgeType: 'binds' });
+      const weights = rule?.anchorWeights ?? undefined;
+      const proposals = generateBindingProposals(anchors, ledger, weights);
       for (const p of proposals.filter((x) => x.route !== 'none')) {
         try {
           const bindingId = await saveBinding(

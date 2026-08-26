@@ -2501,17 +2501,19 @@ export async function ensureTemplateTypePg(
 }
 
 export async function ensureEdgeRulePg(
-  ctx: PostgresDbContext, input: { id: string; sourceTypeId: string; targetTypeId?: string; edgeType: string; allowedVocab: string[]; isActive?: boolean },
+  ctx: PostgresDbContext, input: { id: string; sourceTypeId: string; targetTypeId?: string; edgeType: string; allowedVocab: string[]; isActive?: boolean; anchorWeights?: TemplateAnchorWeights | null },
 ): Promise<void> {
   await ctx.pool.query(
-    `INSERT INTO template_edge_rules (id, source_type_id, target_type_id, edge_type, allowed_vocab, is_active)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO template_edge_rules (id, source_type_id, target_type_id, edge_type, allowed_vocab, is_active, anchor_weights)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT (id) DO UPDATE SET
        target_type_id = excluded.target_type_id,
        allowed_vocab = excluded.allowed_vocab,
-       is_active = excluded.is_active`,
+       is_active = excluded.is_active,
+       anchor_weights = excluded.anchor_weights`,
     [input.id, input.sourceTypeId, input.targetTypeId ?? '', input.edgeType,
-     JSON.stringify(input.allowedVocab), input.isActive === false ? 0 : 1]);
+     JSON.stringify(input.allowedVocab), input.isActive === false ? 0 : 1,
+     input.anchorWeights ? JSON.stringify(input.anchorWeights) : null]);
 }
 
 /** 存量数据幂等迁移 Pg 版: 提单/装箱单 -> 货转单(参数化 UPDATE, 重复执行无副作用)。 */

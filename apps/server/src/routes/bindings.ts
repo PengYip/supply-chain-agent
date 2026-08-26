@@ -226,6 +226,9 @@ async function syncSettlesAfterFlow(
 ) {
   const relation = settlesRelationFor(settled.flowType, settled.direction);
   if (!relation) return;
+  // 顺序保证(终审遗留①): materializeExecutionFlow 已按 FLOW_TYPE_BY_DOC_TYPE 映射
+  // 产出 settled(白名单外返回 null 不走到这里); 此处守卫读 meta.docType(抽取行,
+  // 即映射后的类型), 与派生 relation 交叉验证——映射先于守卫。
   // 交叉验证(spec v2): 类型自带 settles 方向 × flowType×direction 派生。
   // 派生 relation 不在该 docType 激活 settles 词表内 -> 类型方向与派生矛盾, 跳过。
   let meta: Awaited<ReturnType<typeof getDocumentMeta>> = null;
@@ -352,10 +355,13 @@ bindingsRoute.post('/', async (c) => {
     // 重试同步入口(前端 graph_status 非 ok 时幂等调用): confirmed 行重跑
     // syncBindingEdge 并落真实 graph_status; proposed 行尚未确认, 不该有边, 直接返回。
     if (existing.status === 'confirmed') {
+      // 终审遗留③: 重试路径补 templateVersion(对照 confirmOne 已带)。
+      const gate = await templateGate(db, user.id, { documentId, contractNo, relation: existing.relation });
       const sync = await syncBindingEdgeWithMeta(db, user.id, {
         docId: documentId, contractNo, relation: existing.relation,
         bindingId: existing.id, confidence: existing.confidence,
         dstKind: existing.targetKind,
+        templateVersion: gate.ok ? (gate.templateVersion ?? undefined) : undefined,
       });
       const gs = await graphStatusFor(sync.outcome, sync.reason);
       await setBindingGraphStatus(db, existing.id, gs, user.id);

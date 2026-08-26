@@ -4,9 +4,11 @@
 import type { DbContext } from './db/client.js';
 import {
   loadLatestExtractionByDocId, listContractLedgerEntries, listBindingsForUser,
+  listTemplateTypes, listActiveEdgeRules,
 } from './db/repositories.js';
 import { generateBindingProposals, buildAnchorsFromFields, type BindingEvidence } from './bindingProposal.js';
 import { extractAnchors, type VoucherAnchors } from './schemas/vouchers.js';
+import { ancestorChain, matchEdgeRule } from './templateGuard.js';
 import type { ContractLedgerEntry } from './contractLedger.js';
 
 const VOUCHER_TYPES = new Set(['货转单', '付款凭证', '化验报告']);
@@ -43,7 +45,14 @@ export async function buildBindingCandidates(
   if (!hasAnyAnchor) return { hasExtraction: true, anchors, candidates: [] };
 
   const ledger = await listContractLedgerEntries(ctx, userId);
-  const proposals = generateBindingProposals(anchors, ledger);
+  // anchorWeights 接线(终审遗留②): 读 docType 激活 binds 规则的 anchorWeights,
+  // 非空传第三参, null 回退缺省(不传 = WEIGHTS 缺省行为)。
+  const [types, rules] = await Promise.all([listTemplateTypes(ctx), listActiveEdgeRules(ctx)]);
+  const byId = new Map(types.map((t) => [t.id, t]));
+  const chain = ancestorChain(byId.get(`dt-${extraction.docType}`)?.id ?? null, byId);
+  const rule = matchEdgeRule({ rules, sourceChain: chain, targetChain: [''], edgeType: 'binds' });
+  const weights = rule?.anchorWeights ?? undefined;
+  const proposals = generateBindingProposals(anchors, ledger, weights);
   const bindings = await listBindingsForUser(ctx, userId);
   const activeByKey = new Map<string, string>();
   for (const b of bindings) {
