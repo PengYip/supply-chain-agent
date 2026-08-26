@@ -62,4 +62,29 @@ describe('amends edge', () => {
     const rules = await listActiveEdgeRules(ctx);
     expect(rules.some((r) => r.id === 'er-amend-buchong' && r.isActive)).toBe(true);
   });
+
+  it('amends Document src 用小写 docId 原样保留(不被合同归一大写化)', async () => {
+    const { io, nodes } = makeIo();
+    const r = await syncGraphLinkEdge({
+      kind: 'amends', srcKind: 'Document', srcKey: 'doc-abc123-xyz789',
+      dstKind: 'Contract', dstKey: 'HT-2024-001',
+      props: {}, confirmationSource: 'agent', confidence: 0.8,
+    }, io);
+    expect(r.outcome).toBe('ok');
+    // 真实 docId 为小写 base36, 必须原样保留(此前被 normalizeContractNo 大写化产生幽灵节点)。
+    expect(nodes.has('Document:doc-abc123-xyz789')).toBe(true);
+    expect(nodes.has('Document:DOC-ABC123-XYZ789')).toBe(false);
+  });
+
+  it('混合 kind: Document src 原样 + Contract dst 合同归一, 各归各的', async () => {
+    const { io, nodes } = makeIo();
+    const r = await syncGraphLinkEdge({
+      kind: 'amends', srcKind: 'Document', srcKey: 'doc-abc123-xyz789',
+      dstKind: 'Contract', dstKey: 'ht-2024-001', // 小写合同号 -> 归一为大写
+      props: {}, confirmationSource: 'agent', confidence: 0.8,
+    }, io);
+    expect(r.outcome).toBe('ok');
+    expect(nodes.has('Document:doc-abc123-xyz789')).toBe(true);
+    expect(nodes.has('Contract:HT-2024-001')).toBe(true);
+  });
 });

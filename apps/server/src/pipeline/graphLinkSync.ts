@@ -43,10 +43,11 @@ async function ensureNode(
   return io.createEntity({ kind, name });
 }
 
-/** kind -> 节点键归一化(correlates/amends=合同号双归一, relates=项目码)。空串 = 不可用键。
- *  注: amends 的 srcKey 为 docId, 经合同归一后原样保留(docId 为 [A-Z0-9-] 字符集)。 */
-function normalizeKey(kind: GraphLinkKind, key: string): string {
-  if (kind === 'relates') return normalizeProjectCode(key);
+/** 节点 kind -> 键归一化: Document=原样(不归一, docId 为小写 base36),
+ *  Contract=合同号双归一, Project=项目码。空串 = 不可用键。 */
+function normalizeKey(nodeKind: 'Contract' | 'Project' | 'Document', key: string): string {
+  if (nodeKind === 'Document') return key;
+  if (nodeKind === 'Project') return normalizeProjectCode(key);
   return normalizeName(normalizeContractNo(key));
 }
 
@@ -71,8 +72,8 @@ export async function syncGraphLinkEdge(
 ): Promise<{ outcome: 'ok' | 'skipped' | 'failed'; reason?: string }> {
   if (!process.env.NEO4J_PASSWORD) return { outcome: 'skipped', reason: 'NEO4J_PASSWORD not set' };
   try {
-    const srcName = normalizeKey(input.kind, input.srcKey);
-    const dstName = normalizeKey(input.kind, input.dstKey);
+    const srcName = normalizeKey(input.srcKind, input.srcKey);
+    const dstName = normalizeKey(input.dstKind, input.dstKey);
     if (!srcName) return { outcome: 'failed', reason: `srcKey normalized to empty (${input.srcKey})` };
     if (!dstName) return { outcome: 'failed', reason: `dstKey normalized to empty (${input.dstKey})` };
     const srcNode = await ensureNode(io, input.srcKind, srcName);
@@ -103,8 +104,8 @@ export async function removeGraphLinkEdge(
 ): Promise<{ outcome: 'ok' | 'skipped' | 'failed'; reason?: string }> {
   if (!process.env.NEO4J_PASSWORD) return { outcome: 'skipped', reason: 'NEO4J_PASSWORD not set' };
   try {
-    const srcName = normalizeKey(input.kind, input.srcKey);
-    const dstName = normalizeKey(input.kind, input.dstKey);
+    const srcName = normalizeKey(input.srcKind, input.srcKey);
+    const dstName = normalizeKey(input.dstKind, input.dstKey);
     if (!srcName || !dstName) return { outcome: 'failed', reason: 'key normalized to empty' };
     const srcNode = await io.findEntityByName(input.srcKind, srcName);
     const dstNode = await io.findEntityByName(input.dstKind, dstName);
