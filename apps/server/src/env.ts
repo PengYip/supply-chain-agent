@@ -58,7 +58,7 @@ const EnvSchema = z.object({
    * AGENT_FAILURE_THRESHOLD is the circuit breaker threshold: consecutive
    * tool failures OR identical (tool,args) repeat calls that trip it stop the
    * loop early. */
-  AGENT_MAX_STEPS: z.coerce.number().int().positive().default(8),
+  AGENT_MAX_STEPS: z.coerce.number().int().positive().default(20),
   AGENT_FAILURE_THRESHOLD: z.coerce.number().int().positive().default(3),
   /** Conversation-level history compaction (Codex/Pi auto-compact pattern).
    * When a run's total token usage crosses CONTEXT_WINDOW - RESERVE, old
