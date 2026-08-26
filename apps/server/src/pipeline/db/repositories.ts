@@ -113,6 +113,12 @@ import {
   listQuotasPg,
   updateQuotaPg,
   updateQuotaUsedPg,
+  // 模板层(spec 2026-08-26 §3): pg twins for 模板三表。
+  listTemplateTypesPg,
+  findTemplateTypeByNamePg,
+  listActiveEdgeRulesPg,
+  ensureTemplateTypePg,
+  ensureEdgeRulePg,
 } from './postgres-repositories.js';
 
 // Phase 2 business-data isolation: a normalized userId is '' / undefined when the
@@ -3190,4 +3196,93 @@ export async function updateQuotaUsed(
         .prepare('UPDATE quotas SET used_amount = ?, computed_at = ? WHERE id = ?')
         .run(used, computedAt, id)) as { changes: number };
   return res.changes > 0;
+}
+
+// ---- 模板层仓储(spec 2026-08-26 §3) ----------------------------------------
+// 全局本体无 user_id, 与 graph_links 的按 user 隔离刻意不同。
+
+export interface TemplateTypeRow {
+  id: string; kind: 'doc_type' | 'contract_type'; name: string;
+  parentId: string | null; props: Record<string, unknown>; isActive: boolean;
+}
+export interface TemplateAnchorWeights { party: number; time: number; amount: number; qty: number }
+export interface TemplateEdgeRuleRow {
+  id: string; sourceTypeId: string; targetTypeId: string; edgeType: string;
+  allowedVocab: string[]; anchorWeights: TemplateAnchorWeights | null;
+  isActive: boolean; templateVersion: number;
+}
+
+const TEMPLATE_TYPE_COLS = 'id, kind, name, parent_id, props, is_active';
+const TEMPLATE_RULE_COLS = 'id, source_type_id, target_type_id, edge_type, allowed_vocab, anchor_weights, is_active, template_version';
+
+function templateTypeFromRow(r: Record<string, unknown>): TemplateTypeRow {
+  let props: Record<string, unknown> = {};
+  try { props = JSON.parse(String(r.props ?? '{}')) as Record<string, unknown>; } catch { /* 损坏按空 */ }
+  return {
+    id: String(r.id), kind: (r.kind === 'contract_type' ? 'contract_type' : 'doc_type'),
+    name: String(r.name), parentId: r.parent_id ? String(r.parent_id) : null,
+    props, isActive: Number(r.is_active) === 1,
+  };
+}
+
+function templateRuleFromRow(r: Record<string, unknown>): TemplateEdgeRuleRow {
+  let allowedVocab: string[] = [];
+  try { allowedVocab = JSON.parse(String(r.allowed_vocab ?? '[]')) as string[]; } catch { /* 损坏按空 */ }
+  let anchorWeights: TemplateAnchorWeights | null = null;
+  if (r.anchor_weights) {
+    try { anchorWeights = JSON.parse(String(r.anchor_weights)) as TemplateAnchorWeights; } catch { /* 忽略 */ }
+  }
+  return {
+    id: String(r.id), sourceTypeId: String(r.source_type_id),
+    targetTypeId: String(r.target_type_id ?? ''), edgeType: String(r.edge_type),
+    allowedVocab, anchorWeights, isActive: Number(r.is_active) === 1,
+    templateVersion: Number(r.template_version ?? 1),
+  };
+}
+
+export async function listTemplateTypes(ctx: DbContext): Promise<TemplateTypeRow[]> {
+  if (ctx.backend === 'postgres') return listTemplateTypesPg(ctx);
+  const rows = ctx.sqlite.prepare(`SELECT ${TEMPLATE_TYPE_COLS} FROM template_types ORDER BY kind, name`).all() as Record<string, unknown>[];
+  return rows.map(templateTypeFromRow);
+}
+
+export async function findTemplateTypeByName(ctx: DbContext, kind: string, name: string): Promise<TemplateTypeRow | null> {
+  if (ctx.backend === 'postgres') return findTemplateTypeByNamePg(ctx, kind, name);
+  const r = ctx.sqlite.prepare(
+    `SELECT ${TEMPLATE_TYPE_COLS} FROM template_types WHERE kind = ? AND name = ?`,
+  ).get(kind, name) as Record<string, unknown> | undefined;
+  return r ? templateTypeFromRow(r) : null;
+}
+
+export async function listActiveEdgeRules(ctx: DbContext): Promise<TemplateEdgeRuleRow[]> {
+  if (ctx.backend === 'postgres') return listActiveEdgeRulesPg(ctx);
+  const rows = ctx.sqlite.prepare(
+    `SELECT ${TEMPLATE_RULE_COLS} FROM template_edge_rules WHERE is_active = 1`,
+  ).all() as Record<string, unknown>[];
+  return rows.map(templateRuleFromRow);
+}
+
+export async function ensureTemplateType(
+  ctx: DbContext, input: { id: string; kind: string; name: string; parentId?: string | null },
+): Promise<void> {
+  if (ctx.backend === 'postgres') return ensureTemplateTypePg(ctx, input);
+  ctx.sqlite.prepare(
+    `INSERT INTO template_types (id, kind, name, parent_id) VALUES (?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id`,
+  ).run(input.id, input.kind, input.name, input.parentId ?? null);
+}
+
+export async function ensureEdgeRule(
+  ctx: DbContext, input: { id: string; sourceTypeId: string; targetTypeId?: string; edgeType: string; allowedVocab: string[]; isActive?: boolean },
+): Promise<void> {
+  if (ctx.backend === 'postgres') return ensureEdgeRulePg(ctx, input);
+  ctx.sqlite.prepare(
+    `INSERT INTO template_edge_rules (id, source_type_id, target_type_id, edge_type, allowed_vocab, is_active)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       target_type_id = excluded.target_type_id,
+       allowed_vocab = excluded.allowed_vocab,
+       is_active = excluded.is_active`,
+  ).run(input.id, input.sourceTypeId, input.targetTypeId ?? '', input.edgeType,
+    JSON.stringify(input.allowedVocab), input.isActive === false ? 0 : 1);
 }
