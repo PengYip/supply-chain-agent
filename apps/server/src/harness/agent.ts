@@ -187,6 +187,19 @@ function defaultEmbedder(): Embedder {
   return new DeterministicEmbedder();
 }
 
+// Model-facing closing instruction injected on the last allowed step
+// (OpenCode MAX_STEPS_PROMPT pattern). Tools are disabled for that step, so
+// the model can only acknowledge with text -- the turn always ends with an
+// assistant closing instead of dangling on a tool result when the step cap
+// trips.
+const MAX_STEPS_CLOSING = [
+  '系统提示：本轮对话的工具调用步数已达到上限，本步已禁用全部工具。',
+  '请立即用简短文字向用户收尾，不要再请求任何工具。收尾内容必须包含：',
+  '1. 本轮已完成的操作及其结果（引用工具返回的关键数字，不得编造）；',
+  '2. 尚未完成的事项；',
+  '3. 建议用户如何继续（例如换一种问法、或分步提出请求）。',
+].join('\n');
+
 export interface RunStreamOpts {
   messages: ModelMessage[];
   role: Role;
@@ -368,7 +381,7 @@ export async function runStream({ messages, role, auditTraceId, model, deps, use
   // prepareStep runs, so audit/status see uncompressed data -- no re-archive.
   // Created BEFORE buildGatedTools so withAudit can record repeat-call
   // fingerprints into it (Phase 6 T2, book Ch5:186).
-  const failures = createFailureTracker(3);
+  const failures = createFailureTracker(env.AGENT_FAILURE_THRESHOLD);
   const tools = buildGatedTools(role, harnessDeps, failures);
   // Phase 3 status bar: append a per-turn model-facing <agent_status> snapshot
   // at the trajectory tail. The snapshot is built from existing harness state
@@ -384,12 +397,12 @@ export async function runStream({ messages, role, auditTraceId, model, deps, use
     system: SYSTEM_PROMPT,
     messages: messagesForModel,
     tools,
-    // L5 circuit breaker: stop after 3 consecutive tool failures (infra errors,
-    // not business ok:false -- those return success:true with the payload).
-    // Kept alongside the step cap so the loop still terminates on runaway tool
-    // errors. Failure count is updated by experimental_onToolCallFinish (and on
-    // a prepareStep compression throw) via the shared `failures` tracker.
-    stopWhen: [stepCountIs(5), makeCircuitBreaker(() => failures.shouldStop || failures.isLooping)],
+    // L5 circuit breaker: stop after N consecutive tool failures (infra
+    // errors, not business ok:false -- those return success:true with the
+    // payload). Kept alongside the step cap so the loop still terminates on
+    // runaway tool errors. Failure count is updated by withAudit (and on a
+    // prepareStep compression throw) via the shared `failures` tracker.
+    stopWhen: [stepCountIs(env.AGENT_MAX_STEPS), makeCircuitBreaker(() => failures.shouldStop || failures.isLooping)],
     // AI SDK 6 option name is `experimental_telemetry` (v7 renames to `telemetry`).
     // In tests no OTel exporter is registered (instrumentation.ts is not loaded),
     // so these spans are no-op and emit no network traffic.
@@ -403,16 +416,37 @@ export async function runStream({ messages, role, auditTraceId, model, deps, use
         auditTraceId,
       },
     },
-    // L1/L2 context compression: shrink tool results to their declared budget
-    // before each step. Returns {} on error (fail-open) and bumps the failure
-    // streak so the circuit breaker can still trip on a pathological history.
-    prepareStep: async ({ messages: stepMessages }) => {
+    // L1/L2 context compression + step-cap closing, both wired in prepareStep.
+    //
+    // Compression: shrink tool results to their declared budget before each
+    // step; on a compression throw, fail-open with the original messages and
+    // bump the failure streak so the circuit breaker can still trip on a
+    // pathological history.
+    //
+    // Step-cap closing (OpenCode MAX_STEPS_PROMPT pattern): on the LAST
+    // allowed step (stepNumber is 0-based) the tool set is emptied
+    // (activeTools: [] -> the provider receives no tools at all) and a
+    // closing instruction is appended. The model can only respond with text,
+    // so a capped turn always ends with an assistant closing instead of
+    // dangling on a tool result. runSession's onFinish fallback is the net
+    // for the circuit-breaker path, which skips prepareStep entirely.
+    prepareStep: async ({ messages: stepMessages, stepNumber }) => {
+      const isLastStep = stepNumber >= env.AGENT_MAX_STEPS - 1;
+      let compressed: ModelMessage[];
       try {
-        return { messages: compressByBudget(stepMessages) };
+        compressed = compressByBudget(stepMessages);
       } catch {
         failures.recordToolFinish(false);
-        return {};
+        compressed = stepMessages;
       }
+      if (isLastStep) {
+        return {
+          messages: [...compressed, { role: 'user' as const, content: MAX_STEPS_CLOSING }],
+          activeTools: [],
+          toolChoice: 'none' as const,
+        };
+      }
+      return { messages: compressed };
     },
     // Background-runtime seam: forwarded so RunManager can cancel a background
     // run via its AbortController (AI SDK 6 option name: abortSignal).

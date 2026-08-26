@@ -37,10 +37,25 @@ function App() {
     setGraphFocus({ ...target, nonce: graphFocusNonceRef.current });
     navigate('graph');
   }, [navigate]);
-  // 导航入口的统一跳转：手动进入图谱页时清掉旧的外部定位，避免残留合同
-  // 中心覆盖用户操作（openInGraph 直接调 navigate，不清自己刚设置的 focus）。
+  // 跨视图定位（同 graphFocus 模式）：文件抽屉「未绑定」徽标 -> 绑定工作台
+  // 选中该文档。nonce 保证重复点击同一文件也会重新选中；跳转即关抽屉。
+  const [bindingsFocus, setBindingsFocus] = useState<{ docId: string; nonce: number } | null>(null);
+  const bindingsFocusNonceRef = useRef(0);
+  const openBindingsForDoc = useCallback(
+    (docId: string) => {
+      bindingsFocusNonceRef.current += 1;
+      setBindingsFocus({ docId, nonce: bindingsFocusNonceRef.current });
+      setFileDrawerOpen(false);
+      navigate('bindings');
+    },
+    [navigate],
+  );
+  // 导航入口的统一跳转：手动进入图谱/绑定页时清掉旧的外部定位，避免残留
+  // 定位覆盖用户操作（openInGraph/openBindingsForDoc 直接调 navigate，不清
+  // 自己刚设置的 focus）。
   const handleNavigate = useCallback((v: ViewId) => {
     if (v === 'graph') setGraphFocus(null);
+    if (v === 'bindings') setBindingsFocus(null);
     navigate(v);
   }, [navigate]);
   // 执行流水页 -> 主体名单页的跳转(主体未配置导致流水为空时的引导)。
@@ -160,7 +175,7 @@ function App() {
           }}
         />
       ) : view === 'bindings' ? (
-        <BindingsView onOpenInGraph={openInGraph} />
+        <BindingsView onOpenInGraph={openInGraph} docFocus={bindingsFocus} />
       ) : view === 'flows' ? (
         <FlowsView onOpenParties={openParties} />
       ) : view === 'parties' ? (
@@ -180,6 +195,7 @@ function App() {
         onAddToConversation={addToConversation}
         contextFileKeys={contextFileKeys}
         filesApi={filesApi}
+        onOpenBindings={openBindingsForDoc}
       />
     </AppShell>
   );

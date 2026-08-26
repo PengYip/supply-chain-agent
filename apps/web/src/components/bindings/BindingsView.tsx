@@ -66,7 +66,20 @@ const DOC_TYPE_ERROR_TEXT: Record<string, string> = {
   document_not_found: '文档不存在或已删除',
 };
 
-export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: GraphFocusTarget) => void }) {
+/** 外部定位请求（App 分配）：文件抽屉「未绑定」徽标跳转时按 docId 选中。
+ *  nonce 变化即视为一次新请求（同一文件重复点击也重新选中）。 */
+export interface DocFocus {
+  docId: string;
+  nonce: number;
+}
+
+export function BindingsView({
+  onOpenInGraph,
+  docFocus,
+}: {
+  onOpenInGraph?: (target: GraphFocusTarget) => void;
+  docFocus?: DocFocus | null;
+}) {
   const b = useBindings();
   const { overview, proposals, candidates, contracts } = b;
 
@@ -233,6 +246,20 @@ export function BindingsView({ onOpenInGraph }: { onOpenInGraph?: (target: Graph
     setBatchErrors({});
     void b.loadCandidates(doc.docId);
   };
+
+  // 外部定位（文件抽屉「未绑定」徽标跳转）：overview 尚在加载时先等待，加载
+  // 完成后按 docId 选中并载入候选；列表里找不到（已删除等）则静默放弃。
+  // nonce ref 防重复消费——effect 因 overview/loading/handleSelectDoc 身份变化
+  // 重跑时直接短路，不会重复选中。
+  const handledDocFocusNonceRef = useRef(0);
+  useEffect(() => {
+    if (!docFocus || docFocus.nonce === handledDocFocusNonceRef.current) return;
+    if (b.loading) return;
+    handledDocFocusNonceRef.current = docFocus.nonce;
+    const doc = overview.find((d) => d.docId === docFocus.docId);
+    if (doc) handleSelectDoc(doc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 见上注释
+  }, [docFocus, overview, b.loading]);
 
   const handleClearDoc = () => {
     setSelectedDocId(null);
