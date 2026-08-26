@@ -28,6 +28,7 @@ import { evalRunRoute } from './routes/evalRun.js';
 import { evalDatasetsRoute } from './routes/evalDatasets.js';
 import { ensureBucket } from './lib/minio.js';
 import { migrateOnStartup, getDbContext } from './pipeline/db/dbBackend.js';
+import { ensureTemplateSeed } from './pipeline/templateSeed.js';
 import { runExtractionBackfill } from './pipeline/extractionBackfill.js';
 import { getDriver, closeNeo4j } from './graph/neo4j.js';
 import { listToolNames, type Role } from './harness/roleToolRegistry.js';
@@ -180,6 +181,12 @@ process.on('SIGINT', async () => { await closeNeo4j(); });
 // runtime rather than crashing startup). ensureBucket stays best-effort.
 (async () => {
   await migrateOnStartup();
+  // 模板层种子(幂等): 模板三表 DDL 后灌入, 失败仅告警不阻塞启动。
+  try {
+    await ensureTemplateSeed(getDbContext());
+  } catch (e) {
+    console.warn('[templateSeed] 模板种子灌入失败(不阻塞启动):', (e as Error).message);
+  }
   // Background session runtime: any session left 'busy' by a previous process
   // was interrupted by a crash/restart. Flip it to 'interrupted' so the UI can
   // flag it and the caller can decide to resume or discard. Best-effort: a
