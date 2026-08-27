@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createDb, migrate } from '../../src/pipeline/db/client.js';
 import {
-  bumpTemplateVersion, ensureEdgeRule, ensureTemplateType, findTemplateTypeByName,
+  bumpTemplateVersion, ensureEdgeRule, ensureTemplateType,
   listActiveEdgeRules, listTemplateTypes,
 } from '../../src/pipeline/db/repositories.js';
 
@@ -14,12 +14,6 @@ describe('template repo', () => {
     await ensureTemplateType(ctx, { id: 'dt-发票', kind: 'doc_type', name: '发票' });
     const rows = await listTemplateTypes(ctx);
     expect(rows.filter((r) => r.name === '发票')).toHaveLength(1);
-  });
-
-  it('findTemplateTypeByName 精确命中', async () => {
-    await ensureTemplateType(ctx, { id: 'ct-采购', kind: 'contract_type', name: '采购' });
-    expect((await findTemplateTypeByName(ctx, 'contract_type', '采购'))?.id).toBe('ct-采购');
-    expect(await findTemplateTypeByName(ctx, 'contract_type', '不存在')).toBeNull();
   });
 
   it('ensureEdgeRule 词表 JSON往返 + isActive 过滤', async () => {

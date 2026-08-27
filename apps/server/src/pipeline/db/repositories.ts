@@ -39,7 +39,6 @@ import {
   countDocumentsPg,
   countExtractionsNeedingReviewPg,
   listUserDocumentsPg,
-  hasContractDocBindingPg,
   loadExtractionPg,
   saveClassificationPg,
   loadClassificationPg,
@@ -122,7 +121,6 @@ import {
   updateQuotaUsedPg,
   // 模板层(spec 2026-08-26 §3): pg twins for 模板三表。
   listTemplateTypesPg,
-  findTemplateTypeByNamePg,
   listActiveEdgeRulesPg,
   ensureTemplateTypePg,
   ensureEdgeRulePg,
@@ -715,32 +713,6 @@ export async function listBindingsForContract(
 ): Promise<BindingRow[]> {
   if (ctx.backend === 'postgres') return listBindingsForContractPg(ctx, contractNo);
   return ctx.db.select().from(bindings).where(eq(bindings.contractNo, contractNo)).all().map(rowToBinding);
-}
-
-/**
- * 业务顺序门禁(2026-08-25): 目标合同是否已挂合同类型文件(存在非 rejected 绑定,
- * 且来源文档 doc_type='合同')。执行类单据(发票/运输单据等)手动绑定前必须为真——
- * 先有合同文件建立实体锚点, 再挂执行单据。按文档归属过滤用户(legacy 行兼容同前)。
- */
-export async function hasContractDocBinding(
-  ctx: DbContext,
-  contractNo: string,
-  userId?: string,
-): Promise<boolean> {
-  if (ctx.backend === 'postgres') return hasContractDocBindingPg(ctx, contractNo, userId);
-  const uid = effectiveUserId(userId);
-  if (!uid) return false;
-  const row = ctx.sqlite
-    .prepare(
-      `SELECT 1 AS ok
-         FROM bindings b
-         JOIN documents d ON d.id = b.document_id
-        WHERE b.contract_no = ? AND b.status != 'rejected' AND d.doc_type = '合同'
-          AND (d.user_id = ? OR d.user_id = '' OR d.user_id IS NULL)
-        LIMIT 1`,
-    )
-    .get(contractNo, uid);
-  return row !== undefined;
 }
 
 // ---- Phase B: bindings 状态机 -------------------------------------------------
@@ -3442,14 +3414,6 @@ export async function listTemplateTypes(ctx: DbContext): Promise<TemplateTypeRow
   if (ctx.backend === 'postgres') return listTemplateTypesPg(ctx);
   const rows = ctx.sqlite.prepare(`SELECT ${TEMPLATE_TYPE_COLS} FROM template_types ORDER BY kind, name`).all() as Record<string, unknown>[];
   return rows.map(templateTypeFromRow);
-}
-
-export async function findTemplateTypeByName(ctx: DbContext, kind: string, name: string): Promise<TemplateTypeRow | null> {
-  if (ctx.backend === 'postgres') return findTemplateTypeByNamePg(ctx, kind, name);
-  const r = ctx.sqlite.prepare(
-    `SELECT ${TEMPLATE_TYPE_COLS} FROM template_types WHERE kind = ? AND name = ?`,
-  ).get(kind, name) as Record<string, unknown> | undefined;
-  return r ? templateTypeFromRow(r) : null;
 }
 
 export async function listActiveEdgeRules(ctx: DbContext): Promise<TemplateEdgeRuleRow[]> {

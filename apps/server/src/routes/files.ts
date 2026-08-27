@@ -258,6 +258,9 @@ filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
         filename: file.name,
         key,
         directory: directory ? '/' + directory : '/',
+        // Echo the EFFECTIVE stored docType (after the ALLOWED_DOCTYPES fallback
+        // above) so the client/model can narrate the same fact the stub holds.
+        docType,
         parseStatus: 'uploaded',
         ...(detectedModality ? { detectedModality } : {}),
       },

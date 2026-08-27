@@ -687,25 +687,6 @@ export async function listUserDocumentsPg(
   }));
 }
 
-/** 业务顺序门禁(2026-08-25) PG 变体: 目标合同是否已挂合同类型文件。 */
-export async function hasContractDocBindingPg(
-  ctx: PostgresDbContext,
-  contractNo: string,
-  userId?: string,
-): Promise<boolean> {
-  const uid = effectiveUserId(userId);
-  if (!uid) return false;
-  const res = await ctx.pool.query(
-    `SELECT 1 AS ok
-       FROM bindings b
-       JOIN documents d ON d.id = b.document_id
-      WHERE b.contract_no = $1 AND b.status != 'rejected' AND d.doc_type = '合同'
-        AND (d.user_id = $2 OR d.user_id = '' OR d.user_id IS NULL)
-      LIMIT 1`,
-    [contractNo, uid],
-  );
-  return (res.rowCount ?? 0) > 0;
-}
 
 export async function loadExtractionPg(
   ctx: PostgresDbContext,
@@ -2595,20 +2576,6 @@ export async function listTemplateTypesPg(ctx: PostgresDbContext): Promise<Templ
       props, isActive: Number(r.is_active) === 1,
     };
   });
-}
-
-export async function findTemplateTypeByNamePg(ctx: PostgresDbContext, kind: string, name: string): Promise<TemplateTypeRow | null> {
-  const { rows } = await ctx.pool.query(
-    'SELECT id, kind, name, parent_id, props, is_active FROM template_types WHERE kind = $1 AND name = $2', [kind, name]);
-  if (rows.length === 0) return null;
-  const r = rows[0] as Record<string, unknown>;
-  let props: Record<string, unknown> = {};
-  try { props = typeof r.props === 'string' ? JSON.parse(r.props) as Record<string, unknown> : (r.props ?? {}) as Record<string, unknown>; } catch { /* 损坏按空 */ }
-  return {
-    id: String(r.id), kind: (r.kind === 'contract_type' ? 'contract_type' : 'doc_type'),
-    name: String(r.name), parentId: r.parent_id ? String(r.parent_id) : null,
-    props, isActive: Number(r.is_active) === 1,
-  };
 }
 
 export async function listActiveEdgeRulesPg(ctx: PostgresDbContext): Promise<TemplateEdgeRuleRow[]> {

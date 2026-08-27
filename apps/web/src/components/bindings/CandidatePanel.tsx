@@ -42,6 +42,9 @@ interface CandidatePanelProps {
   error: string | null;
   focusedKey: string | null;
   contracts: ContractOption[];
+  /** 台账拉取失败信息(null=最近一次拉取成功或未失败); 非空时手动区提示失败并可重试。 */
+  contractsError: string | null;
+  onRetryContracts: () => void;
   /** 已挂合同文件的合同号集合(overview 中 docType=合同 文档的非 rejected 绑定目标)。 */
   establishedContracts: Set<string>;
   batchErrors: Record<string, string>;
@@ -71,6 +74,8 @@ export function CandidatePanel({
   error,
   focusedKey,
   contracts,
+  contractsError,
+  onRetryContracts,
   establishedContracts,
   batchErrors,
   pending,
@@ -344,9 +349,25 @@ export function CandidatePanel({
                 )}
                 {/* Legacy 降级路径: 旧表单只能绑合同, 台账空仍应提示 */}
                 {contracts.length === 0 ? (
-                  <div className="rounded-md bg-surface px-3 py-2 text-[12px] leading-5 text-ink-soft">
-                    合同台账为空，请先上传合同类文档并完成抽取
-                  </div>
+                  contractsError ? (
+                    <div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] leading-5 text-ink">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="min-w-0 flex-1 break-all">台账加载失败：{contractsError}</span>
+                        <button
+                          type="button"
+                          onClick={onRetryContracts}
+                          className="flex shrink-0 items-center gap-1 text-primary hover:underline"
+                        >
+                          <RefreshCw className="h-3 w-3" aria-hidden />
+                          重试
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-md bg-surface px-3 py-2 text-[12px] leading-5 text-ink-soft">
+                      合同台账为空，请先上传合同类文档并完成抽取
+                    </div>
+                  )
                 ) : (
                   <LegacyManualForm
                     contracts={contracts}
@@ -377,9 +398,25 @@ export function CandidatePanel({
                   onCancel={() => setManualOpen(false)}
                 />
               ) : contracts.length === 0 ? (
-                <div className="rounded-md bg-surface px-3 py-2 text-[12px] leading-5 text-ink-soft">
-                  合同台账为空，请先上传合同类文档并完成抽取
-                </div>
+                contractsError ? (
+                  <div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] leading-5 text-ink">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 flex-1 break-all">台账加载失败：{contractsError}</span>
+                      <button
+                        type="button"
+                        onClick={onRetryContracts}
+                        className="flex shrink-0 items-center gap-1 text-primary hover:underline"
+                      >
+                        <RefreshCw className="h-3 w-3" aria-hidden />
+                        重试
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-md bg-surface px-3 py-2 text-[12px] leading-5 text-ink-soft">
+                    合同台账为空，请先上传合同类文档并完成抽取
+                  </div>
+                )
               ) : (
                 <TemplateBindingForm
                   doc={doc}
