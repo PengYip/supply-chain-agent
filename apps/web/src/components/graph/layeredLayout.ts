@@ -65,6 +65,11 @@ function heightOf(kind: string): number {
   return HAUX;
 }
 
+/** 卡片几何: 布局与画布渲染共用同一套宽高估算, 保证落位与碰撞一致。 */
+export function cardGeometry(kind: string, name: string): { width: number; height: number } {
+  return { width: cardWidth(kind, name), height: heightOf(kind) };
+}
+
 export function computeLayeredLayout(nodes: GraphNode[], edges: GraphEdge[]): LayoutResult {
   const kindOf = new Map(nodes.map((v) => [v.elementId, v.kind]));
   const docContract = new Map<string, string>();
