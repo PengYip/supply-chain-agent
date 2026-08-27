@@ -439,6 +439,12 @@ function TreeFolder(props: TreeFolderProps) {
     cb.dnd.clear();
   };
 
+  // 文件夹行是独立落点：阻断冒泡，防止根区 dragOver 把 dropTarget 覆写成根。
+  const handleRowDragOver = (e: React.DragEvent) => {
+    e.stopPropagation();
+    cb.dnd.onDragOver(fullPath)(e);
+  };
+
   return (
     <div>
       <div
@@ -446,7 +452,7 @@ function TreeFolder(props: TreeFolderProps) {
         draggable={!renamingHere}
         onDragStart={cb.dnd.onDragStart({ kind: 'folder', path: fullPath })}
         onDragEnd={cb.dnd.clear}
-        onDragOver={cb.dnd.onDragOver(fullPath)}
+        onDragOver={handleRowDragOver}
         onDragLeave={cb.dnd.onDragLeave(fullPath)}
         onDrop={handleRowDrop}
         className={clsx(
@@ -531,7 +537,11 @@ function TreeFolder(props: TreeFolderProps) {
         )}
       </div>
       {isOpen && (
-        <div className="ml-5 border-l border-line pl-2">
+        <div
+          className="ml-5 border-l border-line pl-2"
+          onDragOver={handleRowDragOver}
+          onDrop={handleRowDrop}
+        >
           {creatingHere && (
             <div
               className="flex items-center gap-1.5 py-1 pr-3"

@@ -55,7 +55,9 @@ export function useFileDnd() {
     setDropTarget(null);
   }, []);
 
-  /** 行 / 根区的 dragover 处理。仅当存在内部拖拽载荷时才劫持默认行为。 */
+  /** 行 / 根区的 dragover 处理。仅当存在内部拖拽载荷时才劫持默认行为。
+   *  注意：文件夹行调用方需先 e.stopPropagation()，否则事件冒泡到面板根区
+   *  会把 dropTarget 覆写成根（''），高亮与提示条随之失真。 */
   const onDragOver = useCallback(
     (target: DropTarget) => (e: React.DragEvent) => {
       if (dragging) {

@@ -332,7 +332,7 @@ export function FileDrawer(props: FileDrawerProps) {
           onDragLeave={dnd.onDragLeave('')}
           onDrop={handleRootDrop}
         >
-          {dnd.dragging && (
+          {dnd.dragging && dnd.dropTarget === '' && (
             <div className="sticky top-0 z-10 border-b border-primary/20 bg-primary/5 px-3 py-1.5 text-center text-[11px] text-primary">
               拖放到此处移到根目录
             </div>
