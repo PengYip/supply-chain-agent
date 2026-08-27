@@ -5,8 +5,9 @@
 // 的方向语义来自 domain/flowDirection: 锚点 buyer/seller 哪一侧命中本公司主体名单
 // (env.SELF_PARTY_NAMES) 决定 收(in)/付/发/开(out)。
 //
-// 白名单: 付款凭证->资金流、货转单->货物流、发票->发票流; 其余(合同/提单/装箱单/
-// 化验报告/其他)返回 null -- 提单/装箱单/质检(化验报告)是未来扩展, 当前不参与执行流水。
+// 白名单: 付款凭证->资金流、货转单/收货单/发货单->货物流、发票->发票流; 其余
+// (合同/提单/装箱单/化验报告/汽运磅单/火运大票/其他)返回 null -- 提单/装箱单/质检
+// (化验报告)是未来扩展; 汽运磅单/火运大票等轨道衡类单据暂无主体锚点, 见白名单注。
 //
 // 物化是安静旁路: 无抽取、docType 白名单外、名单未配置或方向判不出时返回 null, 不抛错、
 // 不影响绑定确认主流程; 同 bindingId 重复物化的幂等语义交由存储层 upsert 保证。
@@ -25,8 +26,7 @@ import {
   listSelfParties,
   type ExtractionRow,
 } from './db/repositories.js';
-import { extractAnchors, type VoucherType } from './schemas/vouchers.js';
-import { buildAnchorsFromFields } from './bindingProposal.js';
+import { anchorsForExtraction } from './bindingProposal.js';
 import {
   parseSelfPartyNames,
   normalizeCompanyName,
@@ -57,21 +57,17 @@ export interface MaterializedFlow {
   amount: number | null;
 }
 
-/** docType -> 执行流水流族。白名单外不物化(提单/装箱单/质检等未来扩展)。 */
+/** docType -> 执行流水流族。白名单外不物化(提单/装箱单/质检等未来扩展)。
+ *  收货单/发货单(P2-T3 方向编码类型, 文本结构化): 货物流, 走字段锚点路径;
+ *  汽运磅单/火运大票(火运轨道衡类)暂缓: 无买卖方主体锚点则方向判不出,
+ *  且类型体系仍在收敛(P2-T4), 维持净最小集合。 */
 const FLOW_TYPE_BY_DOC_TYPE: Record<string, string> = {
   付款凭证: '资金流',
   货转单: '货物流',
   发票: '发票流',
+  收货单: '货物流',
+  发货单: '货物流',
 };
-
-/** 抽取行 fields({value, sourceSpans} 包装) -> extractAnchors 需要的裸值映射。 */
-function unwrapFieldValues(
-  fields: Record<string, { value: string | number; sourceSpans: unknown[] }>,
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(fields)) out[k] = v.value;
-  return out;
-}
 
 /**
  * 有效自主体名单: DB 侧(self_parties)与 env.SELF_PARTY_NAMES 的并集, 按
@@ -115,13 +111,9 @@ export async function materializeExecutionFlow(
 
   const flowType = FLOW_TYPE_BY_DOC_TYPE[extraction.docType];
   if (!flowType) return null;
-
-  // 锚点: 图片凭证(付款凭证/货转单)走 extractAnchors; 发票(通用文档)走
-  // buildAnchorsFromFields。白名单过滤后此处 docType 只会是两类图片凭证之一。
-  const anchors =
-    extraction.docType === '发票'
-      ? buildAnchorsFromFields(extraction.docType, extraction.fields)
-      : extractAnchors(extraction.docType as VoucherType, unwrapFieldValues(extraction.fields));
+  // 锚点: 分支假设集中anchorsForExtraction(bindingProposal)——图片凭证(付款凭证/
+  // 货转单)走 extractAnchors; 文本结构化文档(发票/收货单/发货单)走字段路径。
+  const anchors = anchorsForExtraction(extraction.docType, extraction.fields);
 
   const names = selfPartyNames ?? (await getEffectiveSelfPartyNames(ctx));
   const side = resolveSelfSide(names, anchors);
@@ -220,9 +212,7 @@ export async function refreshExecutionFlowsForDocument(
   const names = selfPartyNames ?? (await getEffectiveSelfPartyNames(ctx));
   const flowType = extraction ? FLOW_TYPE_BY_DOC_TYPE[extraction.docType] : undefined;
   const anchors = extraction
-    ? extraction.docType === '发票'
-      ? buildAnchorsFromFields(extraction.docType, extraction.fields)
-      : extractAnchors(extraction.docType as VoucherType, unwrapFieldValues(extraction.fields))
+    ? anchorsForExtraction(extraction.docType, extraction.fields)
     : undefined;
   const side = anchors ? resolveSelfSide(names, anchors) : null;
 

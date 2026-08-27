@@ -38,16 +38,20 @@ function parseSqliteArg(): string {
 }
 
 const SQLITE_PATH = parseSqliteArg();
-const DATABASE_URL = process.env.DATABASE_URL;
-
-if (!DATABASE_URL) {
-  console.error(
-    '[migrate-agent-db] DATABASE_URL is required (the Postgres target). ' +
-      'Refusing to fall back to any default for a WRITE migration -- set it ' +
-      'explicitly, e.g. DATABASE_URL=postgresql://sca:...@host:5433/sca.',
-  );
-  process.exit(1);
+function requireDatabaseUrl(): string {
+  const url = process.env.DATABASE_URL;
+  if (!url) {
+    console.error(
+      '[migrate-agent-db] DATABASE_URL is required (the Postgres target). ' +
+        'Refusing to fall back to any default for a WRITE migration -- set it ' +
+        'explicitly, e.g. DATABASE_URL=postgresql://sca:...@host:5433/sca.',
+    );
+    process.exit(1);
+  }
+  return url;
 }
+
+const DATABASE_URL = requireDatabaseUrl();
 
 // ---- source: SQLite (read-only) ----
 

@@ -19,8 +19,7 @@ import {
   listDocumentIdsWithConfirmedBindings,
   getDocumentMeta,
 } from './db/repositories.js';
-import { PARTY_FIELD_ALIASES, buildAnchorsFromFields } from './bindingProposal.js';
-import { extractAnchors, type VoucherType } from './schemas/vouchers.js';
+import { PARTY_FIELD_ALIASES, anchorsForExtraction } from './bindingProposal.js';
 import { normalizeCompanyName } from '../domain/flowDirection.js';
 
 export interface SelfPartyCandidate {
@@ -218,19 +217,11 @@ export async function buildSelfPartyCandidatesForUser(
   return buildSelfPartyCandidates(snapshots, effectiveNames);
 }
 
-/** 抽取行 fields({value, sourceSpans} 包装) -> extractAnchors 需要的裸值映射。 */
-function unwrapFieldValues(
-  fields: Record<string, { value: string | number; sourceSpans: unknown[] }>,
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(fields)) out[k] = v.value;
-  return out;
-}
-
 /**
- * IO 编排: 持有 confirmed 绑定 + 白名单 docType 的文档 -> 最新抽取 -> 锚点
- * (发票走 buildAnchorsFromFields, 其余走 extractAnchors, 与 materializeExecutionFlow
- * 同源) -> findSelfPartyConflicts。effectiveNames 为归一化后的有效名单。
+ * IO 编排: 持有 confirmed 绑定 + FLOW_DOCTYPES 门内 docType 的文档 -> 最新抽取
+ * -> 锚点(anchorsForExtraction: 发票/收货单/发货单走字段路径, 其余走
+ * extractAnchors, 与 materializeExecutionFlow 同源) -> findSelfPartyConflicts。
+ * effectiveNames 为归一化后的有效名单。
  */
 export async function findSelfPartyConflictsForUser(
   ctx: DbContext,
@@ -244,10 +235,7 @@ export async function findSelfPartyConflictsForUser(
     if (!meta || !meta.docType || !FLOW_DOCTYPES.has(meta.docType)) continue;
     const ex = await loadLatestExtractionByDocId(ctx, docId, userId);
     if (!ex) continue;
-    const anchors =
-      ex.docType === '发票'
-        ? buildAnchorsFromFields(ex.docType, ex.fields)
-        : extractAnchors(ex.docType as VoucherType, unwrapFieldValues(ex.fields));
+    const anchors = anchorsForExtraction(ex.docType, ex.fields);
     snapshots.push({ docId, docType: ex.docType, anchors });
   }
   return findSelfPartyConflicts(snapshots, effectiveNames);

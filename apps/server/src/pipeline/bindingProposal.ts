@@ -10,6 +10,7 @@
 // 实体匹配必须模糊容错(matchEntity), 不能精确字符串匹配。
 
 import type { VoucherAnchors } from './schemas/vouchers.js';
+import { extractAnchors, type VoucherType } from './schemas/vouchers.js';
 import { normalizeContractNo } from './contractLedger.js';
 
 // LedgerEntry 使用 contractLedger.ts 的真实形状(ContractLedgerEntry): fields 为
@@ -363,6 +364,65 @@ export function buildAnchorsFromFields(
     }
   }
   return anchors;
+}
+
+/** 方向编码货物单据(收货单/发货单, 文本结构化): 白名单执行流水与绑定锚点共用。 */
+export const GOODS_FIELD_DOCS: ReadonlySet<string> = new Set(['收货单', '发货单']);
+
+/**
+ * 方向编码货物单据(收货单/发货单, 文本结构化, 无专用 voucher schema)的抽取字段
+ * -> 执行流水锚点。以通用文档锚点(buildAnchorsFromFields: 合同号/主体含
+ * 收货人/发货人/裸数量/_吨 数量)为底, 叠加货物单据实测别名(dev 库发货单
+ * DOC-mtb032yu-8pj7): 日期 发货日期(dev 实测)/收货日期/到货日期; 金额 含税总价
+ * (dev 实测; 干扰项如 '75%货款金额' 是部分货款, 不在别名内不会被误取); 数量
+ * 发运数量(dev 实测)。发运数量 字段名不带 '_吨' 后缀且单据无显式 单位 字段时
+ * quantityUnit 留 null(不猜测); 另接受 契约词汇 数量_吨(_吨 后缀=吨, 与台账
+ * scoreQty 词表一致)。
+ */
+export function buildGoodsDocAnchors(
+  docType: string,
+  fields: Record<string, { value: string | number }>,
+): VoucherAnchors {
+  const anchors = buildAnchorsFromFields(docType, fields);
+  const date = firstStr(fields, ['发货日期', '收货日期', '到货日期']);
+  if (date) anchors.date = date;
+  const amount = firstNum(fields, ['含税总价']);
+  if (amount !== undefined) anchors.amount = amount;
+  const qtyFree = firstNum(fields, ['发运数量']);
+  if (qtyFree !== undefined) {
+    anchors.quantityTon = qtyFree;
+    anchors.quantityUnit =
+      firstStr(fields, ['单位']) === '吨' ? '吨' : undefined;
+  } else {
+    // 无单位争议的字段优先: '_吨' 后缀由命名即确定为吨。
+    const qtyTonFixed = firstNum(fields, ['数量_吨']);
+    if (qtyTonFixed !== undefined) {
+      anchors.quantityTon = qtyTonFixed;
+      anchors.quantityUnit = '吨';
+    }
+  }
+  return anchors;
+}
+
+/**
+ * 抽取行(docType + {value} 包装字段) -> 锚点。执行流水物化(materializeExecutionFlow /
+ * refreshExecutionFlowsForDocument)与自主体候选扫描(selfPartyCandidates)共用,
+ * 保证分支假设同源:
+ *   - 发票          -> buildAnchorsFromFields(通用文档路径)
+ *   - 收货单/发货单 -> buildGoodsDocAnchors(文本结构化货物单据)
+ *   - 其余(付款凭证/货转单等图片凭证, 按 voucher schema 提取) -> extractAnchors
+ * fields 直接收抽取行的包装形状(sourceSpans 在此不参与锚点, 被忽略)。
+ */
+export function anchorsForExtraction(
+  docType: string,
+  fields: Record<string, { value: string | number; sourceSpans?: unknown[] }>,
+): VoucherAnchors {
+  if (docType === '发票') return buildAnchorsFromFields(docType, fields);
+  if (GOODS_FIELD_DOCS.has(docType)) return buildGoodsDocAnchors(docType, fields);
+  return extractAnchors(
+    docType as VoucherType,
+    Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, v.value])),
+  );
 }
 
 export interface AnchorWeights { party: number; time: number; amount: number; qty: number }

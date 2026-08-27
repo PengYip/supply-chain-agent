@@ -242,6 +242,139 @@ describe('materializeExecutionFlow 物化决策', () => {
   });
 });
 
+describe('方向编码类型(收货单/发货单)物化', () => {
+  // dev 库实测字段(DOC-mtb032yu-8pj7, 火运发货单): 文本结构化字段路径。
+  it('发货单 + seller 命中 -> 货物流/out, 锚点取 含税总价/发运数量/发货日期 实测别名', async () => {
+    mocks.loadLatestExtractionByDocId.mockResolvedValue(
+      extractionRow('发货单', {
+        买方: '湖北国贸能源化工有限公司',
+        卖方: '我方贸易有限公司',
+        矿种: '混煤',
+        车数: '580',
+        发货日期: '2025年3月21日',
+        发运数量: '3357.46',
+        合同编号: 'GMNH-JBKZ-20250303HNWH',
+        含税单价: '638.60',
+        含税总价: '2,144,073.96',
+        运输方式: '火运',
+        // 干扰项: 部分货款金额不得误作 amount 锚点
+        '75%货款金额': '1,608,055.47',
+      }),
+    );
+    const id = await materializeExecutionFlow(ctx, baseInput, 'u1', SELF);
+    expect(id?.flowId).toBe('EX-1');
+    expect(mocks.upsertExecutionFlow).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertExecutionFlow).toHaveBeenCalledWith(
+      ctx,
+      expect.objectContaining({
+        flowType: '货物流',
+        direction: 'out',
+        amount: 2144073.96,
+        quantityTon: 3357.46,
+        unit: null,
+        docType: '发货单',
+        voucherDate: '2025年3月21日',
+      }),
+      'u1',
+    );
+  });
+
+  it('发货单 + buyer 命中 -> 货物流/in(方向随自主体侧翻转)', async () => {
+    mocks.loadLatestExtractionByDocId.mockResolvedValue(
+      extractionRow('发货单', {
+        买方: '我方贸易有限公司',
+        卖方: '对手方有限公司',
+        含税总价: 100,
+      }),
+    );
+    const id = await materializeExecutionFlow(ctx, baseInput, 'u1', SELF);
+    expect(id?.flowId).toBe('EX-1');
+    expect(mocks.upsertExecutionFlow).toHaveBeenCalledWith(
+      ctx,
+      expect.objectContaining({ flowType: '货物流', direction: 'in' }),
+      'u1',
+    );
+  });
+
+  it('收货单 + buyer 命中 -> 货物流/in, _吨 后缀数量 unit=吨', async () => {
+    mocks.loadLatestExtractionByDocId.mockResolvedValue(
+      extractionRow('收货单', {
+        买方: '我方贸易有限公司',
+        卖方: '对手方有限公司',
+        数量_吨: '1,200',
+      }),
+    );
+    const id = await materializeExecutionFlow(ctx, baseInput, 'u1', SELF);
+    expect(id?.flowId).toBe('EX-1');
+    expect(mocks.upsertExecutionFlow).toHaveBeenCalledWith(
+      ctx,
+      expect.objectContaining({
+        flowType: '货物流',
+        direction: 'in',
+        quantityTon: 1200,
+        unit: '吨',
+      }),
+      'u1',
+    );
+  });
+
+  it('无对应字段时锚点 null 也照常落行: 仅主体命中即可物化(amount/qty/date 为 null)', async () => {
+    mocks.loadLatestExtractionByDocId.mockResolvedValue(
+      extractionRow('收货单', {
+        收货人: '我方贸易有限公司',
+        发货人: '对手方有限公司',
+      }),
+    );
+    const id = await materializeExecutionFlow(ctx, baseInput, 'u1', SELF);
+    expect(id?.flowId).toBe('EX-1');
+    expect(mocks.upsertExecutionFlow).toHaveBeenCalledWith(
+      ctx,
+      expect.objectContaining({
+        flowType: '货物流',
+        direction: 'in',
+        amount: null,
+        quantityTon: null,
+        voucherDate: null,
+      }),
+      'u1',
+    );
+  });
+
+  it('无主体字段 -> 方向判不出 -> 返回 null 且未调 upsert(安静旁路保持)', async () => {
+    mocks.loadLatestExtractionByDocId.mockResolvedValue(
+      extractionRow('发货单', { 矿种: '混煤', 车数: '580', 发运数量: '3357.46' }),
+    );
+    const id = await materializeExecutionFlow(ctx, baseInput, 'u1', SELF);
+    expect(id).toBeNull();
+    expect(mocks.upsertExecutionFlow).not.toHaveBeenCalled();
+  });
+
+  it('汽运磅单仍在白名单外(净最小集合) -> 返回 null', async () => {
+    mocks.loadLatestExtractionByDocId.mockResolvedValue(
+      extractionRow('汽运磅单', { 合计净重: 100 }),
+    );
+    const id = await materializeExecutionFlow(ctx, baseInput, 'u1', SELF);
+    expect(id).toBeNull();
+    expect(mocks.upsertExecutionFlow).not.toHaveBeenCalled();
+  });
+
+  it('refresh introspection 同源: 发货单方向判不出 -> skipped=direction-undeterminable', async () => {
+    mocks.retractExecutionFlowsForDocument.mockResolvedValue(1);
+    mocks.listConfirmedBindingsForDocument.mockResolvedValue([
+      { id: 'BD-1', contractNo: 'CJXC-001', confidence: 0.9 },
+    ]);
+    mocks.loadLatestExtractionByDocId.mockResolvedValue(
+      extractionRow('发货单', { 矿种: '混煤' }),
+    );
+    const out = await refreshExecutionFlowsForDocument(ctx, 'DOC-1', 'u1', SELF);
+    expect(out.materialized).toBe(0);
+    expect(out.skipped).toEqual([
+      { bindingId: 'BD-1', contractNo: 'CJXC-001', reason: 'direction-undeterminable' },
+    ]);
+    expect(mocks.upsertExecutionFlow).not.toHaveBeenCalled();
+  });
+});
+
 describe('retractExecutionFlow', () => {
   it('转调 retractExecutionFlowForBinding 并透传 userId', async () => {
     const ok = await retractExecutionFlow(ctx, 'BD-1', 'u1');
