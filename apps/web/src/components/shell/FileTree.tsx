@@ -229,14 +229,16 @@ function FileRow(props: {
   // 动作区在 hover / 移动中 / 删除确认中保持可见
   const showActions = cb.movingFileKey === file.key || cb.deletingFilePath === file.key;
 
-  // 绑定徽标：未绑定且有 docId 时可点击跳转绑定工作台（孤儿对象/已绑定纯展示）。
+  // 挂合同徽标：判据是「存在已确认的合同绑定」，对合同与执行单据统一表述为
+  // 「挂到合同」，避免合同类文档把「未绑定」误读为「未入台账」（入台账由
+  // 抽取自动完成，与绑定无关）。未挂且有 docId 时可点击跳转绑定工作台。
   const unbound = file.bound !== true;
   const boundBadgeNode = !unbound ? (
     <span
-      title="已绑定到合同台账"
+      title="该文件已与合同建立确认绑定"
       className="whitespace-nowrap rounded bg-success/10 px-1.5 py-px text-[10px] text-success"
     >
-      已绑定
+      已挂合同
     </span>
   ) : file.docId && cb.onOpenBindings ? (
     <button
@@ -245,18 +247,18 @@ function FileRow(props: {
         e.stopPropagation();
         if (file.docId && cb.onOpenBindings) cb.onOpenBindings(file.docId);
       }}
-      title="尚未绑定合同，点击前往绑定"
-      aria-label="尚未绑定合同，点击前往绑定"
+      title="尚未挂到合同，点击前往绑定"
+      aria-label="尚未挂到合同，点击前往绑定"
       className="cursor-pointer whitespace-nowrap rounded bg-surface px-1.5 py-px text-[10px] text-ink-soft transition-colors hover:bg-ink-soft/15 hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
     >
-      未绑定
+      未挂合同
     </button>
   ) : (
     <span
-      title="尚未绑定合同"
+      title="尚未挂到合同"
       className="whitespace-nowrap rounded bg-surface px-1.5 py-px text-[10px] text-ink-soft"
     >
-      未绑定
+      未挂合同
     </span>
   );
 

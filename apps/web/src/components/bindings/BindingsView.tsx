@@ -68,7 +68,7 @@ const DOC_TYPE_ERROR_TEXT: Record<string, string> = {
   document_not_found: '文档不存在或已删除',
 };
 
-/** 外部定位请求（App 分配）：文件抽屉「未绑定」徽标跳转时按 docId 选中。
+/** 外部定位请求（App 分配）：文件抽屉「未挂合同」徽标跳转时按 docId 选中。
  *  nonce 变化即视为一次新请求（同一文件重复点击也重新选中）。 */
 export interface DocFocus {
   docId: string;
@@ -267,7 +267,7 @@ export function BindingsView({
     [overview],
   );
 
-  // 外部定位（文件抽屉「未绑定」徽标跳转）：overview 尚在加载时先等待，加载
+  // 外部定位（文件抽屉「未挂合同」徽标跳转）：overview 尚在加载时先等待，加载
   // 完成后按 docId 选中并载入候选；列表里找不到（已删除等）或加载失败时，
   // 不消费 nonce（保留以便重试），并给出一次临时提示。
   // nonce ref 防重复消费——effect 因 overview/loading/handleSelectDoc 身份变化
@@ -660,7 +660,7 @@ export function BindingsView({
 
         <div className="ml-auto flex items-center gap-2.5">
           <span className="flex items-center gap-1.5 rounded-md bg-surface px-2.5 py-1 text-[11px] text-ink-soft">
-            未绑定 <span className="font-semibold tabular-nums text-ink">{unboundCount}</span>
+            未挂合同 <span className="font-semibold tabular-nums text-ink">{unboundCount}</span>
           </span>
           <span
             className={clsx(

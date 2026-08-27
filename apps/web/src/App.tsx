@@ -38,7 +38,7 @@ function App() {
     navigate('graph');
   }, [navigate]);
   // 跨视图定位 -> 绑定工作台：图谱 Inspector「去审核」(spec 2026-08-26 §4.4)
-  // 与文件抽屉「未绑定」徽标两条入口共用同一 focus 状态。nonce 自增保证重复
+  // 与文件抽屉「未挂合同」徽标两条入口共用同一 focus 状态。nonce 自增保证重复
   // 跳转同一文档也会重新选中。
   const [bindingsFocus, setBindingsFocus] = useState<{ docId: string; nonce: number } | null>(null);
   const bindingsFocusNonceRef = useRef(0);
@@ -47,7 +47,7 @@ function App() {
     setBindingsFocus({ docId, nonce: bindingsFocusNonceRef.current });
     navigate('bindings');
   }, [navigate]);
-  // 文件抽屉「未绑定」徽标 -> 绑定工作台（跳转即关抽屉）。
+  // 文件抽屉「未挂合同」徽标 -> 绑定工作台（跳转即关抽屉）。
   const openBindingsForDoc = useCallback(
     (docId: string) => {
       bindingsFocusNonceRef.current += 1;

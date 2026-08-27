@@ -20,7 +20,7 @@ interface FileDrawerProps {
   contextFileKeys: Set<string>;
   /** Shared file list owned by App (upload + drawer share one useFiles). */
   filesApi: FilesApi;
-  /** 「未绑定」徽标跳转绑定工作台的通道（App 分配 nonce 并导航）。 */
+  /** 「未挂合同」徽标跳转绑定工作台的通道（App 分配 nonce 并导航）。 */
   onOpenBindings?: (docId: string) => void;
 }
 
