@@ -18,6 +18,7 @@ import {
   Save,
   Share2,
   PenLine,
+  Info,
 } from 'lucide-react'
 import { submitReview, type ReviewCorrection } from '../api/review'
 import { correctDocumentType, fetchActiveDocTypes } from '../api/documentType'
@@ -97,6 +98,9 @@ export type DocumentReviewPayload = {
 }
 
 const LOW_CONFIDENCE = 0.7
+
+/** 合同类文档判定(轻量引导条按此分叉; 与模板 doc_type 种子名对齐)。 */
+const CONTRACT_DOC_TYPES = new Set(['合同', '补充合同'])
 
 const pct = (n: unknown): string => {
   if (typeof n !== 'number' || !isFinite(n)) return '--'
@@ -619,7 +623,18 @@ export const DocumentReviewCard: React.FC<{
           )}
         </div>
 
-        {/* 1.5 合同类型 — 主体视角派生（spec 2026-08-20）; null = 非合同或未识别,
+        {/* 1.5 合同文档下一步引导 — 心智模型收敛(轻量版): 合同不需要像凭证那样
+            「绑定到合同」, 它完成抽取后自动进台账, 真正的下一步是挂项目/挂单据。 */}
+        {CONTRACT_DOC_TYPES.has(docType ?? '') && (
+          <div className="flex items-start gap-1.5 text-xs text-ink-soft bg-surface/50 border border-line/50 rounded px-2 py-1.5">
+            <Info className="w-3.5 h-3.5 shrink-0 mt-0.5 text-primary" />
+            <span className="leading-relaxed">
+              合同完成抽取后自动进入合同台账。下一步：到「项目」页把它挂到项目；发票、货转单等执行单据在「绑定」页挂到该合同。
+            </span>
+          </div>
+        )}
+
+        {/* 1.6 合同类型 — 主体视角派生（spec 2026-08-20）; null = 非合同或未识别,
             不渲染该区。conflict=true 时黄条提示人工确认方向。 */}
         {contractType?.contractType && (
           <div>

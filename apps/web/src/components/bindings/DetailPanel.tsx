@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import clsx from 'clsx';
-import { Check, ChevronDown, Link2, Loader2, MousePointerClick, Network, RefreshCw, Unlink, X } from 'lucide-react';
+import { Check, ChevronDown, Info, Link2, Loader2, MousePointerClick, Network, RefreshCw, Unlink, X } from 'lucide-react';
 import type { Anchors, BindingListItem, OverviewDoc } from '../../hooks/useBindings';
 import type { GraphFocusTarget } from '../graph/focus';
 import { buildDocMetaResolver } from '../graph/docMeta';
@@ -436,6 +436,16 @@ export function DetailPanel({
             {typePending && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-ink-soft" aria-hidden />}
           </div>
           <div className="mt-1.5 text-[10px] leading-4 text-ink-soft">修正类型后，绑定建议与关联流水将自动刷新</div>
+          {/* 合同文档下一步引导(与复核卡同一口径): 合同不需要「绑定到合同」,
+              抽取后自动入台账; 真正的下一步是挂项目/被单据挂。 */}
+          {(doc.docType === '合同' || doc.docType === '补充合同') && (
+            <div className="mt-2 flex items-start gap-1.5 rounded border border-line/50 bg-surface/50 px-2 py-1.5 text-[11px] leading-4 text-ink-soft">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
+              <span className="leading-relaxed">
+                该合同已在台账中（抽取自动完成）。下一步：到「项目」页挂到项目；发票、货转单等执行单据可在中栏挂到该合同。
+              </span>
+            </div>
+          )}
         </div>
       )}
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
