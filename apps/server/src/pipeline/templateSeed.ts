@@ -74,6 +74,11 @@ const EDGE_RULE_SEED: Array<{
   { id: 'er-settle-fahuodan', src: '发货单', edge: 'settles', vocab: ['发货'] },
   { id: 'er-settle-jinxiang', src: '进项票', edge: 'settles', vocab: ['收票'] },
   { id: 'er-settle-xiaoxiang', src: '销项票', edge: 'settles', vocab: ['开票'] },
+  // 通用履约物化层(spec 2026-08-27 §7): 运输三类型接入 settles。类型不带方向,
+  // relation 由 flowType x direction 派生 -> 两向词表都放行(对齐货转单先例)。
+  { id: 'er-settle-qiyun', src: '汽运磅单', edge: 'settles', vocab: ['收货', '发货'] },
+  { id: 'er-settle-huoyun', src: '火运大票', edge: 'settles', vocab: ['收货', '发货'] },
+  { id: 'er-settle-paichuan', src: '派船通知单', edge: 'settles', vocab: ['收货', '发货'] },
   // 付款单(申请单, 付款前): 登记不启用——不物化资金流(它不是支付证据)
   { id: 'er-bind-fukuandan', src: '付款单', edge: 'binds', vocab: ['付款申请'], active: false },
   // 结算单: 合同级结算凭证

@@ -41,6 +41,10 @@ describe('template seed', () => {
     expect(vocabOf('货转单', 'binds')).toContainEqual({ target: '*', vocab: ['货权转移'] });
     expect(vocabOf('付款凭证', 'settles')).toContainEqual({ target: '*', vocab: ['收款', '付款'] });
     expect(vocabOf('发票', 'settles')).toContainEqual({ target: '*', vocab: ['收票', '开票'] });
+    // 通用履约物化层(spec 2026-08-27 §7): 运输三类型 settles, 类型不带方向 -> 两向词表。
+    expect(vocabOf('汽运磅单', 'settles')).toContainEqual({ target: '*', vocab: ['收货', '发货'] });
+    expect(vocabOf('火运大票', 'settles')).toContainEqual({ target: '*', vocab: ['收货', '发货'] });
+    expect(vocabOf('派船通知单', 'settles')).toContainEqual({ target: '*', vocab: ['收货', '发货'] });
     expect(vocabOf('其他', 'binds')).toContainEqual({ target: '*', vocab: ['凭证'] });
     // 兜底: 合同类型"其他"作 source? 不——兜底是任意 doc -> 通配。检查存在通配兜底:
     const fallback = rules.find((r) => r.edgeType === 'binds' && r.targetTypeId === '' && r.sourceTypeId === '');
