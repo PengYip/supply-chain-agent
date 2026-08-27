@@ -305,7 +305,12 @@ const ToolResultBox: React.FC<{ result: unknown }> = ({ result }) => {
   )
 }
 
-const RealToolStep: React.FC<{ step: ToolCallStep }> = ({ step }) => {
+const RealToolStep: React.FC<{
+  step: ToolCallStep
+  /** Present-tense jump affordance for the 5-dimension review card (see
+   *  DocumentReviewCard.onOpenBindings); omitted -> card renders without it. */
+  onOpenBindings?: (docId: string) => void
+}> = ({ step, onOpenBindings }) => {
   const isCompleted = step.status === 'completed'
   // `present_document_review` produces a rich 5-dimension review payload. When
   // present (and not an error shape), render the dedicated card instead of the
@@ -337,7 +342,7 @@ const RealToolStep: React.FC<{ step: ToolCallStep }> = ({ step }) => {
           <>
             {isCompleted && step.result !== undefined && (
               reviewPayload ? (
-                <DocumentReviewCard payload={reviewPayload} />
+                <DocumentReviewCard payload={reviewPayload} onOpenBindings={onOpenBindings} />
               ) : (
                 <ToolResultBox result={step.result} />
               )
@@ -371,7 +376,9 @@ export const RealMessageItem: React.FC<{
   isStreaming?: boolean
   onApprove?: (id: string) => void | PromiseLike<void>
   onDeny?: (id: string) => void | PromiseLike<void>
-}> = ({ item, isStreaming, onApprove, onDeny }) => {
+  /** Jump to the bindings workbench for a docId (App 统一注入)。 */
+  onOpenBindings?: (docId: string) => void
+}> = ({ item, isStreaming, onApprove, onDeny, onOpenBindings }) => {
   const isUser = item.role === 'user'
   // Copy-to-clipboard: aggregate the message's text segments into one string
   // and track which message id is in its 1.5s "已复制" confirmation window.
@@ -442,7 +449,7 @@ export const RealMessageItem: React.FC<{
           </div>
           <div className="px-3 divide-y divide-line/50">
             {seg.steps.map((step) => (
-              <RealToolStep key={step.toolCallId} step={step} />
+              <RealToolStep key={step.toolCallId} step={step} onOpenBindings={onOpenBindings} />
             ))}
           </div>
         </div>

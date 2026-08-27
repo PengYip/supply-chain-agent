@@ -241,10 +241,12 @@ export const RealChatView: React.FC<{
   /** Called after an upload lands so App's shared file list (and the file
    *  panel) shows the new object. */
   onFilesChanged?: () => void;
+  /** 复核卡「去绑定」跳转：进入绑定工作台并定位该文档（App 统一注入）。 */
+  onOpenBindings?: (docId: string) => void;
   /** Per-docId parse state for referenced files, shown on the context chips
    *  (owned by App, where 添加到对话 fires the parse). */
   docParseStates: Record<string, DocParseState>;
-}> = ({ sessionId, contextFiles, setContextFiles, onSessionChanged, onSessionCreated, onFilesChanged, docParseStates }) => {
+}> = ({ sessionId, contextFiles, setContextFiles, onSessionChanged, onSessionCreated, onFilesChanged, onOpenBindings, docParseStates }) => {
   const [input, setInput] = useState('')
 
   // 对话收藏: probe + header affordance for the CURRENT session. Self-contained
@@ -730,6 +732,7 @@ export const RealChatView: React.FC<{
               isStreaming={isStreaming && item.role === 'assistant' && item.id === renderItems[renderItems.length - 1]?.id}
               onApprove={handleApprove}
               onDeny={handleDeny}
+              onOpenBindings={onOpenBindings}
             />
           ))}
           <ErrorMessage error={error ? new Error(error) : null} />

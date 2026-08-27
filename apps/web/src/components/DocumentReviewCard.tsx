@@ -375,7 +375,11 @@ export const DocumentReviewCard: React.FC<{
    *  snapshot. Lets a parent (e.g. a chat log) react to status changes; purely
    *  optional — the card manages its own state otherwise. */
   onUpdated?: (snapshot: DocumentReviewPayload) => void
-}> = ({ payload, onUpdated }) => {
+  /** Optional: jump to the bindings workbench focused on this document.
+   *  Provided only when the host can navigate (chat view wires it to App's
+   *  openBindingsForDoc); omitted -> the button does not render. */
+  onOpenBindings?: (docId: string) => void
+}> = ({ payload, onUpdated, onOpenBindings }) => {
   // The card owns its current state so it can optimistic-update after a POST
   // without needing the parent to re-render the tool result. Initialised once
   // from `payload` (tool results are immutable once the step completes).
@@ -563,7 +567,24 @@ export const DocumentReviewCard: React.FC<{
             <div className="text-sm font-medium text-ink truncate">
               单据复核 · {docType || '--'}
             </div>
-            <ReviewStatusBadge status={reviewStatus} />
+            <div className="flex shrink-0 items-center gap-1.5">
+              {onOpenBindings && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onOpenBindings(snapshot.docId)
+                  }}
+                  title="前往绑定工作台查看该文件与合同的绑定关系"
+                  aria-label="前往绑定工作台"
+                  className="inline-flex items-center gap-1 rounded border border-line bg-surface px-1.5 py-0.5 text-[11px] text-ink-soft transition-colors hover:border-primary hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+                >
+                  <Link2 className="h-3 w-3" />
+                  去绑定
+                </button>
+              )}
+              <ReviewStatusBadge status={reviewStatus} />
+            </div>
           </div>
           <div className="text-[11px] text-ink-soft mt-0.5">
             综合置信度 <span className="font-mono text-primary-500">{pct(overallConfidence)}</span>

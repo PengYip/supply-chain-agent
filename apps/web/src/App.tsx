@@ -196,6 +196,7 @@ function App() {
               void sessionsApi.refresh();
             },
             onFilesChanged: () => { void filesApi.refresh(); },
+            onOpenBindings: openBindingsForDoc,
             docParseStates,
           }}
         />
