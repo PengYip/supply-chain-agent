@@ -1,4 +1,5 @@
-// 语义分层泳道布局(spec 2026-08-27): 项目→合同→履约 三层固定层次, 多项目横向泳道并排。
+// 语义分层泳道布局(spec 2026-08-27 + 评审修订): 项目→合同→履约 三层固定层次,
+// 多项目横向泳道并排; 泳道宽度受限, 合同超宽自动折成多排(适配视口导航优先)。
 // 纯函数模块, 不依赖 G6/React — GraphCanvas 直接消费坐标结果落位。
 import type { GraphEdge, GraphNode } from '../../hooks/useGraph';
 
@@ -11,52 +12,29 @@ const PROJECT_LINK_TYPE = 'part_of';
 const AUX_KINDS = new Set(['Party', 'Commodity']);
 
 // ---- 行高与间距常量(集中导出便于调参) ----
-export const HEADPAD = 24; // 泳道内容距顶部
-export const LANEPAD = 32; // 泳道水平内边距
-export const LANEGAP = 72; // 相邻泳道间距
-export const ROWGAP = 48; // 层与层之间的空隙
-export const COLGAP = 28;
-export const STACKGAP = 14; // 单据纵向堆叠间距
-export const HPROJECT = 56;
-export const HAUX = 34;
-export const HCONTRACT = 52;
-export const HDOC = 40;
+export const HEADPAD = 28; // 泳道内容距顶部
+export const LANEPAD = 36; // 泳道水平内边距
+export const LANEGAP = 56; // 相邻泳道间距
+export const ROWGAP = 44; // 层与层之间的空隙
+export const COLGAP = 26;
+export const STACKGAP = 12; // 单据纵向堆叠间距
+/** 单排合同的宽度预算: 超出即把合同折到下一排(限制泳道横向膨胀)。 */
+export const LANE_MAX_W = 720;
 
-// 各类卡片宽度估算(按名称长度), min/max 卡住极端值
+// 卡片高度(布局间距按统一档位预留; 画布实际渲染可略低):
+// 名称两行 + 概述一行 + 类型徽标行的呼吸空间。
+export const HPROJECT = 78;
+export const HCONTRACT = 72;
+export const HDOC = 58;
+export const HAUX = 48;
+
 const MINW_BY_KIND: Record<string, number> = {
-  Project: 220, Contract: 170, Document: 140, Party: 120, Commodity: 120,
+  Project: 230, Contract: 190, Document: 160, Party: 130, Commodity: 130,
 };
-const MAXW = 280;
+const MAXW = 320;
 
-/** 固定行位: 所有泳道共享同一套 y 波段 → 左侧层标尺可全局对齐。 */
+/** 固定行位起点: 所有泳道共享顶部对齐。 */
 const ROOT_TOP = HEADPAD;
-const AUX_TOP = ROOT_TOP + HPROJECT + ROWGAP;
-const CON_TOP = AUX_TOP + HAUX + ROWGAP;
-
-export interface RulerAnchorSpec { id: string; label: string; x: number; y: number }
-
-export interface LayoutResult {
-  positions: Record<string, { x: number; y: number }>;
-  comboIds: Array<{ id: string }>;
-  comboOf: Record<string, string>;
-  rulerAnchors: RulerAnchorSpec[];
-  scatterIds: ReadonlySet<string>;
-  orphanComboId: string;
-}
-
-export function classifyEdge(edgeType: string, srcKind: string, dstKind: string): 'hierarchy' | 'plain' {
-  const kinds = [srcKind, dstKind];
-  if (edgeType === PROJECT_LINK_TYPE && kinds.includes('Contract') && kinds.includes('Project')) return 'hierarchy';
-  if (FULFILLMENT_TYPES.has(edgeType) && kinds.includes('Contract') && kinds.includes('Document')) return 'hierarchy';
-  return 'plain';
-}
-
-function cardWidth(kind: string, name: string): number {
-  // CJK 按每字 ~15px、拉丁按 ~8px 粗估 + padding
-  let w = 44;
-  for (const ch of name) w += ch.charCodeAt(0) > 0x2e7f ? 15 : 8;
-  return Math.min(Math.max(w, MINW_BY_KIND[kind] ?? 120), MAXW);
-}
 
 function heightOf(kind: string): number {
   if (kind === 'Project') return HPROJECT;
@@ -68,6 +46,35 @@ function heightOf(kind: string): number {
 /** 卡片几何: 布局与画布渲染共用同一套宽高估算, 保证落位与碰撞一致。 */
 export function cardGeometry(kind: string, name: string): { width: number; height: number } {
   return { width: cardWidth(kind, name), height: heightOf(kind) };
+}
+
+function cardWidth(kind: string, name: string): number {
+  // CJK 按每字 ~15px、拉丁按 ~8px 粗估(12px 字号) + padding
+  let w = 48;
+  for (const ch of name) w += ch.charCodeAt(0) > 0x2e7f ? 15 : 8;
+  return Math.min(Math.max(w, MINW_BY_KIND[kind] ?? 130), MAXW);
+}
+
+export interface LayoutResult {
+  positions: Record<string, { x: number; y: number }>;
+  comboIds: Array<{ id: string }>;
+  comboOf: Record<string, string>;
+  /** 每条泳道的包围盒(canvas 坐标), 供画布计算初始焦点缩放。 */
+  lanes: Array<{ id: string; x: number; y: number; width: number; height: number }>;
+  scatterIds: ReadonlySet<string>;
+  orphanComboId: string;
+}
+
+export function classifyEdge(edgeType: string, srcKind: string, dstKind: string): 'hierarchy' | 'plain' {
+  const kinds = [srcKind, dstKind];
+  if (edgeType === PROJECT_LINK_TYPE && kinds.includes('Contract') && kinds.includes('Project')) return 'hierarchy';
+  if (FULFILLMENT_TYPES.has(edgeType) && kinds.includes('Contract') && kinds.includes('Document')) return 'hierarchy';
+  return 'plain';
+}
+
+interface InternalLane {
+  id: string;
+  members: { node: GraphNode; kind: string }[];
 }
 
 export function computeLayeredLayout(nodes: GraphNode[], edges: GraphEdge[]): LayoutResult {
@@ -141,98 +148,150 @@ export function computeLayeredLayout(nodes: GraphNode[], edges: GraphEdge[]): La
     comboOf[nd.elementId] = orphanComboId;
   }
 
-  // 组装泳道成员(顺序保持 nodes 输入序, 保证可复现)
+  // 组装泳道成员与固定顺序(保持 nodes 输入序, 保证可复现)
   const orderedLanes: string[] = [];
   for (const nd of nodes) if (nd.kind === 'Project') orderedLanes.push(`lane:${nd.elementId}`);
   for (const nd of nodes) if (nd.kind === 'Contract' && !contractProject.has(nd.elementId)) orderedLanes.push(`lane:${nd.elementId}`);
   for (const id of Object.values(comboOf)) if (!orderedLanes.includes(id)) orderedLanes.push(id);
 
+  const laneMembersMap = new Map<string, InternalLane['members']>();
+  for (const laneId of orderedLanes.concat(orphanComboId)) {
+    if (!laneMembersMap.has(laneId)) laneMembersMap.set(laneId, []);
+  }
+  for (const nd of nodes) {
+    const target = comboOf[nd.elementId];
+    if (!target) continue;
+    if (!laneMembersMap.has(target)) laneMembersMap.set(target, []);
+    laneMembersMap.get(target)!.push({ node: nd, kind: nd.kind });
+  }
+
+  // ---- 定位 ----
   const positions: Record<string, { x: number; y: number }> = {};
+  const lanes: Array<{ id: string; x: number; y: number; width: number; height: number }> = [];
   let cursorX = 0;
+  let cursorYGlobalMax = ROOT_TOP;
+
+  /** 把节点按宽度预算切成多行, 行内均布。 */
+  const wrapByWidth = <T,>(items: T[], widthOf: (item: T) => number, budget = LANE_MAX_W): T[][] => {
+    const rows: T[][] = [];
+    let current: T[] = [];
+    let currentW = 0;
+    for (const it of items) {
+      const w = widthOf(it);
+      const nextW = current.length === 0 ? w : currentW + COLGAP + w;
+      if (current.length > 0 && nextW > budget) {
+        rows.push(current);
+        current = [it];
+        currentW = w;
+      } else {
+        current = current.concat(it);
+        currentW = nextW;
+      }
+    }
+    if (current.length > 0) rows.push(current);
+    return rows;
+  };
+
+  const placeRow = (row: InternalLane['members'], rowTopY: number, innerLeft: number, contentW: number) => {
+    const rowW = row.reduce((acc, m, i) => acc + cardWidth(m.kind, m.node.name) + (i > 0 ? COLGAP : 0), 0);
+    let cx = innerLeft + Math.max(0, (contentW - rowW) / 2);
+    for (const m of row) {
+      const w = cardWidth(m.kind, m.node.name);
+      positions[m.node.elementId] = { x: cx + w / 2, y: rowTopY + heightOf(m.kind) / 2 };
+      cx += w + COLGAP;
+    }
+  };
+
   for (const laneId of orderedLanes) {
-    const members = nodes.filter((nd) => comboOf[nd.elementId] === laneId).map((nd) => nd.elementId);
+    const members = laneMembersMap.get(laneId)!;
     if (members.length === 0) continue;
 
+    const widthOfMember = (m: InternalLane['members'][number]) => cardWidth(m.kind, m.node.name);
+
     if (laneId === orphanComboId) {
-      // 散件区: 最右侧独立列纵向堆叠
-      let sy = ROOT_TOP + heightOf(members[0]!) / 2;
-      let colW = 0;
+      // 散件区: 独立窄列纵向堆叠
+      const colW = Math.max(...members.map(widthOfMember));
+      let sy = ROOT_TOP;
       for (const m of members) {
-        const k = kindOf.get(m)!;
-        positions[m] = { x: cursorX + LANEPAD + Math.max(cardWidth(k, nodes.find((v) => v.elementId === m)!.name) / 2, 70), y: sy };
-        sy += heightOf(k) + STACKGAP + 6;
-        colW = Math.max(colW, cardWidth(k, nodes.find((v) => v.elementId === m)!.name));
+        positions[m.node.elementId] = { x: cursorX + LANEPAD + colW / 2, y: sy + heightOf(m.kind) / 2 };
+        sy += heightOf(m.kind) + STACKGAP + 4;
       }
-      cursorX += LANEPAD * 2 + colW + LANEGAP / 2;
+      const h = sy - ROOT_TOP - STACKGAP - 4;
+      lanes.push({ id: laneId, x: cursorX, y: 0, width: colW + LANEPAD * 2, height: Math.max(h, HDOC) });
+      cursorX += colW + LANEPAD * 2 + LANEGAP / 2;
+      cursorYGlobalMax = Math.max(cursorYGlobalMax, h);
       continue;
     }
 
-    const projectsHere = members.filter((m) => kindOf.get(m) === 'Project');
-    const contractsHere = members.filter((m) => kindOf.get(m) === 'Contract');
-    const auxHere = members.filter((m) => AUX_KINDS.has(kindOf.get(m)!));
+    const projectsHere = members.filter((m) => m.kind === 'Project');
+    const contractsHere = members.filter((m) => m.kind === 'Contract');
+    const auxHere = members.filter((m) => AUX_KINDS.has(m.kind));
 
     const docsByContract = new Map<string, string[]>();
     for (const m of members) {
-      if (kindOf.get(m) !== 'Document') continue;
-      const c = docContract.get(m);
+      if (m.kind !== 'Document') continue;
+      const c = docContract.get(m.node.elementId);
       if (!c) continue;
       const arr = docsByContract.get(c) ?? [];
-      arr.push(m);
+      arr.push(m.node.elementId);
       docsByContract.set(c, arr);
     }
 
-    const widthOf = (id: string) => cardWidth(kindOf.get(id)!, nodes.find((v) => v.elementId === id)?.name ?? '');
-    const rootId = projectsHere[0] ?? contractsHere[0];
-    if (!rootId) continue;
-
-    const contractsRowW = contractsHere.reduce((acc, c) => acc + widthOf(c) + COLGAP, -COLGAP);
-    const auxRowW = auxHere.reduce((acc, a) => acc + widthOf(a) + COLGAP, -COLGAP);
-    const contentW = Math.max(widthOf(rootId), auxRowW, contractsRowW, 120);
-    const innerLeft = cursorX + LANEPAD;
+    const root = projectsHere[0] ?? contractsHere[0];
+    if (!root) continue;
 
     // 根节点: 顶层居中
-    positions[rootId] = { x: innerLeft + contentW / 2, y: ROOT_TOP + HPROJECT / 2 };
+    positions[root.node.elementId] = { x: cursorX + LANEPAD, y: ROOT_TOP + heightOf(root.kind) / 2 };
+    void positions[root.node.elementId].x; // x 在泳道宽度确定后校正
 
-    // 辅助 chip 行: 居中排布
-    let axCursor = innerLeft + Math.max(0, (contentW - auxRowW) / 2);
-    for (const a of auxHere) {
-      positions[a] = { x: axCursor + widthOf(a) / 2, y: AUX_TOP + HAUX / 2 };
-      axCursor += widthOf(a) + COLGAP;
+    // 辅助 chip 行(同样受宽度约束, 可换行)
+    let rowCursorY = ROOT_TOP + HPROJECT + ROWGAP;
+    const auxRows = wrapByWidth(auxHere, widthOfMember);
+    for (const auxRow of auxRows) {
+      placeRow(auxRow, rowCursorY, cursorX + LANEPAD, LANE_MAX_W);
+      rowCursorY += HAUX + STACKGAP + 6;
     }
 
-    // 合同列均布, 单据在各合同正下方堆叠
-    let colCursor = innerLeft + Math.max(0, (contentW - contractsRowW) / 2);
-    for (const c of contractsHere) {
-      const cw = widthOf(c);
-      positions[c] = { x: colCursor + cw / 2, y: CON_TOP + HCONTRACT / 2 };
-      let dy = CON_TOP + HCONTRACT + STACKGAP + HDOC / 2;
-      for (const d of docsByContract.get(c) ?? []) {
-        positions[d] = { x: colCursor + cw / 2, y: dy };
-        dy += HDOC + STACKGAP;
+    // 合同行: 分排 → 每排下方挂各自的单据列
+    let deepestBottom = rowCursorY;
+    const contractRows = contractsHere.length > 0 ? wrapByWidth(contractsHere, widthOfMember) : [];
+    for (const cRow of contractRows) {
+      const rowTopY = rowCursorY;
+      let colX = cursorX + LANEPAD;
+      // 每排独立起点(左对齐而非居中, 多排阅读动线更稳)
+      for (const cm of cRow) {
+        const cw = widthOfMember(cm);
+        const contractCX = colX + cw / 2;
+        positions[cm.node.elementId] = { x: contractCX, y: rowTopY + HCONTRACT / 2 };
+        let dy = rowTopY + HCONTRACT + STACKGAP + HDOC / 2;
+        for (const d of docsByContract.get(cm.node.elementId) ?? []) {
+          positions[d] = { x: contractCX, y: dy };
+          dy += HDOC + STACKGAP;
+        }
+        deepestBottom = Math.max(deepestBottom, dy - STACKGAP);
+        colX += cw + COLGAP;
       }
-      colCursor += cw + COLGAP;
+      // 排高 = 该排最深单据底
+      let maxColBottom = rowTopY + HCONTRACT;
+      for (const cm of cRow) {
+        const n = (docsByContract.get(cm.node.elementId)?.length ?? 0);
+        maxColBottom = Math.max(maxColBottom, rowTopY + HCONTRACT + STACKGAP + n * (HDOC + STACKGAP));
+      }
+      rowCursorY = maxColBottom + ROWGAP;
     }
 
-    cursorX += contentW + LANEPAD * 2 + LANEGAP;
+    // 泳道几何: 内容宽 + 内边距(至少比根卡片宽)
+    const rootW = widthOfMember(root);
+    const contentBottom = deepestBottom;
+    const laneH = Math.max(contentBottom + LANEPAD - ROOT_TOP, root ? HPROJECT : HDOC);
+    const laneW = Math.min(LANE_MAX_W + LANEPAD * 2, Math.max(rootW + LANEPAD * 2, LANE_MAX_W + LANEPAD * 2));
+    // 根节点水平位置最终校正为泳道中心
+    positions[root.node.elementId] = { x: cursorX + laneW / 2, y: ROOT_TOP + heightOf(root.kind) / 2 };
+    lanes.push({ id: laneId, x: cursorX, y: 0, width: laneW, height: laneH });
+
+    cursorX += laneW + LANEGAP;
+    cursorYGlobalMax = Math.max(cursorYGlobalMax, laneH);
   }
 
-  // 左侧层标尺锚点: 全局共享行位 → 可精确落在各波段中点
-  const allXs = Object.values(positions).map((p) => p.x);
-  const minX = allXs.length ? Math.min(...allXs) - 110 : 40;
-  const docYs = nodes.filter((nd) => nd.kind === 'Document').map((nd) => positions[nd.elementId]?.y).filter((y): y is number => typeof y === 'number');
-  const rulerAnchors: RulerAnchorSpec[] = [];
-  if (allXs.length > 0) {
-    rulerAnchors.push({ id: '__rule_project', label: '项目层', x: minX, y: ROOT_TOP + HPROJECT / 2 });
-    rulerAnchors.push({ id: '__rule_contract', label: '合同层', x: minX, y: CON_TOP + HCONTRACT / 2 });
-    if (docYs.length > 0 || [...scatterIds].some((id) => kindOf.get(id) === 'Document')) {
-      const band2Y = docYs.length ? docYs.reduce((a, b) => a + b, 0) / docYs.length : CON_TOP + HCONTRACT + STACKGAP + HDOC / 2;
-      rulerAnchors.push({ id: '__rule_fulfill', label: '履约层', x: minX, y: band2Y });
-    }
-  }
-
-  const comboIds = orderedLanes
-    .filter((laneId) => nodes.some((nd) => comboOf[nd.elementId] === laneId))
-    .map((id) => ({ id }));
-
-  return { positions, comboIds, comboOf, rulerAnchors, scatterIds, orphanComboId };
+  return { positions, comboIds: lanes.map((l) => ({ id: l.id })), comboOf, lanes, scatterIds, orphanComboId };
 }

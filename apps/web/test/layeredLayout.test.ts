@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { classifyEdge, computeLayeredLayout } from '../src/components/graph/layeredLayout';
+import {
+  LANEPAD,
+  classifyEdge,
+  computeLayeredLayout,
+} from '../src/components/graph/layeredLayout';
 import type { GraphEdge, GraphNode } from '../src/hooks/useGraph';
 
 function n(elementId: string, kind: string, name = elementId): GraphNode {
@@ -83,7 +87,9 @@ describe('computeLayeredLayout', () => {
     expect(new Set([r.comboOf['p1'], r.comboOf['p2']]).size).toBe(2);
     expect(r.positions['p2']!.x).not.toBe(r.positions['p1']!.x);
     expect(Object.keys(r.positions).length).toBe(nodes.length + 3);
-    expect(Object.keys(r.positions)).not.toContain(r.rulerAnchors[0]?.id);
+    // 泳道包围盒随节点输出, 且互不重叠(x 区间分离)
+    const [l1, l2] = r.lanes;
+    expect(l1 && l2 && l1.x + l1.width <= l2.x || l2.x + l2.width <= l1.x).toBe(true);
   });
 
   it('无合同时散落单据进孤儿区标记 scatterIds', () => {
@@ -99,14 +105,29 @@ describe('computeLayeredLayout', () => {
     expect(r.positions['d1']).toBeTruthy();
   });
 
-  it('层级锚点覆盖项目/合同/履约三层标签', () => {
+  it('合同超宽时折成多排(第二排 y 更大)', () => {
+    const many = Array.from({ length: 6 }, (_, i) =>
+      n(`cw${i}`, 'Contract', `LONG-CONTRACT-NO-${i}-ABCDEF`),
+    );
+    const bigProj = n('bp', 'Project', '超大项目集');
+    const r = computeLayeredLayout(
+      [bigProj, ...many],
+      many.map((m, i) => e(`el${i}`, 'part_of', m.elementId, 'bp')),
+    );
+    const ys = new Set(many.map((m) => r.positions[m.elementId]!.y));
+    expect(ys.size).toBeGreaterThanOrEqual(2);
+    // 每条泳道宽度受预算限制(合同排宽 <= 预算 + 内边距)
+    for (const l of r.lanes) {
+      expect(l.width).toBeLessThanOrEqual(720 + LANEPAD * 2);
+    }
+  });
+
+  it('泳道几何已导出且首条含项目根', () => {
     const r = computeLayeredLayout(nodes, edges);
-    const labels = r.rulerAnchors.map((a) => a.label);
-    expect(labels).toContain('项目层');
-    expect(labels).toContain('合同层');
-    expect(labels).toContain('履约层');
-    const rule0 = r.rulerAnchors.find((a) => a.label === '项目层')!;
-    const proj = r.positions['p1']!;
-    expect(rule0.x).toBeLessThan(proj.x - 40);
+    expect(r.lanes.length).toBeGreaterThanOrEqual(1);
+    const firstLane = r.lanes[0]!;
+    const projPos = r.positions[project.elementId]!;
+    expect(projPos.x).toBeGreaterThanOrEqual(firstLane.x);
+    expect(projPos.x).toBeLessThanOrEqual(firstLane.x + firstLane.width);
   });
 });

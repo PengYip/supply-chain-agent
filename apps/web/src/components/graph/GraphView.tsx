@@ -54,6 +54,8 @@ export function GraphView({
 
   // 节点类型过滤(spec 2026-08-26 §4.4): 空集合 = 全部可见; 图例计数来自 /api/graph/schema。
   const [hiddenKinds, setHiddenKinds] = useState<ReadonlySet<string>>(new Set());
+  // 边降噪: 普通关系默认隐藏, 只保留层级履约边与绑定边(评审修订)。
+  const [showPlainEdges, setShowPlainEdges] = useState(false);
   const [labelCounts, setLabelCounts] = useState<GraphLabelCount[]>([]);
   // 合同搜索跳转的临时提示(合同在台账但未入图等), 下次查询自动清除。
   const [searchNotice, setSearchNotice] = useState<string | null>(null);
@@ -303,6 +305,17 @@ export function GraphView({
               );
             })}
             <span className="text-[10px] text-ink-soft/60">自上而下：项目 · 合同 · 履约</span>
+            <button
+              type="button"
+              onClick={() => setShowPlainEdges((v) => !v)}
+              title="显示/隐藏非层级的普通关系连线"
+              className={clsx(
+                'rounded px-1.5 py-0.5 text-[11px] transition-colors',
+                showPlainEdges ? 'bg-primary/10 text-primary' : 'text-ink-soft hover:bg-surface',
+              )}
+            >
+              {showPlainEdges ? '普通关系 开' : '普通关系 关'}
+            </button>
           </div>
         </div>
       </div>
@@ -378,6 +391,7 @@ export function GraphView({
               subgraph={subgraph}
               centerElementId={center?.id ?? null}
               hiddenKinds={hiddenKinds}
+              showPlainEdges={showPlainEdges}
               onHover={setHovered}
               onNodeSelect={(node: GraphNode) => {
                 setPinned({ type: 'node', node });
