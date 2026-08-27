@@ -5,6 +5,12 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { ChevronRight, FileText, Folder, FolderOpen } from 'lucide-react';
 import { type FileEntry, type FileFolder } from '../../hooks/useFiles';
+import {
+  isFolderSelfDrop,
+  readPayload,
+  type DragPayload,
+  type DropTarget,
+} from '../../hooks/useFileDnd';
 
 export interface TreeNode {
   files: FileEntry[];
@@ -225,6 +231,21 @@ export interface TreeCallbacks {
   creatingInDir: string | null;
   setCreatingInDir: (path: string | null) => void;
   onCreateSubfolder: (parentPath: string, name: string) => void;
+  // 拖拽移动（内部载荷）
+  dnd: {
+    dragging: DragPayload | null;
+    dropTarget: DropTarget | null;
+    onDragStart: (payload: DragPayload) => (e: React.DragEvent) => void;
+    onDragOver: (target: DropTarget) => (e: React.DragEvent) => void;
+    onDragLeave: (target: DropTarget) => () => void;
+    clear: () => void;
+  };
+  onMoveFile: (key: string, targetDir: DropTarget) => void;
+  onMoveFolder: (from: string, toParent: DropTarget) => void;
+  // 行内重命名
+  renamingPath: string | null;
+  setRenamingPath: (path: string | null) => void;
+  onRenameFolder: (from: string, newName: string) => void;
 }
 
 function FileRow(props: {
@@ -317,6 +338,9 @@ function FileRow(props: {
   return (
     <div
       onClick={() => cb.onSelect(file.key)}
+      draggable
+      onDragStart={cb.dnd.onDragStart({ kind: 'file', key: file.key, name: file.name })}
+      onDragEnd={cb.dnd.clear}
       className={clsx(
         'group relative flex cursor-pointer items-center border-b border-line/60 pr-3 text-sm text-ink transition-colors',
         isSelected ? 'bg-primary/5' : 'hover:bg-surface',
@@ -390,9 +414,16 @@ interface TreeFolderProps {
 function TreeFolder(props: TreeFolderProps) {
   const { name, fullPath, node, depth, expanded, toggle, cb } = props;
   const [subName, setSubName] = useState('');
+  const [renameValue, setRenameValue] = useState('');
   const isOpen = expanded.has(fullPath);
   const hasChildren = node.files.length > 0 || Object.keys(node.subdirs).length > 0;
   const creatingHere = cb.creatingInDir === fullPath;
+  const renamingHere = cb.renamingPath === fullPath;
+  const highlighted =
+    !!cb.dnd.dragging && cb.dnd.dropTarget === fullPath && !isFolderSelfDrop(
+      cb.dnd.dragging.kind === 'folder' ? cb.dnd.dragging.path : '',
+      fullPath,
+    );
 
   const commitSubfolder = () => {
     const trimmed = subName.trim();
@@ -405,13 +436,55 @@ function TreeFolder(props: TreeFolderProps) {
     cb.setCreatingInDir(null);
   };
 
+  const startRename = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRenameValue(name);
+    cb.setRenamingPath(fullPath);
+  };
+
+  const commitRename = () => {
+    const trimmed = renameValue.trim();
+    if (trimmed && trimmed !== name) {
+      cb.onRenameFolder(fullPath, trimmed);
+    }
+    setRenameValue('');
+    cb.setRenamingPath(null);
+  };
+
+  const handleRowDrop = (e: React.DragEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const payload = readPayload(e);
+    if (payload) {
+      if (payload.kind === 'file') {
+        cb.onMoveFile(payload.key, fullPath);
+      } else if (!isFolderSelfDrop(payload.path, fullPath)) {
+        cb.onMoveFolder(payload.path, fullPath);
+      }
+      cb.dnd.clear();
+      return;
+    }
+    // OS 文件/文件夹拖入：交由根区统一上传队列处理（冒泡到容器）。
+    cb.dnd.clear();
+  };
+
   return (
     <div>
       <div
-        onClick={() => toggle(fullPath)}
-        className="group relative flex cursor-pointer items-center border-b border-line/60 pr-3 text-sm text-ink transition-colors hover:bg-surface"
+        onClick={() => { if (!renamingHere) toggle(fullPath); }}
+        draggable={!renamingHere}
+        onDragStart={cb.dnd.onDragStart({ kind: 'folder', path: fullPath })}
+        onDragEnd={cb.dnd.clear}
+        onDragOver={cb.dnd.onDragOver(fullPath)}
+        onDragLeave={cb.dnd.onDragLeave(fullPath)}
+        onDrop={handleRowDrop}
+        className={clsx(
+          'group relative flex cursor-pointer items-center border-b border-line/60 pr-3 text-sm text-ink transition-colors hover:bg-surface',
+          highlighted && 'bg-primary/10 outline outline-1 outline-primary/40',
+        )}
         style={{ paddingLeft: 12 + depth * 14, paddingTop: 7, paddingBottom: 7 }}
       >
+        {highlighted && <span className="absolute inset-y-0 left-0 w-[3px] rounded-full bg-primary" aria-hidden />}
         <span
           onClick={(e) => { e.stopPropagation(); toggle(fullPath); }}
           className="mr-1 flex w-[18px] shrink-0 items-center justify-center"
@@ -430,7 +503,37 @@ function TreeFolder(props: TreeFolderProps) {
         ) : (
           <Folder className="h-4 w-4 shrink-0 text-warning" aria-hidden />
         )}
-        <FileNameText name={name} className="font-medium" />
+        {renamingHere ? (
+          <input
+            autoFocus
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                commitRename();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                setRenameValue('');
+                cb.setRenamingPath(null);
+              }
+            }}
+            onClick={(e) => e.stopPropagation()}
+            onFocus={(e) => e.currentTarget.select()}
+            className="ml-2 min-w-0 flex-1 rounded border border-primary px-1 py-0.5 text-sm outline-none"
+          />
+        ) : (
+          <FileNameText name={name} className="font-medium" />
+        )}
+        <span
+          onClick={startRename}
+          title="重命名"
+          className="hidden cursor-pointer rounded px-1 py-0.5 text-[11px] text-primary transition-colors hover:bg-primary/10 group-hover:inline"
+        >
+          改名
+        </span>
         <span
           onClick={(e) => {
             e.stopPropagation();

@@ -5,7 +5,8 @@ import { Folder, X } from 'lucide-react';
 import { type FileEntry, type FilesApi } from '../../hooks/useFiles';
 import { processDocument } from '../../api/process';
 import { FilePreviewModal } from '../FilePreviewModal';
-import { buildTree, FileTree, type TreeCallbacks } from './FileTree';
+import { buildTree, FileTree, normalizeMoveDirectory, type TreeCallbacks } from './FileTree';
+import { readPayload, useFileDnd } from '../../hooks/useFileDnd';
 
 interface FileDrawerProps {
   open: boolean;
@@ -22,7 +23,7 @@ export function FileDrawer(props: FileDrawerProps) {
   const { open, onClose, onAddToConversation, contextFileKeys, filesApi, onOpenBindings } = props;
   const {
     files, folders, loading, downloadFile, moveFile, createFolder,
-    removeFolder, deleteFile, refresh,
+    removeFolder, renameFolderPath, deleteFile, refresh,
   } = filesApi;
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -34,6 +35,42 @@ export function FileDrawer(props: FileDrawerProps) {
   const [previewingFile, setPreviewingFile] = useState<FileEntry | null>(null);
   // 正在命名子文件夹的目录路径（null = 输入行关闭）
   const [creatingInDir, setCreatingInDir] = useState<string | null>(null);
+  // 行内重命名中的文件夹路径（null = 关闭）
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  // 面板内部拖拽移动状态机
+  const dnd = useFileDnd();
+
+  const basenameOf = (p: string) => p.split('/').filter(Boolean).pop() ?? p;
+
+  /** 拖拽/重命名共用的父目录数学：from 移入 toParent（''=根）。 */
+  const moveFolderInto = useCallback(
+    async (from: string, toParent: string) => {
+      const base = basenameOf(from);
+      const to = toParent ? `${toParent}/${base}` : base;
+      if (to === from) return;
+      try {
+        await renameFolderPath(from, to);
+      } catch (e) {
+        console.error('move folder failed:', e);
+      }
+    },
+    [renameFolderPath],
+  );
+
+  const handleRootDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      const payload = readPayload(e);
+      if (!payload) return; // OS 文件上传在 T8 接入
+      if (payload.kind === 'file') {
+        void moveFile(payload.key, '');
+      } else {
+        void moveFolderInto(payload.path, '');
+      }
+      dnd.clear();
+    },
+    [moveFile, moveFolderInto, dnd],
+  );
   // 徽标点击触发的解析：processDocument 是同步 HTTP（跑完返回终态），期间用
   // 该集合把对应行的徽标翻成「解析中」；无论成败都 refresh 反映落库状态。
   const [parsingDocIds, setParsingDocIds] = useState<Set<string>>(() => new Set());
@@ -73,6 +110,7 @@ export function FileDrawer(props: FileDrawerProps) {
       setSelectedKey(null);
       setPreviewingFile(null);
       setCreatingInDir(null);
+      setRenamingPath(null);
     }
   }, [open]);
 
@@ -138,6 +176,22 @@ export function FileDrawer(props: FileDrawerProps) {
     onCreateSubfolder: (parentPath, name) => {
       void createFolder(parentPath ? `${parentPath}/${name}` : name);
     },
+    dnd,
+    onMoveFile: (key, targetDir) => {
+      void moveFile(key, normalizeMoveDirectory(targetDir));
+    },
+    onMoveFolder: (from, toParent) => {
+      void moveFolderInto(from, normalizeMoveDirectory(toParent));
+    },
+    renamingPath,
+    setRenamingPath,
+    onRenameFolder: (from, newName) => {
+      const idx = from.lastIndexOf('/');
+      const parent = idx > 0 ? from.slice(0, idx) : '';
+      void renameFolderPath(from, parent ? `${parent}/${newName}` : newName).catch((e) => {
+        console.error('rename folder failed:', e);
+      });
+    },
   };
 
   return (
@@ -199,8 +253,19 @@ export function FileDrawer(props: FileDrawerProps) {
           </div>
         )}
 
-        {/* 文件树 */}
-        <div className="flex-1 overflow-y-auto" onClick={() => setSelectedKey(null)}>
+        {/* 文件树（根区同时是拖拽回根的落点） */}
+        <div
+          className={`flex-1 overflow-y-auto${dnd.dragging ? ' ring-1 ring-inset ring-primary/30' : ''}`}
+          onClick={() => setSelectedKey(null)}
+          onDragOver={dnd.onDragOver('')}
+          onDragLeave={dnd.onDragLeave('')}
+          onDrop={handleRootDrop}
+        >
+          {dnd.dragging && (
+            <div className="sticky top-0 z-10 border-b border-primary/20 bg-primary/5 px-3 py-1.5 text-center text-[11px] text-primary">
+              拖放到此处移到根目录
+            </div>
+          )}
           {loading ? (
             <div className="p-8 text-center text-sm text-ink-soft">加载中...</div>
           ) : !hasContent ? (

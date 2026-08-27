@@ -166,6 +166,21 @@ export function useFiles() {
     await refresh();
   }, [refresh]);
 
+  /** 文件夹整体改名/移动（含子树与其中对象），走 PATCH /folder-path。 */
+  const renameFolderPath = useCallback(async (from: string, to: string) => {
+    const res = await fetch('/api/files/folder-path', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to }),
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      const j = (await res.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(j?.error || `folder-path failed (${res.status})`);
+    }
+    await refresh();
+  }, [refresh]);
+
   const deleteFile = useCallback(async (key: string) => {
     const res = await fetch(`/api/files/${encodeURIComponent(key)}`, {
       method: 'DELETE',
@@ -175,7 +190,7 @@ export function useFiles() {
     await refresh();
   }, [refresh]);
 
-  return { files, folders, loading, refresh, downloadFile, moveFile, createFolder, removeFolder, deleteFile };
+  return { files, folders, loading, refresh, downloadFile, moveFile, createFolder, removeFolder, renameFolderPath, deleteFile };
 }
 
 /** The full useFiles() return value, so App can own one instance and hand it
