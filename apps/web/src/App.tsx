@@ -19,9 +19,70 @@ import { ProjectsView } from './components/projects/ProjectsView';
 import { ProjectLedgerView } from './components/ledger/ProjectLedgerView';
 import type { GraphFocus, GraphFocusTarget } from './components/graph/focus';
 
+/** 认证网关: 只负责会话解析与账号切换的 epoch 递增。
+ *  user id 变化时通过 key 强制重挂载内层 AppSession —— 所有按用户隔离的数据
+ *  钩子(useGraph/useFiles/useSessions 等)随重挂载整体重建, 消灭"切号后列表
+ *  不更新"一类的过期数据 bug(修复于 2026-08-27 反馈)。 */
 function App() {
   const [session, setSession] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
+  // 已挂载会话的 user id; 用于识别跨账号切换并递增 epoch。
+  const activeUidRef = useRef<string | null>(null);
+  const [sessionEpoch, setSessionEpoch] = useState(0);
+
+  const refetchSession = useCallback(async () => {
+    const { data } = await authClient.getSession();
+    setSession(data ?? null);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void refetchSession();
+  }, [refetchSession]);
+
+  const uid =
+    (session as { user?: { id?: string } } | null)?.user?.id ?? null;
+  useEffect(() => {
+    if (!uid || uid === activeUidRef.current) return;
+    if (activeUidRef.current !== null) setSessionEpoch((e) => e + 1);
+    activeUidRef.current = uid;
+  }, [uid]);
+
+  const handleSignOut = useCallback(async () => {
+    try {
+      await authClient.signOut();
+    } catch {
+      /* best-effort */
+    }
+    void refetchSession();
+  }, [refetchSession]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-ink-soft text-sm">
+        Loading...
+      </div>
+    );
+  }
+
+  if (!session || !uid) {
+    return <LoginPage onAuthed={() => void refetchSession()} />;
+  }
+
+  const user = (session as { user?: { name?: string; email?: string } }).user ?? null;
+
+  return (
+    <AppSession
+      key={`${uid}-${sessionEpoch}`}
+      user={{ name: user?.name ?? '', email: user?.email ?? '', id: uid }}
+      onSignOut={() => void handleSignOut()}
+    />
+  );
+}
+
+interface SessionUser { name: string; email: string; id: string }
+
+function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }) {
   const [fileDrawerOpen, setFileDrawerOpen] = useState(false);
   // hash 路由是视图与活动会话的 SSOT：`#/chat?session=<id>`。手动 setState
   // activeSessionId 的旧双源已消除，popstate 时自动从 hash 恢复。
@@ -86,16 +147,6 @@ function App() {
   // the context chips in RealChatView (解析中 -> 已解析 / 需OCR / 解析失败).
   const [docParseStates, setDocParseStates] = useState<Record<string, DocParseState>>({});
 
-  const refetchSession = useCallback(async () => {
-    const { data } = await authClient.getSession();
-    setSession(data ?? null);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    refetchSession();
-  }, [refetchSession]);
-
   const contextFileKeys = useMemo(
     () => new Set(contextFiles.map((f) => f.key)),
     [contextFiles],
@@ -133,29 +184,6 @@ function App() {
       });
   }, [view, navigate, refreshFiles]);
 
-  const handleSignOut = useCallback(async () => {
-    try {
-      await authClient.signOut();
-    } catch {
-      /* best-effort */
-    }
-    refetchSession();
-  }, [refetchSession]);
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center text-ink-soft text-sm">
-        Loading...
-      </div>
-    );
-  }
-
-  if (!session) {
-    return <LoginPage onAuthed={refetchSession} />;
-  }
-
-  const user = (session as { user?: { name?: string; email?: string } } | null)?.user ?? null;
-
   return (
     <AppShell
       currentView={view}
@@ -168,7 +196,7 @@ function App() {
       }}
       filesOpen={fileDrawerOpen}
       user={user}
-      onSignOut={() => void handleSignOut()}
+      onSignOut={onSignOut}
       filesPanel={
         fileDrawerOpen ? (
           <FileDrawer
