@@ -39,6 +39,7 @@ const EXPECTED_TOOLS = [
   'link_projects',
   'link_amends',
   'template_overview',
+  'manage_template',
   'manage_quota',
   'query_quota_usage',
 ] as const;
