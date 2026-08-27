@@ -126,12 +126,20 @@ type Outcome =
 /** full-pipeline: 与路由 POST /:docId/process 同一装配(ensureDocumentExtracted + buildIngestDeps)。 */
 async function runFullPipeline(ctx: DbContext, doc: DocCandidateRow): Promise<Outcome> {
   const ingest = buildIngestDeps();
-  const result = await ensureDocumentExtracted(ctx, doc.id, {
-    // 上传时的存储类型是最可信的 hint; 分类器在线时仍会按内容确认/纠正。
-    docType: (doc.docType || '其他') as DocType,
-    modality: doc.modality === 'scanned' ? 'scanned' : 'digital',
-    ...ingest,
-  });
+  const result = await ensureDocumentExtracted(
+    ctx,
+    doc.id,
+    {
+      // 上传时的存储类型是最可信的 hint; 分类器在线时仍会按内容确认/纠正。
+      docType: (doc.docType || '其他') as DocType,
+      modality: doc.modality === 'scanned' ? 'scanned' : 'digital',
+      ...ingest,
+    },
+    // Critical 修复: 必须透传文档归属用户 -- effectiveUserId(undefined)='' 只能
+    // 读 user_id=''/NULL 的 legacy 行, dev 库文档归属真实用户, 不传会
+    // document_not_found。(4th param userId)
+    doc.userId ?? undefined,
+  );
   if (result.parseStatus === 'needs_ocr' || result.parseStatus === 'failed') {
     return { kind: 'failed', detail: `parseStatus=${result.parseStatus}` };
   }
@@ -146,7 +154,13 @@ async function runLedgerOnly(ctx: DbContext, doc: DocCandidateRow): Promise<Outc
   // 并发防护窗: 开跑前再核一次台账。
   if (await ledgerRowExists(ctx, doc.id)) return { kind: 'skip', detail: 'has-ledger(raced)' };
 
-  const ex = await loadLatestExtractionByDocId(ctx, doc.id);
+  const ex = await loadLatestExtractionByDocId(
+    ctx,
+    doc.id,
+    // Critical 修复: 同上, extraction 行按 owner(或 legacy ''/NULL)过滤, 不传
+    // 真实用户的文档会取不到行 -> 假报 no-extraction-row。
+    doc.userId ?? undefined,
+  );
   if (!ex) return { kind: 'failed', detail: 'no-extraction-row' };
 
   // 合同类型派生(与录入写回同规则、同名单纯函数)。
