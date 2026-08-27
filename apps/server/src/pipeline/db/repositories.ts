@@ -28,6 +28,8 @@ import {
   listFileFoldersPg,
   createFileFolderPg,
   deleteFileFolderPg,
+  listFileFoldersUnderPg,
+  renameFileFoldersPrefixPg,
   // pg parity for the previously-stubbed fns.
   countDocumentsPg,
   countExtractionsNeedingReviewPg,
@@ -1275,6 +1277,46 @@ export async function deleteFileFolder(
     .prepare('DELETE FROM file_folders WHERE user_id = ? AND path = ?')
     .run(userId, folderPath);
   return info.changes > 0;
+}
+
+/**
+ * Virtual-folder subtree reads/writes backing PATCH /api/files/folder-path.
+ * The prefix math lives in SQL (`substr(path, LENGTH(from)+1)`) so one UPDATE
+ * rewrites the folder and every descendant in a single statement -- no LIKE,
+ * which would need %/_ escaping. substr() is 1-indexed in both SQLite and PG.
+ */
+
+/** List folder rows equal to or under `from` (inclusive) for this user. */
+export async function listFileFoldersUnder(
+  ctx: DbContext,
+  userId: string,
+  from: string,
+): Promise<FileFolderRow[]> {
+  if (ctx.backend === 'postgres') return listFileFoldersUnderPg(ctx, userId, from);
+  const rows = ctx.sqlite
+    .prepare(
+      `SELECT id, path FROM file_folders
+       WHERE user_id = ? AND (path = ? OR substr(path, 1, LENGTH(?) + 1) = ? || '/')`,
+    )
+    .all(userId, from, from, from) as Array<{ id: string; path: string }>;
+  return rows.map((r) => ({ id: r.id, path: r.path }));
+}
+
+/** Rename `from` -> `to`, cascading to the whole subtree. Returns rows rewritten. */
+export async function renameFileFoldersPrefix(
+  ctx: DbContext,
+  userId: string,
+  from: string,
+  to: string,
+): Promise<number> {
+  if (ctx.backend === 'postgres') return renameFileFoldersPrefixPg(ctx, userId, from, to);
+  const info = ctx.sqlite
+    .prepare(
+      `UPDATE file_folders SET path = ? || substr(path, LENGTH(?) + 1)
+       WHERE user_id = ? AND (path = ? OR substr(path, 1, LENGTH(?) + 1) = ? || '/')`,
+    )
+    .run(to, from, userId, from, from, from);
+  return info.changes;
 }
 
 // ---- Post-ingest review (Task 3) -------------------------------------------
