@@ -27,6 +27,7 @@ import { deriveAutoTags } from '../tagging.js';
 import { chunkBlockModel } from '../chunking.js';
 import { linkDocumentToContract } from '../../data/seed.js';
 import { tagExternal, assertWithinRoot } from '../../harness/injectionDefense.js';
+import { isVectorizableDocType, SKIP_REASON_NOT_VECTORIZABLE } from '../vectorPolicy.js';
 import type { Embedder } from '../embedder.js';
 import { isVecReady, saveChunkVectors } from '../db/vecStore.js';
 import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
@@ -359,11 +360,23 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
     );
     perf.mark('save_classification');
 
-    // 6. 单虚拟 chunk + 有 embedder 就照常嵌入(1 doc = 1 vector, 无害)。
+    // 6. 单虚拟 chunk + 按类型策略嵌入(spec 2026-08-27): 仅合同/立项书子树
+    //    进入向量库; 其余类型跳过(FTS5 召回不受影响)。空文本防御: trim 为空的
+    //    块不进入 embed 输入(防单个空串导致整批 /v1/embeddings 400)。
     const chunkRowIds = await saveChunks(ctx, docId, [{ text: chunkText, index: 0 }]);
     perf.mark('save_chunks');
+    const templateTypes = await listTemplateTypes(ctx);
     let vectorization: VectorizationStatus = { status: 'skipped', mode: 'none', chunkCount: 1 };
-    if (embedder) {
+    if (!isVectorizableDocType(docType, templateTypes)) {
+      vectorization = {
+        status: 'skipped', mode: embedder?.kind ?? 'none', chunkCount: 1,
+        reason: SKIP_REASON_NOT_VECTORIZABLE,
+      };
+      perf.mark('embed', `skipped not-vectorizable ${docType}`);
+    } else if (!chunkText.trim()) {
+      vectorization = { status: 'skipped', mode: embedder?.kind ?? 'none', chunkCount: 1, reason: '无有效文本块' };
+      perf.mark('embed', 'skipped empty-text');
+    } else if (embedder) {
       if (await isVecReady(ctx)) {
         try {
           const vecs = await embedder.embed([chunkText]);
@@ -446,7 +459,9 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
       const ledger = await listContractLedgerEntries(ctx, userId);
       // anchorWeights 接线(终审遗留②): 读 docType 激活 binds 规则的 anchorWeights,
       // 非空传第三参, null 回退缺省(不传 = WEIGHTS 缺省行为)。
-      const [types, rules] = await Promise.all([listTemplateTypes(ctx), listActiveEdgeRules(ctx)]);
+      // types 复用步骤 6 已加载的 templateTypes(同请求内只查一次)。
+      const types = templateTypes;
+      const rules = await listActiveEdgeRules(ctx);
       const byId = new Map(types.map((t) => [t.id, t]));
       const chain = ancestorChain(byId.get(`dt-${result.voucherType}`)?.id ?? null, byId);
       const rule = matchEdgeRule({ rules, sourceChain: chain, targetChain: [''], edgeType: 'binds' });
@@ -635,16 +650,29 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   const chunkRowIds = await saveChunks(ctx, docId, chunks, chunkTagResult);
   perf.mark('save_chunks');
   let vectorization: VectorizationStatus = { status: 'skipped', mode: 'none', chunkCount: chunks.length };
-  if (embedder) {
+  // 类型策略门禁(spec 2026-08-27): 仅合同/立项书子树嵌入; 空文本块过滤防整批 400。
+  const embeddable = chunkRowIds
+    .map((id, i) => ({ chunkRowId: id!, text: chunks[i]!.text }))
+    .filter((x) => x.text.trim().length > 0);
+  if (!isVectorizableDocType(blockModel.docType, types)) {
+    vectorization = {
+      status: 'skipped', mode: embedder?.kind ?? 'none', chunkCount: chunks.length,
+      reason: SKIP_REASON_NOT_VECTORIZABLE,
+    };
+    perf.mark('embed', `skipped not-vectorizable ${blockModel.docType}`);
+  } else if (embeddable.length === 0) {
+    vectorization = { status: 'skipped', mode: embedder?.kind ?? 'none', chunkCount: chunks.length, reason: '无有效文本块' };
+    perf.mark('embed', 'skipped empty-text');
+  } else if (embedder) {
     if (await isVecReady(ctx)) {
       try {
-        const vecs = await embedder.embed(chunks.map((c) => c.text));
+        const vecs = await embedder.embed(embeddable.map((x) => x.text));
         await saveChunkVectors(
           ctx,
-          chunkRowIds.map((id, i) => ({ chunkRowId: id, vec: vecs[i] ?? [] })),
+          embeddable.map((x, i) => ({ chunkRowId: x.chunkRowId, vec: vecs[i] ?? [] })),
         );
         vectorization = { status: 'ok', mode: embedder.kind, chunkCount: chunks.length };
-        perf.mark('embed', `ok ${embedder.kind} n=${chunks.length}`);
+        perf.mark('embed', `ok ${embedder.kind} n=${embeddable.length}`);
       } catch (e) {
         vectorization = {
           status: 'failed', mode: embedder.kind, chunkCount: chunks.length,
@@ -1014,18 +1042,30 @@ export async function processDocument(
     const chunkRowIds = await saveChunks(ctx, docId, chunks, chunkTagResult);
     perf.mark('save_chunks');
 
-    // 8. Vector block (verbatim from ingestFile).
+    // 8. Vector block (verbatim from ingestFile, incl. type-policy gate).
     let vectorization: VectorizationStatus = { status: 'skipped', mode: 'none', chunkCount: chunks.length };
-    if (opts.embedder) {
+    const embeddable = chunkRowIds
+      .map((id, i) => ({ chunkRowId: id!, text: chunks[i]!.text }))
+      .filter((x) => x.text.trim().length > 0);
+    if (!isVectorizableDocType(blockModel.docType, types)) {
+      vectorization = {
+        status: 'skipped', mode: opts.embedder?.kind ?? 'none', chunkCount: chunks.length,
+        reason: SKIP_REASON_NOT_VECTORIZABLE,
+      };
+      perf.mark('embed', `skipped not-vectorizable ${blockModel.docType}`);
+    } else if (embeddable.length === 0) {
+      vectorization = { status: 'skipped', mode: opts.embedder?.kind ?? 'none', chunkCount: chunks.length, reason: '无有效文本块' };
+      perf.mark('embed', 'skipped empty-text');
+    } else if (opts.embedder) {
       if (await isVecReady(ctx)) {
         try {
-          const vecs = await opts.embedder.embed(chunks.map((c) => c.text));
+          const vecs = await opts.embedder.embed(embeddable.map((x) => x.text));
           await saveChunkVectors(
             ctx,
-            chunkRowIds.map((id, i) => ({ chunkRowId: id, vec: vecs[i] ?? [] })),
+            embeddable.map((x, i) => ({ chunkRowId: x.chunkRowId, vec: vecs[i] ?? [] })),
           );
           vectorization = { status: 'ok', mode: opts.embedder.kind, chunkCount: chunks.length };
-          perf.mark('embed', `ok ${opts.embedder.kind} n=${chunks.length}`);
+          perf.mark('embed', `ok ${opts.embedder.kind} n=${embeddable.length}`);
         } catch (e) {
           vectorization = {
             status: 'failed', mode: opts.embedder.kind, chunkCount: chunks.length,
