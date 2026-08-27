@@ -78,6 +78,19 @@ export function collectEstablishedContractNos(rows: Array<{ contractNo: string }
   return s;
 }
 
+/**
+ * Tier-a(auto_rule)内联一键确认的 relation 派生: 优先用规则驱动的
+ * context.bindsRelation(templates.ts 以激活 binds 规则词表首词派生, 规则缺失时
+ * 即 bindingRelationFor 兜底); context 不匹配当前文档/缺失 -> 回退 '凭证'
+ * (er-bind-fallback 词表首词, 服务端 relation 软校验恒通过)。
+ */
+export function quickConfirmRelation(context: TemplateContext | null, documentId: string): string {
+  if (context && context.documentId === documentId && context.bindsRelation) {
+    return context.bindsRelation;
+  }
+  return '凭证';
+}
+
 /** 步骤二过滤: contractNo 大小写不敏感子串匹配(全角空格忽略, 简单 includes)。 */
 export function filterContracts(list: TemplateContractRef[], query: string): TemplateContractRef[] {
   const q = query.replace(/\s/g, '').toLowerCase();

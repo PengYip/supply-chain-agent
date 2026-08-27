@@ -13,7 +13,7 @@ import {
   type ProposalItem,
 } from '../../hooks/useBindings';
 import { formatFlowSkipLines } from '../../lib/flowSkip';
-import { collectEstablishedContractNos } from '../../lib/bindingFormModel';
+import { collectEstablishedContractNos, quickConfirmRelation } from '../../lib/bindingFormModel';
 import type { ContractSearchItem } from '../../api/contractSearch';
 import { ContractSearchBar } from '../common/ContractSearchBar';
 import { prettyDocName } from '../graph/businessTypes';
@@ -580,6 +580,77 @@ export function BindingsView({
     }
   };
 
+  /**
+   * Tier-a(auto_rule)候选无落库行时的内联一键确认(P3 hotfix): 发货单等文本类
+   * 单据的评分只存在于 /candidates 纯计算输出, 不产生 proposed 行, 旧 UI 只能
+   * 引导手动重复选择。此处复用 POST /api/bindings 同通道(服务端 upsert 幂等 +
+   * 台账锚点门禁 + templateGate 组合校验照走), relation 用规则驱动的
+   * quickConfirmRelation(bindsRelation / 兜底 凭证)。轻量确认弹窗语义与手动
+   * 创建一致; 成功后 refreshAll 重算候选 -> 行内变已绑定态; 失败 toast 显示原因。
+   */
+  const requestQuickConfirm = (row: WorkbenchRow) => {
+    if (!selected || pending.has(row.contractNo)) return;
+    const relation = quickConfirmRelation(b.templateContext, selected.docId);
+    const snapOverview = overview;
+    setConfirmReq({
+      title: '确认自动匹配绑定',
+      body: `单据合同号与合同台账精确匹配（${row.contractNo}）。即将为《${docName}》创建该绑定（关系：${relation}），创建后立即生效并同步图谱。`,
+      confirmLabel: '一键确认',
+      action: async () => {
+        const key = row.contractNo;
+        markPending(key, true);
+        b.patchOverview((docs) =>
+          docs.map((d) =>
+            d.docId !== selected.docId
+              ? d
+              : {
+                  ...d,
+                  bindings: [
+                    ...d.bindings.filter((x) => x.contractNo !== key),
+                    {
+                      bindingId: `optimistic:${key}`,
+                      contractNo: key,
+                      relation,
+                      status: 'confirmed',
+                      confidence: row.score,
+                      confirmationSource: 'human',
+                      graphStatus: null,
+                    },
+                  ],
+                },
+          ),
+        );
+        try {
+          const res = await b.createBinding({ documentId: selected.docId, contractNo: key, relation });
+          b.patchOverview((docs) =>
+            docs.map((d) =>
+              d.docId !== selected.docId
+                ? d
+                : {
+                    ...d,
+                    bindings: d.bindings.map((x) =>
+                      x.contractNo === key && x.bindingId.startsWith('optimistic:')
+                        ? { ...x, bindingId: res.bindingId, graphStatus: graphStatusOf(res.graphSync, res.graphReason) }
+                        : x,
+                    ),
+                  },
+            ),
+          );
+          pushToast(
+            'success',
+            res.existing ? `该绑定已存在：${key}` : res.graphSync === 'ok' ? `已创建绑定 ${key}` : `已创建绑定 ${key}（图谱未同步）`,
+          );
+        } catch (e) {
+          b.patchOverview(() => snapOverview);
+          pushToast('error', e instanceof Error ? e.message : '创建失败');
+        } finally {
+          markPending(key, false);
+          b.refreshAll(selected.docId);
+        }
+      },
+    });
+  };
+
   /** 详情面板绑定条目上的确认/拒绝(与候选行共用流程)。 */
   const requestConfirmBinding = (binding: BindingListItem) => {
     const row = rows.find((r) => r.bindingId === binding.bindingId);
@@ -729,6 +800,7 @@ export function BindingsView({
           onReject={requestRejectRow}
           onBatchConfirm={requestBatchConfirm}
           onManualCreate={handleManualCreate}
+          onQuickConfirm={requestQuickConfirm}
           onRetryLoad={() => selectedDocId && void b.loadCandidates(selectedDocId)}
           templateContext={b.templateContext}
           templateLoading={b.templateContextLoading}

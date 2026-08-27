@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildProjectOptions, collectEstablishedContractNos, contractDisableReason, deriveRelation, filterContracts, needsFilter, UNASSIGNED_KEY,
+  buildProjectOptions, collectEstablishedContractNos, contractDisableReason, deriveRelation, filterContracts,
+  needsFilter, quickConfirmRelation, UNASSIGNED_KEY,
 } from '../src/lib/bindingFormModel';
 import type { TemplateContext } from '../src/api/templateContext';
 
@@ -75,5 +76,15 @@ describe('filterContracts / needsFilter', () => {
     expect(filterContracts(list, 'ht-2024-00')).toHaveLength(10);
     expect(filterContracts(list, '999')).toEqual([]);
     expect(filterContracts(list, '  ')).toHaveLength(12); // 纯空白视为不过滤
+  });
+});
+
+describe('quickConfirmRelation(Tier-a 内联一键确认的关系派生)', () => {
+  it('context 匹配当前文档 -> 用规则驱动的 bindsRelation(发货单=凭证/收货单=收货 等)', () => {
+    expect(quickConfirmRelation(ctx({ bindsRelation: '货权转移' }), 'DOC-1')).toBe('货权转移');
+  });
+  it('context 属于其它文档或缺失 -> 兜底 凭证(er-bind-fallback 词表首词)', () => {
+    expect(quickConfirmRelation(ctx(), 'DOC-other')).toBe('凭证');
+    expect(quickConfirmRelation(null, 'DOC-1')).toBe('凭证');
   });
 });

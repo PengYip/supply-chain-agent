@@ -52,6 +52,8 @@ interface CandidatePanelProps {
   onReject: (row: WorkbenchRow) => void;
   onBatchConfirm: (bindingIds: string[]) => void;
   onManualCreate: (p: { contractNo: string; relation: string; note?: string }) => Promise<boolean>;
+  /** Tier-a(auto_rule)无落库行时的内联一键确认(POST /api/bindings 同通道, 父级弹轻量确认)。 */
+  onQuickConfirm?: (row: WorkbenchRow) => void;
   onRetryLoad: () => void;
   /** 模板上下文(双下拉数据源): 仅最新文档的; 加载/失败降级由本组件按模式渲染。 */
   templateContext: TemplateContext | null;
@@ -78,6 +80,7 @@ export function CandidatePanel({
   onReject,
   onBatchConfirm,
   onManualCreate,
+  onQuickConfirm,
   onRetryLoad,
   templateContext,
   templateLoading,
@@ -276,6 +279,25 @@ export function CandidatePanel({
                         className="flex h-6 items-center rounded-md border border-line bg-white px-2 text-[11px] text-ink-soft transition-colors hover:border-danger hover:text-danger disabled:opacity-50"
                       >
                         拒绝
+                      </button>
+                    </div>
+                  )}
+                  {/* Tier-a(auto_rule)评分行无落库建议 -> 无 bindingId, 旧UI只剩手动兜底。
+                      补内联一键确认: 走 POST /api/bindings 正常通道(服务端 templateGate
+                      门禁照走), 成功后 refreshAll 重算候选 -> 行内变已绑定态。 */}
+                  {row.route === 'auto_rule' && !row.bindingStatus && !row.bindingId && onQuickConfirm && (
+                    <div className="flex shrink-0 flex-col gap-1.5 pt-0.5">
+                      <button
+                        type="button"
+                        onClick={() => onQuickConfirm(row)}
+                        disabled={batchPending || pending.has(row.contractNo)}
+                        title="单据合同号与台账精确匹配，一键建立绑定"
+                        className="flex h-6 items-center gap-1 rounded-md bg-primary px-2 text-[11px] font-medium text-white transition-colors hover:bg-primary-800 disabled:opacity-50"
+                      >
+                        {pending.has(row.contractNo) && (
+                          <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                        )}
+                        一键确认
                       </button>
                     </div>
                   )}
