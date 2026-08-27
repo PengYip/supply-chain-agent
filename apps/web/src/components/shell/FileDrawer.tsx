@@ -32,6 +32,8 @@ export function FileDrawer(props: FileDrawerProps) {
   const [deletingFolderPath, setDeletingFolderPath] = useState<string | null>(null);
   const [deletingFilePath, setDeletingFilePath] = useState<string | null>(null);
   const [previewingFile, setPreviewingFile] = useState<FileEntry | null>(null);
+  // 正在命名子文件夹的目录路径（null = 输入行关闭）
+  const [creatingInDir, setCreatingInDir] = useState<string | null>(null);
   // 徽标点击触发的解析：processDocument 是同步 HTTP（跑完返回终态），期间用
   // 该集合把对应行的徽标翻成「解析中」；无论成败都 refresh 反映落库状态。
   const [parsingDocIds, setParsingDocIds] = useState<Set<string>>(() => new Set());
@@ -70,6 +72,7 @@ export function FileDrawer(props: FileDrawerProps) {
       setCreatingFolder(false);
       setSelectedKey(null);
       setPreviewingFile(null);
+      setCreatingInDir(null);
     }
   }, [open]);
 
@@ -130,6 +133,11 @@ export function FileDrawer(props: FileDrawerProps) {
     setDeletingFilePath,
     onOpenBindings,
     onTriggerParse: triggerParse,
+    creatingInDir,
+    setCreatingInDir,
+    onCreateSubfolder: (parentPath, name) => {
+      void createFolder(parentPath ? `${parentPath}/${name}` : name);
+    },
   };
 
   return (

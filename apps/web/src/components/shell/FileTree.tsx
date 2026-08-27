@@ -1,7 +1,7 @@
 // 树形文件列表展示：从 FileDrawer 拆出（行为不变）。
 // 包含树构建、行渲染（文件/文件夹）、移动下拉与删除确认浮层。
 // 交互回调经单一 callbacks 对象由容器（FileDrawer）下发。
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { ChevronRight, FileText, Folder, FolderOpen } from 'lucide-react';
 import { type FileEntry, type FileFolder } from '../../hooks/useFiles';
@@ -221,6 +221,10 @@ export interface TreeCallbacks {
   setDeletingFilePath: (key: string | null) => void;
   onOpenBindings?: (docId: string) => void;
   onTriggerParse?: (docId: string) => void;
+  // 子文件夹创建：creatingInDir 标记正在命名的目录（null 关闭输入行）
+  creatingInDir: string | null;
+  setCreatingInDir: (path: string | null) => void;
+  onCreateSubfolder: (parentPath: string, name: string) => void;
 }
 
 function FileRow(props: {
@@ -385,8 +389,21 @@ interface TreeFolderProps {
 
 function TreeFolder(props: TreeFolderProps) {
   const { name, fullPath, node, depth, expanded, toggle, cb } = props;
+  const [subName, setSubName] = useState('');
   const isOpen = expanded.has(fullPath);
   const hasChildren = node.files.length > 0 || Object.keys(node.subdirs).length > 0;
+  const creatingHere = cb.creatingInDir === fullPath;
+
+  const commitSubfolder = () => {
+    const trimmed = subName.trim();
+    if (!trimmed) {
+      cb.setCreatingInDir(null);
+      return;
+    }
+    cb.onCreateSubfolder(fullPath, trimmed);
+    setSubName('');
+    cb.setCreatingInDir(null);
+  };
 
   return (
     <div>
@@ -415,6 +432,17 @@ function TreeFolder(props: TreeFolderProps) {
         )}
         <FileNameText name={name} className="font-medium" />
         <span
+          onClick={(e) => {
+            e.stopPropagation();
+            if (!isOpen) toggle(fullPath);
+            cb.setCreatingInDir(fullPath);
+          }}
+          title="新建子文件夹"
+          className="hidden cursor-pointer rounded px-1 py-0.5 text-[13px] leading-none text-primary transition-colors hover:bg-primary/10 group-hover:inline"
+        >
+          +
+        </span>
+        <span
           onClick={(e) => { e.stopPropagation(); cb.setDeletingFolderPath(fullPath); }}
           className="hidden cursor-pointer rounded px-1 py-0.5 text-[11px] text-danger transition-colors hover:bg-danger/5 group-hover:inline"
         >
@@ -430,7 +458,45 @@ function TreeFolder(props: TreeFolderProps) {
       </div>
       {isOpen && (
         <div className="ml-5 border-l border-line pl-2">
-          {node.files.length === 0 && Object.keys(node.subdirs).length === 0 && (
+          {creatingHere && (
+            <div
+              className="flex items-center gap-1.5 py-1 pr-3"
+              style={{ paddingLeft: 12 + (depth + 1) * 14 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Folder className="h-4 w-4 shrink-0 text-warning" aria-hidden />
+              <input
+                autoFocus
+                value={subName}
+                onChange={(e) => setSubName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    commitSubfolder();
+                  } else if (e.key === 'Escape') {
+                    // 仅取消命名，不冒泡触发抽屉关闭
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setSubName('');
+                    cb.setCreatingInDir(null);
+                  }
+                }}
+                placeholder="子文件夹名称"
+                className="min-w-0 flex-1 rounded border border-line px-2 py-1 text-xs outline-none focus:border-primary"
+              />
+              <button type="button" onClick={commitSubfolder} className="px-1 text-[11px] text-primary hover:underline">
+                确认
+              </button>
+              <button
+                type="button"
+                onClick={() => { setSubName(''); cb.setCreatingInDir(null); }}
+                className="px-1 text-[11px] text-ink-soft hover:underline"
+              >
+                取消
+              </button>
+            </div>
+          )}
+          {node.files.length === 0 && Object.keys(node.subdirs).length === 0 && !creatingHere && (
             <div className="px-3 py-1.5 text-xs text-ink-soft">（空）</div>
           )}
           {node.files.map((f) => (
