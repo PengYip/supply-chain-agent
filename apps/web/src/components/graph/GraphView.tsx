@@ -36,6 +36,7 @@ export function GraphView({
     docsLoading,
     docsError,
     refreshDocuments,
+    tree,
     subgraph,
     graphLoading,
     graphError,
@@ -159,12 +160,23 @@ export function GraphView({
     query(focus.elementId, focus.label, false);
   }, [focus, query]);
 
-  const handleSelectDoc = useCallback(
-    (doc: GraphDocument) => {
-      setSelectedDoc(doc);
-      query(doc.elementId, prettyDocName(doc.sourceUri), true);
+  // 左侧树面板选中(项目/合同/单据任意层级): 以该节点为中心展开。
+  // 单据选中时回填 selectedDoc(供「返回文档」入口), 文件名从已入库文档兜底解析。
+  const handleSelectListNode = useCallback(
+    (item: { elementId: string; label: string; kind: string }) => {
+      if (item.kind === 'Document') {
+        const meta = documents.find((d) => d.elementId === item.elementId) ?? null;
+        setSelectedDoc(
+          meta ?? { elementId: item.elementId, docId: '', docType: '', sourceUri: '', createdAt: '' },
+        );
+        const label = meta ? (prettyDocName(meta.sourceUri) || meta.docId || item.label) : item.label;
+        query(item.elementId, label, true);
+      } else {
+        setSelectedDoc(null);
+        query(item.elementId, item.label, false);
+      }
     },
-    [query],
+    [documents, query],
   );
 
   const handleExpandNode = useCallback(
@@ -304,11 +316,12 @@ export function GraphView({
           )}
         >
           <DocumentListPanel
+            tree={tree}
             documents={documents}
             loading={docsLoading}
             error={docsError}
-            selectedId={selectedDoc?.elementId ?? null}
-            onSelect={handleSelectDoc}
+            selectedId={center?.id ?? null}
+            onSelectNode={handleSelectListNode}
             onRetry={() => void refreshDocuments()}
           />
         </div>
