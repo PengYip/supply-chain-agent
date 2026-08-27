@@ -74,3 +74,9 @@ apps/server/eval/agent/datasets/user/
 # Local tool state (slim runner scratch / tool ignore file)
 .ignore
 .slim/
+
+# @file-viewer vite plugin copied runtime assets (fileViewerRenderers copyAssets)
+# and its Windows artifact dir - regenerated on every build
+apps/web/public/vendor/
+apps/web/public/flyfish-viewer-assets.json
+apps/web/dummy-non-existing-folder/
