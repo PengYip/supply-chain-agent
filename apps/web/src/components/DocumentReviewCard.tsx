@@ -380,6 +380,11 @@ export const DocumentReviewCard: React.FC<{
   // without needing the parent to re-render the tool result. Initialised once
   // from `payload` (tool results are immutable once the step completes).
   const [snapshot, setSnapshot] = useState<DocumentReviewPayload>(payload)
+  // 最新 snapshot 镜像: 改类型 PATCH 在途期间 snapshot 可能被并发更新(如并行
+  // 提交字段更正/确认), 异步回调里须从 ref 取最新值展开, 避免 stale closure
+  // 把父组件经 onUpdated 回滚到旧字段(照 RealChatView contextFilesRef 模式)。
+  const snapshotRef = useRef(snapshot)
+  useEffect(() => { snapshotRef.current = snapshot }, [snapshot])
   // Per-field edit buffer, keyed by field name. Holds raw input strings; values
   // are only present for fields the user has touched.
   const [edits, setEdits] = useState<Record<string, string>>({})
@@ -514,7 +519,9 @@ export const DocumentReviewCard: React.FC<{
         .map((s) => (s.contractNo ? `${s.contractNo}: ${s.reason}` : s.reason))
         .join('\n')
       setTypeResult({ ok: true, text, ...(detail ? { detail } : {}) })
-      onUpdated?.({ ...snapshot, docType: applied })
+      // 从 ref 展开最新值, 只覆盖 docType: snapshot 变量是本回调创建时的
+      // stale closure, 并行写操作(提交更正/确认)后的字段不能被旧值冲掉。
+      onUpdated?.({ ...snapshotRef.current, docType: applied })
     } catch (e) {
       setTypeResult({
         ok: false,

@@ -72,6 +72,10 @@ export function ProjectSearchBar({
     return () => document.removeEventListener('mousedown', onDocClick);
   }, []);
 
+  // 卸载时 abort 在途搜索请求(照 useBindings.loadTemplateContext 模式),
+  // 防止组件销毁后晚到的响应触发已卸载组件的 setState。
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
+
   // 列表变化时把 activeIndex 收敛到有效范围。
   useEffect(() => {
     setActiveIndex((i) => (items.length === 0 ? 0 : Math.min(i, items.length - 1)));
