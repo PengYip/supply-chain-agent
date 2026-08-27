@@ -83,6 +83,9 @@ export interface AutoExtractionOutcome {
   reason?: string;
   fieldCount?: number;
   relationshipCount?: number;
+  /** Wall-clock ms for the whole extract(+save) attempt; on timeout this is
+   *  ~timeoutMs. Lets callers attribute pipeline time to the model call. */
+  elapsedMs?: number;
 }
 
 /**
@@ -144,6 +147,7 @@ export async function runAutoExtraction(args: {
     timer = setTimeout(() => reject(new AutoExtractionTimeout()), timeoutMs);
   });
 
+  const t0 = performance.now();
   try {
     const result = await Promise.race([deps.extract(blockModel), timeout]);
 
@@ -165,8 +169,10 @@ export async function runAutoExtraction(args: {
       status: 'ok',
       fieldCount: Object.keys(result.fields).length,
       relationshipCount: result.proposedRelationships.length,
+      elapsedMs: Math.round(performance.now() - t0),
     };
   } catch (e) {
+    const elapsedMs = Math.round(performance.now() - t0);
     const isTimeout = e instanceof AutoExtractionTimeout;
     const stampStatus: 'skipped' | 'failed' = isTimeout ? 'skipped' : 'failed';
     // Best-effort status stamp on the failure/skip path too.
@@ -174,10 +180,10 @@ export async function runAutoExtraction(args: {
       /* swallow: do not mask the real failure reason */
     });
     if (isTimeout) {
-      return { status: 'skipped', reason: 'timeout' };
+      return { status: 'skipped', reason: 'timeout', elapsedMs };
     }
     const reason = e instanceof Error ? e.message : String(e);
-    return { status: 'failed', reason };
+    return { status: 'failed', reason, elapsedMs };
   } finally {
     if (timer) clearTimeout(timer);
   }

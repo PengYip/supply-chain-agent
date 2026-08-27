@@ -44,6 +44,7 @@ import { deriveContractType, type ContractTypeDerivation } from '../../domain/co
 import type { ContractType } from '../../domain/tradeSemantics.js';
 import { proposeProjectMemberships } from '../projectProposal.js';
 import { createProject, upsertProjectMembership } from '../db/repositories.js';
+import { StageProfiler } from '../perf.js';
 
 /** Phase A: 图片凭证 VLM 解析依赖(可注入 fake 供测试; 缺省用真实 extractVoucher)。 */
 export interface VlmDeps {
@@ -298,6 +299,7 @@ interface VoucherPipelineResult {
  */
 async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPipelineResult> {
   const { ctx, sourcePath, docId, embedder, userId, vlm } = input;
+  const perf = new StageProfiler(`voucher docId=${docId}`);
   try {
     // 2. VLM 提取(可注入 fake; 缺省真实 extractVoucher, 未配置时抛明确错误)。
     const ext = sourcePath.split('.').pop() ?? '';
@@ -308,6 +310,7 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
     const buffer = readFileSync(sourcePath);
     const extract = vlm?.extract ?? extractVoucher;
     const result = await extract(buffer, mime);
+    perf.mark('vlm_extract', `${result.voucherType}`);
 
     // 3. zod 校验(按 voucherType 选 schema; '其他' 无 schema 跳过)。
     const schema = result.voucherType === '其他' ? undefined : VOUCHER_SCHEMAS[result.voucherType];
@@ -322,6 +325,7 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
     }
     const warnings = validateVoucher(result.voucherType, result.fields);
     const docType = result.voucherType as DocType;
+    perf.mark('validate', `${warnings.length} warnings`);
 
     // 4. 真实 block_model: 单合成块(与 schema 兼容, 无文本块可 span 接地)。
     const chunkText = voucherFieldsToText(result.voucherType, result.fields);
@@ -343,6 +347,7 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
       createdAt: new Date().toISOString(),
     };
     await updateDocumentMeta(ctx, docId, { docType, modality: 'scanned', blockModel }, userId);
+    perf.mark('save_meta');
 
     // 5. 分类: source 'classified', confidence 用 VLM 自报类型置信或 0.9。
     const typeConf = result.字段置信度['voucherType'] ?? result.字段置信度['凭证类型'];
@@ -352,9 +357,11 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
       { documentId: docId, docType, confidence: classificationConfidence, source: 'classified', hint: docType },
       userId,
     );
+    perf.mark('save_classification');
 
     // 6. 单虚拟 chunk + 有 embedder 就照常嵌入(1 doc = 1 vector, 无害)。
     const chunkRowIds = await saveChunks(ctx, docId, [{ text: chunkText, index: 0 }]);
+    perf.mark('save_chunks');
     let vectorization: VectorizationStatus = { status: 'skipped', mode: 'none', chunkCount: 1 };
     if (embedder) {
       if (await isVecReady(ctx)) {
@@ -362,16 +369,21 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
           const vecs = await embedder.embed([chunkText]);
           await saveChunkVectors(ctx, [{ chunkRowId: chunkRowIds[0]!, vec: vecs[0] ?? [] }]);
           vectorization = { status: 'ok', mode: embedder.kind, chunkCount: 1 };
+          perf.mark('embed', `ok ${embedder.kind}`);
         } catch (e) {
           vectorization = {
             status: 'failed', mode: embedder.kind, chunkCount: 1,
             reason: (e as Error).message,
           };
+          perf.mark('embed', `failed ${embedder.kind}`);
           console.warn('[ingestVoucherImage] vector embedding failed; FTS5 recall still available:', vectorization.reason);
         }
       } else {
         vectorization = { status: 'skipped', mode: embedder.kind, chunkCount: 1, reason: 'vec_store_not_ready' };
+        perf.mark('embed', 'skipped vec_store_not_ready');
       }
+    } else {
+      perf.mark('embed', 'skipped no-embedder');
     }
 
     // 7. 自动标签(byproduct, 容错)。
@@ -379,12 +391,15 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
     try {
       tags = deriveAutoTags({ docType, blocks: blockModel.blocks });
       await saveDocumentTags(ctx, docId, tags, 'auto', userId);
+      perf.mark('auto_tags', tags.join(',') || 'none');
     } catch (e) {
+      perf.mark('auto_tags', 'failed');
       console.error('[ingestVoucherImage] auto-tag persistence failed:', (e as Error).message);
     }
 
     try {
       await setDocumentVectorization(ctx, docId, vectorization, userId);
+      perf.mark('vec_meta');
     } catch (e) {
       console.error('[ingestVoucherImage] vectorization_meta persistence failed:', (e as Error).message);
     }
@@ -421,6 +436,7 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
       },
       userId,
     );
+    perf.mark('save_extraction', `${Object.keys(fields).length} fields`);
 
     // 9. Phase B: 绑定建议生成 + 落库(失败不阻断入库, 同 auto-tags 模式)。
     //    锚点 -> 与合同台账匹配 -> 多锚点评分 -> 阈值路由(auto_rule/human/none)。
@@ -436,6 +452,7 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
       const rule = matchEdgeRule({ rules, sourceChain: chain, targetChain: [''], edgeType: 'binds' });
       const weights = rule?.anchorWeights ?? undefined;
       const proposals = generateBindingProposals(anchors, ledger, weights);
+      let persisted = 0;
       for (const p of proposals.filter((x) => x.route !== 'none')) {
         try {
           const bindingId = await saveBinding(
@@ -454,6 +471,7 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
             },
             userId,
           );
+          persisted++;
           bindingProposals.push({ contractNo: p.contractNo, score: p.score, route: p.route });
           // 执行流水物化(hook): auto_rule 直连确认(合同号精确命中)后物化; 失败仅告警。
           if (p.route === 'auto_rule') {
@@ -470,12 +488,16 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
           console.warn('[ingestVoucherImage] binding proposal persistence failed:', (e as Error).message);
         }
       }
+      perf.mark('binding_proposals', `${persisted}/${proposals.length}`);
     } catch (e) {
+      perf.mark('binding_proposals', 'failed');
       console.warn('[ingestVoucherImage] binding proposal generation failed:', (e as Error).message);
     }
 
     // 10. 成功: parse_status='parsed'。
     await setDocumentParseStatus(ctx, docId, 'parsed', userId);
+    perf.mark('stamp_parsed');
+    perf.finish();
 
     return {
       docId,
@@ -490,6 +512,7 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
     };
   } catch (e) {
     // VLM 失败 -> parse_status='failed'(错误可追溯), 不静默成功。
+    perf.finish(`failed: ${e instanceof Error ? e.message : String(e)}`);
     await setDocumentParseStatus(ctx, docId, 'failed', userId).catch(() => {});
     throw e;
   }
@@ -575,7 +598,9 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   }
 
   // Parse (pure, no DB) — extracted into parseDocument primitive (Phase 1).
+  const perf = new StageProfiler(`ingest docId=${docId}`);
   const blockModel = await parseDocument({ sourcePath: safePath, docType: docType ?? '其他', docId, modality });
+  perf.mark('parse', `${blockModel.modality}, ${blockModel.blocks.length} blocks`);
 
   // Classify (Phase 2 routing-classify): parsed blocks -> effective docType.
   // Degrades to the hint when no classifier is wired (tests / dev offline).
@@ -584,17 +609,21 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   const cls = classifier
     ? await classifyDocument(classifier, { blocks: blockModel.blocks, hint: docType, vocab })
     : classifyDocumentWithoutModel({ blocks: blockModel.blocks, hint: docType });
+  perf.mark('classify', `${cls.docType} src=${cls.source} conf=${cls.confidence.toFixed(2)}`);
   // The classified docType is the source of truth from here on (design §6:
   // routing-classify picks the docType used downstream).
   blockModel.docType = cls.docType;
 
   await saveDocument(ctx, blockModel, userId);
+  perf.mark('save_document');
   await saveClassification(
     ctx,
     { documentId: docId, docType: cls.docType, confidence: cls.confidence, source: cls.source, hint: docType },
     userId,
   );
+  perf.mark('save_classification');
   const chunks = chunkBlockModel(blockModel);
+  perf.mark('chunk', `${chunks.length} chunks`);
   // Lane B: tag chunks against the (closed) docType taxonomy. tagChunks never
   // throws and short-circuits to all-null when the tagger is unset or the
   // taxonomy is empty (其他), so this degrades cleanly in tests / offline.
@@ -602,7 +631,9 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   const chunkTagResult = tagger
     ? await tagChunks({ chunks: chunks.map((c) => ({ text: c.text })), taxonomy, tagger })
     : chunks.map(() => null);
+  perf.mark('chunk_tag', tagger ? `${chunkTagResult.filter(Boolean).length}/${chunks.length} tagged` : 'tagger-off');
   const chunkRowIds = await saveChunks(ctx, docId, chunks, chunkTagResult);
+  perf.mark('save_chunks');
   let vectorization: VectorizationStatus = { status: 'skipped', mode: 'none', chunkCount: chunks.length };
   if (embedder) {
     if (await isVecReady(ctx)) {
@@ -613,16 +644,21 @@ export async function ingestFile(opts: IngestOptions): Promise<{
           chunkRowIds.map((id, i) => ({ chunkRowId: id, vec: vecs[i] ?? [] })),
         );
         vectorization = { status: 'ok', mode: embedder.kind, chunkCount: chunks.length };
+        perf.mark('embed', `ok ${embedder.kind} n=${chunks.length}`);
       } catch (e) {
         vectorization = {
           status: 'failed', mode: embedder.kind, chunkCount: chunks.length,
           reason: (e as Error).message,
         };
+        perf.mark('embed', `failed ${embedder.kind}`);
         console.warn('[ingest] vector embedding failed; FTS5 recall still available:', vectorization.reason);
       }
     } else {
       vectorization = { status: 'skipped', mode: embedder.kind, chunkCount: chunks.length, reason: 'vec_store_not_ready' };
+      perf.mark('embed', 'skipped vec_store_not_ready');
     }
+  } else {
+    perf.mark('embed', 'skipped no-embedder');
   }
   // Auto-tag (Phase 2): derive a small deterministic tag set from the effective
   // docType + content (design §8: auto-tags are an ingest byproduct, persisted
@@ -637,7 +673,9 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   try {
     tags = deriveAutoTags({ docType: blockModel.docType, blocks: blockModel.blocks });
     await saveDocumentTags(ctx, docId, tags, 'auto', userId);
+    perf.mark('auto_tags', tags.join(',') || 'none');
   } catch (e) {
+    perf.mark('auto_tags', 'failed');
     console.error('[ingest] auto-tag persistence failed:', (e as Error).message);
   }
 
@@ -647,6 +685,7 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   // ingestFile directly — leaving present_document_review showing 'unknown').
   try {
     await setDocumentVectorization(ctx, docId, vectorization, userId);
+    perf.mark('vec_meta');
   } catch (e) {
     console.error('[ingest] vectorization_meta persistence failed:', (e as Error).message);
   }
@@ -666,14 +705,23 @@ export async function ingestFile(opts: IngestOptions): Promise<{
         userId,
         deps: buildAutoExtractionDeps({ ctx, extraction, userId }),
       });
+      perf.mark(
+        'auto_extract',
+        outcome.status === 'ok'
+          ? `ok ${outcome.fieldCount ?? 0}f`
+          : `${outcome.status}${outcome.reason ? `:${outcome.reason}` : ''} ${outcome.elapsedMs ?? 0}ms`,
+      );
       // Fault isolation is silent by design; surface non-ok outcomes (timeout /
       // model error) so a silently-missing extraction is never mistaken for success.
       if (outcome.status !== 'ok') {
         console.error(`[ingestFile] auto-extraction ${outcome.status}:`, outcome.reason ?? 'no reason');
       }
     } catch (e) {
+      perf.mark('auto_extract', 'exception');
       console.error('[ingestFile] auto-extraction failed:', (e as Error).message);
     }
+  } else {
+    perf.mark('auto_extract', 'skipped no-model');
   }
 
   // Model B: tool-created docs are fully parsed at the end of ingest, so stamp
@@ -681,9 +729,11 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   // Wrapped like the vectorization write above so a status write can't break ingest.
   try {
     await setDocumentParseStatus(ctx, docId, 'parsed', userId);
+    perf.mark('stamp_parsed');
   } catch (e) {
     console.error('[ingest] parse_status persistence failed:', (e as Error).message);
   }
+  perf.finish();
 
   return {
     docId,
@@ -811,13 +861,16 @@ export async function processDocument(
   opts: ProcessDocumentOptions = {},
 ): Promise<ProcessDocumentResult> {
   ensureFk(ctx);
+  const perf = new StageProfiler(`process docId=${docId}`);
   // 1. Resolve the stub's source path. A missing row is the one case that throws
   //    (the caller asked to process a doc that does not exist).
   const sourceUri = await getDocumentSourceUri(ctx, docId, opts.userId);
   if (!sourceUri) throw new Error('document_not_found');
+  perf.mark('resolve_source');
 
   // 2. Mark parsing in progress.
   await setDocumentParseStatus(ctx, docId, 'parsing', opts.userId);
+  perf.mark('stamp_parsing');
 
   // Phase A: 图片凭证走 VLM 分支(与 ingestFile 同一分流; digitalAdapter 按
   // utf-8 读图是乱码, 分类器对乱码块会失败 -> 'failed')。VLM 失败 -> 'failed'
@@ -827,6 +880,7 @@ export async function processDocument(
       const v = await runVoucherPipeline({
         ctx, sourcePath: sourceUri, docId, embedder: opts.embedder, userId: opts.userId, vlm: opts.vlm,
       });
+      perf.finish();
       return {
         docId, parseStatus: 'parsed' as const, blockCount: v.blockCount,
         classifiedDocType: v.classifiedDocType, classificationConfidence: v.classificationConfidence,
@@ -834,6 +888,7 @@ export async function processDocument(
       };
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
+      perf.finish(`voucher failed: ${reason}`);
       return { docId, parseStatus: 'failed' as const, blockCount: 0, reason };
     }
   }
@@ -843,9 +898,11 @@ export async function processDocument(
   let blockModel: BlockModel;
   try {
     blockModel = await parseWithOcrRetry(sourceUri, opts.docType ?? '其他', docId, opts.modality);
+    perf.mark('parse', `${blockModel.modality}, ${blockModel.blocks.length} blocks`);
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
     await setDocumentParseStatus(ctx, docId, 'needs_ocr', opts.userId).catch(() => {});
+    perf.finish(`needs_ocr: ${reason}`);
     return { docId, parseStatus: 'needs_ocr', blockCount: 0, reason };
   }
 
@@ -858,6 +915,7 @@ export async function processDocument(
     const cls = opts.classifier
       ? await classifyDocument(opts.classifier, { blocks: blockModel.blocks, hint: opts.docType, vocab })
       : classifyDocumentWithoutModel({ blocks: blockModel.blocks, hint: opts.docType });
+    perf.mark('classify', `${cls.docType} src=${cls.source} conf=${cls.confidence.toFixed(2)}`);
     blockModel.docType = cls.docType;
 
     // 5. UPDATE the stub with the real docType/modality/block_model (replaces
@@ -868,6 +926,7 @@ export async function processDocument(
       { docType: blockModel.docType, modality: blockModel.modality, blockModel },
       opts.userId,
     );
+    perf.mark('save_document', 'update');
 
     // 6. Persist classification.
     await saveClassification(
@@ -875,16 +934,20 @@ export async function processDocument(
       { documentId: docId, docType: cls.docType, confidence: cls.confidence, source: cls.source, hint: opts.docType },
       opts.userId,
     );
+    perf.mark('save_classification');
 
     // 7. Chunk + tag + save chunks (Lane B, same as ingestFile). tagChunks never
     //    throws and short-circuits to all-null when the tagger is unset or the
     //    taxonomy is empty (其他).
     const chunks = chunkBlockModel(blockModel);
+    perf.mark('chunk', `${chunks.length} chunks`);
     const taxonomy = getTaxonomy(blockModel.docType);
     const chunkTagResult = opts.tagger
       ? await tagChunks({ chunks: chunks.map((c) => ({ text: c.text })), taxonomy, tagger: opts.tagger })
       : chunks.map(() => null);
+    perf.mark('chunk_tag', opts.tagger ? `${chunkTagResult.filter(Boolean).length}/${chunks.length} tagged` : 'tagger-off');
     const chunkRowIds = await saveChunks(ctx, docId, chunks, chunkTagResult);
+    perf.mark('save_chunks');
 
     // 8. Vector block (verbatim from ingestFile).
     let vectorization: VectorizationStatus = { status: 'skipped', mode: 'none', chunkCount: chunks.length };
@@ -897,16 +960,21 @@ export async function processDocument(
             chunkRowIds.map((id, i) => ({ chunkRowId: id, vec: vecs[i] ?? [] })),
           );
           vectorization = { status: 'ok', mode: opts.embedder.kind, chunkCount: chunks.length };
+          perf.mark('embed', `ok ${opts.embedder.kind} n=${chunks.length}`);
         } catch (e) {
           vectorization = {
             status: 'failed', mode: opts.embedder.kind, chunkCount: chunks.length,
             reason: (e as Error).message,
           };
+          perf.mark('embed', `failed ${opts.embedder.kind}`);
           console.warn('[processDocument] vector embedding failed; FTS5 recall still available:', vectorization.reason);
         }
       } else {
         vectorization = { status: 'skipped', mode: opts.embedder.kind, chunkCount: chunks.length, reason: 'vec_store_not_ready' };
+        perf.mark('embed', 'skipped vec_store_not_ready');
       }
+    } else {
+      perf.mark('embed', 'skipped no-embedder');
     }
 
     // 9. Auto-tag (verbatim from ingestFile; fault-tolerant byproduct).
@@ -914,13 +982,16 @@ export async function processDocument(
     try {
       tags = deriveAutoTags({ docType: blockModel.docType, blocks: blockModel.blocks });
       await saveDocumentTags(ctx, docId, tags, 'auto', opts.userId);
+      perf.mark('auto_tags', tags.join(',') || 'none');
     } catch (e) {
+      perf.mark('auto_tags', 'failed');
       console.error('[processDocument] auto-tag persistence failed:', (e as Error).message);
     }
 
     // 10. Persist the vectorization outcome.
     try {
       await setDocumentVectorization(ctx, docId, vectorization, opts.userId);
+      perf.mark('vec_meta');
     } catch (e) {
       console.error('[processDocument] vectorization_meta persistence failed:', (e as Error).message);
     }
@@ -940,6 +1011,12 @@ export async function processDocument(
             { ctx, docType: blockModel.docType, userId: opts.userId },
           ),
         });
+        perf.mark(
+          'auto_extract',
+          outcome.status === 'ok'
+            ? `ok ${outcome.fieldCount ?? 0}f`
+            : `${outcome.status}${outcome.reason ? `:${outcome.reason}` : ''} ${outcome.elapsedMs ?? 0}ms`,
+        );
         // Surface non-ok outcomes (timeout / model error) so a silently-missing
         // extraction is never mistaken for success (processDocument discards the
         // outcome otherwise).
@@ -947,12 +1024,17 @@ export async function processDocument(
           console.error(`[processDocument] auto-extraction ${outcome.status}:`, outcome.reason ?? 'no reason');
         }
       } catch (e) {
+        perf.mark('auto_extract', 'exception');
         console.error('[processDocument] auto-extraction failed:', (e as Error).message);
       }
+    } else {
+      perf.mark('auto_extract', 'skipped no-model');
     }
 
     // 12. Parsed.
     await setDocumentParseStatus(ctx, docId, 'parsed', opts.userId);
+    perf.mark('stamp_parsed');
+    perf.finish();
 
     return {
       docId,
@@ -966,6 +1048,7 @@ export async function processDocument(
     };
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
+    perf.finish(`failed: ${reason}`);
     await setDocumentParseStatus(ctx, docId, 'failed', opts.userId).catch(() => {});
     return { docId, parseStatus: 'failed', reason };
   }
@@ -1099,6 +1182,7 @@ export async function ensureDocumentExtracted(
       if (outcome.status !== 'ok') {
         console.error(`[ensureDocumentExtracted] auto-extraction ${outcome.status}:`, outcome.reason ?? 'no reason');
       }
+      console.log(`[perf] re-extract docId=${docId} ${outcome.status} ${outcome.elapsedMs ?? 0}ms f=${outcome.fieldCount ?? 0}`);
     } catch (e) {
       console.error('[ensureDocumentExtracted] auto-extraction failed:', (e as Error).message);
     }
