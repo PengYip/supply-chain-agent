@@ -237,6 +237,21 @@ export async function saveChunkVectors(ctx: DbContext, rows: VectorRow[]): Promi
 }
 
 /**
+ * Remove ALL vectors belonging to a document — 纠错回溯把单据改到不可向量化类型时
+ * 清库(sqlite: 按 document_id 子查询删 vec0 行; postgres: embedding 置 NULL,
+ * vectorKnnPg 本就跳过 NULL)。幂等。
+ */
+export async function clearChunkVectorsForDocument(ctx: DbContext, documentId: string): Promise<void> {
+  if (ctx.backend === 'postgres') {
+    await ctx.pool.query('UPDATE doc_chunk SET embedding = NULL WHERE document_id = $1', [documentId]);
+    return;
+  }
+  ctx.sqlite
+    .prepare('DELETE FROM doc_chunk_vec WHERE id IN (SELECT id FROM doc_chunk WHERE document_id = ?)')
+    .run(documentId);
+}
+
+/**
  * Cosine KNN over chunk vectors. Returns up to `k` nearest chunk rowids, nearest
  * first. Returns [] when the vector backend is unavailable (sqlite-vec missing)
  * or when no embeddings are stored yet.

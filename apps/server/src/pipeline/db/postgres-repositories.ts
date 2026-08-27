@@ -955,11 +955,26 @@ export async function saveChunkVectorsPg(
   return written;
 }
 
+/** Read (id, chunk_text) rows for one document in chunk order — 纠错回溯
+ *  reconcileVectorizationAfterDocTypeChange 的补嵌入输入。 */
+export async function listChunksByDocumentPg(
+  ctx: PostgresDbContext,
+  documentId: string,
+): Promise<Array<{ id: number; text: string }>> {
+  const res = await ctx.pool.query(
+    'SELECT id, chunk_text FROM doc_chunk WHERE document_id = $1 ORDER BY chunk_index, id',
+    [documentId],
+  );
+  return res.rows.map((r: Record<string, unknown>) => ({
+    id: Number(r.id),
+    text: String(r.chunk_text ?? ''),
+  }));
+}
+
 /**
  * Cosine KNN over doc_chunk.embedding via `<=>`. Returns up to `k` nearest chunk
  * rowids, nearest first. Skips rows with NULL embedding (not yet embedded).
- */
-export async function vectorKnnPg(
+ */export async function vectorKnnPg(
   ctx: PostgresDbContext,
   queryVec: number[],
   k: number,
