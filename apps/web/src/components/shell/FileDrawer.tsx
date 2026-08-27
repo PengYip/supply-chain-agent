@@ -6,7 +6,11 @@ import { type FileEntry, type FilesApi } from '../../hooks/useFiles';
 import { processDocument } from '../../api/process';
 import { FilePreviewModal } from '../FilePreviewModal';
 import { buildTree, FileTree, normalizeMoveDirectory, type TreeCallbacks } from './FileTree';
-import { readPayload, useFileDnd } from '../../hooks/useFileDnd';
+import { readPayload, useFileDnd, type DropTarget } from '../../hooks/useFileDnd';
+import {
+  collectDropItems,
+  useFolderDropUpload,
+} from '../../hooks/useFolderDropUpload';
 
 interface FileDrawerProps {
   open: boolean;
@@ -40,6 +44,32 @@ export function FileDrawer(props: FileDrawerProps) {
   // 面板内部拖拽移动状态机
   const dnd = useFileDnd();
 
+  /** 上传队列：先把层级里的缺失目录补齐，再逐个串行上传。 */
+  const uploadQueue = useFolderDropUpload({
+    ensureDirs: useCallback(
+      async (dirs: string[]) => {
+        const have = new Set(folders.map((f) => f.path));
+        for (const d of dirs) {
+          if (!have.has(d)) {
+            await createFolder(d);
+            have.add(d);
+          }
+        }
+      },
+      [folders, createFolder],
+    ),
+    onDone: () => void refresh(),
+  });
+
+  const handleDropFiles = useCallback(
+    (dt: DataTransfer, targetDir: DropTarget) => {
+      void collectDropItems(dt).then((items) => {
+        if (items.length > 0) void uploadQueue.enqueue(items, targetDir);
+      });
+    },
+    [uploadQueue],
+  );
+
   const basenameOf = (p: string) => p.split('/').filter(Boolean).pop() ?? p;
 
   /** 拖拽/重命名共用的父目录数学：from 移入 toParent（''=根）。 */
@@ -61,7 +91,11 @@ export function FileDrawer(props: FileDrawerProps) {
     (e: React.DragEvent) => {
       e.preventDefault();
       const payload = readPayload(e);
-      if (!payload) return; // OS 文件上传在 T8 接入
+      if (!payload) {
+        handleDropFiles(e.dataTransfer, '');
+        dnd.clear();
+        return;
+      }
       if (payload.kind === 'file') {
         void moveFile(payload.key, '');
       } else {
@@ -69,7 +103,7 @@ export function FileDrawer(props: FileDrawerProps) {
       }
       dnd.clear();
     },
-    [moveFile, moveFolderInto, dnd],
+    [moveFile, moveFolderInto, dnd, handleDropFiles],
   );
   // 徽标点击触发的解析：processDocument 是同步 HTTP（跑完返回终态），期间用
   // 该集合把对应行的徽标翻成「解析中」；无论成败都 refresh 反映落库状态。
@@ -192,6 +226,7 @@ export function FileDrawer(props: FileDrawerProps) {
         console.error('rename folder failed:', e);
       });
     },
+    onDropFiles: handleDropFiles,
   };
 
   return (
@@ -277,6 +312,49 @@ export function FileDrawer(props: FileDrawerProps) {
             <FileTree tree={tree} expanded={expanded} toggle={toggle} cb={callbacks} />
           )}
         </div>
+
+        {/* 上传队列汇总条：进行中或存在失败项时展示 */}
+        {(uploadQueue.uploads.length > 0) && (
+          <div className="shrink-0 border-t border-line px-3 py-2">
+            <div className="flex items-center justify-between text-[11px] text-ink-soft">
+              <span>
+                {uploadQueue.active
+                  ? `上传中 ${uploadQueue.aggregate.done}/${uploadQueue.aggregate.total}`
+                  : uploadQueue.aggregate.failed > 0
+                    ? '上传完成（有失败项）'
+                    : '上传完成'}
+              </span>
+              {uploadQueue.aggregate.failed > 0 && (
+                <span className="text-danger">失败 {uploadQueue.aggregate.failed}</span>
+              )}
+            </div>
+            <div className="mt-1 h-1 overflow-hidden rounded bg-surface">
+              <div
+                className={`h-full rounded transition-all ${
+                  uploadQueue.aggregate.failed > 0 ? 'bg-warning' : 'bg-primary'
+                }`}
+                style={{
+                  width: `${
+                    uploadQueue.aggregate.bytesTotal > 0
+                      ? Math.round(
+                          (uploadQueue.aggregate.bytesLoaded /
+                            uploadQueue.aggregate.bytesTotal) *
+                            100,
+                        )
+                      : 0
+                  }%`,
+                }}
+              />
+            </div>
+            {uploadQueue.uploads
+              .filter((u) => u.status === 'failed')
+              .map((u) => (
+                <div key={u.id} className="mt-1 truncate text-[11px] text-danger" title={u.error}>
+                  {u.name}：{u.error ?? '上传失败'}
+                </div>
+              ))}
+          </div>
+        )}
 
         {previewingFile && <FilePreviewModal file={previewingFile} onClose={() => setPreviewingFile(null)} />}
       </aside>

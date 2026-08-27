@@ -246,6 +246,8 @@ export interface TreeCallbacks {
   renamingPath: string | null;
   setRenamingPath: (path: string | null) => void;
   onRenameFolder: (from: string, newName: string) => void;
+  // OS 文件/文件夹拖入（上传队列），targetDir 为落点目录
+  onDropFiles: (dt: DataTransfer, targetDir: DropTarget) => void;
 }
 
 function FileRow(props: {
@@ -464,7 +466,8 @@ function TreeFolder(props: TreeFolderProps) {
       cb.dnd.clear();
       return;
     }
-    // OS 文件/文件夹拖入：交由根区统一上传队列处理（冒泡到容器）。
+    // OS 文件/文件夹拖入：交给容器的上传队列（保层级）。
+    cb.onDropFiles(e.dataTransfer, fullPath);
     cb.dnd.clear();
   };
 
