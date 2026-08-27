@@ -23,6 +23,7 @@ const DOC_TYPE_SEED: Array<{ name: string; parent?: string; props?: Record<strin
   { name: '发货单', parent: '运输凭证' },
   { name: '汽运磅单', parent: '运输凭证' },
   { name: '火运大票', parent: '运输凭证' },
+  { name: '轨道衡称重单', parent: '运输凭证' },
   { name: '派船通知单', parent: '运输凭证' },
   { name: '资金凭证', parent: '履约凭证' },
   { name: '付款单', parent: '资金凭证' },
@@ -78,6 +79,7 @@ const EDGE_RULE_SEED: Array<{
   // relation 由 flowType x direction 派生 -> 两向词表都放行(对齐货转单先例)。
   { id: 'er-settle-qiyun', src: '汽运磅单', edge: 'settles', vocab: ['收货', '发货'] },
   { id: 'er-settle-huoyun', src: '火运大票', edge: 'settles', vocab: ['收货', '发货'] },
+  { id: 'er-settle-guidaocheng', src: '轨道衡称重单', edge: 'settles', vocab: ['收货', '发货'] },
   { id: 'er-settle-paichuan', src: '派船通知单', edge: 'settles', vocab: ['收货', '发货'] },
   // 付款单(申请单, 付款前): 登记不启用——不物化资金流(它不是支付证据)
   { id: 'er-bind-fukuandan', src: '付款单', edge: 'binds', vocab: ['付款申请'], active: false },

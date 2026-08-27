@@ -3,9 +3,14 @@ import { FLOW_ADAPTERS, CONTRACT_TYPE_FLOW_DIRECTION } from '../../src/domain/tr
 
 describe('FLOW_ADAPTERS', () => {
   it('覆盖 spec §6 全部字段路径类型', () => {
-    for (const t of ['收货单', '发货单', '汽运磅单', '火运大票', '派船通知单', '进项票', '销项票', '发票']) {
+    for (const t of ['收货单', '发货单', '汽运磅单', '火运大票', '轨道衡称重单', '派船通知单', '进项票', '销项票', '发票']) {
       expect(FLOW_ADAPTERS[t], t).toBeDefined();
     }
+  });
+  it('铁路单据族: 发货单(预告)/火运大票(运单)/轨道衡称重单(过衡)均货物流', () => {
+    expect(FLOW_ADAPTERS['发货单']!.flowFamily).toBe('货物流');
+    expect(FLOW_ADAPTERS['火运大票']!.flowFamily).toBe('货物流');
+    expect(FLOW_ADAPTERS['轨道衡称重单']!.flowFamily).toBe('货物流');
   });
   it('流族映射', () => {
     expect(FLOW_ADAPTERS['发货单']!.flowFamily).toBe('货物流');

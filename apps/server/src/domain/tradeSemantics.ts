@@ -131,6 +131,7 @@ export const CHUNK_TAG_TAXONOMY: Record<DocType, string[]> = {
   发货单: [],
   汽运磅单: [],
   火运大票: [],
+  轨道衡称重单: [],
   派船通知单: [],
   资金凭证: [],
   付款单: [],
@@ -237,6 +238,16 @@ export const FLOW_ADAPTERS: Readonly<Record<string, FlowAdapter>> = {
     dateFields: ['称量日期', '发货日期', '日期'],
     amountFields: [],
   },
+  // 铁路物流单据族(spec 2026-08-27, 业务确认): 发货单(预告) -> 火运大票(运单) ->
+  // 轨道衡称重单(过衡称重, 常伴随 样品编号/校码 等质检采样字段) -> 质检报告(质检,
+  // 不物化六向)。称重单数量以 合计净重 为准, 单位来自 重量单位 字段。
+  轨道衡称重单: {
+    flowFamily: '货物流',
+    qtyFields: [['合计净重'], ['净重'], ['合计毛重'], ['毛重'], ['重量_吨', '吨'], ['数量_吨', '吨'], ['数量']],
+    unitFields: ['重量单位', '单位'],
+    dateFields: ['称量日期', '发货日期', '日期'],
+    amountFields: [],
+  },
   派船通知单: {
     flowFamily: '货物流',
     qtyFields: [['数量'], ['数量_吨', '吨'], ['重量_吨', '吨']],
@@ -276,3 +287,19 @@ export const CONTRACT_TYPE_FLOW_DIRECTION: Readonly<
   采购: { 资金流: 'out', 货物流: 'in', 发票流: 'in' },
   销售: { 资金流: 'in', 货物流: 'out', 发票流: 'out' },
 };
+
+// ---- 节点权威聚合(spec 2026-08-27 §15) ---------------------------------------
+//
+// 同一批货会经过多个物流节点并各留一张凭证(发出预告 -> 过衡/签收), 逐行 SUM 会
+// 双计。进度聚合按节点分两层: 预告节点(发货单/派船通知单)只在未被实重覆盖时计入,
+// 实重节点(轨道衡称重单/汽运磅单/火运大票/收货单/货转单)是数量的权威来源;
+// 每个量纲取 max(实重, 预告) —— 预告被覆盖时不重复累计, 未覆盖批次仍按预告计入。
+/** 预告节点单据类型(数量仅为发出预告, 可被实重覆盖)。 */
+export const NOTICE_NODE_DOC_TYPES: ReadonlySet<string> = new Set(['发货单', '派船通知单']);
+
+export type FlowNodeTier = 'notice' | 'actual';
+
+/** 单据类型 -> 节点层级; 未知类型一律按实重处理(宁可保守计入也不静默丢量)。 */
+export function flowNodeTier(docType: string | null | undefined): FlowNodeTier {
+  return docType != null && NOTICE_NODE_DOC_TYPES.has(docType) ? 'notice' : 'actual';
+}

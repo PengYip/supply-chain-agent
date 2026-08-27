@@ -164,7 +164,85 @@ dev 实测交叉验证: 发货单 DOC-mtb032yu（买方=湖北国贸=自主主�
 - 进度: mass 对齐 / 量纲不一致 mismatch / 无基准 / count 池对齐。
 - 回归: 现有 executionFlow/bindingProposal 测试全绿; build→lint→test 必须过。
 
-## 12. Phase 2 演进路径（记录, 不实施）
+## 12. 铁路物流单据族(业务确认 2026-08-27)
 
-适配表 + 单位注册表均为纯数据, 搬进 template_types.props 后即可"新类型=插配置"（方案B）;
-付款单/结算单/提单/装箱单接入另行评审。
+铁路运输单据对应货物流的三个节点: **发出 -> 运输 -> 接收**。
+
+| 节点 | 单据 | 类型树 | 物化 |
+|---|---|---|---|
+| 发出 | 卖家发货单预告(多少货要发) | 发货单(已有) | 货物流 |
+| 运输 | 铁路大票运单 | 火运大票(已有) | 货物流 |
+| 运输 | 轨道衡过衡称重记录 | 轨道衡称重单(新增细类, 挂运输凭证) | 货物流(合计净重为准, 常伴样品编号/校码等质检采样字段) |
+| 接收 | 质检单 | 质检报告(已有) | 不物化(质检是 binds 质检关系, 非六向动作) |
+
+同一货物流在三节点各有凭证: 预告量(发货单)、过衡实重(称重单)、签收量(收货单)
+构成节点间对账冗余; 方向统一由主体锚点/合同类型判定, 类型不再自带方向。
+收货单签收量与轨道衡实重的差额即运输损耗(后续对账/损耗分析的输入)。
+
+## 13. 非标大宗贸易场景校验(业务确认 2026-08-27)
+
+典型场景: 合同约定周期内供 1 万吨煤, 实际分三次各约 3000 吨, 每批数量浮动,
+结算价 = 基准价 ± 质量浮动(货到后确定), 发货时结算金额不可知。结论: 模型兼容。
+
+- 分批供货: 流水逐凭证追加行, 合同进度 = SUM(流水), 分批是常态而非特例。
+- 数量浮动: 进度不截断(0.99/1.02 如实呈现), 每批按过衡/签收实际值记录。
+- 价格后定: 金额按"凭证时点事实"分层 ——
+  - 发货/过衡时点: 货物流水以数量为权威值, 凭证金额(含税总价)作为暂估价如实存;
+  - 资金进度: 只认付款凭证/发票流水, 不拿发货单暂估金额充当;
+  - **结算单(Phase 2 第一优先)**: 定位为金额对账锚点 —— 确认后将关联货物流的
+    暂估金额修正为结算金额, 与货物流/发票流构成三方对账(暂估 vs 结算 vs 票面),
+    并承接质量浮动依据(质检报告的化验指标)。Phase 1 维持不物化, 语义已定。
+
+## 14. Phase 2 演进路径（记录, 不实施）
+
+- **节点权威源聚合(必须, 优先级最高)**: 同一批货在 发出(发货单预告)/运输(轨道衡实重)/
+  接收(收货单签收) 三节点各有凭证, 简单 SUM 会双计(dev 实测: 同批 3357.46t 计为 6714.92t)。
+  聚合层需按批次归组、按节点权威级取数(轨道衡实重 > 发货预告; 签收量做核减), 节点间差额
+  即运输损耗, 作为对账视图输出。
+- **结算引擎**: 见 §13 —— 合同定价条款参数化(LLM 提取 + L2 人工确认) + 数量/质量凭证
+  取证 + 确定性计算器出结算单草稿, 金额对账锚点(暂估 vs 结算 vs 票面)。
+- 付款单/结算单/提单/装箱单接入另行评审; 模板表驱动配置(方案B)。
+
+## 15. Phase 2 交付记录（2026-08-28 实施完毕）
+
+### 15.1 节点权威聚合（修双计）
+- 铁路/水运单据族同批货会经过 发出预告 -> 过衡/签收 多个节点并各留凭证，逐行 SUM 双计
+  （dev 实例：发货单 3357.46t + 轨道衡称重单 3357.46t -> 6714.92t 错误）。
+- 词汇（domain/tradeSemantics.ts）：`NOTICE_NODE_DOC_TYPES`（发货单/派船通知单=预告节点）+
+  `flowNodeTier(docType)`；未知类型保守按实重（宁可计入不静默丢量）。
+- 聚合规则（pipeline/executionProgress.ts）：每个量纲取 `max(实重, 预告)`：
+  - 预告被实重覆盖 -> 不重复累计（同批双计修复）；
+  - 实重 > 预告（数量浮动上浮）-> 取实重；
+  - 一批已过衡一批在途 -> 预告总和更大，在途批次按预告计入（不丢）。
+- `delivered.nodes` 保留 actual/notice 分层（massKg + countPools）供前端/模型溯源展示。
+- query_execution_flows 描述已声明：回答"发了多少货/进度"以 executionProgress 为准，
+  勿自行逐行累加 flows（会双计）。
+- DocType 联合类型补 `轨道衡称重单`（Phase 1 只进了 templateSeed，类型层漏了）；
+  CHUNK_TAG_TAXONOMY 同步补键（25 类）。
+
+### 15.2 结算引擎（用户简化架构）
+用户已实测 LLM 直接计算结算足够准确，故不做独立确定性计算器。流程：
+`gather_settlement_evidence（L1 取证） -> 模型按合同条款原文计算并向用户完整展示 -> 
+confirm_settlement（L2 软门控） -> settlement_records 台账落账`。
+
+- **settlement_records**（双端 DDL：sqlite raw + pg IF NOT EXISTS + drizzle 双 schema）：
+  contract_no / contract_ledger_id(=合同文档 id) / settled_quantity / quantity_unit /
+  base_price / currency / total_amount / adjustments(JSON 奖罚明细) /
+  basis_flow_ids / basis_extraction_ids(溯源) / notes / status('confirmed') /
+  confirmed_by / created_by / user_id / created_at。只增不改：修正 = 确认一条新行，
+  保留完整时序（对齐"事实分层"原则）。
+- **gather_settlement_evidence**（pipeline/tools/settlementTools.ts，L1）：一次返回
+  合同台账字段（定价/付款条款原文）、执行流水（含 docType/量纲/溯源 id）、
+  executionProgress（节点聚合后的已交付量，防模型自己双计）、质量凭证
+  （质检报告/化验报告抽取行 + extractionId 溯源）、历史结算记录、usage 口径提示。
+  边界：不做任何计算，只给证据。
+- **confirm_settlement**（L2，needsApproval）：硬校验合同台账存在；
+  软校验 basisFlowIds 全部属于本合同流水（防跨合同张冠李戴）；数值不做算术校验
+  ——以向用户展示并被确认的为准。contextContract 注册（tagged/external）+
+  permissionGate L2 + 契约集合测试同步。
+- 排序：listSettlementRecords 按 created_at DESC, rowid DESC（SQLite 秒级时间戳平手
+  由 rowid 决胜；pg timestamptz 微秒精度无此问题）。
+
+### 15.3 工具集计数
+trader 工具 28 -> 30（gather_settlement_evidence / confirm_settlement）；
+contextContract EXPECTED_TOOLS、e2e/integration-recall 工具计数断言同步。

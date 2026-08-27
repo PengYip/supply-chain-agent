@@ -80,6 +80,8 @@ registerPermission('template_overview', 'L1'); // 2026-08-26 模板: 类型层�
 registerPermission('manage_quota', 'L2'); // 2026-08-25 方案A §6: 额度创建/调整/停用
 registerPermission('query_quota_usage', 'L1'); // 2026-08-25 方案A §6: 额度占用只读查询
 registerPermission('update_document_fields', 'L2'); // post-ingest field correction (write)
+registerPermission('gather_settlement_evidence', 'L1'); // 2026-08-27 §15: 结算取证(只读)
+registerPermission('confirm_settlement', 'L2'); // 2026-08-27 §15: 结算结果人工确认后落台账
 // L3: no registered tools -- money/irreversible operations are not executable
 // in-system. Human-in-the-loop goes through escalate_to_human tickets
 // (sessionStore pending approvals + /api/approval/callback resume).

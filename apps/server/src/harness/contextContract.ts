@@ -237,6 +237,22 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'summary', signal: 'counter',
     persist: 'business', risk: { level: 'L1', injection: 'safe' },
   },
+  // 2026-08-27 §15 结算引擎: gather_settlement_evidence 返回台账字段与化验/
+  // 凭证抽取字段(文档原文回流, 可能携带注入话术) -> output 'tagged' /
+  // injection 'external'。单合同证据有界 -> budget 'summary'。只读 -> L1,
+  // signal 'counter', persist 'business'。
+  gather_settlement_evidence: {
+    output: 'tagged', budget: 'summary', signal: 'counter',
+    persist: 'business', risk: { level: 'L1', injection: 'external' },
+  },
+  // confirm_settlement 是结算落台账的唯一写面(L2 软门控, 人工确认通道)。
+  // 输入为模型已向用户展示并被确认的数值(可信输入), 返回短 handle ->
+  // output 'raw' / injection 'safe'。落 settlement_records -> signal 'env',
+  // persist 'business'。
+  confirm_settlement: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'business', risk: { level: 'L2', injection: 'safe' },
+  },
 };
 
 /** True iff a contract exists for the given tool name. */

@@ -88,6 +88,9 @@ import {
   listAllConfirmedBindingsPg,
   listExecutionFlowsPg,
   summarizeExecutionFlowsPg,
+  // 结算台账(spec 2026-08-27 §15): pg twins。
+  insertSettlementRecordPg,
+  listSettlementRecordsPg,
   // 自主体名单(Task A): pg twins for self_parties CRUD + backfill helpers.
   listSelfPartiesPg,
   addSelfPartyPg,
@@ -2675,6 +2678,147 @@ export async function summarizeExecutionFlows(
       r.total_mass_kg === null || r.total_mass_kg === undefined ? null : Number(r.total_mass_kg),
     lastVoucherDate: r.last_voucher_date ?? null,
   }));
+}
+
+// ---- 结算台账(spec 2026-08-27 §15) -------------------------------------------
+//
+// LLM 依据合同条款+数量/质量凭证计算结算 -> L2 人工确认(confirm_settlement)后
+// 落账。行只增不改(修正=再确认一条新行, 保留完整时序); 金额锚点语义见 DDL 注释。
+
+export interface SettlementAdjustment {
+  label: string;
+  amount: number;
+}
+
+export interface SettlementRecordInput {
+  contractNo: string;
+  contractLedgerId: string | null;
+  settledQuantity: number;
+  quantityUnit: string | null;
+  basePrice: number | null;
+  currency: string | null;
+  totalAmount: number;
+  adjustments: SettlementAdjustment[];
+  /** 依据流水 id(extraction 溯源在 basisExtractionIds)。 */
+  basisFlowIds: string[];
+  basisExtractionIds: string[];
+  notes: string | null;
+  createdBy: string;
+}
+
+export interface SettlementRecordRow extends SettlementRecordInput {
+  id: string;
+  status: string;
+  confirmedBy: string | null;
+  userId: string | null;
+  createdAt: string;
+}
+
+/** 插入一条已确认结算记录(只增不改), 返回 id。 */
+export async function insertSettlementRecord(
+  ctx: DbContext,
+  input: SettlementRecordInput,
+  userId?: string,
+): Promise<string> {
+  if (ctx.backend === 'postgres') return insertSettlementRecordPg(ctx, input, userId);
+  const id = rid('SR');
+  ctx.sqlite
+    .prepare(
+      `INSERT INTO settlement_records
+         (id, contract_no, contract_ledger_id, settled_quantity, quantity_unit, base_price, currency,
+          total_amount, adjustments, basis_flow_ids, basis_extraction_ids, notes, status, confirmed_by,
+          created_by, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?)`,
+    )
+    .run(
+      id,
+      input.contractNo,
+      input.contractLedgerId,
+      input.settledQuantity,
+      input.quantityUnit,
+      input.basePrice,
+      input.currency,
+      input.totalAmount,
+      JSON.stringify(input.adjustments),
+      JSON.stringify(input.basisFlowIds),
+      JSON.stringify(input.basisExtractionIds),
+      input.notes,
+      input.createdBy,
+      input.createdBy,
+      effectiveUserId(userId),
+    );
+  return id;
+}
+
+function settlementRowFromSqlite(r: {
+  id: string;
+  contract_no: string;
+  contract_ledger_id: string | null;
+  settled_quantity: number;
+  quantity_unit: string | null;
+  base_price: number | null;
+  currency: string | null;
+  total_amount: number;
+  adjustments: string;
+  basis_flow_ids: string;
+  basis_extraction_ids: string;
+  notes: string | null;
+  status: string;
+  confirmed_by: string | null;
+  created_by: string;
+  user_id: string | null;
+  created_at: string;
+}): SettlementRecordRow {
+  const parse = (s: string, fallback: unknown): unknown => {
+    try {
+      return JSON.parse(s);
+    } catch {
+      return fallback;
+    }
+  };
+  return {
+    id: r.id,
+    contractNo: r.contract_no,
+    contractLedgerId: r.contract_ledger_id,
+    settledQuantity: r.settled_quantity,
+    quantityUnit: r.quantity_unit,
+    basePrice: r.base_price,
+    currency: r.currency,
+    totalAmount: r.total_amount,
+    adjustments: parse(r.adjustments, []) as SettlementAdjustment[],
+    basisFlowIds: parse(r.basis_flow_ids, []) as string[],
+    basisExtractionIds: parse(r.basis_extraction_ids, []) as string[],
+    notes: r.notes,
+    status: r.status,
+    confirmedBy: r.confirmed_by,
+    createdBy: r.created_by,
+    userId: r.user_id,
+    createdAt: r.created_at,
+  };
+}
+
+/** 某合同的结算记录, created_at DESC(最新在前)。 */
+export async function listSettlementRecords(
+  ctx: DbContext,
+  contractNo: string,
+  userId?: string,
+): Promise<SettlementRecordRow[]> {
+  if (ctx.backend === 'postgres') return listSettlementRecordsPg(ctx, contractNo, userId);
+  const uid = effectiveUserId(userId);
+  const rows = (uid
+    ? ctx.sqlite
+        .prepare(
+          `SELECT * FROM settlement_records
+           WHERE contract_no = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)
+           ORDER BY created_at DESC, rowid DESC, id DESC`,
+        )
+        .all(contractNo, uid)
+    : ctx.sqlite
+        .prepare(
+          `SELECT * FROM settlement_records WHERE contract_no = ? ORDER BY created_at DESC, rowid DESC, id DESC`,
+        )
+        .all(contractNo)) as Array<Parameters<typeof settlementRowFromSqlite>[0]>;
+  return rows.map(settlementRowFromSqlite);
 }
 
 // ---- 自主体名单(Task A) -------------------------------------------------------
