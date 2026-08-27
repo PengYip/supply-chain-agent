@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { createDb, migrate } from '../../../src/pipeline/db/client.js';
 import { ensureTemplateSeed } from '../../../src/pipeline/templateSeed.js';
 import { env } from '../../../src/env.js';
-import { ingestFile } from '../../../src/pipeline/tools/documentEntry.js';
+import { ingestFile, processDocument, ensureDocumentExtracted } from '../../../src/pipeline/tools/documentEntry.js';
 import { findContractLedgerByNo } from '../../../src/pipeline/db/repositories.js';
 
 // Bug B(用户验收): 上传快捷路径 ingestFile 的 auto-extraction 只挂了
@@ -76,5 +76,54 @@ describe('ingestFile 抽取 -> 合同台账回写(Bug B)', () => {
     expect(entry!.documentId).toBe(res.docId);
     expect(entry!.docType).toBe('合同');
     expect(entry!.contractNo).toBe('HT-2024-100');
+  });
+});
+
+// 小修 1(P3 后端): ensureDocumentExtracted 的重抽取路径与 ingestFile 同模式
+// 漏挂 buildLedgerWritingDeps —— 超时补抽成功的合同同样不回写台账。
+describe('ensureDocumentExtracted 重抽取 -> 合同台账回写(小修 1)', () => {
+  it('补抽含合同号的字段后产生 contract_ledger 行', async () => {
+    const f = join(dir, 'ensure.txt');
+    writeFileSync(f, '合同号：HT-2024-200\n', 'utf-8');
+
+    // 先经 processDocument 无 extraction 解析到 parsed(extraction_status 保持 NULL,
+    // 无抽取行 -> ensureDocumentExtracted 判定需重抽), 再以 extraction 依赖触发补抽。
+    const { createDocumentStub } = await import('../../../src/pipeline/db/repositories.js');
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f, docType: '合同' });
+    await processDocument(ctx, docId, { docType: '合同', modality: 'digital' });
+
+    // 补抽模型的字段值改为 HT-2024-200 以匹配本用例 fixture。
+    const model = {
+      ...stubModel,
+      async doGenerate() {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({
+                fields: {
+                  合同号: {
+                    value: 'HT-2024-200',
+                    sourceSpans: [{ blockId: 'b0', start: 4, end: 15 }],
+                  },
+                },
+                llmConsistency: 0.95,
+              }),
+            },
+          ],
+          finishReason: 'stop' as const,
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          warnings: [] as unknown[],
+        };
+      },
+    } as any;
+
+    const res = await ensureDocumentExtracted(ctx, docId, { extraction: { model } });
+
+    expect(res.extractionStatus).toBe('ok');
+    const entry = await findContractLedgerByNo(ctx, 'HT-2024-200');
+    expect(entry).not.toBeNull();
+    expect(entry!.documentId).toBe(docId);
+    expect(entry!.docType).toBe('合同');
   });
 });

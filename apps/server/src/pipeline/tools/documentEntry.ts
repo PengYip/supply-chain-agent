@@ -1184,7 +1184,14 @@ export async function ensureDocumentExtracted(
         docId,
         blockModel,
         userId,
-        deps: buildAutoExtractionDeps({ ctx, extraction: opts.extraction, userId }),
+        // 接线闭环(小修 1): 重抽取路径同样挂台账回写 -- buildLedgerWritingDeps
+        // 挂到 save 之后(与 ingestFile / processDocument / extractionBackfill 同
+        // 语义), 超时补抽成功的合同立即进入 contract_ledger; writeContractLedger
+        // 永不抛出, 不影响 outcome。
+        deps: buildLedgerWritingDeps(
+          buildAutoExtractionDeps({ ctx, extraction: opts.extraction, userId }),
+          { ctx, docType: blockModel.docType, userId },
+        ),
       });
       if (outcome.status !== 'ok') {
         console.error(`[ensureDocumentExtracted] auto-extraction ${outcome.status}:`, outcome.reason ?? 'no reason');
