@@ -101,11 +101,14 @@ export async function classifyDocument(
 ): Promise<ClassifierResult> {
   const hint: DocType = input.hint ?? '其他';
   const vocab = input.vocab ?? { coarse: DEFAULT_COARSE, fineByCoarse: {} };
+  const t0 = performance.now();
+  let coarseMs: number | null = null;
   try {
     const coarseSchema = z.object({
       docType: z.enum(vocab.coarse as [string, ...string[]]),
       confidence: z.number().min(0).max(1),
     });
+    const coarseStart = performance.now();
     const coarse = await generateObject({
       model: deps.model,
       schema: coarseSchema,
@@ -113,8 +116,12 @@ export async function classifyDocument(
       prompt: blocksToPrompt(input.blocks),
       providerOptions: { openai: { structuredOutputs: false } },
     });
+    coarseMs = Math.round(performance.now() - coarseStart);
     const fineCandidates = vocab.fineByCoarse[coarse.object.docType] ?? [];
     if (fineCandidates.length === 0) {
+      console.log(
+        `[perf-classify] coarse=${coarseMs}ms fine=skipped -> ${coarse.object.docType}`,
+      );
       return { docType: coarse.object.docType as DocType, confidence: coarse.object.confidence, source: 'classified' };
     }
     try {
@@ -122,6 +129,7 @@ export async function classifyDocument(
         docType: z.enum(fineCandidates as [string, ...string[]]),
         confidence: z.number().min(0).max(1),
       });
+      const fineStart = performance.now();
       const fine = await generateObject({
         model: deps.model,
         schema: fineSchema,
@@ -129,9 +137,14 @@ export async function classifyDocument(
         prompt: blocksToPrompt(input.blocks),
         providerOptions: { openai: { structuredOutputs: false } },
       });
+      console.log(
+        `[perf-classify] coarse=${coarseMs}ms fine=${Math.round(performance.now() - fineStart)}ms`
+        + ` total=${Math.round(performance.now() - t0)}ms -> ${fine.object.docType}`,
+      );
       return { docType: fine.object.docType as DocType, confidence: fine.object.confidence, source: 'classified' };
     } catch {
       // 细类失败 -> 回退粗类(仍是 LLM 判定, source 保持 'classified')。
+      console.log(`[perf-classify] coarse=${coarseMs}ms fine=failed -> ${coarse.object.docType}`);
       return { docType: coarse.object.docType as DocType, confidence: coarse.object.confidence, source: 'classified' };
     }
   } catch {
