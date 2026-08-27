@@ -18,7 +18,7 @@ export interface FileEntry {
   directory: string;   // directory path (e.g. "/" or "/合同文件")
   parseStatus: FileParseStatus | null;
   /* Optional because synthetic FileEntry literals elsewhere (e.g. the preview
-   * trace in ExecutionFlowPanel) don't carry it; undefined reads as not bound. */
+   * trace in ContractExecutionSection) don't carry it; undefined reads as not bound. */
   bound?: boolean;     // true once the file is bound to a contract ledger row
 }
 

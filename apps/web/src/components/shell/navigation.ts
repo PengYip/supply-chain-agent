@@ -1,5 +1,4 @@
 import {
-  ArrowLeftRight,
   BookOpen,
   Building2,
   FlaskConical,
@@ -18,7 +17,6 @@ export type ViewId =
   | 'ledger'
   | 'graph'
   | 'bindings'
-  | 'flows'
   | 'eval'
   | 'favorites'
   | 'parties';
@@ -45,7 +43,6 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'ledger', label: '项目台账', description: '按项目归集合同的凭证齐套率', icon: BookOpen, group: 'work', enabled: true },
   { id: 'graph', label: '图谱', description: '实体关系可视化', icon: Network, group: 'work', enabled: true },
   { id: 'bindings', label: '绑定', description: '文档与合同绑定工作台', icon: Link2, group: 'work', enabled: true },
-  { id: 'flows', label: '执行流水', description: '资金 / 货物 / 发票六向流水', icon: ArrowLeftRight, group: 'work', enabled: true },
   { id: 'eval', label: '评估', description: '评估数据集与结果分析', icon: FlaskConical, group: 'admin', enabled: true },
   { id: 'favorites', label: '收藏反馈', description: '对话收藏与用户反馈', icon: Star, group: 'admin', enabled: true },
   { id: 'parties', label: '己方主体', description: '仅添加你自己的公司', icon: Building2, group: 'admin', enabled: true },
