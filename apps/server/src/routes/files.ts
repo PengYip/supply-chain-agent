@@ -36,6 +36,7 @@ import {
   listFileFolders,
   createFileFolder,
   deleteFileFolder,
+  renameFileFoldersPrefix,
   deleteDocument,
   createDocumentStub,
   getDocumentParseStatus,
@@ -46,12 +47,12 @@ import type { DocType } from '../pipeline/types.js';
 export const filesRoute = new Hono<AuthEnv>();
 filesRoute.use('*', requireAuth);
 
-// One DbContext reused across uploads (same 'pipeline.db' file / DB as the agent,
-// so ingested docs are immediately queryable by recall_documents).
-let _ctx: DbContext | null = null;
+// One DbContext per call -- getDbContext is itself a singleton in dbBackend
+// (same 'pipeline.db' / DB as the agent, so ingested docs are immediately
+// queryable by recall_documents). Per-call resolution keeps route modules
+// testable against fresh per-test databases.
 function ctx(): DbContext {
-  if (!_ctx) _ctx = getDbContext();
-  return _ctx;
+  return getDbContext();
 }
 
 const ALLOWED_DOCTYPES: ReadonlySet<string> = new Set(['合同', '发票', '提单', '装箱单', '其他']);
@@ -401,6 +402,92 @@ filesRoute.delete('/rmdir', requireRole('admin', 'trader'), async (c) => {
 
   await deleteFileFolder(ctx(), user.id, folderPath);
   return c.json({ ok: true });
+});
+
+/**
+ * Rename or relocate a virtual-folder subtree. Body: { from: "旧目录", to: "新家[/子]" }.
+ * Rewrites every descendant path in file_folders and moves all MinIO objects
+ * under users/<uid>/<from>/ onto the rewritten prefix. Documents re-link via
+ * minio_key -> docId, and parse artifacts + graph bindings anchor on docId, so
+ * they survive the move untouched. Mid-flight storage failures trigger a
+ * best-effort reverse rollback -- same guarantee level as single-file /move.
+ */
+filesRoute.patch('/folder-path', requireRole('admin', 'trader'), async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+
+  let body: { from?: unknown; to?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'invalid JSON body' }, 400);
+  }
+  const fromRaw = typeof body.from === 'string' ? body.from : '';
+  const toRaw = typeof body.to === 'string' ? body.to : '';
+  const guard = validateFolderPathChange(fromRaw, toRaw);
+  if (!guard.ok) {
+    return c.json({ error: 'invalid folder path change', reason: guard.reason }, 400);
+  }
+  const from = normalizeDirectory(fromRaw);
+  const to = normalizeDirectory(toRaw);
+
+  try {
+    // 1. Conflict scan: an existing folder row would collide with a target.
+    const allFolders = await listFileFolders(ctx(), user.id);
+    const targetOf = (p: string) => to + p.slice(from.length);
+    const existingTargets = new Set(
+      allFolders.filter((f) => !isPathUnderFolder(f.path, from)).map((f) => f.path),
+    );
+    if (allFolders.some((f) => isPathUnderFolder(f.path, from) && existingTargets.has(targetOf(f.path)))) {
+      return c.json({ error: 'target exists' }, 409);
+    }
+
+    // 2. Move MinIO objects: copy -> remove per object. Roll back what was done.
+    const srcPrefix = `users/${user.id}/${from}/`;
+    const done: Array<{ oldKey: string; newKey: string }> = [];
+    try {
+      const stream = minioClient.listObjectsV2(MINIO_BUCKET, srcPrefix, true);
+      for await (const obj of stream) {
+        const oldKey = obj.name ?? '';
+        if (!oldKey.startsWith(srcPrefix)) continue;
+        const newKey = rewriteKeyPrefix(oldKey, user.id, from, to);
+        if (newKey === oldKey) continue;
+        await minioClient.copyObject(MINIO_BUCKET, newKey, `${MINIO_BUCKET}/${oldKey}`);
+        await minioClient.removeObject(MINIO_BUCKET, oldKey);
+        done.push({ oldKey, newKey });
+      }
+    } catch (e) {
+      // Reverse rollback of already-migrated objects (best-effort).
+      for (const d of [...done].reverse()) {
+        try {
+          await minioClient.copyObject(MINIO_BUCKET, d.oldKey, `${MINIO_BUCKET}/${d.newKey}`);
+          await minioClient.removeObject(MINIO_BUCKET, d.newKey);
+        } catch {
+          console.warn('[files] folder-path rollback step failed for', d.newKey);
+        }
+      }
+      throw e;
+    }
+
+    // 3. Rewrite the virtual folder rows (single UPDATE, prefix math in SQL).
+    const foldersRewritten = await renameFileFoldersPrefix(ctx(), user.id, from, to);
+
+    // 4. Re-link document rows to their fresh keys (documents.minio_key still
+    //    holds the OLD value here, so looking up by oldKey resolves correctly).
+    for (const d of done) {
+      const docIdMap = await findDocIdsByMinioKeys(ctx(), [d.oldKey], user.id);
+      const docId = docIdMap.get(d.oldKey);
+      if (docId) {
+        await setDocumentMinioKey(ctx(), docId, d.newKey);
+      }
+    }
+
+    return c.json({ ok: true, folders: foldersRewritten, objects: done.length });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[files] folder-path failed:', msg);
+    return c.json({ error: 'folder-path failed', detail: msg }, 500);
+  }
 });
 
 /** Delete a file: cascade-delete the DB document row + all dependents (chunks,
