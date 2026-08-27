@@ -184,3 +184,95 @@ export const GRAPH_TRADE_EDGES = {
   settles: 'settles',
   granted: 'granted',
 } as const;
+
+// ---------------------------------------------------------------------------
+// 通用履约物化层: 类型适配表(spec 2026-08-27 §4)。字段路径文档的流族/字段别名/
+// 方向编码唯一归宿; 图片凭证(货转单/付款凭证/化验报告)不在此表, 走 vouchers.extractAnchors。
+// 新单据类型接入 = 本表加一行, 机制不变。
+
+/** 单据类型 -> 履约流水适配(数量/日期/金额字段按优先序, 首个命中即用)。 */
+export interface FlowAdapter {
+  readonly flowFamily: FlowFamily;
+  /** [字段名, 单位提示?]。'_吨' 后缀命名即单位(与台账 scoreQty 词表一致)。 */
+  readonly qtyFields: ReadonlyArray<readonly [string] | [string, string]>;
+  readonly unitFields: readonly string[];
+  readonly dateFields: readonly string[];
+  readonly amountFields: readonly string[];
+  /** 类型自带方向(方向编码类型), 仅主体/合同类型都判不出时的第三级兜底。 */
+  readonly codedDirection?: 'in' | 'out';
+}
+
+const INVOICE_QTY: FlowAdapter['qtyFields'] = [['数量']];
+const INVOICE_DATE: readonly string[] = ['开票日期', '日期'];
+const INVOICE_AMOUNT: readonly string[] = ['价税合计', '价税合计小写_元', '合计金额', '金额'];
+
+export const FLOW_ADAPTERS: Readonly<Record<string, FlowAdapter>> = {
+  收货单: {
+    flowFamily: '货物流',
+    qtyFields: [['发运数量'], ['数量_吨', '吨'], ['数量']],
+    unitFields: ['单位'],
+    dateFields: ['收货日期', '到货日期', '发货日期', '日期'],
+    amountFields: ['含税总价'],
+    codedDirection: 'in',
+  },
+  发货单: {
+    flowFamily: '货物流',
+    qtyFields: [['发运数量'], ['数量_吨', '吨'], ['数量']],
+    unitFields: ['单位'],
+    dateFields: ['发货日期', '收货日期', '到货日期', '日期'],
+    amountFields: ['含税总价'],
+    codedDirection: 'out',
+  },
+  汽运磅单: {
+    flowFamily: '货物流',
+    qtyFields: [['合计净重'], ['净重'], ['合计毛重'], ['毛重'], ['重量_吨', '吨'], ['数量_吨', '吨'], ['数量']],
+    unitFields: ['重量单位', '单位'],
+    dateFields: ['称量日期', '发货日期', '日期'],
+    amountFields: [],
+  },
+  火运大票: {
+    flowFamily: '货物流',
+    qtyFields: [['合计净重'], ['净重'], ['合计毛重'], ['毛重'], ['重量_吨', '吨'], ['数量_吨', '吨'], ['数量']],
+    unitFields: ['重量单位', '单位'],
+    dateFields: ['称量日期', '发货日期', '日期'],
+    amountFields: [],
+  },
+  派船通知单: {
+    flowFamily: '货物流',
+    qtyFields: [['数量'], ['数量_吨', '吨'], ['重量_吨', '吨']],
+    unitFields: ['单位'],
+    dateFields: ['通知日期', '发货日期', '日期'],
+    amountFields: [],
+  },
+  进项票: {
+    flowFamily: '发票流',
+    qtyFields: INVOICE_QTY,
+    unitFields: ['单位'],
+    dateFields: INVOICE_DATE,
+    amountFields: INVOICE_AMOUNT,
+    codedDirection: 'in',
+  },
+  销项票: {
+    flowFamily: '发票流',
+    qtyFields: INVOICE_QTY,
+    unitFields: ['单位'],
+    dateFields: INVOICE_DATE,
+    amountFields: INVOICE_AMOUNT,
+    codedDirection: 'out',
+  },
+  发票: {
+    flowFamily: '发票流',
+    qtyFields: INVOICE_QTY,
+    unitFields: ['单位'],
+    dateFields: INVOICE_DATE,
+    amountFields: INVOICE_AMOUNT,
+  },
+};
+
+/** 合同类型 -> 六向方向兜底(主体锚点缺席时, spec §5 第 2 级)。 */
+export const CONTRACT_TYPE_FLOW_DIRECTION: Readonly<
+  Record<'采购' | '销售', Readonly<Record<FlowFamily, 'in' | 'out'>>>
+> = {
+  采购: { 资金流: 'out', 货物流: 'in', 发票流: 'in' },
+  销售: { 资金流: 'in', 货物流: 'out', 发票流: 'out' },
+};
