@@ -12,7 +12,6 @@ import { useSessions } from './hooks/useSessions';
 import { EvalWorkbenchView } from './components/eval/EvalWorkbenchView';
 import { GraphView } from './components/graph/GraphView';
 import { BindingsView } from './components/bindings/BindingsView';
-import { FlowsView } from './components/flows/FlowsView';
 import { SelfPartyPanel } from './components/parties/SelfPartyPanel';
 import { FavoritesView } from './components/favorites/FavoritesView';
 import { ProjectsView } from './components/projects/ProjectsView';
@@ -127,7 +126,7 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
     if (v === 'bindings') setBindingsFocus(null);
     navigate(v);
   }, [navigate]);
-  // 执行流水页 -> 主体名单页的跳转(主体未配置导致流水为空时的引导)。
+  // 台账执行区块 -> 主体名单页的跳转(主体未配置导致流水为空时的引导)。
   const openParties = useCallback(() => navigate('parties'), [navigate]);
   // 会话切换用 replace：高频操作不灌爆浏览器历史；跨视图跳转用 push。
   const selectSession = useCallback(
@@ -230,8 +229,6 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
         />
       ) : view === 'bindings' ? (
         <BindingsView onOpenInGraph={openInGraph} docFocus={bindingsFocus} onChanged={() => { void filesApi.refresh(); }} />
-      ) : view === 'flows' ? (
-        <FlowsView onOpenParties={openParties} />
       ) : view === 'parties' ? (
         <SelfPartyPanel />
       ) : view === 'favorites' ? (
@@ -241,7 +238,7 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
       ) : view === 'projects' ? (
         <ProjectsView />
       ) : view === 'ledger' ? (
-        <ProjectLedgerView onOpenProjects={() => navigate('projects')} />
+        <ProjectLedgerView onOpenProjects={() => navigate('projects')} onOpenParties={openParties} />
       ) : view === 'eval' ? (
         <EvalWorkbenchView />
       ) : null}

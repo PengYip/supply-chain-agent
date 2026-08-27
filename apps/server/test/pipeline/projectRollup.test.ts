@@ -3,6 +3,7 @@ import { createDb, migrate } from '../../src/pipeline/db/client.js';
 import {
   createProject, upsertProjectMembership, upsertContractLedgerEntry,
   upsertExecutionFlow, addSelfParty, type ProjectMembershipRow,
+  type ExecutionFlowRow,
 } from '../../src/pipeline/db/repositories.js';
 import { buildLedgerEntryFromExtraction, type ContractLedgerEntry } from '../../src/pipeline/contractLedger.js';
 import { buildRollup, rollupProject } from '../../src/pipeline/projectRollup.js';
@@ -53,7 +54,38 @@ function flowSummary(contractNo: string, flowType: string, direction: 'in' | 'ou
     entryCount: 1,
     totalAmount,
     totalQuantityTon,
+    totalMassKg: null,
     lastVoucherDate: null,
+  };
+}
+
+/** 执行流水行 fixture(rollup execution 块输入; 量纲列默认空)。 */
+function flowRow(
+  contractNo: string,
+  flowType: string,
+  direction: 'in' | 'out',
+  extra: Partial<ExecutionFlowRow> = {},
+): ExecutionFlowRow {
+  return {
+    id: `EF-${contractNo}-${flowType}-${direction}-${extra.quantityCanonical ?? 0}`,
+    bindingId: `BD-${contractNo}`,
+    documentId: `D-${contractNo}`,
+    contractNo,
+    flowType,
+    direction,
+    amount: null,
+    quantityTon: null,
+    unit: null,
+    quantityValue: null,
+    quantityDimension: null,
+    quantityCanonical: null,
+    docType: '发货单',
+    voucherDate: null,
+    confidence: 1,
+    createdBy: 'u1',
+    userId: null,
+    createdAt: '2026-08-27T00:00:00.000Z',
+    ...extra,
   };
 }
 
@@ -80,6 +112,7 @@ describe('buildRollup (纯函数)', () => {
       ],
       ledgers,
       flowSummaries: [],
+      flowRows: new Map(),
       selfPartyNames: selfNames,
     });
     expect(r.metrics.salesAmount).toBe(220);
@@ -109,6 +142,7 @@ describe('buildRollup (纯函数)', () => {
         // 多合同同向求和:
         flowSummary('HT-S2', '发票流', 'out', 20),
       ],
+      flowRows: new Map(),
       selfPartyNames: selfNames,
     });
     expect(r.flows.发票流).toEqual({ in: 50, out: 120 });
@@ -127,6 +161,7 @@ describe('buildRollup (纯函数)', () => {
         flowSummary('HT-S1', '货物流', 'in', null, 100),
         flowSummary('HT-P1', '货物流', 'in', null, 30),
       ],
+      flowRows: new Map(),
       selfPartyNames: selfNames,
     });
     expect(r.flows.货物流).toEqual({ inTon: 130, outTon: 100 });
@@ -139,6 +174,7 @@ describe('buildRollup (纯函数)', () => {
         flowSummary('HT-S1', '货物流', 'out', null, 100),
         flowSummary('HT-S1', '货物流', 'in', null, 100),
       ],
+      flowRows: new Map(),
       selfPartyNames: selfNames,
     });
     expect(balanced.checks.some((c) => c.code === 'qty_gap')).toBe(false);
@@ -150,6 +186,7 @@ describe('buildRollup (纯函数)', () => {
       memberships: [membership('HT-P1', '采购', 'confirmed')],
       ledgers: new Map([['HT-P1', ledger('HT-P1', { 甲方: '我方贸易', 乙方: '某供应商', 金额: 80 })]]),
       flowSummaries: [],
+      flowRows: new Map(),
       selfPartyNames: selfNames,
     });
     expect(r.contracts[0]?.counterparty).toBe('某供应商');
@@ -172,6 +209,7 @@ describe('buildRollup (纯函数)', () => {
         flowSummary('HT-S1', '发票流', 'in', 10),  // 销售合同收进项 -> warn
         flowSummary('HT-P1', '发票流', 'out', 10), // 采购合同开销项 -> warn
       ],
+      flowRows: new Map(),
       selfPartyNames: selfNames,
     });
     const mismatches = mismatch.checks.filter((c) => c.code === 'type_direction_mismatch');
@@ -189,11 +227,52 @@ describe('buildRollup (纯函数)', () => {
         ['HT-N2', ledger('HT-N2', {})],
       ]),
       flowSummaries: [],
+      flowRows: new Map(),
       selfPartyNames: selfNames,
     });
     const amountMissing = missing.checks.filter((c) => c.code === 'amount_missing');
     expect(amountMissing).toHaveLength(2);
     expect(amountMissing.every((c) => c.level === 'warn')).toBe(true);
+  });
+
+  it('execution 块: 有基准 -> basis/progress; 无台账 -> no-contract-basis; summaries 按合同过滤', () => {
+    const ledgers = new Map<string, ContractLedgerEntry | null>([
+      ['HT-S1', ledger('HT-S1', { 金额: 100, 数量: 10000, 单位: '吨' })],
+      ['HT-N1', null],
+    ]);
+    const r = buildRollup({
+      project,
+      memberships: [
+        membership('HT-S1', '销售', 'confirmed'),
+        membership('HT-N1', '采购', 'confirmed'),
+      ],
+      ledgers,
+      flowSummaries: [
+        flowSummary('HT-S1', '货物流', 'out', null, 6000),
+        flowSummary('HT-P1', '资金流', 'out', 30), // 别的合同, 不进 HT-S1.execution.summaries
+      ],
+      flowRows: new Map([
+        ['HT-S1', [flowRow('HT-S1', '货物流', 'out', {
+          quantityTon: 6000,
+          unit: '吨',
+          quantityValue: 6000,
+          quantityDimension: 'mass',
+          quantityCanonical: 6_000_000,
+        })]],
+        ['HT-N1', []],
+      ]),
+      selfPartyNames: selfNames,
+    });
+    const s1 = r.contracts.find((c) => c.contractNo === 'HT-S1')!;
+    expect(s1.execution.flowCount).toBe(1);
+    expect(s1.execution.summaries).toHaveLength(1);
+    expect(s1.execution.summaries[0]?.contractNo).toBe('HT-S1');
+    expect(s1.execution.progress.basis).toEqual({ quantity: 10000, unit: '吨', dimension: 'mass', canonical: 10_000_000 });
+    expect(s1.execution.progress.progress).toBeCloseTo(0.6);
+    const n1 = r.contracts.find((c) => c.contractNo === 'HT-N1')!;
+    expect(n1.execution.flowCount).toBe(0);
+    expect(n1.execution.progress.basis).toBeNull();
+    expect(n1.execution.progress.reason).toBe('no-contract-basis');
   });
 });
 
@@ -242,6 +321,14 @@ describe('rollupProject (in-memory 集成)', () => {
     expect(r?.metrics.receivableOpen).toBe(100 - 60 - 0); // 40
     expect(r?.metrics.payableOpen).toBe(80 - 0 - 40);     // 40
     expect(r?.contracts.find((c) => c.contractNo === 'HT-S1')?.counterparty).toBe('某钢厂');
+    // execution 块: HT-S1 一笔发票流水(无数量基准 -> no-contract-basis); HT-P1 一笔付款
+    const s1 = r?.contracts.find((c) => c.contractNo === 'HT-S1');
+    expect(s1?.execution.flowCount).toBe(1);
+    expect(s1?.execution.summaries).toHaveLength(1);
+    expect(s1?.execution.summaries[0]?.flowType).toBe('发票流');
+    expect(s1?.execution.progress.reason).toBe('no-contract-basis');
+    const p1 = r?.contracts.find((c) => c.contractNo === 'HT-P1');
+    expect(p1?.execution.flowCount).toBe(1);
   });
 
   it('项目不存在 -> null', async () => {

@@ -2,9 +2,10 @@
 // 执行流水 -> 单项目口径的合同面/六向流水/指标/校验。不查 Neo4j —— 报表不依赖图。
 import {
   findProjectByCode, findContractLedgerByNo, listMembershipsByProject,
-  summarizeExecutionFlows, normalizeProjectCode,
-  type ProjectMembershipRow, type ExecutionFlowSummary,
+  summarizeExecutionFlows, listExecutionFlows, normalizeProjectCode,
+  type ProjectMembershipRow, type ExecutionFlowSummary, type ExecutionFlowRow,
 } from './db/repositories.js';
+import { computeExecutionProgress, type ExecutionProgress } from './executionProgress.js';
 import { getEffectiveSelfPartyNames } from './executionFlow.js';
 import { resolveSelfSide } from '../domain/flowDirection.js';
 import type { ContractLedgerEntry } from './contractLedger.js';
@@ -18,6 +19,16 @@ export interface RollupContract {
   amount: number | null;
   currency: string | null;
   counterparty: string | null;
+  /** 合同面执行块(spec 2026-08-27 台账整合): 六向汇总 + 数量口径进度 + 逐笔笔数。 */
+  execution: ContractExecution;
+}
+
+/** 单合同执行块: summaries 只含本合同(形状同 /api/bindings/flows); progress 复用
+ *  computeExecutionProgress(基准=台账 数量+单位, 量纲不一致如实降级)。 */
+export interface ContractExecution {
+  summaries: ExecutionFlowSummary[];
+  progress: ExecutionProgress;
+  flowCount: number;
 }
 
 export interface RollupFlows {
@@ -65,6 +76,8 @@ export function buildRollup(args: {
   memberships: ProjectMembershipRow[];
   ledgers: Map<string, ContractLedgerEntry | null>;
   flowSummaries: ExecutionFlowSummary[];
+  /** 每合同流水行(计算数量口径进度); 空数组 = 无流水。 */
+  flowRows: Map<string, ExecutionFlowRow[]>;
   selfPartyNames: string[];
 }): ProjectRollup {
   const checks: RollupCheck[] = [];
@@ -83,6 +96,7 @@ export function buildRollup(args: {
     const entry = args.ledgers.get(m.contractNo) ?? null;
     const amount = parseAmount(entry?.fields['金额']?.value);
     const currencyRaw = entry?.fields['币种']?.value;
+    const flowRows = args.flowRows.get(m.contractNo) ?? [];
     contracts.push({
       contractNo: m.contractNo,
       displayContractNo: entry?.displayContractNo ?? m.contractNo,
@@ -91,6 +105,11 @@ export function buildRollup(args: {
       amount,
       currency: currencyRaw === undefined ? null : String(currencyRaw),
       counterparty: counterpartyOf(entry, args.selfPartyNames),
+      execution: {
+        summaries: args.flowSummaries.filter((s) => s.contractNo === m.contractNo),
+        progress: computeExecutionProgress(flowRows, entry?.fields ?? null),
+        flowCount: flowRows.length,
+      },
     });
     if (amount === null) {
       checks.push({ level: 'warn', code: 'amount_missing', message: `合同 ${m.contractNo} 无台账金额${entry ? '(金额字段缺失)' : '(台账缺失)'}` });
@@ -155,9 +174,11 @@ export async function rollupProject(
   const memberships = await listMembershipsByProject(ctx, project.code, userId);
   const ledgers = new Map<string, ContractLedgerEntry | null>();
   const flowSummaries: ExecutionFlowSummary[] = [];
+  const flowRows = new Map<string, ExecutionFlowRow[]>();
   for (const m of memberships) {
     if (m.status !== 'confirmed') continue;
     ledgers.set(m.contractNo, await findContractLedgerByNo(ctx, m.contractNo, userId));
+    flowRows.set(m.contractNo, await listExecutionFlows(ctx, m.contractNo, userId));
     flowSummaries.push(...(await summarizeExecutionFlows(ctx, m.contractNo, userId)));
   }
   return buildRollup({
@@ -165,6 +186,7 @@ export async function rollupProject(
     memberships,
     ledgers,
     flowSummaries,
+    flowRows,
     selfPartyNames: await getEffectiveSelfPartyNames(ctx),
   });
 }

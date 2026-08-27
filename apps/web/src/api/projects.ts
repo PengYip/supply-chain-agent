@@ -28,6 +28,22 @@ export interface ProjectMembership {
   graphStatus: { status: string; reason?: string; syncedAt?: string } | null
 }
 
+/** 每合同执行块(与 server ContractExecution 一致; progress 结构见 lib/executionProgress)。 */
+export interface ContractExecutionView {
+  summaries: Array<{
+    contractNo: string
+    flowType: string
+    direction: 'in' | 'out'
+    entryCount: number
+    totalAmount: number | null
+    totalQuantityTon: number | null
+    totalMassKg?: number | null
+    lastVoucherDate: string | null
+  }>
+  progress: import('../lib/executionProgress').ExecutionProgressView
+  flowCount: number
+}
+
 /** GET /api/projects/:code/rollup 响应(与 server ProjectRollup 一致)。 */
 export interface ProjectRollupResp {
   project: { code: string; name: string }
@@ -39,6 +55,7 @@ export interface ProjectRollupResp {
     amount: number | null
     currency: string | null
     counterparty: string | null
+    execution: ContractExecutionView
   }>
   pendingMemberships: Array<{ contractNo: string; role: string | null }>
   flows: {
