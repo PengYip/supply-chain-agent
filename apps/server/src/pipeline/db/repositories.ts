@@ -127,6 +127,9 @@ import {
   ensureTemplateTypePg,
   ensureEdgeRulePg,
   bumpTemplateVersionPg,
+  listAllEdgeRulesPg,
+  listTemplateTypesManagedPg,
+  insertTemplateEdgeRulePg,
   migrateDocTypeAliasesPg,
 } from './postgres-repositories.js';
 
@@ -3505,6 +3508,51 @@ export async function bumpTemplateVersion(
     'INSERT INTO template_versions (version, changed_by, change_summary) VALUES (?, ?, ?)',
   ).run(next, input.changedBy, input.changeSummary);
   return next;
+}
+
+// ---- 模板管理 REST 读/存储面(Task 3 /api/templates) --------------------------
+
+/** 全量边规则行(GET /api/templates/rules): 含登记不启用(is_active=0)行, 幂等种子与管理视图共用读面。 */
+export async function listAllEdgeRules(ctx: DbContext): Promise<TemplateEdgeRuleRow[]> {
+  if (ctx.backend === 'postgres') return listAllEdgeRulesPg(ctx);
+  const rows = ctx.sqlite.prepare(
+    `SELECT ${TEMPLATE_RULE_COLS} FROM template_edge_rules ORDER BY id`,
+  ).all() as Record<string, unknown>[];
+  return rows.map(templateRuleFromRow);
+}
+
+/** 类型行 + 管理戳(managed_at/managed_by), GET /api/templates/types 的"含 managed 元数据"读面。 */
+export interface TemplateTypeManageMeta { managedAt: string | null; managedBy: string | null }
+
+export async function listTemplateTypesManaged(
+  ctx: DbContext,
+): Promise<Array<TemplateTypeRow & TemplateTypeManageMeta>> {
+  if (ctx.backend === 'postgres') return listTemplateTypesManagedPg(ctx);
+  const rows = ctx.sqlite.prepare(
+    `SELECT ${TEMPLATE_TYPE_COLS}, managed_at, managed_by FROM template_types ORDER BY kind, name`,
+  ).all() as Record<string, unknown>[];
+  return rows.map((r) => ({
+    ...templateTypeFromRow(r),
+    managedAt: r.managed_at == null ? null : String(r.managed_at),
+    managedBy: r.managed_by == null ? null : String(r.managed_by),
+  }));
+}
+
+/**
+ * 新建边规则(POST /api/templates/rules 存储面, Task 3): 登记先行(spec §3.2),
+ * 允许悬空 source/target 引用; 创建即打管理戳(managed-wins => boot seed 不再覆写)。
+ * 版本审计由调用方经 bumpTemplateVersion 记账(changeSummary `rule.create <id>`)。
+ */
+export async function insertTemplateEdgeRule(
+  ctx: DbContext, input: { id: string; sourceTypeId: string; targetTypeId?: string; edgeType: string; allowedVocab: string[]; isActive?: boolean; managedBy: string },
+): Promise<void> {
+  if (ctx.backend === 'postgres') return insertTemplateEdgeRulePg(ctx, input);
+  ctx.sqlite.prepare(
+    `INSERT INTO template_edge_rules
+       (id, source_type_id, target_type_id, edge_type, allowed_vocab, is_active, anchor_weights, managed_at, managed_by)
+     VALUES (?, ?, ?, ?, ?, ?, NULL, datetime('now'), ?)`,
+  ).run(input.id, input.sourceTypeId, input.targetTypeId ?? '', input.edgeType,
+    JSON.stringify(input.allowedVocab), input.isActive === false ? 0 : 1, input.managedBy);
 }
 
 /** 存量数据幂等迁移(spec §3.1): 提单/装箱单并入货转单(别名)。重复执行无副作用。 */

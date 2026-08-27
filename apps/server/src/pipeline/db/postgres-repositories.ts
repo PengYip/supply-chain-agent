@@ -68,6 +68,7 @@ import type {
   QuotaRow,
   QuotaStatus,
   TemplateTypeRow,
+  TemplateTypeManageMeta,
   TemplateAnchorWeights,
   TemplateEdgeRuleRow,
 } from './repositories.js';
@@ -2671,6 +2672,58 @@ export async function bumpTemplateVersionPg(
      RETURNING version`,
     [input.changedBy, input.changeSummary]);
   return Number((rows[0] as Record<string, unknown>).version);
+}
+
+/** 全量边规则行 pg twin(含登记不启用行; 与 listActiveEdgeRulesPg 同行映射)。 */
+export async function listAllEdgeRulesPg(ctx: PostgresDbContext): Promise<TemplateEdgeRuleRow[]> {
+  const { rows } = await ctx.pool.query(
+    'SELECT id, source_type_id, target_type_id, edge_type, allowed_vocab, anchor_weights, is_active, template_version FROM template_edge_rules ORDER BY id');
+  return rows.map((r: Record<string, unknown>) => {
+    let allowedVocab: string[] = [];
+    try { allowedVocab = typeof r.allowed_vocab === 'string' ? JSON.parse(r.allowed_vocab) as string[] : (r.allowed_vocab ?? []) as string[]; } catch { /* 损坏按空 */ }
+    let anchorWeights: TemplateAnchorWeights | null = null;
+    if (r.anchor_weights) {
+      try { anchorWeights = typeof r.anchor_weights === 'string' ? JSON.parse(r.anchor_weights) as TemplateAnchorWeights : r.anchor_weights as TemplateAnchorWeights; } catch { /* 忽略 */ }
+    }
+    return {
+      id: String(r.id), sourceTypeId: String(r.source_type_id),
+      targetTypeId: String(r.target_type_id ?? ''), edgeType: String(r.edge_type),
+      allowedVocab, anchorWeights, isActive: Number(r.is_active) === 1, templateVersion: Number(r.template_version ?? 1),
+    };
+  });
+}
+
+/** 类型行 + 管理戳 pg twin(GET /api/templates/types 元数据读面)。 */
+export async function listTemplateTypesManagedPg(
+  ctx: PostgresDbContext,
+): Promise<Array<TemplateTypeRow & TemplateTypeManageMeta>> {
+  const { rows } = await ctx.pool.query(
+    'SELECT id, kind, name, parent_id, props, is_active, managed_at, managed_by FROM template_types ORDER BY kind, name');
+  return rows.map((r: Record<string, unknown>) => {
+    let props: Record<string, unknown> = {};
+    try { props = typeof r.props === 'string' ? JSON.parse(r.props) as Record<string, unknown> : (r.props ?? {}) as Record<string, unknown>; } catch { /* 损坏按空 */ }
+    return {
+      id: String(r.id), kind: (r.kind === 'contract_type' ? 'contract_type' : 'doc_type'),
+      name: String(r.name), parentId: r.parent_id ? String(r.parent_id) : null,
+      props, isActive: Number(r.is_active) === 1,
+      managedAt: r.managed_at == null ? null : String(r.managed_at),
+      managedBy: r.managed_by == null ? null : String(r.managed_by),
+    };
+  });
+}
+
+/**
+ * 新建边规则存储面 pg twin(登记先行, 创建即打管理戳)。版本审计由调用方记账。
+ */
+export async function insertTemplateEdgeRulePg(
+  ctx: PostgresDbContext, input: { id: string; sourceTypeId: string; targetTypeId?: string; edgeType: string; allowedVocab: string[]; isActive?: boolean; managedBy: string },
+): Promise<void> {
+  await ctx.pool.query(
+    `INSERT INTO template_edge_rules
+       (id, source_type_id, target_type_id, edge_type, allowed_vocab, is_active, anchor_weights, managed_at, managed_by)
+     VALUES ($1, $2, $3, $4, $5, $6, NULL, now(), $7)`,
+    [input.id, input.sourceTypeId, input.targetTypeId ?? '', input.edgeType,
+     JSON.stringify(input.allowedVocab), input.isActive === false ? 0 : 1, input.managedBy]);
 }
 
 /** 存量数据幂等迁移 Pg 版: 提单/装箱单 -> 货转单(参数化 UPDATE, 重复执行无副作用)。 */
