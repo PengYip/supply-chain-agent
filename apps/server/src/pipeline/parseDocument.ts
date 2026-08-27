@@ -22,10 +22,15 @@ export interface ParseDocumentInput {
 export async function parseDocument(opts: ParseDocumentInput): Promise<BlockModel> {
   const { sourcePath, docType, docId, modality } = opts;
 
+  const t0 = performance.now();
   let blockModel =
     modality === 'scanned'
       ? await ingestWithMinerU(sourcePath, docType, docId)
       : await ingestWithDigital(sourcePath, docType, docId);
+  console.log(
+    `[perf-parse] ${docId} ${modality === 'scanned' ? 'ocr' : 'digital'} `
+    + `${Math.round(performance.now() - t0)}ms ${blockModel.blocks.length} blocks`,
+  );
 
   // Digital PDFs with no text layer: retry as scanned via MinerU OCR.
   if (
@@ -34,11 +39,16 @@ export async function parseDocument(opts: ParseDocumentInput): Promise<BlockMode
     /\.pdf$/i.test(sourcePath)
   ) {
     console.warn('[parse] digital yielded 0 blocks for PDF; retrying as scanned via MinerU OCR');
+    const ocrT0 = performance.now();
     try {
       const mineruModel = await ingestWithMinerU(sourcePath, docType, docId);
+      console.log(
+        `[perf-parse] ${docId} ocr-fallback ${Math.round(performance.now() - ocrT0)}ms ${mineruModel.blocks.length} blocks`,
+      );
       if (mineruModel.blocks.length > 0) blockModel = mineruModel;
     } catch (e) {
       console.warn('[parse] MinerU OCR fallback failed:', (e as Error).message);
+      console.log(`[perf-parse] ${docId} ocr-fallback-failed ${Math.round(performance.now() - ocrT0)}ms`);
     }
   }
 
