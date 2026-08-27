@@ -5,12 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && tsc -p tsconfig.scripts.json",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "eval": "tsx eval/run.ts",
-    "eval:agent": "tsx eval/agent/run.ts"
+    "eval:agent": "tsx eval/agent/run.ts",
+    "backfill:embeddings": "tsx scripts/backfillEmbeddings.ts"
   },
   "dependencies": {
     "@ai-sdk/deepseek": "^2.0.52",

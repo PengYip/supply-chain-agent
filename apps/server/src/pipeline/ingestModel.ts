@@ -38,18 +38,37 @@ export function getIngestModel(): LanguageModel {
   return ingestModel;
 }
 
-/** Match the agent's embedder choice so parse gives docs the same vector treatment. */
+/**
+ * Env-driven embedder priority chain -- SINGLE SOURCE OF TRUTH (agent.ts,
+ * eval and backfill all import this): SiliconFlow hosted bge-m3
+ * (SILICONFLOW_API_KEY, GPU-free) -> Ollama local (OLLAMA_BASE_URL) ->
+ * deterministic hash embedder (offline, NOT semantically meaningful).
+ *
+ * Reads process.env at call time (same convention as defaultReranker) so a
+ * deployment env change takes effect without a module reload.
+ */
 export function defaultEmbedder(): Embedder {
-  if (env.SILICONFLOW_API_KEY) {
+  if (process.env.SILICONFLOW_API_KEY) {
     return new OpenAICompatEmbedder({
-      apiKey: env.SILICONFLOW_API_KEY,
-      baseUrl: env.SILICONFLOW_BASE_URL,
-      model: env.SILICONFLOW_EMBED_MODEL,
+      apiKey: process.env.SILICONFLOW_API_KEY,
+      baseUrl: process.env.SILICONFLOW_BASE_URL,
+      model: process.env.SILICONFLOW_EMBED_MODEL,
     });
   }
-  return env.OLLAMA_BASE_URL
-    ? new OllamaEmbedder({ baseUrl: env.OLLAMA_BASE_URL, model: env.OLLAMA_EMBED_MODEL })
-    : new DeterministicEmbedder();
+  if (process.env.OLLAMA_BASE_URL) {
+    return new OllamaEmbedder({
+      baseUrl: process.env.OLLAMA_BASE_URL,
+      model: process.env.OLLAMA_EMBED_MODEL,
+    });
+  }
+  if (process.env.NODE_ENV === 'production') {
+    console.warn(
+      '[defaultEmbedder] No SILICONFLOW_API_KEY (and no OLLAMA_BASE_URL) configured: '
+        + 'falling back to DeterministicEmbedder, whose vectors are hash-based '
+        + 'and NOT semantically meaningful.',
+    );
+  }
+  return new DeterministicEmbedder();
 }
 
 /** The model-backed dep bundle processDocument / ensureDocumentParsed consume. */

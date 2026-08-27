@@ -46,6 +46,7 @@ Run from repo root unless noted.
 | Single test file | `npm test --workspace apps/server -- test/harness/foo.test.ts` |
 | Tests watch mode | `npm run test:watch --workspace apps/server` |
 | Eval harness | `npm run eval --workspace apps/server` (tsx eval/run.ts) |
+| Backfill embeddings | `npm run backfill:embeddings --workspace apps/server -- --dry-run` first, then without `--dry-run`; on ubuntu-server prepend the nvm PATH export (`export PATH=$HOME/.nvm/versions/node/v24.19.0/bin:$PATH`) |
 
 Required order before claiming done: **build → lint → test** (matches CI).
 

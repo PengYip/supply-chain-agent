@@ -145,12 +145,108 @@ export class OllamaEmbedder implements Embedder {
   }
 }
 
+// ---- Shared OpenAI-compatible HTTP transport --------------------------------
+// Post-with-retry used by both the embedder and the reranker clients below.
+
+/** Backoff schedule between retries (attempt 0 fail -> 2s, attempt 1 -> 4s). */
+const RETRY_BACKOFFS_MS = [2_000, 4_000];
+/** Retry-After waits are honored but never exceed this. */
+const RETRY_AFTER_CAP_MS = 15_000;
+/** Initial attempt + max 2 retries. */
+const MAX_HTTP_ATTEMPTS = 3;
+
+/** Transient HTTP failure worth retrying (429 / 5xx). */
+class RetryableHttpError extends Error {
+  constructor(
+    message: string,
+    readonly retryAfterMs: number | null,
+  ) {
+    super(message);
+  }
+}
+
+/** Fetch-level network failure (DNS/socket/connection reset) -- transient. */
+class NetworkHttpError extends Error {}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function retryAfterMsOf(res: Response): number | null {
+  const raw = res.headers.get('retry-after');
+  if (!raw) return null;
+  const secs = Number(raw);
+  let ms = Number.isFinite(secs) ? secs * 1000 : Date.parse(raw) - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  return Math.min(Math.round(ms), RETRY_AFTER_CAP_MS);
+}
+
+function isTimeout(err: unknown, signal: AbortSignal): boolean {
+  return signal.aborted || (err instanceof Error && err.name === 'TimeoutError');
+}
+
+interface PostJsonOpts {
+  url: string;
+  init: RequestInit;
+  timeoutMs: number;
+  /** Call identity for errors, e.g. 'OpenAICompatEmbedder: /v1/embeddings'. */
+  errorPrefix: string;
+  /** Extra context appended after status text, e.g. 'for model BAAI/bge-m3'. */
+  errorSuffix?: string;
+}
+
+/**
+ * POST JSON with a per-attempt AbortSignal.timeout, then classify-and-retry:
+ * up to MAX_HTTP_ATTEMPTS on HTTP 429 / 5xx and network errors, waiting
+ * Retry-After (capped at 15s) when present, else exponential 2s -> 4s.
+ * Non-retryable 4xx and timeouts fail fast; timeouts surface an error naming
+ * the call and the ms budget.
+ */
+export async function postJsonWithRetries(opts: PostJsonOpts): Promise<Response> {
+  const suffix = opts.errorSuffix ? ` ${opts.errorSuffix}` : '';
+  let lastError: unknown;
+  for (let attempt = 0; ; attempt++) {
+    const signal = AbortSignal.timeout(opts.timeoutMs);
+    try {
+      const res = await fetch(opts.url, { ...opts.init, signal });
+      if (res.ok) return res;
+      const message = `${opts.errorPrefix} failed (${res.status} ${res.statusText})${suffix}`;
+      if (res.status === 429 || res.status >= 500) {
+        throw new RetryableHttpError(message, retryAfterMsOf(res));
+      }
+      throw new Error(message);
+    } catch (caught) {
+      if (isTimeout(caught, signal)) {
+        throw new Error(`${opts.errorPrefix} timed out after ${opts.timeoutMs}ms`);
+      }
+      // undici surfaces connect/socket failures as TypeError: normalize them so
+      // every transient failure class is uniformly identifiable.
+      const err: unknown =
+        caught instanceof TypeError
+          ? new NetworkHttpError(`${opts.errorPrefix}: network error: ${caught.message}`)
+          : caught;
+      lastError = err;
+      const retryable = err instanceof RetryableHttpError || err instanceof NetworkHttpError;
+      if (!retryable || attempt >= MAX_HTTP_ATTEMPTS - 1) throw lastError;
+      const waitMs =
+        err instanceof RetryableHttpError && err.retryAfterMs !== null
+          ? err.retryAfterMs
+          : RETRY_BACKOFFS_MS[Math.min(attempt, RETRY_BACKOFFS_MS.length - 1)] ?? RETRY_BACKOFFS_MS[0]!;
+      await sleep(waitMs);
+    }
+  }
+}
+
 // ---- OpenAICompatEmbedder (hosted: SiliconFlow etc.) ------------------------
 
 export interface OpenAICompatEmbedderOptions {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  /** Per-request timeout in ms (default 10s). */
+  timeoutMs?: number;
+  /** Expected vector dimensionality (default 1024); mismatch fails fast. */
+  dim?: number;
 }
 
 /**
@@ -158,24 +254,34 @@ export interface OpenAICompatEmbedderOptions {
  * the deployment target; also works with OpenAI/DashScope-compatible hosts).
  *
  * bge-m3 on SiliconFlow returns exactly 1024 dims, matching EMBED_DIM and the
- * vec0 table — verified live 2026-08-27 (batch of 3, CJK + ASCII).
+ * vec0 table — verified live 2026-08-27 (batch of 3, CJK + ASCII). Returned
+ * vectors are dimension-checked against `dim` (default EMBED_DIM) fail-fast.
+ *
+ * Transport: postJsonWithRetries (10s default timeout; retries 429/5xx/network).
+ *
+ * kind embeds the model so changing SILICONFLOW_EMBED_MODEL invalidates stored
+ * vectorization modes (backfill detects docs embedded under a stale model).
  *
  * Throws a CLEAR configuration error when no API key is configured, mirroring
  * OllamaEmbedder. Never invoked in the test path (tests inject
  * DeterministicEmbedder or mock fetch).
  */
 export class OpenAICompatEmbedder implements Embedder {
-  readonly dim: number = EMBED_DIM;
-  readonly kind = 'openai-compat';
+  readonly dim: number;
+  readonly kind: string;
   private readonly apiKey: string | undefined;
   private readonly baseUrl: string;
   private readonly model: string;
+  private readonly timeoutMs: number;
 
   constructor(opts: OpenAICompatEmbedderOptions = {}) {
+    this.dim = opts.dim ?? EMBED_DIM;
     this.apiKey = opts.apiKey ?? process.env.SILICONFLOW_API_KEY;
     this.baseUrl = (opts.baseUrl ?? process.env.SILICONFLOW_BASE_URL ?? 'https://api.siliconflow.cn')
       .replace(/\/+$/, '');
     this.model = opts.model ?? process.env.SILICONFLOW_EMBED_MODEL ?? 'BAAI/bge-m3';
+    this.kind = `openai-compat:${this.model}`;
+    this.timeoutMs = opts.timeoutMs ?? 10_000;
   }
 
   async embed(texts: string[]): Promise<number[][]> {
@@ -186,20 +292,20 @@ export class OpenAICompatEmbedder implements Embedder {
           '/ BAAI/bge-m3) to enable vector recall, or inject DeterministicEmbedder for offline use.',
       );
     }
-    const res = await fetch(`${this.baseUrl}/v1/embeddings`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${this.apiKey}`,
+    const res = await postJsonWithRetries({
+      url: `${this.baseUrl}/v1/embeddings`,
+      init: {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({ model: this.model, input: texts }),
       },
-      body: JSON.stringify({ model: this.model, input: texts }),
+      timeoutMs: this.timeoutMs,
+      errorPrefix: 'OpenAICompatEmbedder: /v1/embeddings',
+      errorSuffix: `for model ${this.model}`,
     });
-    if (!res.ok) {
-      throw new Error(
-        `OpenAICompatEmbedder: /v1/embeddings failed (${res.status} ${res.statusText}) `
-        + `for model ${this.model}`,
-      );
-    }
     // OpenAI shape: { data: [{ embedding: number[], index: number }], usage? }
     const data = (await res.json()) as { data?: Array<{ embedding?: number[]; index?: number }> };
     const rows = data.data ?? [];
@@ -207,8 +313,18 @@ export class OpenAICompatEmbedder implements Embedder {
       throw new Error('OpenAICompatEmbedder: unexpected /v1/embeddings response shape');
     }
     // OpenAI guarantees order-aligned data but sort by index defensively.
-    return [...rows]
+    const vectors = [...rows]
       .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
       .map((r) => r.embedding!);
+    const badRow = vectors.findIndex((v) => v.length !== this.dim);
+    if (badRow >= 0) {
+      const got = vectors[badRow]?.length;
+      throw new Error(
+        `OpenAICompatEmbedder: dimension mismatch for model ${this.model} `
+        + `(expected ${this.dim}, got ${got} at row ${badRow}). `
+        + 'Check that the model matches the vector table dimension.',
+      );
+    }
+    return vectors;
   }
 }

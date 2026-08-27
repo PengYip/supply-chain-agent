@@ -12,6 +12,10 @@
 //
 // Enablement: constructed only when SILICONFLOW_API_KEY is set (same key as
 // the embedding endpoint); CI/tests stay offline via mock fetch or no key.
+// Transport is postJsonWithRetries (shared with embedder.ts): 20s default
+// timeout, retries on 429/5xx/network, Retry-After honored (capped at 15s).
+
+import { postJsonWithRetries } from './embedder.js';
 
 export interface RerankResult {
   /** Zero-based index into the caller's documents array. */
@@ -29,6 +33,8 @@ export interface OpenAICompatRerankerOptions {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  /** Per-request timeout in ms (default 20s). */
+  timeoutMs?: number;
 }
 
 /** OpenAI/Cohere-compatible /v1/rerank client (SiliconFlow). */
@@ -37,6 +43,7 @@ export class OpenAICompatReranker implements Reranker {
   private readonly apiKey: string | undefined;
   private readonly baseUrl: string;
   private readonly model: string;
+  private readonly timeoutMs: number;
 
   constructor(opts: OpenAICompatRerankerOptions = {}) {
     this.apiKey = opts.apiKey ?? process.env.SILICONFLOW_API_KEY;
@@ -45,6 +52,7 @@ export class OpenAICompatReranker implements Reranker {
     ).replace(/\/+$/, '');
     this.model = opts.model ?? process.env.SILICONFLOW_RERANK_MODEL ?? 'BAAI/bge-reranker-v2-m3';
     this.kind = `openai-compat-rerank:${this.model}`;
+    this.timeoutMs = opts.timeoutMs ?? 20_000;
   }
 
   async rerank(query: string, documents: string[], topN?: number): Promise<RerankResult[]> {
@@ -54,25 +62,25 @@ export class OpenAICompatReranker implements Reranker {
       );
     }
     if (documents.length === 0) return [];
-    const res = await fetch(`${this.baseUrl}/v1/rerank`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${this.apiKey}`,
+    const res = await postJsonWithRetries({
+      url: `${this.baseUrl}/v1/rerank`,
+      init: {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          query,
+          documents,
+          ...(topN !== undefined ? { top_n: topN } : {}),
+        }),
       },
-      body: JSON.stringify({
-        model: this.model,
-        query,
-        documents,
-        ...(topN !== undefined ? { top_n: topN } : {}),
-      }),
+      timeoutMs: this.timeoutMs,
+      errorPrefix: 'OpenAICompatReranker: /v1/rerank',
+      errorSuffix: `for model ${this.model}`,
     });
-    if (!res.ok) {
-      throw new Error(
-        `OpenAICompatReranker: /v1/rerank failed (${res.status} ${res.statusText}) `
-        + `for model ${this.model}`,
-      );
-    }
     const data = (await res.json()) as {
       results?: Array<{ index?: number; relevance_score?: number }>;
     };
