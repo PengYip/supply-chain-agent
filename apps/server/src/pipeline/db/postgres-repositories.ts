@@ -942,8 +942,10 @@ export async function saveChunkVectorsPg(
   rows: VectorRow[],
 ): Promise<number> {
   if (rows.length === 0) return 0;
-  // One UPDATE per row inside an implicit transaction (Promise.all would race on
-  // the same pool; sequential awaits are safe and ingest has few chunks).
+  // One autocommit UPDATE per row -- there is NO wrapping transaction, so a
+  // failure mid-loop leaves earlier rows updated and later ones untouched.
+  // Promise.all would race on the same pool; sequential awaits are safe and
+  // ingest has few chunks.
   let written = 0;
   for (const r of rows) {
     const res = await ctx.pool.query(
