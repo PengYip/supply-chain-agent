@@ -55,6 +55,8 @@ import type {
    ExecutionFlowRow,
    ExecutionFlowSummary,
    ConfirmedBindingRef,
+   SettlementRecordInput,
+   SettlementRecordRow,
   SelfPartyRow,
   DocumentSourceRow,
   ProjectRow,
@@ -2750,4 +2752,92 @@ export async function migrateDocTypeAliasesPg(ctx: PostgresDbContext): Promise<n
     }
   }
   return total;
+}
+
+// ---- 结算台账 pg twin(spec 2026-08-27 §15) ------------------------------------
+
+export async function insertSettlementRecordPg(
+  ctx: PostgresDbContext,
+  input: SettlementRecordInput,
+  userId?: string,
+): Promise<string> {
+  const id = rid('SR');
+  await ctx.pool.query(
+    `INSERT INTO settlement_records
+       (id, contract_no, contract_ledger_id, settled_quantity, quantity_unit, base_price, currency,
+        total_amount, adjustments, basis_flow_ids, basis_extraction_ids, notes, status, confirmed_by,
+        created_by, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'confirmed', $13, $14, $15)`,
+    [
+      id,
+      input.contractNo,
+      input.contractLedgerId,
+      input.settledQuantity,
+      input.quantityUnit,
+      input.basePrice,
+      input.currency,
+      input.totalAmount,
+      JSON.stringify(input.adjustments),
+      JSON.stringify(input.basisFlowIds),
+      JSON.stringify(input.basisExtractionIds),
+      input.notes,
+      input.createdBy,
+      input.createdBy,
+      effectiveUserId(userId),
+    ],
+  );
+  return id;
+}
+
+function settlementRowFromPg(r: Record<string, unknown>): SettlementRecordRow {
+  const parse = (v: unknown, fallback: unknown): unknown => {
+    if (typeof v === 'string') {
+      try {
+        return JSON.parse(v);
+      } catch {
+        return fallback;
+      }
+    }
+    return v ?? fallback;
+  };
+  return {
+    id: String(r.id),
+    contractNo: String(r.contract_no),
+    contractLedgerId: r.contract_ledger_id == null ? null : String(r.contract_ledger_id),
+    settledQuantity: Number(r.settled_quantity),
+    quantityUnit: r.quantity_unit == null ? null : String(r.quantity_unit),
+    basePrice: r.base_price == null ? null : Number(r.base_price),
+    currency: r.currency == null ? null : String(r.currency),
+    totalAmount: Number(r.total_amount),
+    adjustments: parse(r.adjustments, []) as SettlementRecordRow['adjustments'],
+    basisFlowIds: parse(r.basis_flow_ids, []) as string[],
+    basisExtractionIds: parse(r.basis_extraction_ids, []) as string[],
+    notes: r.notes == null ? null : String(r.notes),
+    status: String(r.status),
+    confirmedBy: r.confirmed_by == null ? null : String(r.confirmed_by),
+    createdBy: String(r.created_by),
+    userId: r.user_id == null ? null : String(r.user_id),
+    createdAt: r.created_at == null ? '' : String(r.created_at),
+  };
+}
+
+/** 某合同的结算记录(created_at DESC, 最新在前), pg twin。 */
+export async function listSettlementRecordsPg(
+  ctx: PostgresDbContext,
+  contractNo: string,
+  userId?: string,
+): Promise<SettlementRecordRow[]> {
+  const uid = effectiveUserId(userId);
+  const res = uid
+    ? await ctx.pool.query(
+        `SELECT * FROM settlement_records
+         WHERE contract_no = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)
+         ORDER BY created_at DESC, id DESC`,
+        [contractNo, uid],
+      )
+    : await ctx.pool.query(
+        `SELECT * FROM settlement_records WHERE contract_no = $1 ORDER BY created_at DESC, id DESC`,
+        [contractNo],
+      );
+  return (res.rows as Array<Record<string, unknown>>).map(settlementRowFromPg);
 }

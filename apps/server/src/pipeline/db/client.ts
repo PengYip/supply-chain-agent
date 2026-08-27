@@ -266,6 +266,31 @@ export function migrate(sqlite: Database.Database): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_flows_binding ON execution_flows(binding_id, user_id);
     CREATE INDEX IF NOT EXISTS idx_execution_flows_contract ON execution_flows(contract_no, user_id);
 
+    -- Settlement records (spec 2026-08-27 §15 结算引擎): LLM 依据合同条款+数量/质量
+    -- 凭证计算结算, 经 L2 人工确认(confirm_settlement)后落台账的金额锚点行。
+    -- 金额时点分层: 发货单含税总价=暂估, 本表=结算, 发票/付款流水=资金事实。
+    -- adjustments/basis_* 为 JSON(奖罚明细/流水与抽取行溯源), 不拆独立表(YAGNI)。
+    CREATE TABLE IF NOT EXISTS settlement_records (
+      id TEXT PRIMARY KEY,
+      contract_no TEXT NOT NULL,
+      contract_ledger_id TEXT,
+      settled_quantity REAL NOT NULL,
+      quantity_unit TEXT,
+      base_price REAL,
+      currency TEXT,
+      total_amount REAL NOT NULL,
+      adjustments TEXT NOT NULL DEFAULT '[]',
+      basis_flow_ids TEXT NOT NULL DEFAULT '[]',
+      basis_extraction_ids TEXT NOT NULL DEFAULT '[]',
+      notes TEXT,
+      status TEXT NOT NULL DEFAULT 'confirmed',
+      confirmed_by TEXT,
+      created_by TEXT NOT NULL,
+      user_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_settlement_records_contract ON settlement_records(contract_no, user_id);
+
     -- Graph links (spec 2026-08-25 方案A §3.3/§6): correlates(背靠背购销对应)与
     -- relates(项目级关联)的提案-确认 SSOT。图上的边只是本表确认后的投影。
     -- triple 唯一(kind+src_key+dst_key+user_id)支撑幂等 upsert; props 为 JSON
@@ -722,6 +747,28 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     // Unit as its own column (grafted from CodeX-2): bare '数量' fields carry no
     // unit semantics, so unit stays NULL rather than being guessed.
     `ALTER TABLE execution_flows ADD COLUMN IF NOT EXISTS unit TEXT`,
+    // Settlement records (spec 2026-08-27 §15): mirror of the SQLite
+    // settlement_records. LLM 计算 -> L2 人工确认 -> 结算锚点落账。
+    `CREATE TABLE IF NOT EXISTS settlement_records (
+       id TEXT PRIMARY KEY,
+       contract_no TEXT NOT NULL,
+       contract_ledger_id TEXT,
+       settled_quantity double precision NOT NULL,
+       quantity_unit TEXT,
+       base_price double precision,
+       currency TEXT,
+       total_amount double precision NOT NULL,
+       adjustments TEXT NOT NULL DEFAULT '[]',
+       basis_flow_ids TEXT NOT NULL DEFAULT '[]',
+       basis_extraction_ids TEXT NOT NULL DEFAULT '[]',
+       notes TEXT,
+       status TEXT NOT NULL DEFAULT 'confirmed',
+       confirmed_by TEXT,
+       created_by TEXT NOT NULL,
+       user_id TEXT,
+       created_at timestamptz NOT NULL DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_settlement_records_contract ON settlement_records(contract_no, user_id)`,
     // 自主体名单(Task A): pg mirror of the SQLite self_parties. name 为原始名
     // (PK), created_by 审计, created_at timestamptz。租户全局, 无 user_id。
     `CREATE TABLE IF NOT EXISTS self_parties (

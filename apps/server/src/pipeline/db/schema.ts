@@ -178,6 +178,37 @@ export const executionFlows = sqliteTable(
 );
 
 /**
+ * 结算台账(settlement_records, spec 2026-08-27 §15): LLM 依据合同条款+数量/质量
+ * 凭证计算结算, L2 人工确认后落账的金额锚点。adjustments/basis_* 为 JSON 文本
+ * (奖罚明细/流水与抽取行溯源), 与本文件 JSON-in-TEXT 惯例一致。
+ */
+export const settlementRecords = sqliteTable(
+  'settlement_records',
+  {
+    id: text('id').primaryKey(),
+    contractNo: text('contract_no').notNull(),
+    contractLedgerId: text('contract_ledger_id'),
+    settledQuantity: real('settled_quantity').notNull(),
+    quantityUnit: text('quantity_unit'),
+    basePrice: real('base_price'),
+    currency: text('currency'),
+    totalAmount: real('total_amount').notNull(),
+    adjustments: text('adjustments').notNull().default('[]'), // JSON [{label, amount}]
+    basisFlowIds: text('basis_flow_ids').notNull().default('[]'), // JSON string[]
+    basisExtractionIds: text('basis_extraction_ids').notNull().default('[]'), // JSON string[]
+    notes: text('notes'),
+    status: text('status').notNull().default('confirmed'),
+    confirmedBy: text('confirmed_by'),
+    createdBy: text('created_by').notNull(),
+    userId: text('user_id'),
+    createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  },
+  (t) => ({
+    contractIdx: index('idx_settlement_records_contract').on(t.contractNo, t.userId),
+  }),
+);
+
+/**
  * Graph links(spec 2026-08-25 方案A §3.3/§6): correlates(背靠背购销对应)与
  * relates(项目级关联)的提案-确认 SSOT。图上的边只是确认后的投影。triple 唯一
  * (kind+src_key+dst_key+user_id)支撑幂等 upsert; props 为 JSON 自由属性。

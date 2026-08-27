@@ -338,9 +338,12 @@ export function buildQueryExecutionFlowsTool(deps: QueryFlowsToolDeps) {
   return tool({
     description:
       '查询某合同的执行流水六向汇总(收款/付款/收货/发货/收票/开票)与逐笔明细, 每笔可回溯凭证文档; ' +
-      '另附 executionProgress 执行进度块(基准=台账合同数量+单位, 量纲不一致时如实说明).' +
+      '另附 executionProgress 执行进度块(基准=台账合同数量+单位, 量纲不一致时如实说明; ' +
+      '同批货的预告凭证(发货单/派船通知单)与实重凭证(轨道衡/磅单/收货单)不重复累计, 取 max(实重, 预告), ' +
+      '分层明细在 delivered.nodes).' +
       '用途: 用户问"这个合同收/付了多少钱""货发了多少""开了多少票""合同执行到什么程度"时调用, ' +
-      '输出按流向汇总的执行情况与每笔流水的凭证出处。',
+      '输出按流向汇总的执行情况与每笔流水的凭证出处。回答"发了多少货/执行进度"以 executionProgress 为准, ' +
+      '不要自己把 flows 的数量逐行相加(会双计预告与实重)。',
     inputSchema: z.object({
       contractNo: z.string().min(1).describe('合同号(台账规范化后的 CJXC-... 形式)'),
     }),

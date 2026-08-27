@@ -14,6 +14,7 @@ import { buildLinkContractsTool, buildLinkProjectsTool, buildLinkAmendsTool } fr
 import { buildTemplateOverviewTool } from '../pipeline/tools/templateOverviewTool.js';
 import { buildManageTemplateTool } from '../pipeline/tools/manageTemplateTool.js';
 import { buildManageQuotaTool, buildQueryQuotaUsageTool } from '../pipeline/tools/quotaTools.js';
+import { buildGatherSettlementEvidenceTool, buildConfirmSettlementTool } from '../pipeline/tools/settlementTools.js';
 import type { DbContext } from '../pipeline/db/client.js';
 import type { ExtractionDeps } from '../pipeline/extraction.js';
 import type { ClassifierDeps } from '../pipeline/classifier.js';
@@ -84,7 +85,7 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
 // though constructing their instances requires a DbContext (see getToolsForRole).
 // query_contract is listed here too: after the BASE removal above its name would
 // otherwise drop out of listToolNames (it is still always registered for trader).
-const TRADER_CTX_TOOL_NAMES = ['query_contract', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'query_execution_flows', 'project_rollup', 'link_contracts', 'link_projects', 'link_amends', 'template_overview', 'manage_template', 'manage_quota', 'query_quota_usage'] as const;
+const TRADER_CTX_TOOL_NAMES = ['query_contract', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'query_execution_flows', 'project_rollup', 'link_contracts', 'link_projects', 'link_amends', 'template_overview', 'manage_template', 'manage_quota', 'query_quota_usage', 'gather_settlement_evidence', 'confirm_settlement'] as const;
 
 export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
   const base: GatedTool[] = (BASE_TOOLS_FOR_ROLE[role] ?? []).map((t) => ({ ...t }));
@@ -143,6 +144,12 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
         { ...buildManageQuotaTool({ ctx, userId }), name: 'manage_quota', needsApproval: true },
         // query_quota_usage is L1: 只读额度占用(读对账桥物化结果)。
         { ...buildQueryQuotaUsageTool({ ctx, userId }), name: 'query_quota_usage' },
+        // gather_settlement_evidence is L1 (2026-08-27 §15): 结算取证(合同条款+
+        // 数量流水+质量凭证+历史结算), 计算前的必经步骤。
+        { ...buildGatherSettlementEvidenceTool({ ctx, userId }), name: 'gather_settlement_evidence' },
+        // confirm_settlement is L2 (2026-08-27 §15): 结算结果人工确认后落
+        // settlement_records 台账(金额锚点), 软门控。
+        { ...buildConfirmSettlementTool({ ctx, userId }), name: 'confirm_settlement', needsApproval: true },
         // recall_documents is L1: FTS5/vector/hybrid recall over ingested chunks
         // (+ optional bge-reranker precision stage from env).
         { ...buildRecallDocumentsTool({ ctx, embedder, reranker, userId }), name: 'recall_documents' },

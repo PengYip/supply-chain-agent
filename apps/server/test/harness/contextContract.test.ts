@@ -42,6 +42,8 @@ const EXPECTED_TOOLS = [
   'manage_template',
   'manage_quota',
   'query_quota_usage',
+  'gather_settlement_evidence',
+  'confirm_settlement',
 ] as const;
 
 describe('tool-context contract registry', () => {
@@ -101,8 +103,9 @@ describe('contract injection-exposure mapping (integration point 1)', () => {
     // from uploaded documents, and recall_documents returns BM25 snippets of
     // ingested doc text -> all must be wrapped in <external_content>. execute_code
     // runs user-supplied Python whose stdout can carry injection payloads too.
-    expect(getTaggedOutputTools().sort()).toEqual(
-      ['execute_code', 'extract_fields', 'inspect_extraction', 'present_document_review', 'recall_documents', 'verify_document_fields'].sort(),
+    // gather_settlement_evidence returns 台账/化验/凭证抽取字段(文档原文回流).
+    expect([...getTaggedOutputTools()].sort()).toEqual(
+      ['execute_code', 'extract_fields', 'gather_settlement_evidence', 'inspect_extraction', 'present_document_review', 'recall_documents', 'verify_document_fields'].sort(),
     );
   });
 
@@ -111,8 +114,8 @@ describe('contract injection-exposure mapping (integration point 1)', () => {
     // parsed an untrusted file -> injection external. extract/verify both handle
     // AND return external content. recall_documents reads back that doc text.
     // execute_code runs untrusted user code (injection external).
-    expect(getExternalHandlingTools().sort()).toEqual(
-      ['execute_code', 'extract_fields', 'ingest_document', 'inspect_extraction', 'present_document_review', 'recall_documents', 'verify_document_fields'].sort(),
+    expect([...getExternalHandlingTools()].sort()).toEqual(
+      ['execute_code', 'extract_fields', 'gather_settlement_evidence', 'ingest_document', 'inspect_extraction', 'present_document_review', 'recall_documents', 'verify_document_fields'].sort(),
     );
   });
 

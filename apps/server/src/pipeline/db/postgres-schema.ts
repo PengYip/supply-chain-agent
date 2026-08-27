@@ -287,6 +287,36 @@ export const executionFlows = pgTable(
 );
 
 /**
+ * settlement_records(spec 2026-08-27 §15): LLM 计算 -> L2 人工确认 -> 结算锚点
+ * 落账。Mirrors SQLite settlement_records 列对列; JSON 列为 TEXT, 与本文件惯例一致。
+ */
+export const settlementRecords = pgTable(
+  'settlement_records',
+  {
+    id: text('id').primaryKey(),
+    contractNo: text('contract_no').notNull(),
+    contractLedgerId: text('contract_ledger_id'),
+    settledQuantity: doublePrecision('settled_quantity').notNull(),
+    quantityUnit: text('quantity_unit'),
+    basePrice: doublePrecision('base_price'),
+    currency: text('currency'),
+    totalAmount: doublePrecision('total_amount').notNull(),
+    adjustments: text('adjustments').notNull().default('[]'),
+    basisFlowIds: text('basis_flow_ids').notNull().default('[]'),
+    basisExtractionIds: text('basis_extraction_ids').notNull().default('[]'),
+    notes: text('notes'),
+    status: text('status').notNull().default('confirmed'),
+    confirmedBy: text('confirmed_by'),
+    createdBy: text('created_by').notNull(),
+    userId: text('user_id'),
+    createdAt: nowTs(),
+  },
+  (t) => ({
+    contractIdx: index('idx_settlement_records_contract').on(t.contractNo, t.userId),
+  }),
+);
+
+/**
  * graph_links(spec 2026-08-25 方案A §3.3/§6): correlates(背靠背购销对应)与
  * relates(项目级关联)的提案-确认 SSOT。Mirrors SQLite graph_links 列对列;
  * props/graph_status 为 TEXT(JSON 字符串), 与本文件 JSON-in-TEXT 惯例一致。

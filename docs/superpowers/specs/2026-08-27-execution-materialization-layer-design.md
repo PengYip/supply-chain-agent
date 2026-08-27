@@ -202,3 +202,47 @@ dev 实测交叉验证: 发货单 DOC-mtb032yu（买方=湖北国贸=自主主�
 - **结算引擎**: 见 §13 —— 合同定价条款参数化(LLM 提取 + L2 人工确认) + 数量/质量凭证
   取证 + 确定性计算器出结算单草稿, 金额对账锚点(暂估 vs 结算 vs 票面)。
 - 付款单/结算单/提单/装箱单接入另行评审; 模板表驱动配置(方案B)。
+
+## 15. Phase 2 交付记录（2026-08-28 实施完毕）
+
+### 15.1 节点权威聚合（修双计）
+- 铁路/水运单据族同批货会经过 发出预告 -> 过衡/签收 多个节点并各留凭证，逐行 SUM 双计
+  （dev 实例：发货单 3357.46t + 轨道衡称重单 3357.46t -> 6714.92t 错误）。
+- 词汇（domain/tradeSemantics.ts）：`NOTICE_NODE_DOC_TYPES`（发货单/派船通知单=预告节点）+
+  `flowNodeTier(docType)`；未知类型保守按实重（宁可计入不静默丢量）。
+- 聚合规则（pipeline/executionProgress.ts）：每个量纲取 `max(实重, 预告)`：
+  - 预告被实重覆盖 -> 不重复累计（同批双计修复）；
+  - 实重 > 预告（数量浮动上浮）-> 取实重；
+  - 一批已过衡一批在途 -> 预告总和更大，在途批次按预告计入（不丢）。
+- `delivered.nodes` 保留 actual/notice 分层（massKg + countPools）供前端/模型溯源展示。
+- query_execution_flows 描述已声明：回答"发了多少货/进度"以 executionProgress 为准，
+  勿自行逐行累加 flows（会双计）。
+- DocType 联合类型补 `轨道衡称重单`（Phase 1 只进了 templateSeed，类型层漏了）；
+  CHUNK_TAG_TAXONOMY 同步补键（25 类）。
+
+### 15.2 结算引擎（用户简化架构）
+用户已实测 LLM 直接计算结算足够准确，故不做独立确定性计算器。流程：
+`gather_settlement_evidence（L1 取证） -> 模型按合同条款原文计算并向用户完整展示 -> 
+confirm_settlement（L2 软门控） -> settlement_records 台账落账`。
+
+- **settlement_records**（双端 DDL：sqlite raw + pg IF NOT EXISTS + drizzle 双 schema）：
+  contract_no / contract_ledger_id(=合同文档 id) / settled_quantity / quantity_unit /
+  base_price / currency / total_amount / adjustments(JSON 奖罚明细) /
+  basis_flow_ids / basis_extraction_ids(溯源) / notes / status('confirmed') /
+  confirmed_by / created_by / user_id / created_at。只增不改：修正 = 确认一条新行，
+  保留完整时序（对齐"事实分层"原则）。
+- **gather_settlement_evidence**（pipeline/tools/settlementTools.ts，L1）：一次返回
+  合同台账字段（定价/付款条款原文）、执行流水（含 docType/量纲/溯源 id）、
+  executionProgress（节点聚合后的已交付量，防模型自己双计）、质量凭证
+  （质检报告/化验报告抽取行 + extractionId 溯源）、历史结算记录、usage 口径提示。
+  边界：不做任何计算，只给证据。
+- **confirm_settlement**（L2，needsApproval）：硬校验合同台账存在；
+  软校验 basisFlowIds 全部属于本合同流水（防跨合同张冠李戴）；数值不做算术校验
+  ——以向用户展示并被确认的为准。contextContract 注册（tagged/external）+
+  permissionGate L2 + 契约集合测试同步。
+- 排序：listSettlementRecords 按 created_at DESC, rowid DESC（SQLite 秒级时间戳平手
+  由 rowid 决胜；pg timestamptz 微秒精度无此问题）。
+
+### 15.3 工具集计数
+trader 工具 28 -> 30（gather_settlement_evidence / confirm_settlement）；
+contextContract EXPECTED_TOOLS、e2e/integration-recall 工具计数断言同步。

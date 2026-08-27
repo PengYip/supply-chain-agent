@@ -1,17 +1,19 @@
 import { describe, it, expect } from 'vitest';
 import { computeExecutionProgress } from '../../src/pipeline/executionProgress.js';
 
-const mass = (canonical: number) => ({
+const mass = (canonical: number, docType?: string) => ({
   quantityDimension: 'mass' as const,
   quantityCanonical: canonical,
   quantityValue: canonical,
   unit: '吨',
+  ...(docType ? { docType } : {}),
 });
-const count = (unit: string, value: number) => ({
+const count = (unit: string, value: number, docType?: string) => ({
   quantityDimension: 'count' as const,
   quantityCanonical: value,
   quantityValue: value,
   unit,
+  ...(docType ? { docType } : {}),
 });
 const wrap = (m: Record<string, string | number>) =>
   Object.fromEntries(Object.entries(m).map(([k, v]) => [k, { value: v }]));
@@ -62,5 +64,57 @@ describe('computeExecutionProgress(spec 2026-08-27 §9)', () => {
   it('基准为 0 -> progress null(避免除零)', () => {
     const r = computeExecutionProgress([mass(1000)], wrap({ 数量: 0, 单位: '吨' }));
     expect(r.progress).toBeNull();
+  });
+});
+
+describe('computeExecutionProgress 节点权威聚合(spec 2026-08-27 §15)', () => {
+  it('dev 实例: 发货单(预告)+轨道衡(实重)同批 3357.46t -> 不双计, massKg=3357460', () => {
+    const flows = [mass(3357460, '发货单'), mass(3357460, '轨道衡称重单')];
+    const r = computeExecutionProgress(flows, wrap({ 数量: 3357.46, 单位: '吨' }));
+    expect(r.delivered!.massKg).toBe(3357460);
+    expect(r.delivered!.nodes.noticeMassKg).toBe(3357460);
+    expect(r.delivered!.nodes.actualMassKg).toBe(3357460);
+    expect(r.progress).toBeCloseTo(1);
+  });
+
+  it('仅预告(发货单, 尚未过衡) -> 按预告计入', () => {
+    const r = computeExecutionProgress([mass(1000, '发货单')], wrap({ 数量: 3, 单位: '吨' }));
+    expect(r.delivered!.massKg).toBe(1000);
+    expect(r.progress).toBeCloseTo(1 / 3);
+  });
+
+  it('实重 > 预告(数量浮动上浮) -> 取实重', () => {
+    const r = computeExecutionProgress(
+      [mass(1000, '发货单'), mass(1020, '汽运磅单')],
+      wrap({ 数量: 3, 单位: '吨' }),
+    );
+    expect(r.delivered!.massKg).toBe(1020);
+  });
+
+  it('两批: 一批已过衡一批在途(预告总和 5357.46 > 实重 3357.46) -> 取预告总和(在途批次不丢)', () => {
+    const flows = [
+      mass(3357460, '发货单'),
+      mass(3357460, '轨道衡称重单'),
+      mass(2000000, '发货单'),
+    ];
+    const r = computeExecutionProgress(flows, wrap({ 数量: 6000, 单位: '吨' }));
+    expect(r.delivered!.nodes.actualMassKg).toBe(3357460);
+    expect(r.delivered!.nodes.noticeMassKg).toBe(5357460);
+    expect(r.delivered!.massKg).toBe(5357460);
+  });
+
+  it('count 池同批双计: 发货单 10箱 + 收货单 10箱 -> 池值 10; 单侧预告 5箱另算池', () => {
+    const r = computeExecutionProgress(
+      [count('箱', 10, '发货单'), count('箱', 10, '收货单'), count('件', 5, '发货单')],
+      wrap({ 数量: 10, 单位: '箱' }),
+    );
+    expect(r.delivered!.countPools['箱']).toBe(10);
+    expect(r.delivered!.countPools['件']).toBe(5);
+    expect(r.progress).toBeCloseTo(1);
+  });
+
+  it('未知 docType 缺省按实重(保守计入), 与旧行为等价', () => {
+    const r = computeExecutionProgress([mass(1000), mass(500, '收货单')], wrap({ 数量: 3, 单位: '吨' }));
+    expect(r.delivered!.massKg).toBe(1500);
   });
 });
