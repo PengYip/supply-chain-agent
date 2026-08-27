@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import clsx from 'clsx';
 import {
   AlertCircle,
@@ -12,6 +12,8 @@ import {
 } from 'lucide-react';
 import { useProjects } from '../../hooks/useProjects';
 import type { ProjectMembership } from '../../api/projects';
+import { fetchLedgerContracts, type ContractSearchItem } from '../../api/contractSearch';
+import { ContractSearchBar } from '../common/ContractSearchBar';
 
 /* ---------- 项目工作台(spec 2026-08-20 §6.2) ----------
  *
@@ -63,10 +65,21 @@ export function ProjectsView() {
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [assignNo, setAssignNo] = useState('');
+  // 指派目标合同: 搜索框选中项(替代裸 input 手敲, 防合同号笔误)。
+  const [assignContract, setAssignContract] = useState<ContractSearchItem | null>(null);
   const [assignRole, setAssignRole] = useState<string>('采购');
   const [assigning, setAssigning] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  // 搜索框空聚焦时的台账候选(前 8 条); 加载失败静默降级为无候选。
+  const [idleContracts, setIdleContracts] = useState<ContractSearchItem[]>([]);
+
+  useEffect(() => {
+    const ac = new AbortController();
+    fetchLedgerContracts(ac.signal)
+      .then((list) => setIdleContracts(list.slice(0, 8)))
+      .catch(() => { /* 台账候选是增强信息, 失败不阻塞页面 */ });
+    return () => ac.abort();
+  }, []);
 
   const handleCreate = async () => {
     if (!newCode.trim() || !newName.trim() || creating) return;
@@ -84,12 +97,12 @@ export function ProjectsView() {
   };
 
   const handleAssign = async () => {
-    if (!selectedCode || !assignNo.trim() || assigning) return;
+    if (!selectedCode || !assignContract || assigning) return;
     setAssigning(true);
     setActionError(null);
     try {
-      await assign(selectedCode, assignNo.trim(), assignRole);
-      setAssignNo('');
+      await assign(selectedCode, assignContract.contractNo, assignRole);
+      setAssignContract(null);
     } catch (e) {
       setActionError(e instanceof Error ? e.message : '指派失败');
     } finally {
@@ -373,14 +386,28 @@ export function ProjectsView() {
             <div className="rounded-lg border border-line bg-white px-3 py-2.5">
               <div className="text-[13px] font-medium text-ink mb-2">人工指派归属</div>
               <div className="flex flex-wrap items-center gap-2">
-                <input
-                  type="text"
-                  value={assignNo}
-                  onChange={(e) => setAssignNo(e.target.value)}
-                  placeholder="合同号"
-                  spellCheck={false}
-                  className="min-w-40 rounded-md border border-line px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary-500/40"
+                <ContractSearchBar
+                  className="w-64"
+                  placeholder="搜索台账合同：编号 / 标题"
+                  idleItems={idleContracts}
+                  itemNote={(it) => it.docType || null}
+                  onSelect={setAssignContract}
                 />
+                {assignContract && (
+                  <span className="flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-[11px] text-primary-500">
+                    <span className="max-w-[160px] truncate font-mono" title={assignContract.contractNo}>
+                      {assignContract.displayContractNo}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label="清除选中的合同"
+                      onClick={() => setAssignContract(null)}
+                      className="text-primary-500 hover:text-danger"
+                    >
+                      <X className="h-3 w-3" aria-hidden />
+                    </button>
+                  </span>
+                )}
                 <select
                   value={assignRole}
                   onChange={(e) => setAssignRole(e.target.value)}
@@ -393,7 +420,7 @@ export function ProjectsView() {
                 <button
                   type="button"
                   onClick={() => void handleAssign()}
-                  disabled={assigning || !assignNo.trim()}
+                  disabled={assigning || !assignContract}
                   className="inline-flex items-center gap-1 rounded-md bg-primary-500 text-white text-xs font-medium px-3 py-1.5 hover:bg-primary-500/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   {assigning ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Plus className="h-3.5 w-3.5" aria-hidden />}

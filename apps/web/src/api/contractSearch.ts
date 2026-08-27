@@ -87,6 +87,34 @@ export async function fetchContractSearch(
     .filter((x): x is ContractSearchItem => x !== null);
 }
 
+/** GET /api/bindings/contracts 全量台账(项目指派搜索框的空聚焦候选)。
+ *  台账行没有买方/卖方字段, 统一记 matchedField='contractNo';
+ *  按综合置信度降序, 调用方自行截断展示条数。失败抛中文错误。 */
+export async function fetchLedgerContracts(signal?: AbortSignal): Promise<ContractSearchItem[]> {
+  const data = await getJson<{ contracts?: unknown[] }>('/api/bindings/contracts', signal);
+  const rawList = Array.isArray(data?.contracts) ? data.contracts : [];
+  return rawList
+    .map((raw) => {
+      if (!raw || typeof raw !== 'object') return null;
+      const r = raw as Record<string, unknown>;
+      const contractNo = asStr(r.contractNo);
+      if (!contractNo) return null;
+      const item: ContractSearchItem = {
+        contractNo,
+        displayContractNo: asStr(r.displayContractNo) || contractNo,
+        title: asStr(r.title),
+        buyer: null,
+        seller: null,
+        docType: asStr(r.docType),
+        overallConfidence: typeof r.overallConfidence === 'number' ? r.overallConfidence : 0,
+        matchedField: 'contractNo',
+      };
+      return item;
+    })
+    .filter((x): x is ContractSearchItem => x !== null)
+    .sort((a, b) => b.overallConfidence - a.overallConfidence);
+}
+
 /** 图例计数; 失败静默降级为 [](图例退化为静态注册表)。 */
 export async function fetchGraphSchema(): Promise<GraphLabelCount[]> {
   try {
