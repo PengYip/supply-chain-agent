@@ -6,6 +6,7 @@ import { RealMessageItem, ErrorMessage } from './RealMessageItem'
 import { HumanAgentStatusBar } from './HumanAgentStatusBar'
 import { useHumanAgentStatus } from '../hooks/useHumanAgentStatus'
 import { type ContextFile } from '../hooks/useFiles'
+import { uploadWithProgress, MAX_UPLOAD_BYTES } from '../api/uploadWithProgress'
 import { type DocParseState } from '../api/process'
 import {
   buildRenderItems,
@@ -324,6 +325,8 @@ export const RealChatView: React.FC<{
   // activates when the file is added to a conversation as a reference.
   const [uploadState, setUploadState] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle')
   const [uploadMsg, setUploadMsg] = useState<string | null>(null)
+  // 上传方向字节级进度（null = 空闲）；与 uploadState 联动驱动内联进度条。
+  const [uploadPercent, setUploadPercent] = useState<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -332,7 +335,6 @@ export const RealChatView: React.FC<{
     // Client guard: reject oversized uploads before POSTing. Keep in sync with
     // the server default (env.MAX_UPLOAD_BYTES); the server re-checks and
     // returns 413, so this is a latency/UX guard, not the enforcement edge.
-    const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
     if (file.size > MAX_UPLOAD_BYTES) {
       setUploadState('error')
       setUploadMsg(`文件过大（${(file.size / 1024 / 1024).toFixed(1)} MiB），上限为 25 MiB`)
@@ -341,19 +343,9 @@ export const RealChatView: React.FC<{
     }
     setUploadState('uploading')
     setUploadMsg(null)
+    setUploadPercent(0)
     try {
-      const fd = new FormData()
-      fd.append('file', file)
-      const res = await fetch('/api/files', {
-        method: 'POST',
-        body: fd,
-        credentials: 'include',
-      })
-      if (!res.ok) {
-        const j = (await res.json().catch(() => ({}))) as { error?: string; detail?: string }
-        throw new Error(j.error || j.detail || `upload failed (${res.status})`)
-      }
-      const data = (await res.json()) as { filename?: string }
+      const data = await uploadWithProgress(file, '', (p) => setUploadPercent(p.percent))
       setUploadState('success')
       setUploadMsg(`已上传「${data.filename ?? file.name}」，可在右侧文件管理中添加到对话`)
       // Storage-only: no agent turn, no auto-parse here. Refresh the shared
@@ -363,6 +355,7 @@ export const RealChatView: React.FC<{
       setUploadState('error')
       setUploadMsg(err instanceof Error ? err.message : String(err))
     } finally {
+      setUploadPercent(null)
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
   }, [onFilesChanged])
@@ -808,6 +801,19 @@ export const RealChatView: React.FC<{
               ))}
             </div>
           )}
+          {uploadPercent !== null && (
+            <div className="mb-1 ml-auto w-32">
+              <div className="h-1 overflow-hidden rounded bg-surface">
+                <div
+                  className="h-full rounded bg-primary transition-all"
+                  style={{ width: `${uploadPercent}%` }}
+                />
+              </div>
+              <div className="mt-0.5 text-right text-[10px] text-ink-soft">
+                上传中 {uploadPercent}%
+              </div>
+            </div>
+          )}
           <form onSubmit={onSubmit} className="flex items-end gap-2">
             <input
               ref={fileInputRef}
@@ -823,11 +829,7 @@ export const RealChatView: React.FC<{
               disabled={uploadState === 'uploading'}
               className="h-10 w-10 shrink-0 rounded-lg border border-line flex items-center justify-center text-ink-soft hover:text-ink hover:bg-surface disabled:opacity-50"
             >
-              {uploadState === 'uploading' ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Paperclip className="w-4 h-4" />
-              )}
+              <Paperclip className="w-4 h-4" />
             </button>
             <textarea
               value={input}
