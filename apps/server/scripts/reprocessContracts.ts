@@ -81,7 +81,7 @@ interface DocCandidateRow extends RepairCandidateRow {
 async function loadCandidates(ctx: DbContext, typeNames: string[]): Promise<DocCandidateRow[]> {
   const placeholders = typeNames.map(() => '?').join(', ');
   if (ctx.backend === 'postgres') {
-    const nums = typeNames.map((_, i) => `$${i + 2}`).join(', ');
+    const nums = typeNames.map((_, i) => `$${i + 1}`).join(', ');
     const res = await ctx.pool.query(
       `SELECT d.id, d.doc_type AS "docType", d.parse_status AS "parseStatus",
               d.extraction_status AS "extractionStatus", d.modality, d.user_id AS "userId",
