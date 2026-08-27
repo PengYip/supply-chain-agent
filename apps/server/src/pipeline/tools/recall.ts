@@ -55,6 +55,9 @@ export interface RecallToolDeps {
 const RRF_K = 60;
 /** Max snippet length for vector-only hits (no FTS highlight available). */
 const VECTOR_SNIPPET_MAX = 400;
+/** Hard ceiling on documents sent to the reranker per recall call (payload/
+ *  provider bound); candidates beyond this keep fusion order unscored. */
+export const RERANK_MAX_DOCS = 50;
 
 /**
  * 合同号过滤无命中时的如实说明: 区分"该合同号根本没有绑定文档"与"有绑定但本次
@@ -172,38 +175,64 @@ async function resolveStrategy(
 
 /**
  * Precision stage over the candidate list BEFORE truncation to `limit`.
- * Reorders `candidates` by the reranker's relevance scores (descending).
- * Fault-tolerant by design: any reranker failure logs once and returns the
- * input order unchanged -- recall output shape never depends on rerank
- * availability. Returns [reorderedCandidates, applied] so the response can
- * honestly report whether rerank ran.
+ * Input is capped at RERANK_MAX_DOCS (existing ranking order) and identical
+ * duplicate texts are sent to the provider once, with each score mapped back
+ * to every candidate sharing that text. Reorders candidates by relevance
+ * (descending). Fault-tolerant by design: any reranker failure logs once and
+ * returns the input order unchanged -- recall output shape never depends on
+ * rerank availability. Returns [reorderedCandidates, applied] so the response
+ * can honestly report whether rerank ran.
  */
-async function applyRerank<T>(
+export async function applyRerank<T>(
   reranker: Reranker | null | undefined,
   query: string,
   candidates: T[],
   textOf: (c: T) => string,
 ): Promise<[T[], boolean]> {
   if (!reranker || candidates.length === 0) return [candidates, false];
-  try {
-    const t0 = performance.now();
-    const results = await reranker.rerank(
-      query,
-      candidates.map((c) => textOf(c)),
+  const capped =
+    candidates.length > RERANK_MAX_DOCS ? candidates.slice(0, RERANK_MAX_DOCS) : candidates;
+  if (capped.length !== candidates.length) {
+    console.info(
+      `[recall_documents] rerank capped: sending top ${RERANK_MAX_DOCS} of `
+        + `${candidates.length} candidates; the rest keep fusion order and are dropped`,
     );
-    console.log(`[perf-recall] rerank ${Math.round(performance.now() - t0)}ms n=${candidates.length}`);
+  }
+  try {
+    // Dedup identical texts: one provider entry per unique text, back-mapped
+    // to every candidate index that shares it.
+    const uniqueTexts: string[] = [];
+    const candIdxByUnique: number[][] = [];
+    const uniqueIdxByText = new Map<string, number>();
+    capped.forEach((c, i) => {
+      const t = textOf(c);
+      let u = uniqueIdxByText.get(t);
+      if (u === undefined) {
+        u = uniqueTexts.length;
+        uniqueIdxByText.set(t, u);
+        uniqueTexts.push(t);
+        candIdxByUnique.push([]);
+      }
+      candIdxByUnique[u]!.push(i);
+    });
+    const t0 = performance.now();
+    const results = await reranker.rerank(query, uniqueTexts);
+    console.log(
+      `[perf-recall] rerank ${Math.round(performance.now() - t0)}ms n=${uniqueTexts.length}/${capped.length}`,
+    );
     const ordered: T[] = [];
     const seen = new Set<number>();
     for (const r of results) {
-      const c = candidates[r.index];
-      if (c !== undefined && !seen.has(r.index)) {
-        seen.add(r.index);
-        ordered.push(c);
+      for (const ci of candIdxByUnique[r.index] ?? []) {
+        if (!seen.has(ci)) {
+          seen.add(ci);
+          ordered.push(capped[ci]!);
+        }
       }
     }
     // Safety net: append any candidate the response skipped, preserving order.
-    for (let i = 0; i < candidates.length; i++) {
-      if (!seen.has(i)) ordered.push(candidates[i]!);
+    for (let i = 0; i < capped.length; i++) {
+      if (!seen.has(i)) ordered.push(capped[i]!);
     }
     return [ordered, true];
   } catch (e) {
@@ -428,11 +457,25 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
           candidates = inScope;
           tagFilterFallback = true;
         }
+        // Rerank input uses FULL chunk text (the 400-char f.snippet stays
+        // display-only). Fetch missing texts in ONE batched query covering the
+        // top-RERANK_MAX_DOCS candidates (FTS-only rowids may lack meta above).
+        const rerankCands = candidates.slice(0, RERANK_MAX_DOCS);
+        const rerankMeta = new Map(meta);
+        if (deps.reranker && rerankCands.length > 0) {
+          const missing = rerankCands
+            .filter((f) => !rerankMeta.has(f.chunkRowId))
+            .map((f) => f.chunkRowId);
+          if (missing.length > 0) {
+            const extra = await getChunkMetaByRowids(deps.ctx, missing, deps.userId);
+            for (const [rowid, m] of extra) rerankMeta.set(rowid, m);
+          }
+        }
         const [reranked, rerankedApplied] = await applyRerank(
           deps.reranker,
           query,
-          candidates,
-          (f) => f.snippet,
+          rerankCands,
+          (f) => rerankMeta.get(f.chunkRowId)?.text ?? f.snippet,
         );
         const matches = reranked.slice(0, limit);
         return {

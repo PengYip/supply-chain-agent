@@ -31,6 +31,8 @@ interface VecMeta {
 }
 
 const BATCH = 32;
+// Pause between documents, applied after every doc (success or failure).
+const DOC_PAUSE_MS = 150;
 
 async function listDocsNeedingReembed(
   ctx: DbContext,
@@ -74,7 +76,7 @@ async function listDocsNeedingReembed(
 }
 
 async function getChunksPg(
-  ctx: DbContext,
+  ctx: Extract<DbContext, { backend: 'postgres' }>,
   docId: string,
 ): Promise<Array<{ rowid: number; text: string }>> {
   const res = await ctx.pool.query(
@@ -85,6 +87,16 @@ async function getChunksPg(
     rowid: Number(r.id),
     text: r.chunk_text,
   }));
+}
+
+async function getChunks(
+  ctx: Extract<DbContext, { backend: 'sqlite' }>,
+  docId: string,
+): Promise<Array<{ rowid: number; text: string }>> {
+  const rows = ctx.sqlite
+    .prepare('SELECT id, chunk_text FROM doc_chunk WHERE document_id = ? ORDER BY id')
+    .all(docId) as Array<{ id: number; chunk_text: string }>;
+  return rows.map((r) => ({ rowid: Number(r.id), text: r.chunk_text }));
 }
 
 async function main(): Promise<void> {
@@ -111,6 +123,17 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Applying with the hash-based test embedder would stamp meaningless vectors
+  // as the current mode, making future backfills skip those docs.
+  if (embedder.kind.includes('deterministic') && !process.argv.includes('--allow-deterministic')) {
+    console.error(
+      '[backfill] refusing to write vectors produced by the deterministic hash embedder '
+      + `(kind=${embedder.kind}); they carry no semantics. Configure a real embedder `
+      + '(e.g. SILICONFLOW_API_KEY) or pass --allow-deterministic to override.',
+    );
+    process.exit(1);
+  }
+
   let doneDocs = 0;
   let doneChunks = 0;
   let failedDocs = 0;
@@ -119,8 +142,13 @@ async function main(): Promise<void> {
   for (const doc of docs) {
     try {
       const chunks =
-        ctx.backend === 'postgres' ? await getChunksPg(ctx, doc.docId) : getChunks(doc.docId);
-      if (chunks.length === 0) continue;
+        ctx.backend === 'postgres'
+          ? await getChunksPg(ctx, doc.docId)
+          : await getChunks(ctx, doc.docId);
+      if (chunks.length === 0) {
+        await new Promise((r) => setTimeout(r, DOC_PAUSE_MS));
+        continue;
+      }
       // Batched embedding: BATCH texts per HTTP call (rate-limit friendly).
       const vectors: number[][] = [];
       for (let i = 0; i < chunks.length; i += BATCH) {
@@ -152,6 +180,8 @@ async function main(): Promise<void> {
       failedDocs++;
       console.error(`[backfill] FAILED ${doc.docId}:`, (e as Error).message);
     }
+    // Gentle pace between docs regardless of outcome.
+    await new Promise((r) => setTimeout(r, DOC_PAUSE_MS));
   }
 
   console.log(
