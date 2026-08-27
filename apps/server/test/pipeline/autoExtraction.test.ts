@@ -61,7 +61,12 @@ describe('runAutoExtraction', () => {
       deps,
     });
 
-    expect(out).toEqual({ status: 'ok', fieldCount: 2, relationshipCount: 2 });
+    expect(out).toEqual({
+      status: 'ok',
+      fieldCount: 2,
+      relationshipCount: 2,
+      elapsedMs: expect.any(Number),
+    });
 
     // extract received the blockModel.
     expect(deps.extract).toHaveBeenCalledTimes(1);
@@ -136,7 +141,7 @@ describe('runAutoExtraction', () => {
       timeoutMs: 15,
     });
 
-    expect(out).toEqual({ status: 'skipped', reason: 'timeout' });
+    expect(out).toEqual({ status: 'skipped', reason: 'timeout', elapsedMs: expect.any(Number) });
     expect(deps.save).not.toHaveBeenCalled();
     expect(deps.setStatus).toHaveBeenCalledWith({ ctx, docId: 'DOC-1', status: 'skipped' });
   });

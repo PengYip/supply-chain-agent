@@ -1090,6 +1090,35 @@ export async function deleteFileFolderPg(
   return (res.rowCount ?? 0) > 0;
 }
 
+/** pg twin of listFileFoldersUnder -- see repositories.ts for the SQL rationale. */
+export async function listFileFoldersUnderPg(
+  ctx: PostgresDbContext,
+  userId: string,
+  from: string,
+): Promise<Array<{ id: string; path: string }>> {
+  const res = await ctx.pool.query(
+    `SELECT id, path FROM file_folders
+     WHERE user_id = $1 AND (path = $2 OR substr(path, 1, LENGTH($2) + 1) = $2 || '/')`,
+    [userId, from],
+  );
+  return res.rows.map((r) => ({ id: r.id, path: r.path }));
+}
+
+/** pg twin of renameFileFoldersPrefix. Returns the number of rows rewritten. */
+export async function renameFileFoldersPrefixPg(
+  ctx: PostgresDbContext,
+  userId: string,
+  from: string,
+  to: string,
+): Promise<number> {
+  const res = await ctx.pool.query(
+    `UPDATE file_folders SET path = $1 || substr(path, LENGTH($2) + 1)
+     WHERE user_id = $3 AND (path = $2 OR substr(path, 1, LENGTH($2) + 1) = $2 || '/')`,
+    [to, from, userId],
+  );
+  return res.rowCount ?? 0;
+}
+
 // ---- Post-ingest review (Task 3) -------------------------------------------
 //
 // pg twins for getReviewSnapshot / setReviewStatus / updateExtractionFields.

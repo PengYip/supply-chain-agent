@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { env } from '../../src/env.js';
-import { exceedsUploadLimit, contentTypeForKey } from '../../src/routes/files.js';
+import {
+  exceedsUploadLimit,
+  contentTypeForKey,
+  validateFolderPathChange,
+  rewriteKeyPrefix,
+  isPathUnderFolder,
+} from '../../src/routes/files.js';
 
 describe('exceedsUploadLimit (upload size guard predicate)', () => {
   const limit = env.MAX_UPLOAD_BYTES;
@@ -58,5 +64,58 @@ describe('contentTypeForKey (in-app stream MIME mapping)', () => {
     expect(contentTypeForKey(key)).toBe('application/pdf');
     // Extension comes from the final path segment only, not earlier dots.
     expect(contentTypeForKey('users/u1/dir.with.dots/file.txt')).toBe('text/plain');
+  });
+});
+
+describe('validateFolderPathChange (folder rename/move guard)', () => {
+  it('rejects empty from', () => {
+    expect(validateFolderPathChange('', 'x')).toEqual({ ok: false, reason: 'empty_from' });
+    expect(validateFolderPathChange('/', 'x')).toEqual({ ok: false, reason: 'empty_from' });
+  });
+
+  it('rejects same-path rename and moving a folder into its own subtree', () => {
+    expect(validateFolderPathChange('a', 'a')).toEqual({ ok: false, reason: 'same_path' });
+    expect(validateFolderPathChange('/a/', 'a')).toEqual({ ok: false, reason: 'same_path' });
+    expect(validateFolderPathChange('a', 'a/b')).toEqual({ ok: false, reason: 'self_nested' });
+    expect(validateFolderPathChange('a', 'a/b/c')).toEqual({ ok: false, reason: 'self_nested' });
+  });
+
+  it('accepts legitimate renames and moves', () => {
+    expect(validateFolderPathChange('合同', '合同2026')).toEqual({ ok: true });
+    expect(validateFolderPathChange('汽运业务资料', '煤焦化/发运')).toEqual({ ok: true });
+    expect(validateFolderPathChange('a/b', 'a')).toEqual({ ok: true });
+    expect(validateFolderPathChange('', '')).toEqual({ ok: false, reason: 'empty_from' });
+  });
+});
+
+describe('isPathUnderFolder (subtree membership predicate)', () => {
+  it('matches exact and prefix paths', () => {
+    expect(isPathUnderFolder('a', 'a')).toBe(true);
+    expect(isPathUnderFolder('a/b', 'a')).toBe(true);
+    expect(isPathUnderFolder('a/b/c', 'a')).toBe(true);
+  });
+
+  it('does not match sibling names sharing characters or unrelated paths', () => {
+    expect(isPathUnderFolder('ab', 'a')).toBe(false);
+    expect(isPathUnderFolder('b/a', 'a')).toBe(false);
+    expect(isPathUnderFolder('', 'a')).toBe(false);
+  });
+});
+
+describe('rewriteKeyPrefix (MinIO key relocation math)', () => {
+  it('replaces the <uid>/<from>/ prefix and keeps trailing segments', () => {
+    expect(rewriteKeyPrefix('users/u1/合同/x.pdf', 'u1', '合同', '合同2026'))
+      .toBe('users/u1/合同2026/x.pdf');
+    expect(rewriteKeyPrefix('users/u1/合同/子/xy.txt', 'u1', '合同', '发运/合同'))
+      .toBe('users/u1/发运/合同/子/xy.txt');
+  });
+
+  it('leaves keys outside the folder untouched', () => {
+    expect(rewriteKeyPrefix('users/u1/发票/a.pdf', 'u1', '合同', '合同2'))
+      .toBe('users/u1/发票/a.pdf');
+    expect(rewriteKeyPrefix('users/u1/合同化/a.pdf', 'u1', '合同', '合同2'))
+      .toBe('users/u1/合同化/a.pdf');
+    expect(rewriteKeyPrefix('users/u2/合同/a.pdf', 'u1', '合同', '合同2'))
+      .toBe('users/u2/合同/a.pdf');
   });
 });

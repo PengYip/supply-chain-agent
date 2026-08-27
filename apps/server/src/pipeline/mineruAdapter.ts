@@ -153,6 +153,8 @@ export async function ingestWithMinerU(
   // Production path: shell out to MinerU CLI.
   const outDir = await mkdtemp(path.join(tmpdir(), 'mineru-'));
   const mineruBin = process.env.MINERU_BIN || 'mineru';
+  const cliT0 = performance.now();
+  console.log(`[perf-mineru] start docId=${docId} file=${path.basename(sourceUri)} bin=${mineruBin}`);
   try {
     const { stdout, stderr } = await execFileAsync(mineruBin, [
       '-p', sourceUri,
@@ -162,6 +164,9 @@ export async function ingestWithMinerU(
       '-d', 'cpu',      // no GPU on server
       '-m', 'auto',     // auto-download models on first run
     ], { timeout: 600_000 });  // 10 min timeout per PDF
+    console.log(
+      `[perf-mineru] cli-done docId=${docId} ${Math.round(performance.now() - cliT0)}ms`,
+    );
     // MinerU 3.4.4 with `-m auto` writes its outputs one level deeper than the
     // documented layout: <outDir>/<baseName>/auto/<baseName>_middle.json (the
     // `auto/` subdir comes from the -m auto mode). The previous exact-path
@@ -189,6 +194,7 @@ export async function ingestWithMinerU(
     const raw = JSON.parse(readFileSync(middleJsonPath, 'utf-8'));
     return normalizeMinerUOutput({ docId, docType, sourceUri, minerUOutput: raw });
   } catch (e) {
+    console.warn(`[perf-mineru] cli-failed docId=${docId} ${Math.round(performance.now() - cliT0)}ms`);
     throw new Error(`MinerU CLI failed: ${(e as Error).message}. Ensure MINERU_BIN points to the mineru executable.`);
   }
 }
