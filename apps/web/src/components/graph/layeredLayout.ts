@@ -28,6 +28,11 @@ export const HCONTRACT = 72;
 export const HDOC = 58;
 export const HAUX = 48;
 
+// 卡片排版 token(与 GraphCanvas 的 cardHtml 严格一致):
+// padTop8 + chip16 + gap2 + 名称行17*n(≤2) + [gap2+概述13] + padBottom7
+const CARD_PAD_T = 8, CARD_PAD_B = 7, CARD_GAP = 2;
+const CHIP_ROW = 16, NAME_LINE = 17, SUB_LINE = 13;
+
 const MINW_BY_KIND: Record<string, number> = {
   Project: 230, Contract: 190, Document: 160, Party: 130, Commodity: 130,
 };
@@ -43,13 +48,55 @@ function heightOf(kind: string): number {
   return HAUX;
 }
 
-/** 卡片几何: 布局与画布渲染共用同一套宽高估算, 保证落位与碰撞一致。 */
-export function cardGeometry(kind: string, name: string): { width: number; height: number } {
-  return { width: cardWidth(kind, name), height: heightOf(kind) };
+function nameLines(name: string, widthInner: number): number {
+  // CJK≈15px / 其他≈8px @12.5px 粗估; 与 CSS line-clamp 上限 2 对齐
+  let w = 0;
+  for (const ch of name) w += ch.charCodeAt(0) > 0x2e7f ? 15 : 8;
+  const lines = Math.max(1, Math.ceil(w / Math.max(widthInner, 40)));
+  return Math.min(lines, 2);
 }
 
-function cardWidth(kind: string, name: string): number {
-  // CJK 按每字 ~15px、拉丁按 ~8px 粗估(12px 字号) + padding
+/** 展示元数据: 由画布解析(displayName 走文件名兜底链), 布局据此定几何。 */
+export interface NodeCardMeta {
+  displayName?: string;
+  subtitle?: string;
+}
+
+/**
+ * 单源卡片几何: 宽按文本估宽钳制, 高按 chip 行 + 名称折行数 + 概述有无精确相加。
+ * 布局间距与 HTML 模板共用本函数, 保证不再出现"字被拦腰截断"。
+ */
+export function cardSpec(
+  kind: string,
+  displayName: string,
+  subtitle: string,
+): { width: number; height: number } {
+  let w = 48;
+  for (const ch of displayName) w += ch.charCodeAt(0) > 0x2e7f ? 15 : 8;
+  const width = Math.min(Math.max(w, MINW_BY_KIND[kind] ?? 130), MAXW);
+  void kindOfNoop(kind);
+  const lines = nameLines(displayName, width - 24);
+  const height =
+    CARD_PAD_T + CHIP_ROW + CARD_GAP +
+    lines * NAME_LINE +
+    (subtitle ? CARD_GAP + SUB_LINE : 0) +
+    CARD_PAD_B;
+  return { width, height };
+}
+function kindOfNoop(_k: string): number {
+  return _k.length;
+}
+
+/** 卡片几何: 兼容旧签名(无 meta 时退回 kind 档位高度)。 */
+export function cardGeometry(
+  kind: string,
+  name: string,
+  meta?: NodeCardMeta,
+): { width: number; height: number } {
+  if (meta) return cardSpec(kind, meta.displayName ?? name, meta.subtitle ?? '');
+  return { width: cardWidthCompat(kind, name), height: heightOf(kind) };
+}
+function cardWidthCompat(kind: string, name: string): number {
   let w = 48;
   for (const ch of name) w += ch.charCodeAt(0) > 0x2e7f ? 15 : 8;
   return Math.min(Math.max(w, MINW_BY_KIND[kind] ?? 130), MAXW);
@@ -77,7 +124,11 @@ interface InternalLane {
   members: { node: GraphNode; kind: string }[];
 }
 
-export function computeLayeredLayout(nodes: GraphNode[], edges: GraphEdge[]): LayoutResult {
+export function computeLayeredLayout(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  metaMap?: Record<string, NodeCardMeta>,
+): LayoutResult {
   const kindOf = new Map(nodes.map((v) => [v.elementId, v.kind]));
   const docContract = new Map<string, string>();
   const contractProject = new Map<string, string>();
@@ -171,6 +222,13 @@ export function computeLayeredLayout(nodes: GraphNode[], edges: GraphEdge[]): La
   let cursorX = 0;
   let cursorYGlobalMax = ROOT_TOP;
 
+  /** 单源几何: 有 meta 用精确测量, 否则退回 kind 档位。 */
+  const measure = (nd: GraphNode): { width: number; height: number } => {
+    const m = metaMap?.[nd.elementId];
+    if (!m) return { width: cardWidthCompat(nd.kind, nd.name), height: heightOf(nd.kind) };
+    return cardSpec(nd.kind, m.displayName ?? nd.name, m.subtitle ?? '');
+  };
+
   /** 把节点按宽度预算切成多行, 行内均布。 */
   const wrapByWidth = <T,>(items: T[], widthOf: (item: T) => number, budget = LANE_MAX_W): T[][] => {
     const rows: T[][] = [];
@@ -193,11 +251,11 @@ export function computeLayeredLayout(nodes: GraphNode[], edges: GraphEdge[]): La
   };
 
   const placeRow = (row: InternalLane['members'], rowTopY: number, innerLeft: number, contentW: number) => {
-    const rowW = row.reduce((acc, m, i) => acc + cardWidth(m.kind, m.node.name) + (i > 0 ? COLGAP : 0), 0);
+    const rowW = row.reduce((acc, m, i) => acc + measure(m.node).width + (i > 0 ? COLGAP : 0), 0);
     let cx = innerLeft + Math.max(0, (contentW - rowW) / 2);
     for (const m of row) {
-      const w = cardWidth(m.kind, m.node.name);
-      positions[m.node.elementId] = { x: cx + w / 2, y: rowTopY + heightOf(m.kind) / 2 };
+      const w = measure(m.node).width;
+      positions[m.node.elementId] = { x: cx + w / 2, y: rowTopY + measure(m.node).height / 2 };
       cx += w + COLGAP;
     }
   };
@@ -206,7 +264,7 @@ export function computeLayeredLayout(nodes: GraphNode[], edges: GraphEdge[]): La
     const members = laneMembersMap.get(laneId)!;
     if (members.length === 0) continue;
 
-    const widthOfMember = (m: InternalLane['members'][number]) => cardWidth(m.kind, m.node.name);
+    const widthOfMember = (m: InternalLane['members'][number]) => measure(m.node).width;
 
     if (laneId === orphanComboId) {
       // 散件区: 独立窄列纵向堆叠

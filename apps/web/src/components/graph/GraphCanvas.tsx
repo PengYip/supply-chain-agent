@@ -5,9 +5,9 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { Graph as G6Graph, type EdgeData, type IElementEvent, type NodeData } from '@antv/g6';
 import type { GraphEdge, GraphNode, InspectTarget, Subgraph } from '../../hooks/useGraph';
-import { EDGE_STYLE_OVERRIDES, businessTypeOf, docTypeName, nodeDisplayName } from './businessTypes';
+import { EDGE_STYLE_OVERRIDES, businessTypeOf, contractTypeStyle, docTypeName, docTypeStyle, nodeDisplayName } from './businessTypes';
 import { useDocMeta } from './docMeta';
-import { cardGeometry, classifyEdge, computeLayeredLayout } from './layeredLayout';
+import { cardSpec, classifyEdge, computeLayeredLayout, type NodeCardMeta } from './layeredLayout';
 
 interface GraphCanvasProps {
   subgraph: Subgraph;
@@ -59,29 +59,45 @@ function subtitleOf(nd: GraphNode, docMeta: ReturnType<typeof useDocMeta>): stri
   return '';
 }
 
-/** DOM 信息卡模板: 左色条 + 类型 Chip + 名称两行截断 + 概述单行省略。 */
+/** DOM 信息卡模板: 左色条 + 类型 Chip + 名称两行截断 + 概述单行省略。
+ *  尺寸 token 与 layeredLayout.cardSpec 严格一致(pad8/chip16/gap2/名称行17/概述13)。 */
 function cardHtml(opts: {
-  kindLabel: string; color: string; border: string; name: string; subtitle: string;
-  width: number; height: number; scatter: boolean; isRoot: boolean;
+  label: string; color: string; border: string; bg: string;
+  name: string; subtitle: string; width: number; height: number; scatter: boolean;
 }): string {
-  const { kindLabel, color, border, name, subtitle, width, height, scatter, isRoot } = opts;
-  const bg = isRoot ? '#F5F3FC' : '#FFFFFF';
-  const nameColor = '#0F172A';
+  const { label, color, border, bg, name, subtitle, width, height, scatter } = opts;
   return `
 <div style="width:${width}px;height:${height}px;box-sizing:border-box;background:${bg};
   border:1px solid ${border};border-left:4px solid ${color};border-radius:10px;
-  box-shadow:0 2px 8px rgba(15,23,42,0.12);padding:9px 12px 8px 10px;
+  box-shadow:0 2px 8px rgba(15,23,42,0.12);padding:8px 12px 7px 9px;
   font-family:'PingFang SC','Microsoft YaHei',system-ui,sans-serif;
-  display:flex;flex-direction:column;gap:3px;pointer-events:none;user-select:none;overflow:hidden;">
-  <div style="display:flex;align-items:center;gap:6px;">
-    <span style="background:${color};color:#fff;font-size:10px;line-height:1;
-      padding:3px 8px;border-radius:999px;font-weight:600;">${escapeHtml(kindLabel)}</span>
-    ${scatter ? '<span style="font-size:10px;color:#94A3B8;border:1px dashed #CBD5E1;padding:2px 6px;border-radius:999px;">散件</span>' : ''}
+  display:flex;flex-direction:column;gap:2px;pointer-events:none;user-select:none;overflow:hidden;">
+  <div style="display:flex;align-items:center;gap:6px;height:16px;flex:none;">
+    <span style="background:${color};color:#fff;font-size:10px;line-height:16px;
+      padding:0 8px;border-radius:999px;font-weight:600;">${escapeHtml(label)}</span>
+    ${scatter ? '<span style="font-size:10px;color:#94A3B8;border:1px dashed #CBD5E1;padding:1px 6px;border-radius:999px;">散件</span>' : ''}
   </div>
-  <div style="font-size:13px;font-weight:600;color:${nameColor};line-height:18px;
+  <div style="flex:none;font-size:13px;font-weight:600;color:#0F172A;line-height:17px;
     display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${escapeHtml(name)}</div>
-  ${subtitle ? `<div style="font-size:11px;color:#64748B;line-height:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(subtitle)}</div>` : ''}
+  ${subtitle ? `<div style="flex:none;font-size:11px;color:#64748B;line-height:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(subtitle)}</div>` : ''}
 </div>`;
+}
+
+/** 节点主题解析: 文档按 docType 分色、合同按子类型分色(spec 三轮), 项目紫/其余用 kind 色。 */
+function themeOf(nd: GraphNode, subtitle: string): { label: string; color: string; border: string; bg: string } {
+  if (nd.kind === 'Document') {
+    const dts = docTypeStyle(docTypeName(nd, null) || subtitle);
+    return { label: dts.label === '文档' ? '文档' : dts.label, color: dts.color, border: dts.border, bg: dts.bg };
+  }
+  if (nd.kind === 'Contract') {
+    const cts = contractTypeStyle(nd.name, nd.props);
+    return { label: cts.label, color: cts.color, border: cts.border, bg: cts.bg };
+  }
+  if (nd.kind === 'Project') {
+    return { label: '项目', color: '#6D5FC3', border: '#D8D0F0', bg: '#F5F3FC' };
+  }
+  const bt = businessTypeOf(nd.kind);
+  return { label: bt.displayName, color: bt.color, border: bt.softBorder, bg: '#FFFFFF' };
 }
 
 export function GraphCanvas({
@@ -108,22 +124,29 @@ export function GraphCanvas({
           e.type === 'binds'),
     );
 
-    const layout = computeLayeredLayout(visibleNodes, visibleEdges);
+    // 展示元数据先解析(文件名兜底链 + 概述), 供布局精确测几何与卡片渲染共用
+    const metaMap: Record<string, NodeCardMeta> = {};
+    for (const nd of visibleNodes) {
+      metaMap[nd.elementId] = { displayName: nodeDisplayName(nd, docMeta), subtitle: subtitleOf(nd, docMeta) };
+    }
+
+    const layout = computeLayeredLayout(visibleNodes, visibleEdges, metaMap);
 
     const g6Nodes = visibleNodes.map((nd) => {
-      const bt = businessTypeOf(nd.kind);
-      const geo = cardGeometry(nd.kind, nd.name);
+      const meta = metaMap[nd.elementId]!;
+      const theme = themeOf(nd, meta.subtitle ?? '');
+      const geo = cardSpec(nd.kind, meta.displayName ?? nd.name, meta.subtitle ?? '');
       const pos = layout.positions[nd.elementId] ?? { x: 0, y: 0 };
       const html = cardHtml({
-        kindLabel: bt.displayName,
-        color: bt.color,
-        border: bt.softBorder,
-        name: nodeDisplayName(nd, docMeta),
-        subtitle: subtitleOf(nd, docMeta),
+        label: theme.label,
+        color: theme.color,
+        border: theme.border,
+        bg: theme.bg,
+        name: meta.displayName ?? nd.name,
+        subtitle: meta.subtitle ?? '',
         width: geo.width,
         height: geo.height,
         scatter: layout.scatterIds.has(nd.elementId),
-        isRoot: nd.kind === 'Project',
       });
       return {
         id: nd.elementId,

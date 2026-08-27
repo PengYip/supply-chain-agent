@@ -168,3 +168,81 @@ const FALLBACK_BUSINESS_TYPE: BusinessType = {
 export function businessTypeOf(kind: string): BusinessType {
   return BUSINESS_TYPES[kind] ?? { ...FALLBACK_BUSINESS_TYPE, label: kind };
 }
+
+/** 文档业务类型的展示配色: 按 docType 关键词分色系(spec 2026-08-27 评审三轮),
+ *  与节点 kind 色板区分——同是"文档"节点, 合同类偏棕金、发票类偏蓝、物流类偏青。
+ *  匹配规则: docType 包含关键词即命中, 首个命中生效。 */
+export interface DocTypeStyle {
+  /** 主色(chip 底/左色条) */
+  color: string;
+  /** 描边 */
+  border: string;
+  /** 极浅底色 */
+  bg: string;
+  /** Chip 展示名 */
+  label: string;
+}
+
+export const DOC_TYPE_STYLES: Array<{ keys: string[]; style: DocTypeStyle }> = [
+  { keys: ['合同', '协议'], style: { color: '#B45309', border: '#F0D9B0', bg: '#FFFBF3', label: '合同' } },
+  { keys: ['发票'], style: { color: '#1D4ED8', border: '#C7D6E3', bg: '#F5F8FF', label: '发票' } },
+  { keys: ['物流', '运输', '运单'], style: { color: '#0E7490', border: '#B8DCE4', bg: '#F2FAFC', label: '物流' } },
+  { keys: ['报关', '海关', '清关'], style: { color: '#7C3AED', border: '#DDD0F0', bg: '#FAF7FF', label: '报关' } },
+  { keys: ['提单'], style: { color: '#4338CA', border: '#CFD0EC', bg: '#F7F7FE', label: '提单' } },
+  { keys: ['装箱', '箱单'], style: { color: '#0369A1', border: '#BAD9EE', bg: '#F3F9FD', label: '箱单' } },
+  { keys: ['检验', '质检', '报告'], style: { color: '#BE185D', border: '#F2CEE0', bg: '#FEF5FA', label: '检验' } },
+  { keys: ['资质', '许可', '证书'], style: { color: '#4D7C0F', border: '#D3E3B4', bg: '#F7FBEF', label: '资质' } },
+];
+
+const FALLBACK_DOC_TYPE_STYLE: DocTypeStyle = {
+  color: '#475569', border: '#CBD5E1', bg: '#FFFFFF', label: '文档',
+};
+
+/** 未收录: 稳定散列到扩展备选色, 同一类型恒定同色 */
+export function docTypeStyle(docType: string): DocTypeStyle {
+  const dt = (docType || '').trim();
+  if (!dt) return FALLBACK_DOC_TYPE_STYLE;
+  for (const entry of DOC_TYPE_STYLES) {
+    if (entry.keys.some((k) => dt.includes(k))) return entry.style;
+  }
+  // 未收录: 稳定散列到扩展备选色, 同一类型恒定同色
+  const extras = ['#64748B', '#A16207', '#57534E', '#7C2D12'];
+  let h = 0;
+  for (let i = 0; i < dt.length; i++) h = (h * 31 + dt.charCodeAt(i)) >>> 0;
+  const pick = extras[h % extras.length]!;
+  return { color: pick, border: '#CBD5E1', bg: '#FFFFFF', label: dt.slice(0, 3) };
+}
+
+/** 合同子类型的展示配色(spec 2026-08-27 三轮): 采购/销售/第三方/补充协议各自色系,
+ *  Chip 直接展示子类型短标签。匹配顺序即优先级。 */
+export const CONTRACT_TYPE_STYLES: Array<{ keys: string[]; style: DocTypeStyle }> = [
+  { keys: ['采购'], style: { color: '#0E7490', border: '#B8DCE4', bg: '#F2FAFC', label: '采购' } },
+  { keys: ['销售'], style: { color: '#15803D', border: '#CBE5D3', bg: '#F4FAF5', label: '销售' } },
+  { keys: ['三方', '第三方'], style: { color: '#C2410C', border: '#F0D2BF', bg: '#FFF8F3', label: '三方' } },
+  { keys: ['补充', '变更', '修订'], style: { color: '#7C3AED', border: '#DDD0F0', bg: '#FAF7FF', label: '补充' } },
+  { keys: ['框架'], style: { color: '#4338CA', border: '#CFD0EC', bg: '#F7F7FE', label: '框架' } },
+];
+
+const BASE_CONTRACT_STYLE: DocTypeStyle = {
+  color: '#15803D', border: '#CBE5D3', bg: '#FFFFFF', label: '合同',
+};
+
+/** 解析合同子类型配色: props 显式字段优先, 其次从合同编号/名称匹配关键词。 */
+export function contractTypeStyle(
+  name: string,
+  props: Record<string, unknown> | null,
+): DocTypeStyle {
+  for (const k of ['contractType', 'contract_type', 'type', 'category']) {
+    const v = props?.[k];
+    if (typeof v === 'string' && v.trim()) {
+      for (const entry of CONTRACT_TYPE_STYLES) {
+        if (entry.keys.some((key) => v.includes(key))) return entry.style;
+      }
+      return { ...BASE_CONTRACT_STYLE, label: v.trim().slice(0, 3) };
+    }
+  }
+  for (const entry of CONTRACT_TYPE_STYLES) {
+    if (entry.keys.some((key) => name.includes(key))) return entry.style;
+  }
+  return BASE_CONTRACT_STYLE;
+}
