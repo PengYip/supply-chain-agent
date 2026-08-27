@@ -18,6 +18,8 @@ import type { ExtractionDeps } from '../pipeline/extraction.js';
 import type { ClassifierDeps } from '../pipeline/classifier.js';
 import type { Embedder } from '../pipeline/embedder.js';
 import type { ChunkTagger } from '../pipeline/chunkTagging.js';
+import type { Reranker } from '../pipeline/reranker.js';
+import { defaultReranker } from '../pipeline/reranker.js';
 import { env } from '../env.js';
 
 // MVP roles. Later phases add risk / finance / management with their own toolsets.
@@ -34,6 +36,9 @@ export interface HarnessDeps {
   /** Phase 2 routing-classify stage. Unset -> ingest degrades to the hint docType. */
   classifier?: ClassifierDeps;
   embedder?: Embedder;
+  /** Optional recall precision stage (bge-reranker via SiliconFlow). Unset ->
+   *  registry builds one from env when SILICONFLOW_API_KEY is present. */
+  reranker?: Reranker | null;
   /** Lane B: per-chunk semantic tagger for ingest. Unset -> chunks stored untagged. */
   tagger?: ChunkTagger;
   /** Phase 2 business-data isolation: stamp + filter doc/extraction/binding/chunk
@@ -90,6 +95,7 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
     base.push({ ...buildProjectRollupTool({ ctx: deps?.ctx, userId }), name: 'project_rollup' });
     if (deps?.ctx) {
       const { ctx, extraction, embedder, classifier, tagger, userId } = deps;
+      const reranker = deps.reranker !== undefined ? deps.reranker : defaultReranker();
       base.push(
         { ...buildIngestDocumentTool({ ctx, embedder, classifier, extraction, tagger, userId }), name: 'ingest_document' },
         { ...buildExtractFieldsTool({ ctx, extraction, userId }), name: 'extract_fields' },
@@ -133,8 +139,9 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
         { ...buildManageQuotaTool({ ctx, userId }), name: 'manage_quota', needsApproval: true },
         // query_quota_usage is L1: 只读额度占用(读对账桥物化结果)。
         { ...buildQueryQuotaUsageTool({ ctx, userId }), name: 'query_quota_usage' },
-        // recall_documents is L1: FTS5/vector/hybrid recall over ingested chunks.
-        { ...buildRecallDocumentsTool({ ctx, embedder, userId }), name: 'recall_documents' },
+        // recall_documents is L1: FTS5/vector/hybrid recall over ingested chunks
+        // (+ optional bge-reranker precision stage from env).
+        { ...buildRecallDocumentsTool({ ctx, embedder, reranker, userId }), name: 'recall_documents' },
         // execute_code is L1: run Python in an isolated CubeSandbox microVM.
         {
           ...buildExecuteCodeTool({

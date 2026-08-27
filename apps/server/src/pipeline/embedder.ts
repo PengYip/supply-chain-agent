@@ -144,3 +144,71 @@ export class OllamaEmbedder implements Embedder {
     return data.embeddings;
   }
 }
+
+// ---- OpenAICompatEmbedder (hosted: SiliconFlow etc.) ------------------------
+
+export interface OpenAICompatEmbedderOptions {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}
+
+/**
+ * Embedder for any OpenAI-compatible /v1/embeddings endpoint (SiliconFlow is
+ * the deployment target; also works with OpenAI/DashScope-compatible hosts).
+ *
+ * bge-m3 on SiliconFlow returns exactly 1024 dims, matching EMBED_DIM and the
+ * vec0 table — verified live 2026-08-27 (batch of 3, CJK + ASCII).
+ *
+ * Throws a CLEAR configuration error when no API key is configured, mirroring
+ * OllamaEmbedder. Never invoked in the test path (tests inject
+ * DeterministicEmbedder or mock fetch).
+ */
+export class OpenAICompatEmbedder implements Embedder {
+  readonly dim: number = EMBED_DIM;
+  readonly kind = 'openai-compat';
+  private readonly apiKey: string | undefined;
+  private readonly baseUrl: string;
+  private readonly model: string;
+
+  constructor(opts: OpenAICompatEmbedderOptions = {}) {
+    this.apiKey = opts.apiKey ?? process.env.SILICONFLOW_API_KEY;
+    this.baseUrl = (opts.baseUrl ?? process.env.SILICONFLOW_BASE_URL ?? 'https://api.siliconflow.cn')
+      .replace(/\/+$/, '');
+    this.model = opts.model ?? process.env.SILICONFLOW_EMBED_MODEL ?? 'BAAI/bge-m3';
+  }
+
+  async embed(texts: string[]): Promise<number[][]> {
+    if (!this.apiKey) {
+      throw new Error(
+        'OpenAICompatEmbedder: SILICONFLOW_API_KEY is not configured. Set it (and optionally ' +
+          'SILICONFLOW_BASE_URL / SILICONFLOW_EMBED_MODEL, defaults https://api.siliconflow.cn ' +
+          '/ BAAI/bge-m3) to enable vector recall, or inject DeterministicEmbedder for offline use.',
+      );
+    }
+    const res = await fetch(`${this.baseUrl}/v1/embeddings`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({ model: this.model, input: texts }),
+    });
+    if (!res.ok) {
+      throw new Error(
+        `OpenAICompatEmbedder: /v1/embeddings failed (${res.status} ${res.statusText}) `
+        + `for model ${this.model}`,
+      );
+    }
+    // OpenAI shape: { data: [{ embedding: number[], index: number }], usage? }
+    const data = (await res.json()) as { data?: Array<{ embedding?: number[]; index?: number }> };
+    const rows = data.data ?? [];
+    if (rows.length !== texts.length || rows.some((r) => !Array.isArray(r.embedding))) {
+      throw new Error('OpenAICompatEmbedder: unexpected /v1/embeddings response shape');
+    }
+    // OpenAI guarantees order-aligned data but sort by index defensively.
+    return [...rows]
+      .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+      .map((r) => r.embedding!);
+  }
+}

@@ -16,7 +16,12 @@ import {
 import { appendStatusMessage, type AgentStatusSnapshot } from './agentStatus.js';
 import { getToolCallCounts } from './statusAggregator.js';
 import { countDocuments, countExtractionsNeedingReview } from '../pipeline/db/repositories.js';
-import { DeterministicEmbedder, OllamaEmbedder, type Embedder } from '../pipeline/embedder.js';
+import {
+  DeterministicEmbedder,
+  OllamaEmbedder,
+  OpenAICompatEmbedder,
+  type Embedder,
+} from '../pipeline/embedder.js';
 import { makeLlmTagger } from '../pipeline/chunkTagging.js';
 import { type DbContext } from '../pipeline/db/client.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
@@ -176,11 +181,19 @@ function getHarnessDbContext(): DbContext {
 }
 
 /**
- * Default embedder for production. Real bge-m3 via Ollama when OLLAMA_BASE_URL is
- * configured; otherwise the deterministic test embedder (offline, no model pull).
- * Tests bypass this by injecting their own embedder via RunStreamOpts.deps.
+ * Default embedder for production. Priority: SiliconFlow hosted bge-m3 (when
+ * SILICONFLOW_API_KEY is set; GPU-free) -> Ollama local (OLLAMA_BASE_URL) ->
+ * deterministic test embedder (offline, no model pull). Tests bypass this by
+ * injecting their own embedder via RunStreamOpts.deps.
  */
 function defaultEmbedder(): Embedder {
+  if (env.SILICONFLOW_API_KEY) {
+    return new OpenAICompatEmbedder({
+      apiKey: env.SILICONFLOW_API_KEY,
+      baseUrl: env.SILICONFLOW_BASE_URL,
+      model: env.SILICONFLOW_EMBED_MODEL,
+    });
+  }
   if (env.OLLAMA_BASE_URL) {
     return new OllamaEmbedder({ baseUrl: env.OLLAMA_BASE_URL, model: env.OLLAMA_EMBED_MODEL });
   }
