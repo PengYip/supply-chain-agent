@@ -1744,8 +1744,8 @@ export async function updateDocumentType(
   // contract_type。故障隔离: 台账级联失败不翻转已成功的 documents/extractions 更新。
   try {
     const rows = ctx.sqlite
-      .prepare('SELECT id, contract_type, title, fields FROM contract_ledger WHERE document_id = ?')
-      .all(docId) as Array<{ id: string; contract_type: string | null; title: string; fields: string }>;
+      .prepare('SELECT id, contract_type, fields FROM contract_ledger WHERE document_id = ?')
+      .all(docId) as Array<{ id: string; contract_type: string | null; fields: string }>;
     if (rows.length > 0) {
       ctx.sqlite
         .prepare(`UPDATE contract_ledger SET doc_type = ?, updated_at = datetime('now') WHERE document_id = ?`)
@@ -1800,8 +1800,6 @@ export function ledgerRowFieldsToProjection(
   }
   return out;
 }
-
-/** contract_ledger 行 fields(JSON 文本, {value, sourceSpans} 包装) -> 最小字段投影。 */
 
 /**
  * Set the parse_status lifecycle on a document. Mirrors setReviewStatus's raw
