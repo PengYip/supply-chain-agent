@@ -246,6 +246,9 @@ export const templateTypes = sqliteTable('template_types', {
   parentId: text('parent_id'),
   props: text('props').notNull().default('{}'),
   isActive: integer('is_active').notNull().default(1),
+  // P4 managed-wins: NULL=纯种子行(boot seed 可覆写); 非空=DB 状态优先。
+  managedAt: text('managed_at'),
+  managedBy: text('managed_by'),
   createdAt: text('created_at').notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
   updatedAt: text('updated_at').notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
 }, (t) => [
@@ -263,6 +266,9 @@ export const templateEdgeRules = sqliteTable('template_edge_rules', {
   anchorWeights: text('anchor_weights'),
   isActive: integer('is_active').notNull().default(1),
   templateVersion: integer('template_version').notNull().default(1),
+  // P4 managed-wins: 同 template_types, NULL=纯种子行。
+  managedAt: text('managed_at'),
+  managedBy: text('managed_by'),
   createdAt: text('created_at').notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
 }, (t) => [
   index('template_edge_rules_src').on(t.sourceTypeId, t.edgeType),

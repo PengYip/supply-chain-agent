@@ -126,6 +126,7 @@ import {
   listActiveEdgeRulesPg,
   ensureTemplateTypePg,
   ensureEdgeRulePg,
+  bumpTemplateVersionPg,
   migrateDocTypeAliasesPg,
 } from './postgres-repositories.js';
 
@@ -3462,7 +3463,9 @@ export async function ensureTemplateType(
   if (ctx.backend === 'postgres') return ensureTemplateTypePg(ctx, input);
   ctx.sqlite.prepare(
     `INSERT INTO template_types (id, kind, name, parent_id, props) VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id, props = excluded.props`,
+     ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id, props = excluded.props
+     -- P4 managed-wins(种子冲突策略): managed_at 非空=已管理行, boot seed 跳过覆写。
+     WHERE template_types.managed_at IS NULL`,
   ).run(input.id, input.kind, input.name, input.parentId ?? null, JSON.stringify(input.props ?? {}));
 }
 
@@ -3479,10 +3482,29 @@ export async function ensureEdgeRule(
        is_active = excluded.is_active,
        -- anchor_weights 覆写防护(小修 3): seed/幂等重跑不带权重(传入 NULL)时保留
        -- 既有值(manage_template 设的权重不被 boot 重跑抹掉); 显式传值照常覆写。
-       anchor_weights = COALESCE(excluded.anchor_weights, template_edge_rules.anchor_weights)`,
+       anchor_weights = COALESCE(excluded.anchor_weights, template_edge_rules.anchor_weights)
+     -- P4 managed-wins(种子冲突策略): 已管理行整行冻结(anchor_weights 一并不触碰,
+     -- 权重的显式写入走 manage 入口)。
+     WHERE template_edge_rules.managed_at IS NULL`,
   ).run(input.id, input.sourceTypeId, input.targetTypeId ?? '', input.edgeType,
     JSON.stringify(input.allowedVocab), input.isActive === false ? 0 : 1,
     input.anchorWeights ? JSON.stringify(input.anchorWeights) : null);
+}
+
+/**
+ * 模板版本审计(spec §3.3/§5): 每次管理性变更递增一个版本号。
+ * 单列自增无并发竞争面(管理操作低频且前台单实例 Hono), 不做事务锁。
+ */
+export async function bumpTemplateVersion(
+  ctx: DbContext, input: { changedBy: string; changeSummary: string },
+): Promise<number> {
+  if (ctx.backend === 'postgres') return bumpTemplateVersionPg(ctx, input);
+  const cur = ctx.sqlite.prepare('SELECT MAX(version) AS v FROM template_versions').get() as { v: number | null };
+  const next = (cur.v ?? 0) + 1;
+  ctx.sqlite.prepare(
+    'INSERT INTO template_versions (version, changed_by, change_summary) VALUES (?, ?, ?)',
+  ).run(next, input.changedBy, input.changeSummary);
+  return next;
 }
 
 /** 存量数据幂等迁移(spec §3.1): 提单/装箱单并入货转单(别名)。重复执行无副作用。 */

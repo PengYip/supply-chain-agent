@@ -347,6 +347,20 @@ export function migrate(sqlite: Database.Database): void {
     );
   `);
 
+  // P4: 种子冲突策略列(managed-wins)。NULL=纯种子行(boot 可覆写);非空=DB 优先。
+  // 存量 dev 库补列, 同 guarded ALTER 模式(CREATE TABLE IF NOT EXISTS 不加列;
+  // try/catch 兜并发初始化 "duplicate column name" -- 见 sessionStore.ts 51ef03c)。
+  for (const tbl of ['template_types', 'template_edge_rules']) {
+    const cols = sqlite.prepare(`PRAGMA table_info(${tbl})`).all() as Array<{ name: string }>;
+    const have = new Set(cols.map((c) => c.name));
+    if (!have.has('managed_at')) {
+      try { sqlite.exec(`ALTER TABLE ${tbl} ADD COLUMN managed_at TEXT`); } catch { /* concurrent */ }
+    }
+    if (!have.has('managed_by')) {
+      try { sqlite.exec(`ALTER TABLE ${tbl} ADD COLUMN managed_by TEXT`); } catch { /* concurrent */ }
+    }
+  }
+
   // Phase 2 business-data isolation: add user_id to pre-existing dev databases.
   // CREATE TABLE IF NOT EXISTS does not add columns to an already-existing table,
   // so ALTER is needed for databases created before the user_id columns landed.
@@ -800,6 +814,12 @@ export async function migratePostgres(pool: Pool): Promise<void> {
        change_summary TEXT NOT NULL,
        changed_at TEXT NOT NULL DEFAULT now()
      )`,
+    // P4: 种子冲突策略列(managed-wins)。NULL=纯种子行(boot 可覆写);非空=DB 优先。
+    // 幂等(ADD COLUMN IF NOT EXISTS), 存量库补列(SQLite 侧同款 guarded ALTER)。
+    `ALTER TABLE template_types ADD COLUMN IF NOT EXISTS managed_at timestamptz`,
+    `ALTER TABLE template_types ADD COLUMN IF NOT EXISTS managed_by TEXT`,
+    `ALTER TABLE template_edge_rules ADD COLUMN IF NOT EXISTS managed_at timestamptz`,
+    `ALTER TABLE template_edge_rules ADD COLUMN IF NOT EXISTS managed_by TEXT`,
     // L4 FTS fix (2026-08-17): drizzle migration 0000 created doc_chunk.fts_vector
     // as a PLAIN tsvector column (no GENERATED), so it stays NULL forever and
     // every FTS query silently returns 0 hits. Recreate it as a GENERATED column

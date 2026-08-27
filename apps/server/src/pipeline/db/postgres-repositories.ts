@@ -2633,7 +2633,9 @@ export async function ensureTemplateTypePg(
 ): Promise<void> {
   await ctx.pool.query(
     `INSERT INTO template_types (id, kind, name, parent_id, props) VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (id) DO UPDATE SET parent_id = excluded.parent_id, props = excluded.props`,
+     ON CONFLICT (id) DO UPDATE SET parent_id = excluded.parent_id, props = excluded.props
+     -- P4 managed-wins(种子冲突策略): managed_at 非空=已管理行, boot seed 跳过覆写。
+     WHERE template_types.managed_at IS NULL`,
     [input.id, input.kind, input.name, input.parentId ?? null, JSON.stringify(input.props ?? {})]);
 }
 
@@ -2648,10 +2650,27 @@ export async function ensureEdgeRulePg(
        allowed_vocab = excluded.allowed_vocab,
        is_active = excluded.is_active,
        -- anchor_weights 覆写防护(小修 3): 与 SQLite 分支同规则, 传入 NULL 保留既有值。
-       anchor_weights = COALESCE(excluded.anchor_weights, template_edge_rules.anchor_weights)`,
+       anchor_weights = COALESCE(excluded.anchor_weights, template_edge_rules.anchor_weights)
+     -- P4 managed-wins(种子冲突策略): 已管理行整行冻结(anchor_weights 一并不触碰)。
+     WHERE template_edge_rules.managed_at IS NULL`,
     [input.id, input.sourceTypeId, input.targetTypeId ?? '', input.edgeType,
      JSON.stringify(input.allowedVocab), input.isActive === false ? 0 : 1,
      input.anchorWeights ? JSON.stringify(input.anchorWeights) : null]);
+}
+
+/**
+ * 模板版本审计 Pg twin(SQLite 版见 repositories.ts bumpTemplateVersion)。
+ * INSERT..SELECT..RETURNING 单语句取 MAX+1 并落审计行, 天然规避读写窗口竞态。
+ */
+export async function bumpTemplateVersionPg(
+  ctx: PostgresDbContext, input: { changedBy: string; changeSummary: string },
+): Promise<number> {
+  const { rows } = await ctx.pool.query(
+    `INSERT INTO template_versions (version, changed_by, change_summary)
+     SELECT COALESCE(MAX(version), 0) + 1, $1, $2 FROM template_versions
+     RETURNING version`,
+    [input.changedBy, input.changeSummary]);
+  return Number((rows[0] as Record<string, unknown>).version);
 }
 
 /** 存量数据幂等迁移 Pg 版: 提单/装箱单 -> 货转单(参数化 UPDATE, 重复执行无副作用)。 */
