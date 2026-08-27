@@ -246,6 +246,9 @@ export async function clearChunkVectorsForDocument(ctx: DbContext, documentId: s
     await ctx.pool.query('UPDATE doc_chunk SET embedding = NULL WHERE document_id = $1', [documentId]);
     return;
   }
+  // vec0 表未建(扩展未加载)时无向量可清, 直接 no-op —— 与 saveChunkVectorsSqlite
+  // 的 isVecReadySqlite 守卫对称, 避免 "no such table" 假失败。
+  if (!isVecReadySqlite(ctx.sqlite)) return;
   ctx.sqlite
     .prepare('DELETE FROM doc_chunk_vec WHERE id IN (SELECT id FROM doc_chunk WHERE document_id = ?)')
     .run(documentId);

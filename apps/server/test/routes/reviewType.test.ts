@@ -92,8 +92,13 @@ describe('PATCH /api/documents/:docId/type', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       ok: boolean; docType: string; refreshedFlows: number; skipped: unknown[];
+      vectorization?: { status: string };
     };
-    expect(body).toEqual({ ok: true, docType: '发票', refreshedFlows: 1, skipped: [] });
+    // spec 2026-08-27: 响应携带向量回溯结果(发票非可向量化类型 -> skipped)。
+    expect(body).toEqual({
+      ok: true, docType: '发票', refreshedFlows: 1, skipped: [],
+      vectorization: expect.objectContaining({ status: 'skipped' }),
+    });
 
     // 文档行与 extraction 行都已级联更新。
     const meta = await getDocumentMeta(ctx, docId, 'u1');
@@ -116,8 +121,12 @@ describe('PATCH /api/documents/:docId/type', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       ok: boolean; docType: string; refreshedFlows: number; skipped: unknown[];
+      vectorization?: { status: string };
     };
-    expect(body).toEqual({ ok: true, docType: '发票', refreshedFlows: 1, skipped: [] });
+    expect(body).toEqual({
+      ok: true, docType: '发票', refreshedFlows: 1, skipped: [],
+      vectorization: expect.objectContaining({ status: 'skipped' }),
+    });
     // 图同步失败后仍继续执行流水重建。
     expect(refreshMock).toHaveBeenCalled();
   });

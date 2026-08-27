@@ -26,7 +26,8 @@ import {
 import { ensureDocumentExtracted } from '../pipeline/tools/documentEntry.js';
 import { refreshExecutionFlowsForDocument } from '../pipeline/executionFlow.js';
 import { commitDocumentGraph, syncDocumentTypeToGraph } from '../pipeline/graphCommit.js';
-import { buildIngestDeps } from '../pipeline/ingestModel.js';
+import { buildIngestDeps, defaultEmbedder } from '../pipeline/ingestModel.js';
+import { reconcileVectorizationAfterDocTypeChange } from '../pipeline/vectorReconcile.js';
 import { getModalityHint } from '../pipeline/modalityHints.js';
 import type { DocType, Modality } from '../pipeline/types.js';
 
@@ -243,7 +244,7 @@ const docTypeChangeSchema = z.object({ docType: z.string().min(1) });
  *   { docType: string }  — 必须在 DOC_TYPES 八类词汇内
  *
  * Responses:
- *   200 { ok: true, docType, refreshedFlows }
+ *   200 { ok: true, docType, refreshedFlows, skipped?, vectorization }
  *   400 { ok: false, error: 'invalid_body' | 'invalid_doc_type' }
  *   401 { error: 'unauthorized' }            (requireAuth, applied in index.ts)
  *   404 { ok: false, error: 'document_not_found' }
@@ -292,7 +293,17 @@ reviewRoute.patch('/:docId/type', async (c) => {
     // 失败不得告警吞掉(与修正钩子的 warn-only 语义不同)。skipped 透传跳过原因
     // (F2: 白名单外 / 方向判不出 / 无 confirmed 绑定)。
     const { materialized, skipped } = await refreshExecutionFlowsForDocument(ctx(), docId, user.id);
-    return c.json({ ok: true, docType, refreshedFlows: materialized, skipped });
+    // 向量回溯(spec 2026-08-27 选择性向量化): 对齐向量库与新类型——可向量化补
+    // 嵌入, 不可向量化清空。reconcile 契约永不抛出; 这层 try 与图同步同款兜底。
+    let vectorization;
+    try {
+      vectorization = await reconcileVectorizationAfterDocTypeChange(
+        ctx(), docId, docType, defaultEmbedder(), user.id,
+      );
+    } catch (e) {
+      console.warn('[review] 向量回溯失败:', e instanceof Error ? e.message : String(e));
+    }
+    return c.json({ ok: true, docType, refreshedFlows: materialized, skipped, vectorization });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[review] docType change failed:', msg);
