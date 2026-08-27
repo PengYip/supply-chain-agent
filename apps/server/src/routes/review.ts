@@ -252,7 +252,12 @@ reviewRoute.patch('/:docId/type', async (c) => {
   }
   const docType = parsed.data.docType;
   const templateTypes = await listTemplateTypes(ctx());
-  const valid = templateTypes.some((t) => t.kind === 'doc_type' && t.isActive && t.name === docType);
+  // 小修 4: 同步排除 aliasOf 别名类型(提单/装箱单=货转单别名) —— boot 迁移
+  // migrateDocTypeAliases 会把设成别名的 doc_type 翻回主类型, 人工修正接口
+  // 必须拒绝这类值, 否则用户改完刷新即被翻回。
+  const valid = templateTypes.some(
+    (t) => t.kind === 'doc_type' && t.isActive && !t.props.aliasOf && t.name === docType,
+  );
   if (!valid) {
     return c.json({ ok: false, error: 'invalid_doc_type' }, 400);
   }

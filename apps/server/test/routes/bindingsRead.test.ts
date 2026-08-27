@@ -45,6 +45,18 @@ describe('GET /api/bindings/overview', () => {
     expect(byId.get(b.docId)?.bindings).toEqual([]);
   });
 
+  it('docTypes 排除 aliasOf 别名类型(提单/装箱单), 小修 4', async () => {
+    // 下拉数据源若含别名类型, 用户把文档标成 提单 后 boot 迁移又翻回 货转单。
+    const { ensureTemplateSeed } = await import('../../src/pipeline/templateSeed.js');
+    await ensureTemplateSeed(ctx);
+    const res = await appAs('u1').request('/api/bindings/overview');
+    expect(res.status).toBe(200);
+    const data = await res.json() as { docTypes: string[] };
+    expect(data.docTypes).toContain('货转单');
+    expect(data.docTypes).not.toContain('提单');
+    expect(data.docTypes).not.toContain('装箱单');
+  });
+
   it('未认证 -> 401', async () => {
     const app = new Hono<AuthEnv>();
     app.route('/api/bindings', bindingsRoute);

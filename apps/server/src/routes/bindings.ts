@@ -60,10 +60,13 @@ bindingsRoute.get('/overview', async (c) => {
       bindings: byDoc.get(d.id) ?? [],
     };
   });
-  // 单据类型词汇表(模板派生: 激活的 doc_type 类型名), 前端据此渲染 docType
-  // 下拉/徽章, 不必硬编码。
+  // 单据类型词汇表(模板派生: 激活且非别名 aliasOf 的 doc_type 类型名), 前端据此
+  // 渲染 docType 下拉/徽章, 不必硬编码。排除别名(提单/装箱单=货转单, 小修 4):
+  // 用户选了别名后 boot 迁移 migrateDocTypeAliases 又会翻回主类型。
   const templateTypes = await listTemplateTypes(ctx());
-  const docTypes = templateTypes.filter((t) => t.kind === 'doc_type' && t.isActive).map((t) => t.name);
+  const docTypes = templateTypes
+    .filter((t) => t.kind === 'doc_type' && t.isActive && !t.props.aliasOf)
+    .map((t) => t.name);
   return c.json({ documents, docTypes });
 });
 

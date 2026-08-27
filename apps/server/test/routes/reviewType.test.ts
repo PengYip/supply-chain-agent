@@ -158,6 +158,24 @@ describe('PATCH /api/documents/:docId/type', () => {
     expect(refreshMock).not.toHaveBeenCalled();
   });
 
+  it('aliasOf 别名类型(提单) -> 400 invalid_doc_type(小修 4)', async () => {
+    // 提单/装箱单是货转单的别名(props.aliasOf), boot 迁移 migrateDocTypeAliases
+    // 会把设成别名的 doc_type 翻回 货转单 —— 人工修正接口必须拒绝这类值。
+    const ctx = ctxHolder.current!;
+    const docId = await seedDoc(ctx);
+
+    const res = await appAs('u1').request(`/api/documents/${docId}/type`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ docType: '提单' }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ ok: false, error: 'invalid_doc_type' });
+    expect(refreshMock).not.toHaveBeenCalled();
+    // 文档行未被修改。
+    expect((await getDocumentMeta(ctx, docId, 'u1'))?.docType).toBe('其他');
+  });
+
   it('缺 body / 空 docType -> 400 invalid_body', async () => {
     const ctx = ctxHolder.current!;
     const docId = await seedDoc(ctx);
