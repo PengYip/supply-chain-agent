@@ -211,12 +211,20 @@ server.
 ## Workflow conventions
 
 - **Commit + push after edits by default.** When a change is complete and
-  verified (build -> lint -> test green), commit and `git push origin main`
-  without waiting to be asked. A push to `main` triggers CI
+  verified (build -> lint -> test green), commit without waiting to be asked.
+  A push to `main` triggers CI
   (`npm install` -> `build` -> `lint` -> `test`) and, on success, the CD job
   deploys to the ubuntu-server over the self-hosted runner (see `## Deploy`).
   Never push broken code -- a red CI blocks the deploy job and leaves `main`
   in a bad state.
+- **Merge finished work back into main.** Day-to-day work happens on feature /
+  worktree branches (e.g. `PengYip/UI-UX优化`), not directly on `main`. Once a
+  change is verified (build -> lint -> test green), push the branch AND merge
+  it into `main`: `git fetch origin main` -> `git merge origin/main` (resolve,
+  then re-verify if the merge touched code) -> `git push origin HEAD:<branch>`
+  followed by `git push origin HEAD:main`. Merged-but-unpushed work never
+  reaches the dev deployment at 10.10.0.2, so "没有生效" usually means this
+  step was skipped, not that the fix failed.
 - Stage only the files relevant to the current change; do not sweep in
   unrelated untracked files (e.g. stray docs/plans).
 
