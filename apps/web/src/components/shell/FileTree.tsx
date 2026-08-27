@@ -332,9 +332,14 @@ function FileRow(props: {
       <span className="mr-2 hidden shrink-0 whitespace-nowrap text-[11px] text-ink-soft group-hover:inline">
         {formatSize(file.size)}
       </span>
+      {/* 动作条采用悬浮覆盖（absolute 右缘定位）而非行内排布：不占行宽，
+          窄面板/深层级下不会被徽标与尺寸挤出可视区。 */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className={clsx('items-center gap-1.5 whitespace-nowrap', showActions ? 'flex' : 'hidden group-hover:flex')}
+        className={clsx(
+          'absolute right-2 top-1/2 z-20 flex -translate-y-1/2 items-center gap-1 whitespace-nowrap rounded-md border border-line bg-white px-1 py-0.5 shadow-pop',
+          showActions ? 'flex' : 'hidden group-hover:flex',
+        )}
       >
         <span onClick={() => cb.downloadFile(file.key)} className={actionLinkClass()}>
           下载
