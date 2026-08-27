@@ -4,8 +4,23 @@
 import { useCallback, useState } from 'react';
 
 export type DragPayload =
-  | { kind: 'file'; key: string; name: string }
+  | { kind: 'file'; key: string; name: string; directory: string }
   | { kind: 'folder'; path: string };
+
+/** 悬停位置判定：文件夹行支持上/中/下三区（边=排序，中=移入），
+ *  文件行只用上下两半（排序）。 */
+export type RowZone = 'above' | 'into' | 'below';
+
+export function rowZoneFromEvent(e: React.DragEvent, allowInto: true): RowZone;
+export function rowZoneFromEvent(e: React.DragEvent, allowInto: false): 'above' | 'below';
+export function rowZoneFromEvent(e: React.DragEvent, allowInto: boolean): RowZone {
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  const ratio = rect.height > 0 ? (e.clientY - rect.top) / rect.height : 0.5;
+  if (!allowInto) return ratio < 0.5 ? 'above' : 'below';
+  if (ratio < 0.3) return 'above';
+  if (ratio > 0.7) return 'below';
+  return 'into';
+}
 
 export const FILE_MIME = 'application/x-sca-file';
 export const FOLDER_MIME = 'application/x-sca-folder';

@@ -37,6 +37,10 @@ import {
   createFileFolder,
   deleteFileFolder,
   renameFileFoldersPrefix,
+  listFileRanks,
+  upsertFileRanks,
+  deleteFileRank,
+  setFolderSortOrders,
   deleteDocument,
   createDocumentStub,
   getDocumentParseStatus,
@@ -319,9 +323,66 @@ filesRoute.get('/', requireRole('admin', 'trader', 'viewer'), async (c) => {
   }));
 
   // Virtual folders (presentational only; file objects live in MinIO regardless).
+  // Already sorted by the repo (rank ASC, path ASC; unranked last).
   const folders = await listFileFolders(ctx(), user.id);
 
-  return c.json({ files: filesWithStatus, folders });
+  // Apply manual drag-order ranks to files: ranked first in rank order, then
+  // never-ranked rows by name. A user's rank table is tiny -- load it whole.
+  const ranks = await listFileRanks(ctx(), user.id);
+  const rankedKeys = [...ranks.keys()];
+  const keyedFiles = new Map(filesWithStatus.map((f) => [f.key, f]));
+  const orderedFiles: typeof filesWithStatus = [];
+  for (const k of rankedKeys) {
+    const f = keyedFiles.get(k);
+    if (f) {
+      orderedFiles.push(f);
+      keyedFiles.delete(k);
+    }
+  }
+  orderedFiles.push(...[...keyedFiles.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh')));
+
+  return c.json({ files: orderedFiles, folders });
+});
+
+/** Persist a drag-to-sort result for one sibling group.
+ *  Body {kind:'folders', paths:[fullPath,...]} -> sets each folder's rank to
+ *  its array index. Body {kind:'files', keys:[minioKey,...]} -> upserts ranks
+ *  keyed by object key. The client always sends the FULL group order, so the
+ *  whole group becomes consistently ranked after any single drop. */
+filesRoute.patch('/reorder', requireRole('admin', 'trader'), async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+
+  let body: { kind?: unknown; paths?: unknown; keys?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'invalid JSON body' }, 400);
+  }
+
+  if (body.kind === 'folders') {
+    if (!Array.isArray(body.paths)) return c.json({ error: 'paths must be an array' }, 400);
+    const paths = body.paths.filter((p): p is string => typeof p === 'string').map((p) => normalizeDirectory(p));
+    await setFolderSortOrders(ctx(), user.id, paths);
+    return c.json({ ok: true });
+  }
+
+  if (body.kind === 'files') {
+    if (!Array.isArray(body.keys)) return c.json({ error: 'keys must be an array' }, 400);
+    const keys = body.keys.filter((k): k is string => typeof k === 'string');
+    // Ownership: every key must live under this user's prefix.
+    if (keys.some((k) => !k.startsWith(`users/${user.id}/`))) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    await upsertFileRanks(
+      ctx(),
+      user.id,
+      keys.map((key, order) => ({ key, order })),
+    );
+    return c.json({ ok: true });
+  }
+
+  return c.json({ error: "kind must be 'folders' or 'files'" }, 400);
 });
 
 /** Move a file to a different directory (MinIO copy + remove + doc link update). */
@@ -519,6 +580,12 @@ filesRoute.delete('/:key', requireRole('admin', 'trader'), async (c) => {
   } catch (e) {
     // Log but don't 500 — the DB rows were already deleted (or never existed).
     console.warn('[files] minio removeObject failed for', key, (e as Error).message);
+  }
+  // Best-effort: drop any drag-order rank row left behind by the deleted object.
+  try {
+    await deleteFileRank(ctx(), user.id, key);
+  } catch {
+    // rank rows are cosmetic; never fail the delete over one.
   }
   return c.json({ ok: true, key, docId: docId ?? null });
 });

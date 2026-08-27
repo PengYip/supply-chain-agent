@@ -175,9 +175,21 @@ export function migrate(sqlite: Database.Database): void {
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
       path TEXT NOT NULL,
+      -- NULL = never manually ordered; sorts after all ranked rows.
+      sort_order INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_file_folders_user ON file_folders(user_id);
+
+    -- File manager manual ordering (drag-to-sort): per-user rank rows for file
+    -- objects, keyed by MinIO object key. Ranks are lost when a file is moved/
+    -- renamed (key changes) and orphaned ranks are harmless read-time noise.
+    CREATE TABLE IF NOT EXISTS file_sort_orders (
+      user_id TEXT NOT NULL,
+      obj_key TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, obj_key)
+    );
 
     -- L4 document recall index (Task 6 v1, SQLite/FTS5 path). Keyword BM25 recall
     -- over chunked document text. Postgres+pgvector and sqlite-vec/semantic paths
@@ -364,6 +376,15 @@ export function migrate(sqlite: Database.Database): void {
     const cols = sqlite.prepare('PRAGMA table_info(execution_flows)').all() as Array<{ name: string }>;
     if (!cols.some((c) => c.name === 'unit')) {
       try { sqlite.exec('ALTER TABLE execution_flows ADD COLUMN unit TEXT'); } catch { /* concurrent */ }
+    }
+  }
+
+  // 文件管理拖拽排序: 存量 dev 库的 file_folders 补 sort_order 列（新建库已带列,
+  // PRAGMA 守卫保证幂等）。file_sort_orders 表由上方 CREATE TABLE IF NOT EXISTS 覆盖。
+  {
+    const cols = sqlite.prepare('PRAGMA table_info(file_folders)').all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'sort_order')) {
+      try { sqlite.exec('ALTER TABLE file_folders ADD COLUMN sort_order INTEGER'); } catch { /* concurrent */ }
     }
   }
 
@@ -564,6 +585,14 @@ export async function migratePostgres(pool: Pool): Promise<void> {
        created_at timestamptz NOT NULL DEFAULT NOW()
      )`,
     `CREATE INDEX IF NOT EXISTS idx_file_folders_user ON file_folders(user_id)`,
+    // 文件管理拖拽排序: 文件夹顺序列 + 文件对象顺序表（与 SQLite 同构，幂等）。
+    `ALTER TABLE file_folders ADD COLUMN IF NOT EXISTS sort_order INTEGER`,
+    `CREATE TABLE IF NOT EXISTS file_sort_orders (
+       user_id TEXT NOT NULL,
+       obj_key TEXT NOT NULL,
+       sort_order INTEGER NOT NULL DEFAULT 0,
+       PRIMARY KEY (user_id, obj_key)
+     )`,
     // classifications: mirror of the SQLite table in migrate(). numeric(5,4) for
     // confidence matches extractions.overall_confidence pg convention.
     `CREATE TABLE IF NOT EXISTS classifications (

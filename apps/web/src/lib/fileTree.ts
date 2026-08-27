@@ -34,3 +34,14 @@ export function normalizeMoveDirectory(directory: string): string {
     .filter((s) => s.length > 0)
     .join('/');
 }
+
+/** 按 '/' 分段路径从树根取节点；'' 即根。不存在时返回 null。 */
+export function nodeAt(tree: TreeNode, path: string): TreeNode | null {
+  let node = tree;
+  for (const seg of pathSegments(path)) {
+    const next = node.subdirs[seg];
+    if (!next) return null;
+    node = next;
+  }
+  return node;
+}
