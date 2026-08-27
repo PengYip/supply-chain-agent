@@ -35,6 +35,7 @@ import {
   findEntities,
   listDocumentNodes,
   graphLabelCounts,
+  projectTree,
   type GraphEntity,
 } from '../graph/repo.js';
 import { normalizeName } from '../graph/normalize.js';
@@ -120,6 +121,24 @@ graphRoute.get('/documents', async (c) => {
       };
     });
   return c.json({ documents });
+});
+
+/** GET /api/graph/tree — 项目为根的树: Project -> part_of Contract -> 履约 Document。
+ *  只读聚合，供左侧列表的层级浏览(spec 2026-08-27 Task5)；无 Project 数据时前端
+ *  用 orphanContracts 渲染「未分组」兜底区。 */
+graphRoute.get('/tree', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  try {
+    const tree = await projectTree();
+    return c.json(tree);
+  } catch (e) {
+    if (isGraphUnavailable(e)) {
+      return c.json({ error: '图谱服务未配置或不可用' }, 503);
+    }
+    console.error('[graph] projectTree failed:', errDetail(e));
+    return c.json({ error: 'tree query failed', detail: errDetail(e) }, 500);
+  }
 });
 
 /** GET /api/graph/query?subject=&depth=&direction= — bounded graph traversal. */
