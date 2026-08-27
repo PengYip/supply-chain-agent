@@ -702,27 +702,55 @@ export const RealChatView: React.FC<{
               <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
                 <Sparkles className="w-6 h-6 text-primary" />
               </div>
-              <h3 className="text-base font-medium text-ink mb-2">真实 DeepSeek 工具调用</h3>
+              <h3 className="text-base font-medium text-ink mb-2">贸易业务助理</h3>
               <p className="text-sm text-ink-soft mb-6 max-w-md">
-                下方输入查询，AI 将自动调用后端真实工具（query_contract / query_orders / cross_check），所有数字来自工具返回，不编造。
+                上传合同、发票、提单即可自动识别字段并挂接台账；对话查询合同、订单与履约流水。
+                所有数字来自系统台账与文档，不编造。
               </p>
-              <div className="flex flex-wrap justify-center gap-2">
-                {[
-                  '查合同 HT-2024-001',
-                  '挂提单 BL-2024-0920-002 到合同 HT-2024-001',
-                  '发起付款 50 万',
-                  'HT-2024-001 和 HT-2024-002 金额对不上',
-                  '核验提单 BL-2024-0920-002 字段',
-                ].map((prompt) => (
-                  <button
-                    key={prompt}
-                    onClick={() => setInput(prompt)}
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-full border border-line bg-white text-sm text-ink-soft hover:border-warning hover:text-warning transition-colors"
-                  >
-                    {prompt}
-                  </button>
+              <div className="grid gap-4 max-w-xl w-full">
+                {(
+                  [
+                    {
+                      label: '查询与核对',
+                      prompts: [
+                        '查一下合同 HT-2024-001 的执行情况',
+                        'HT-2024-001 和 HT-2024-002 的金额对得上吗',
+                        '这个项目累计发运了多少',
+                      ],
+                    },
+                    {
+                      label: '单据处理与绑定',
+                      prompts: [
+                        '核验提单 BL-2024-0920-002 的关键字段',
+                        '把提单 BL-2024-0920-002 挂到合同 HT-2024-001',
+                      ],
+                    },
+                    {
+                      label: '图谱追溯与模板管理',
+                      prompts: [
+                        'HT-2024-001 关联了哪些交易方和文档',
+                        '新建文档类型铁路运单，必填运单号、发站、到站（需审批）',
+                      ],
+                    },
+                  ] as const
+                ).map((group) => (
+                  <div key={group.label}>
+                    <div className="mb-1.5 text-xs font-medium text-ink-soft">{group.label}</div>
+                    <div className="flex flex-wrap justify-center gap-2">
+                      {group.prompts.map((prompt) => (
+                        <button
+                          key={prompt}
+                          onClick={() => setInput(prompt)}
+                          className="px-3 py-1.5 rounded-full border border-line bg-white text-sm text-ink-soft hover:border-primary hover:text-primary transition-colors"
+                        >
+                          {prompt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
+              <p className="mt-4 text-xs text-ink-soft">标注需审批的操作会弹出审批卡片，管理员批准后才会执行</p>
             </div>
           )}
           {renderItems.map((item) => (

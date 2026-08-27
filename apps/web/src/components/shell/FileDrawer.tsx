@@ -353,6 +353,9 @@ export function FileDrawer(props: FileDrawerProps) {
             <div className="flex flex-col items-center p-10 text-sm text-ink-soft">
               <Folder className="mb-2 h-10 w-10 text-line" aria-hidden />
               <span>暂无文件</span>
+              <span className="mt-2 max-w-[230px] text-center text-xs leading-5">
+                把合同、发票、提单等文件直接拖到这里即可上传并自动解析；支持整文件夹拖入以保留层级
+              </span>
             </div>
           ) : (
             <FileTree tree={tree} expanded={expanded} toggle={toggle} cb={callbacks} />
