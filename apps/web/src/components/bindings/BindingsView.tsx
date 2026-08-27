@@ -79,10 +79,15 @@ export interface DocFocus {
 export function BindingsView({
   onOpenInGraph,
   docFocus,
+  onChanged,
 }: {
   onOpenInGraph?: (target: GraphFocusTarget) => void;
   /** 外部定位深链（图谱 Inspector「去审核」与文件抽屉徽标共用，App 统一注入）。 */
   docFocus?: DocFocus | null;
+  /** 绑定状态发生成功变更(确认/解绑/创建)后通知宿主，供文件树等
+   *  「已挂合同」徽标的消费方刷新（文件列表由 App 级 useFiles 持有，
+   *  本视图内更新不会自然触达）。 */
+  onChanged?: () => void;
 }) {
   const b = useBindings();
   const { overview, proposals, candidates, contracts } = b;
@@ -377,6 +382,7 @@ export function BindingsView({
               ? `已确认绑定 ${row.contractNo}`
               : `已确认绑定 ${row.contractNo}（图谱未同步）`,
           );
+          onChanged?.();
         } catch (e) {
           b.patchOverview(() => snapOverview);
           b.patchProposals(() => snapProposals);
@@ -441,6 +447,7 @@ export function BindingsView({
         try {
           await b.unbindBinding(id);
           pushToast('success', `已解除绑定 ${binding.contractNo}`);
+          onChanged?.();
         } catch (e) {
           b.patchOverview(() => snapOverview);
           pushToast('error', e instanceof Error ? e.message : '解除失败');
@@ -481,8 +488,10 @@ export function BindingsView({
           if (failed.length > 0) {
             setBatchErrors(Object.fromEntries(failed.map((f) => [f.bindingId, f.error || '确认失败'])));
             pushToast('error', `批量确认：成功 ${results.length - failed.length} 项 · 失败 ${failed.length} 项`);
+            if (results.length - failed.length > 0) onChanged?.();
           } else {
             pushToast('success', `已确认 ${results.length} 项绑定`);
+            onChanged?.();
           }
         } catch (e) {
           b.patchOverview(() => snapOverview);
@@ -549,6 +558,7 @@ export function BindingsView({
             ? `已创建绑定 ${p.contractNo}`
             : `已创建绑定 ${p.contractNo}（图谱未同步）`,
       );
+      if (!res.existing) onChanged?.();
       return true;
     } catch (e) {
       pushToast('error', e instanceof Error ? e.message : '创建失败');
@@ -640,6 +650,7 @@ export function BindingsView({
             'success',
             res.existing ? `该绑定已存在：${key}` : res.graphSync === 'ok' ? `已创建绑定 ${key}` : `已创建绑定 ${key}（图谱未同步）`,
           );
+          if (!res.existing) onChanged?.();
         } catch (e) {
           b.patchOverview(() => snapOverview);
           pushToast('error', e instanceof Error ? e.message : '创建失败');

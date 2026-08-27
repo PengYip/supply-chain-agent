@@ -13,7 +13,8 @@ export type ReviewRequestBody = {
 }
 
 /** Success envelope. `snapshot` is the full review payload with updated
- *  reviewStatus / fields / vectorization — drop-in for the card's local state. */
+ *  reviewStatus / fields / vectorization — drop-in for the card's local state.
+ *  Shared by POST (write result) and GET (read current state). */
 export type ReviewSuccessResponse = {
   ok: true
   docId: string
@@ -26,25 +27,9 @@ export type ReviewErrorResponse = {
   error: string
 }
 
-/** POST a document review action (corrections or confirm-as-is) to the backend.
- *  Cookie-authed, same-origin. Throws an Error on any non-2xx / network failure
- *  or when the response envelope is malformed — callers surface the message. */
-export async function submitReview(
-  docId: string,
-  body: ReviewRequestBody,
-): Promise<ReviewSuccessResponse> {
-  let res: Response
-  try {
-    res = await fetch(`/api/documents/${encodeURIComponent(docId)}/review`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-  } catch {
-    throw new Error('网络错误，请稍后重试')
-  }
-
+/** Shared envelope parsing for both review endpoints. Throws an Error with a
+ *  user-facing message on any non-2xx / malformed response. */
+async function parseEnvelope(res: Response): Promise<ReviewSuccessResponse> {
   if (!res.ok) {
     let message = `请求失败（${res.status}）`
     try {
@@ -69,4 +54,42 @@ export async function submitReview(
     throw new Error('响应格式异常')
   }
   return envelope
+}
+
+/** GET the CURRENT review snapshot. Chat history persists the tool result as a
+ *  point-in-time copy, so a card restored from history can lag behind the DB
+ *  (e.g. confirmed in an earlier session); callers hydrate pending cards with
+ *  this. Cookie-authed, same-origin; throws like submitReview. */
+export async function fetchReviewSnapshot(docId: string): Promise<ReviewSuccessResponse> {
+  let res: Response
+  try {
+    res = await fetch(`/api/documents/${encodeURIComponent(docId)}/review`, {
+      method: 'GET',
+      credentials: 'include',
+    })
+  } catch {
+    throw new Error('网络错误，请稍后重试')
+  }
+  return parseEnvelope(res)
+}
+
+/** POST a document review action (corrections or confirm-as-is) to the backend.
+ *  Cookie-authed, same-origin. Throws an Error on any non-2xx / network failure
+ *  or when the response envelope is malformed — callers surface the message. */
+export async function submitReview(
+  docId: string,
+  body: ReviewRequestBody,
+): Promise<ReviewSuccessResponse> {
+  let res: Response
+  try {
+    res = await fetch(`/api/documents/${encodeURIComponent(docId)}/review`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  } catch {
+    throw new Error('网络错误，请稍后重试')
+  }
+  return parseEnvelope(res)
 }

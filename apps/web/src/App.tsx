@@ -160,7 +160,12 @@ function App() {
     <AppShell
       currentView={view}
       onNavigate={handleNavigate}
-      onOpenFiles={() => setFileDrawerOpen(true)}
+      // 打开文件抽屉时重拉列表：「已挂合同」徽标在绑定工作台/对话里确认后
+      // 会过期（useFiles 仅在挂载与上传等少数事件时刷新），打开即取最新态。
+      onOpenFiles={() => {
+        setFileDrawerOpen(true);
+        void refreshFiles();
+      }}
       filesOpen={fileDrawerOpen}
       user={user}
       onSignOut={() => void handleSignOut()}
@@ -195,7 +200,7 @@ function App() {
           }}
         />
       ) : view === 'bindings' ? (
-        <BindingsView onOpenInGraph={openInGraph} docFocus={bindingsFocus} />
+        <BindingsView onOpenInGraph={openInGraph} docFocus={bindingsFocus} onChanged={() => { void filesApi.refresh(); }} />
       ) : view === 'flows' ? (
         <FlowsView onOpenParties={openParties} />
       ) : view === 'parties' ? (

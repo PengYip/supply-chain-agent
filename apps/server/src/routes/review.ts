@@ -153,6 +153,37 @@ reviewRoute.post('/:docId/review', async (c) => {
 });
 
 /**
+ * GET /api/documents/:docId/review
+ *
+ * Read-only current review snapshot. Chat history stores the
+ * present_document_review tool result as an immutable point-in-time copy, so a
+ * document confirmed AFTER the fact still reads 'pending' from restored
+ * history; clients hydrate open ('pending') cards from here on load.
+ *
+ * Responses:
+ *   200 { ok: true, docId, snapshot }
+ *   401 { error: 'unauthorized' }            (requireAuth, applied in index.ts)
+ *   404 { ok: false, error: 'document_or_extraction_not_found' }
+ *   500 { ok: false, error: <message> }
+ */
+reviewRoute.get('/:docId/review', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const docId = c.req.param('docId');
+  try {
+    const snapshot = await getReviewSnapshot(ctx(), docId, user.id);
+    if (!snapshot) {
+      return c.json({ ok: false, error: 'document_or_extraction_not_found' }, 404);
+    }
+    return c.json({ ok: true, docId, snapshot });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[review] snapshot fetch failed:', msg);
+    return c.json({ ok: false, error: msg }, 500);
+  }
+});
+
+/**
  * POST /api/documents/:docId/process
  *
  * Model B: run the parse pipeline on an EXISTING upload stub

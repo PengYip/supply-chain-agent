@@ -20,7 +20,7 @@ import {
   PenLine,
   Info,
 } from 'lucide-react'
-import { submitReview, type ReviewCorrection } from '../api/review'
+import { submitReview, fetchReviewSnapshot, type ReviewCorrection } from '../api/review'
 import { correctDocumentType, fetchActiveDocTypes } from '../api/documentType'
 
 /** One chunk classified under a semantic tag. `text` is server-capped (800
@@ -385,6 +385,23 @@ export const DocumentReviewCard: React.FC<{
   // 把父组件经 onUpdated 回滚到旧字段(照 RealChatView contextFilesRef 模式)。
   const snapshotRef = useRef(snapshot)
   useEffect(() => { snapshotRef.current = snapshot }, [snapshot])
+  // 历史会话水合: 聊天历史里的工具结果是 present_document_review 运行时刻的
+  // 不可变快照, 事后在别处确认/更正过的文档恢复时仍显示 pending。挂载且可编辑
+  // 时向服务端拉取一次当前快照, 状态已推进则采纳(404/网络失败静默保留原状)。
+  // 依赖仅 docId/初始状态: 挂载后拉一次, 用户本地操作不受影响。
+  useEffect(() => {
+    if (payload.reviewStatus !== 'pending') return
+    let cancelled = false
+    fetchReviewSnapshot(payload.docId)
+      .then((res) => {
+        if (cancelled || res.snapshot.reviewStatus === 'pending') return
+        setSnapshot((prev) =>
+          prev.reviewStatus === 'pending' ? res.snapshot : prev,
+        )
+      })
+      .catch(() => { /* 文档已删除或网络失败: 保留历史快照展示 */ })
+    return () => { cancelled = true }
+  }, [payload.docId, payload.reviewStatus])
   // Per-field edit buffer, keyed by field name. Holds raw input strings; values
   // are only present for fields the user has touched.
   const [edits, setEdits] = useState<Record<string, string>>({})
