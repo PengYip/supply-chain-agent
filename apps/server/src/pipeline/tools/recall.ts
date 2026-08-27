@@ -12,6 +12,7 @@ import {
 import { vectorKnn, isVecReady, type VecKnnHit } from '../db/vecStore.js';
 import { tagExternal } from '../../harness/injectionDefense.js';
 import type { Embedder } from '../embedder.js';
+import type { Reranker } from '../reranker.js';
 import { filterChunksByTag, type TagFilterMode } from '../chunkTagFilter.js';
 import { normalizeContractNo } from '../contractLedger.js';
 
@@ -41,6 +42,10 @@ export interface RecallToolDeps {
   /** Embedder for vector/hybrid strategies. Defaults to a deterministic test
    *  embedder when unset (no Ollama needed); see roleToolRegistry/agent wiring. */
   embedder?: Embedder;
+  /** Optional precision stage over vector/hybrid candidates (SiliconFlow
+   *  bge-reranker). Applied to the pre-truncation candidate list; any failure
+   *  degrades silently to the fusion order. Absent -> no rerank (tests/CI). */
+  reranker?: Reranker | null;
   /** Phase 2 business-data isolation: only recall chunks owned by this user.
    *  Empty/undefined = unscoped (legacy/tests; no filtering). */
   userId?: string;
@@ -165,6 +170,48 @@ async function resolveStrategy(
   return 'fts';
 }
 
+/**
+ * Precision stage over the candidate list BEFORE truncation to `limit`.
+ * Reorders `candidates` by the reranker's relevance scores (descending).
+ * Fault-tolerant by design: any reranker failure logs once and returns the
+ * input order unchanged -- recall output shape never depends on rerank
+ * availability. Returns [reorderedCandidates, applied] so the response can
+ * honestly report whether rerank ran.
+ */
+async function applyRerank<T>(
+  reranker: Reranker | null | undefined,
+  query: string,
+  candidates: T[],
+  textOf: (c: T) => string,
+): Promise<[T[], boolean]> {
+  if (!reranker || candidates.length === 0) return [candidates, false];
+  try {
+    const t0 = performance.now();
+    const results = await reranker.rerank(
+      query,
+      candidates.map((c) => textOf(c)),
+    );
+    console.log(`[perf-recall] rerank ${Math.round(performance.now() - t0)}ms n=${candidates.length}`);
+    const ordered: T[] = [];
+    const seen = new Set<number>();
+    for (const r of results) {
+      const c = candidates[r.index];
+      if (c !== undefined && !seen.has(r.index)) {
+        seen.add(r.index);
+        ordered.push(c);
+      }
+    }
+    // Safety net: append any candidate the response skipped, preserving order.
+    for (let i = 0; i < candidates.length; i++) {
+      if (!seen.has(i)) ordered.push(candidates[i]!);
+    }
+    return [ordered, true];
+  } catch (e) {
+    console.warn('[recall_documents] rerank failed; keeping fusion order:', (e as Error).message);
+    return [candidates, false];
+  }
+}
+
 export function buildRecallDocumentsTool(deps: RecallToolDeps) {
   return tool({
     description:
@@ -172,6 +219,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
       'strategy 何时选哪个: 用户给出精确词(合同号/单据号/物料编码/专有名词)选 fts; ' +
       '用户换说法或语义描述(如"关于烧碱采购的那批文件")选 vector; 不确定时用默认 hybrid。' +
       '(fts=FTS5 BM25 关键词, 多词空格分隔按 AND; vector=sqlite-vec 余弦 KNN 语义; hybrid=两者 RRF 融合。) ' +
+      'vector/hybrid 候选会在配置了 rerank 服务时用 bge-reranker 精排重排序(响应含 reranked:true)。' +
       '返回片段 + document_id + score + source。未命中时 fts 返回空(不编造); ' +
       'vector/hybrid 在 sqlite-vec 不可用时自动降级为 fts。' +
       'contractNo 可按合同号过滤, 只返回绑定到该合同的文档片段。' +
@@ -323,7 +371,13 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
             candidates = inScope;
             tagFilterFallback = true;
           }
-          const matches = candidates.slice(0, limit);
+          const [reranked, rerankedApplied] = await applyRerank(
+            deps.reranker,
+            query,
+            candidates,
+            (k) => meta.get(k.chunkRowId)?.text ?? '',
+          );
+          const matches = reranked.slice(0, limit);
           return {
             query,
             strategy: 'vector' as const,
@@ -340,6 +394,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
                 vector_distance: k.distance,
               };
             }),
+            ...(rerankedApplied ? { reranked: true as const } : {}),
             ...contractNoField,
             ...(tagFilterFallback ? { tagFilterFallback: true as const } : {}),
           };
@@ -373,7 +428,13 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
           candidates = inScope;
           tagFilterFallback = true;
         }
-        const matches = candidates.slice(0, limit);
+        const [reranked, rerankedApplied] = await applyRerank(
+          deps.reranker,
+          query,
+          candidates,
+          (f) => f.snippet,
+        );
+        const matches = reranked.slice(0, limit);
         return {
           query,
           strategy: 'hybrid' as const,
@@ -387,6 +448,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
             bm25_score: f.bm25,
             vector_distance: f.vectorDistance,
           })),
+          ...(rerankedApplied ? { reranked: true as const } : {}),
           ...contractNoField,
           ...(tagFilterFallback ? { tagFilterFallback: true as const } : {}),
         };

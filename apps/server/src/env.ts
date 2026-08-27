@@ -30,6 +30,15 @@ const EnvSchema = z.object({
   // real bge-m3 embeddings are deferred to deployment (no model pull needed).
   OLLAMA_BASE_URL: z.string().url().optional(),
   OLLAMA_EMBED_MODEL: z.string().default('bge-m3'),
+  // SiliconFlow hosted embeddings (OpenAI-compatible /v1/embeddings). When the
+  // API key is set it takes priority over Ollama in defaultEmbedder(): no local
+  // model install needed (GPU-free). Defaults match SiliconFlow's bge-m3 offer.
+  SILICONFLOW_API_KEY: z.string().optional(),
+  SILICONFLOW_BASE_URL: z.string().url().default('https://api.siliconflow.cn'),
+  SILICONFLOW_EMBED_MODEL: z.string().default('BAAI/bge-m3'),
+  // Rerank model served by the same key/host (precision stage over hybrid
+  // recall candidates). Active only when SILICONFLOW_API_KEY is set.
+  SILICONFLOW_RERANK_MODEL: z.string().default('BAAI/bge-reranker-v2-m3'),
   // Better Auth (Phase 1). secret signs session cookies/JWTs; in production set
   // a strong random value via .env. baseURL is the canonical origin (same :3001
   // as the Hono server in prod; the dev Vite proxy forwards /api/auth/* too).
