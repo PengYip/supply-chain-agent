@@ -4,7 +4,7 @@ import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.
 // 桩掉存储层(并行任务实现中): 只测物化决策逻辑, 不碰真实 DB。
 // 存储层契约类型(ExecutionFlowRow 等)由并行任务落地, 此处 mock 用宽松签名。
 const mocks = vi.hoisted(() => ({
-  upsertExecutionFlow: vi.fn<(args: any[]) => Promise<any>>(async () => 'EX-1'),
+  upsertExecutionFlow: vi.fn<(args: any[], uid?: string) => Promise<any>>(async () => 'EX-1'),
   retractExecutionFlowForBinding: vi.fn<(args: any[]) => Promise<any>>(async () => true),
   retractExecutionFlowsForDocument: vi.fn<(args: any[]) => Promise<any>>(async () => 0),
   listConfirmedBindingsForDocument: vi.fn<(args: any[]) => Promise<any>>(async () => []),
@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   // 自主体名单(Task A): materializeExecutionFlow 缺省名单走 getEffectiveSelfPartyNames
   // -> listSelfParties。测试均显式注入 selfPartyNames, 此 mock 仅兜底默认路径。
   listSelfParties: vi.fn<(args: any[]) => Promise<any>>(async () => []),
+  // 方向三级判定(spec 2026-08-27 §5): 第 2 级合同类型兜底读台账。
+  findContractLedgerByNo: vi.fn<(args: any[]) => Promise<any>>(async () => null),
 }));
 
 vi.mock('../../src/pipeline/db/repositories.js', () => ({
@@ -25,6 +27,7 @@ vi.mock('../../src/pipeline/db/repositories.js', () => ({
   summarizeExecutionFlows: mocks.summarizeExecutionFlows,
   listExecutionFlows: mocks.listExecutionFlows,
   listSelfParties: mocks.listSelfParties,
+  findContractLedgerByNo: mocks.findContractLedgerByNo,
 }));
 
 import {
@@ -47,6 +50,7 @@ beforeEach(() => {
   mocks.listConfirmedBindingsForDocument.mockResolvedValue([]);
   mocks.summarizeExecutionFlows.mockResolvedValue([]);
   mocks.listExecutionFlows.mockResolvedValue([]);
+  mocks.findContractLedgerByNo.mockResolvedValue(null);
 });
 
 /** 构造 loadLatestExtractionByDocId 返回的抽取行(fields 为 {value, sourceSpans} 包装)。 */
@@ -340,16 +344,20 @@ describe('方向编码类型(收货单/发货单)物化', () => {
     );
   });
 
-  it('无主体字段 -> 方向判不出 -> 返回 null 且未调 upsert(安静旁路保持)', async () => {
+  it('发货单无主体/无合同类型 -> 第三级 codedDirection 兜底 out(spec §5)', async () => {
     mocks.loadLatestExtractionByDocId.mockResolvedValue(
       extractionRow('发货单', { 矿种: '混煤', 车数: '580', 发运数量: '3357.46' }),
     );
     const id = await materializeExecutionFlow(ctx, baseInput, 'u1', SELF);
-    expect(id).toBeNull();
-    expect(mocks.upsertExecutionFlow).not.toHaveBeenCalled();
+    expect(id!.direction).toBe('out');
+    expect(mocks.upsertExecutionFlow).toHaveBeenCalledWith(
+      ctx,
+      expect.objectContaining({ flowType: '货物流', direction: 'out' }),
+      'u1',
+    );
   });
 
-  it('汽运磅单仍在白名单外(净最小集合) -> 返回 null', async () => {
+  it('汽运磅单(无主体/无合同类型/无方向编码) -> 三级全判不出 -> null(安静旁路保持)', async () => {
     mocks.loadLatestExtractionByDocId.mockResolvedValue(
       extractionRow('汽运磅单', { 合计净重: 100 }),
     );
@@ -358,13 +366,13 @@ describe('方向编码类型(收货单/发货单)物化', () => {
     expect(mocks.upsertExecutionFlow).not.toHaveBeenCalled();
   });
 
-  it('refresh introspection 同源: 发货单方向判不出 -> skipped=direction-undeterminable', async () => {
+  it('refresh introspection 同源: 汽运磅单方向判不出 -> skipped=direction-undeterminable', async () => {
     mocks.retractExecutionFlowsForDocument.mockResolvedValue(1);
     mocks.listConfirmedBindingsForDocument.mockResolvedValue([
       { id: 'BD-1', contractNo: 'CJXC-001', confidence: 0.9 },
     ]);
     mocks.loadLatestExtractionByDocId.mockResolvedValue(
-      extractionRow('发货单', { 矿种: '混煤' }),
+      extractionRow('汽运磅单', { 合计净重: 100 }),
     );
     const out = await refreshExecutionFlowsForDocument(ctx, 'DOC-1', 'u1', SELF);
     expect(out.materialized).toBe(0);
@@ -499,5 +507,55 @@ describe('buildQueryExecutionFlowsTool', () => {
     expect(mocks.summarizeExecutionFlows).toHaveBeenCalledWith(ctx, 'CJXC-001', 'u1');
     expect(mocks.listExecutionFlows).toHaveBeenCalledWith(ctx, 'CJXC-001', 'u1');
     expect((t as any).needsApproval).toBeUndefined();
+  });
+});
+describe('方向三级判定与白名单扩围(spec 2026-08-27 §5/§6)', () => {
+  it('火运大票(无主体锚点): 合同类型采购兜底 -> 货物流/in, quantity 投影 mass', async () => {
+    mocks.loadLatestExtractionByDocId.mockResolvedValue(
+      extractionRow('火运大票', { 合计净重: 3.2, 重量单位: '吨', 称量日期: '2025-03-01' }),
+    );
+    mocks.findContractLedgerByNo.mockResolvedValue({ contractNo: 'CJXC-001', contractType: '采购' });
+    const settled = await materializeExecutionFlow(ctx, baseInput, 'u1', ['我方贸易有限公司']);
+    expect(settled).toEqual({ flowId: 'EX-1', flowType: '货物流', direction: 'in', amount: null });
+    expect(mocks.upsertExecutionFlow.mock.calls[0]![1]).toMatchObject({
+      quantityValue: 3.2,
+      quantityDimension: 'mass',
+      quantityCanonical: 3200,
+      quantityTon: 3.2,
+      unit: '吨',
+      voucherDate: '2025-03-01',
+    });
+  });
+
+  it('发货单: 主体命中 buyer -> in(收货), codedDirection(out) 不覆盖主体证据', async () => {
+    mocks.loadLatestExtractionByDocId.mockResolvedValue(
+      extractionRow('发货单', { 买方: '我方贸易有限公司', 卖方: '某物流公司', 发运数量: 100 }),
+    );
+    const settled = await materializeExecutionFlow(ctx, baseInput, 'u1', ['我方贸易有限公司']);
+    expect(settled!.direction).toBe('in');
+    expect(settled!.flowType).toBe('货物流');
+  });
+
+  it('方向编码类型第三级: 名单与合同类型都缺席时 发货单 -> out', async () => {
+    mocks.loadLatestExtractionByDocId.mockResolvedValue(
+      extractionRow('发货单', { 发货人: '某人', 发运数量: 5 }),
+    );
+    const settled = await materializeExecutionFlow(ctx, baseInput, 'u1', []);
+    expect(settled!.direction).toBe('out');
+  });
+
+  it('进项票 -> 发票流/in; 付款单/结算单仍不物化', async () => {
+    mocks.loadLatestExtractionByDocId.mockResolvedValue(
+      extractionRow('进项票', { 购买方名称: '我方贸易有限公司', 金额: 999 }),
+    );
+    const settled = await materializeExecutionFlow(ctx, baseInput, 'u1', ['我方贸易有限公司']);
+    expect(settled!.flowType).toBe('发票流');
+    expect(settled!.direction).toBe('in');
+
+    mocks.loadLatestExtractionByDocId.mockResolvedValue(extractionRow('付款单', { 金额: 1 }));
+    mocks.upsertExecutionFlow.mockClear();
+    const paymentRequest = await materializeExecutionFlow(ctx, baseInput, 'u1', ['我方贸易有限公司']);
+    expect(paymentRequest).toBeNull();
+    expect(mocks.upsertExecutionFlow).not.toHaveBeenCalled();
   });
 });

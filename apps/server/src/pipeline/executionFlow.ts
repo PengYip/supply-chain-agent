@@ -2,12 +2,14 @@
 //
 // 一条 binding 变为 confirmed(人工确认 / auto_rule 自动确认 / 手动创建 / agent 确认)
 // 时, 用该凭证的最新抽取行物化一条"执行流水"落库。六向(收款/付款/收货/发货/收票/开票)
-// 的方向语义来自 domain/flowDirection: 锚点 buyer/seller 哪一侧命中本公司主体名单
-// (env.SELF_PARTY_NAMES) 决定 收(in)/付/发/开(out)。
+// 的方向语义按三级链判定(spec 2026-08-27 §5): 主体锚点(买/卖方命中自主主体名单,
+// env.SELF_PARTY_NAMES ∪ self_parties) -> 合同类型兜底(台账 contract_type) ->
+// 方向编码类型自带方向; 全判不出则安静跳过, 不猜测。
 //
-// 白名单: 付款凭证->资金流、货转单/收货单/发货单->货物流、发票->发票流; 其余
-// (合同/提单/装箱单/化验报告/汽运磅单/火运大票/其他)返回 null -- 提单/装箱单/质检
-// (化验报告)是未来扩展; 汽运磅单/火运大票等轨道衡类单据暂无主体锚点, 见白名单注。
+// 白名单(spec §6): 资金流=付款凭证; 货物流=货转单/收货单/发货单/汽运磅单/火运大票/
+// 派船通知单; 发票流=发票/进项票/销项票; 其余(合同/立项书/化验报告/付款单/结算单/
+// 提单/装箱单/其他)返回 null 不物化——付款单是申请非支付证据, 结算单为合同级汇总,
+// 语义待定; 提单/装箱单待 Phase 2 并入类型树后再接。
 //
 // 物化是安静旁路: 无抽取、docType 白名单外、名单未配置或方向判不出时返回 null, 不抛错、
 // 不影响绑定确认主流程; 同 bindingId 重复物化的幂等语义交由存储层 upsert 保证。
@@ -27,6 +29,13 @@ import {
   type ExtractionRow,
 } from './db/repositories.js';
 import { anchorsForExtraction } from './bindingProposal.js';
+import type { VoucherAnchors } from './schemas/vouchers.js';
+import {
+  FLOW_ADAPTERS,
+  CONTRACT_TYPE_FLOW_DIRECTION,
+  type FlowFamily,
+} from '../domain/tradeSemantics.js';
+import { findContractLedgerByNo } from './db/repositories.js';
 import {
   parseSelfPartyNames,
   normalizeCompanyName,
@@ -57,17 +66,20 @@ export interface MaterializedFlow {
   amount: number | null;
 }
 
-/** docType -> 执行流水流族。白名单外不物化(提单/装箱单/质检等未来扩展)。
- *  收货单/发货单(P2-T3 方向编码类型, 文本结构化): 货物流, 走字段锚点路径;
- *  汽运磅单/火运大票(火运轨道衡类)暂缓: 无买卖方主体锚点则方向判不出,
- *  且类型体系仍在收敛(P2-T4), 维持净最小集合。 */
-const FLOW_TYPE_BY_DOC_TYPE: Record<string, string> = {
+/** 图片凭证(封闭 schema, extractAnchors 路径)的流族映射。
+ *  化验报告(质检)非六向履约动作, 不物化。 */
+const IMAGE_VOUCHER_FLOW_TYPE: Record<string, string> = {
   付款凭证: '资金流',
   货转单: '货物流',
-  发票: '发票流',
-  收货单: '货物流',
-  发货单: '货物流',
 };
+
+/**
+ * docType -> 流族(spec 2026-08-27 §6): 图片凭证映射 + 适配表(flowFamily)。
+ * 白名单外(合同/立项书/化验报告/付款单/结算单/提单/装箱单/其他)返回 undefined 不物化。
+ */
+export function flowTypeFor(docType: string): string | undefined {
+  return IMAGE_VOUCHER_FLOW_TYPE[docType] ?? FLOW_ADAPTERS[docType]?.flowFamily;
+}
 
 /**
  * 有效自主体名单: DB 侧(self_parties)与 env.SELF_PARTY_NAMES 的并集, 按
@@ -96,6 +108,42 @@ export async function getEffectiveSelfPartyNames(ctx: DbContext): Promise<string
 }
 
 /**
+ * 方向三级判定(spec 2026-08-27 §5): 主体锚点 -> 合同类型兜底 -> 类型自带方向。
+ * 全部判不出返回 null(宁可空缺不猜)。
+ */
+async function resolveFlowDirection(
+  ctx: DbContext,
+  args: {
+    docType: string;
+    flowFamily: string;
+    anchors: VoucherAnchors;
+    contractNo: string;
+    userId?: string;
+    selfPartyNames: string[];
+  },
+): Promise<FlowDirection | null> {
+  // 第 1 级: 主体锚点(最具体证据, 命中即用, 不被类型语义覆盖)。
+  const side = resolveSelfSide(args.selfPartyNames, args.anchors);
+  if (side) {
+    if (args.flowFamily === '资金流') return moneyDirectionFor(side);
+    if (args.flowFamily === '货物流') return goodsDirectionFor(side);
+    return invoiceDirectionFor(side);
+  }
+  // 第 2 级: 合同类型兜底(采购: 货物收/资金付/发票收; 销售: 反向)。
+  let contractType: string | null | undefined;
+  try {
+    contractType = (await findContractLedgerByNo(ctx, args.contractNo, args.userId))?.contractType ?? null;
+  } catch {
+    contractType = null;
+  }
+  if (contractType === '采购' || contractType === '销售') {
+    return CONTRACT_TYPE_FLOW_DIRECTION[contractType][args.flowFamily as FlowFamily] ?? null;
+  }
+  // 第 3 级: 方向编码类型自带方向(收货单=in/发货单=out/进项票=in/销项票=out)。
+  return FLOW_ADAPTERS[args.docType]?.codedDirection ?? null;
+}
+
+/**
  * 物化一条执行流水。安静旁路: 返回 null 表示本次不物化(无抽取/白名单外/方向未知),
  * 绝不抛错。selfPartyNames 可注入(测试用), 缺省取有效名单(getEffectiveSelfPartyNames:
  * DB 名单 ∪ env.SELF_PARTY_NAMES, 归一化去重)。
@@ -109,24 +157,26 @@ export async function materializeExecutionFlow(
   const extraction = await loadLatestExtractionByDocId(ctx, input.documentId, userId);
   if (!extraction) return null;
 
-  const flowType = FLOW_TYPE_BY_DOC_TYPE[extraction.docType];
+  const flowType = flowTypeFor(extraction.docType);
   if (!flowType) return null;
   // 锚点: 分支假设集中anchorsForExtraction(bindingProposal)——图片凭证(付款凭证/
-  // 货转单)走 extractAnchors; 文本结构化文档(发票/收货单/发货单)走字段路径。
+  // 货转单)走 extractAnchors; 其余适配表类型走字段路径(quantity 带量纲投影)。
   const anchors = anchorsForExtraction(extraction.docType, extraction.fields);
 
   const names = selfPartyNames ?? (await getEffectiveSelfPartyNames(ctx));
-  const side = resolveSelfSide(names, anchors);
-  if (!side) {
-    // 名单未配置 / 两侧未命中 / 双侧命中: 方向未知, 安静跳过, 不猜测。
+  const direction = await resolveFlowDirection(ctx, {
+    docType: extraction.docType,
+    flowFamily: flowType,
+    anchors,
+    contractNo: input.contractNo,
+    userId,
+    selfPartyNames: names,
+  });
+  if (!direction) {
+    // 三级方向链全判不出: 安静跳过, 不猜测。
     console.debug('[executionFlow] 方向无法判定, 跳过物化:', input.contractNo, input.documentId);
     return null;
   }
-
-  let direction: FlowDirection;
-  if (flowType === '资金流') direction = moneyDirectionFor(side);
-  else if (flowType === '货物流') direction = goodsDirectionFor(side);
-  else direction = invoiceDirectionFor(side);
 
   const flowId = await upsertExecutionFlow(
     ctx,
@@ -140,6 +190,10 @@ export async function materializeExecutionFlow(
       quantityTon: anchors.quantityTon ?? null,
       // 数量单位独立建模: '_吨' 后缀字段确定为吨; 裸 '数量' 不带单位语义, 留 null 不猜测。
       unit: anchors.quantityUnit ?? null,
+      // 通用物化层(spec 2026-08-27): 数量原值/量纲/规范值; 未知单位留 NULL 不猜测。
+      quantityValue: anchors.quantity?.value ?? null,
+      quantityDimension: anchors.quantity?.dimension ?? null,
+      quantityCanonical: anchors.quantity?.canonical ?? null,
       docType: extraction.docType,
       voucherDate: anchors.date ?? null,
       // 溯源: 这行流水来自哪次抽取(修正重建后指向新行, 审计线索)。
@@ -199,9 +253,10 @@ export async function refreshExecutionFlowsForDocument(
   }
 
   // 跳过原因 introspection(不改变物化语义): 单次加载抽取 + 名单, 白名单/方向
-  // 判定与 materializeExecutionFlow 同源。物化内部仍会再加载一次抽取(双加载
-  // 可接受, 保持非侵入)。introspection 失败(抽取加载抛错) -> 原因未知, 不记录
-  // 跳过原因, 仅按原路径物化。无抽取行 -> 无法确认白名单成员 -> not-whitelisted。
+  // 判定与 materializeExecutionFlow 同源(三级方向链)。物化内部仍会再加载一次
+  // 抽取(双加载可接受, 保持非侵入)。introspection 失败(抽取加载抛错) -> 原因
+  // 未知, 不记录跳过原因, 仅按原路径物化。无抽取行 -> 无法确认白名单成员 ->
+  // not-whitelisted。
   let extraction: ExtractionRow | null = null;
   let introspectionOk = true;
   try {
@@ -210,11 +265,10 @@ export async function refreshExecutionFlowsForDocument(
     introspectionOk = false;
   }
   const names = selfPartyNames ?? (await getEffectiveSelfPartyNames(ctx));
-  const flowType = extraction ? FLOW_TYPE_BY_DOC_TYPE[extraction.docType] : undefined;
+  const flowType = extraction ? flowTypeFor(extraction.docType) : undefined;
   const anchors = extraction
     ? anchorsForExtraction(extraction.docType, extraction.fields)
     : undefined;
-  const side = anchors ? resolveSelfSide(names, anchors) : null;
 
   let materialized = 0;
   for (const b of bindings) {
@@ -224,9 +278,19 @@ export async function refreshExecutionFlowsForDocument(
           skipped.push({ bindingId: b.id, contractNo: b.contractNo, reason: 'not-whitelisted' });
           continue;
         }
-        if (!side) {
-          skipped.push({ bindingId: b.id, contractNo: b.contractNo, reason: 'direction-undeterminable' });
-          continue;
+        if (extraction && anchors) {
+          const direction = await resolveFlowDirection(ctx, {
+            docType: extraction.docType,
+            flowFamily: flowType,
+            anchors,
+            contractNo: b.contractNo,
+            userId,
+            selfPartyNames: names,
+          });
+          if (!direction) {
+            skipped.push({ bindingId: b.id, contractNo: b.contractNo, reason: 'direction-undeterminable' });
+            continue;
+          }
         }
       }
       const materializedFlow = await materializeExecutionFlow(
