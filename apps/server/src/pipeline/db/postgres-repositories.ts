@@ -2574,7 +2574,8 @@ export async function ensureEdgeRulePg(
        target_type_id = excluded.target_type_id,
        allowed_vocab = excluded.allowed_vocab,
        is_active = excluded.is_active,
-       anchor_weights = excluded.anchor_weights`,
+       -- anchor_weights 覆写防护(小修 3): 与 SQLite 分支同规则, 传入 NULL 保留既有值。
+       anchor_weights = COALESCE(excluded.anchor_weights, template_edge_rules.anchor_weights)`,
     [input.id, input.sourceTypeId, input.targetTypeId ?? '', input.edgeType,
      JSON.stringify(input.allowedVocab), input.isActive === false ? 0 : 1,
      input.anchorWeights ? JSON.stringify(input.anchorWeights) : null]);

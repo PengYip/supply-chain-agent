@@ -31,4 +31,46 @@ describe('template repo', () => {
     expect(pay?.allowedVocab).toEqual(['收款', '付款']);
     expect(rules.some((r) => r.id === 'er-inactive')).toBe(false);
   });
+
+  it('重跑 ensure 不带 anchorWeights 时保留既有权重不被抹成 null(小修 3)', async () => {
+    // 场景: manage_template 设了 anchor_weights, 之后 boot seed 幂等重跑
+    // (seed 输入不带 anchorWeights) -> 已有权重必须保留。
+    await ensureTemplateType(ctx, { id: 'dt-付款凭证', kind: 'doc_type', name: '付款凭证' });
+    await ensureEdgeRule(ctx, {
+      id: 'er-weights',
+      sourceTypeId: 'dt-付款凭证',
+      edgeType: 'binds',
+      allowedVocab: ['凭证'],
+      anchorWeights: { party: 0.4, time: 0.1, amount: 0.3, qty: 0.2 },
+    });
+    // 重跑: 未传 anchorWeights(undefined -> SQL NULL)。
+    await ensureEdgeRule(ctx, {
+      id: 'er-weights',
+      sourceTypeId: 'dt-付款凭证',
+      edgeType: 'binds',
+      allowedVocab: ['凭证'],
+    });
+    const rule = (await listActiveEdgeRules(ctx)).find((r) => r.id === 'er-weights');
+    expect(rule?.anchorWeights).toEqual({ party: 0.4, time: 0.1, amount: 0.3, qty: 0.2 });
+  });
+
+  it('显式传新 anchorWeights 时照常覆写(COALESCE 只护 NULL)', async () => {
+    await ensureTemplateType(ctx, { id: 'dt-付款凭证', kind: 'doc_type', name: '付款凭证' });
+    await ensureEdgeRule(ctx, {
+      id: 'er-overwrite',
+      sourceTypeId: 'dt-付款凭证',
+      edgeType: 'binds',
+      allowedVocab: ['凭证'],
+      anchorWeights: { party: 0.4, time: 0.1, amount: 0.3, qty: 0.2 },
+    });
+    await ensureEdgeRule(ctx, {
+      id: 'er-overwrite',
+      sourceTypeId: 'dt-付款凭证',
+      edgeType: 'binds',
+      allowedVocab: ['凭证'],
+      anchorWeights: { party: 0.9, time: 0.02, amount: 0.04, qty: 0.04 },
+    });
+    const rule = (await listActiveEdgeRules(ctx)).find((r) => r.id === 'er-overwrite');
+    expect(rule?.anchorWeights).toEqual({ party: 0.9, time: 0.02, amount: 0.04, qty: 0.04 });
+  });
 });
