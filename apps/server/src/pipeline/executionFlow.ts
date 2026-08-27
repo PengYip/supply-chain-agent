@@ -30,6 +30,7 @@ import {
 } from './db/repositories.js';
 import { anchorsForExtraction } from './bindingProposal.js';
 import type { VoucherAnchors } from './schemas/vouchers.js';
+import { computeExecutionProgress } from './executionProgress.js';
 import {
   FLOW_ADAPTERS,
   CONTRACT_TYPE_FLOW_DIRECTION,
@@ -336,9 +337,10 @@ export interface QueryFlowsToolDeps {
 export function buildQueryExecutionFlowsTool(deps: QueryFlowsToolDeps) {
   return tool({
     description:
-      '查询某合同的执行流水六向汇总(收款/付款/收货/发货/收票/开票)与逐笔明细, 每笔可回溯凭证文档。' +
-      '用途: 用户问"这个合同收/付了多少钱""货发了多少""开了多少票"时调用, 输出按流向汇总的' +
-      '执行情况与每笔流水的凭证出处。',
+      '查询某合同的执行流水六向汇总(收款/付款/收货/发货/收票/开票)与逐笔明细, 每笔可回溯凭证文档; ' +
+      '另附 executionProgress 执行进度块(基准=台账合同数量+单位, 量纲不一致时如实说明).' +
+      '用途: 用户问"这个合同收/付了多少钱""货发了多少""开了多少票""合同执行到什么程度"时调用, ' +
+      '输出按流向汇总的执行情况与每笔流水的凭证出处。',
     inputSchema: z.object({
       contractNo: z.string().min(1).describe('合同号(台账规范化后的 CJXC-... 形式)'),
     }),
@@ -347,6 +349,13 @@ export function buildQueryExecutionFlowsTool(deps: QueryFlowsToolDeps) {
         summarizeExecutionFlows(deps.ctx, contractNo, deps.userId),
         listExecutionFlows(deps.ctx, contractNo, deps.userId),
       ]);
+      // 执行进度(spec 2026-08-27 §9): 基准=台账合同数量+单位; 量纲不一致如实报 mismatch。
+      let ledgerFields: Record<string, { value: string | number }> | null = null;
+      try {
+        ledgerFields = (await findContractLedgerByNo(deps.ctx, contractNo, deps.userId))?.fields ?? null;
+      } catch {
+        ledgerFields = null;
+      }
       return {
         contractNo,
         summaries,
@@ -363,6 +372,7 @@ export function buildQueryExecutionFlowsTool(deps: QueryFlowsToolDeps) {
           docType: f.docType,
           extractionId: f.extractionId ?? null,
         })),
+        executionProgress: computeExecutionProgress(flows, ledgerFields),
       };
     },
   });

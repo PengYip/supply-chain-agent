@@ -85,6 +85,7 @@ import {
   retractExecutionFlowForBindingPg,
   retractExecutionFlowsForDocumentPg,
   listConfirmedBindingsForDocumentPg,
+  listAllConfirmedBindingsPg,
   listExecutionFlowsPg,
   summarizeExecutionFlowsPg,
   // 自主体名单(Task A): pg twins for self_parties CRUD + backfill helpers.
