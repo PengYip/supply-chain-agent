@@ -73,6 +73,35 @@ function normalizeDirectory(dir: string): string {
 }
 
 /**
+ * Pure guards for PATCH /folder-path (exported for unit tests).
+ *  - empty `from` is meaningless; `to === from` is a no-op; moving a folder
+ *    into its own subtree would orphan it. All three are rejected as 400.
+ */
+export function validateFolderPathChange(
+  rawFrom: string,
+  rawTo: string,
+): { ok: true } | { ok: false; reason: 'empty_from' | 'same_path' | 'self_nested' } {
+  const from = normalizeDirectory(rawFrom);
+  const to = normalizeDirectory(rawTo);
+  if (!from) return { ok: false, reason: 'empty_from' };
+  if (to === from) return { ok: false, reason: 'same_path' };
+  if (to.startsWith(`${from}/`)) return { ok: false, reason: 'self_nested' };
+  return { ok: true };
+}
+
+/** path === from or lives inside the from subtree. */
+export function isPathUnderFolder(path: string, from: string): boolean {
+  return path === from || path.startsWith(`${from}/`);
+}
+
+/** Rewrite a MinIO object key `users/<uid>/<from>/...` onto the new folder prefix. */
+export function rewriteKeyPrefix(key: string, userId: string, from: string, to: string): string {
+  const prefix = `users/${userId}/${from}/`;
+  if (!key.startsWith(prefix)) return key;
+  return `users/${userId}/${to}/${key.slice(prefix.length)}`;
+}
+
+/**
  * Parse a MinIO object key into the display {name, directory} a file manager
  * needs. Key format: `users/<userId>/[<folder>/...]<uuid>-<filename>`.
  *   - name: the original filename (the `<uuid>-` prefix added at upload is a
