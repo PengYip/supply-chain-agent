@@ -10,7 +10,12 @@ import {
 } from 'lucide-react';
 import { listProjects, fetchProjectRollup, type ProjectSummary, type ProjectRollupResp } from '../../api/projects';
 import { fetchLedgerOverview, type LedgerDoc } from '../../api/ledger';
+import { flowDirectionLabel } from '../../api/flows';
 import { prettyDocName } from '../graph/businessTypes';
+import { FilePreviewModal } from '../FilePreviewModal';
+import type { FileEntry } from '../../hooks/useFiles';
+import { executedInBasisUnit, roleNaturalDirection } from '../../lib/executionProgress';
+import { ContractExecutionSection } from './ContractExecutionSection';
 import {
   VOUCHER_DIMENSIONS,
   coverageOf,
@@ -28,6 +33,45 @@ import {
 
 const fmtAmount = (n: number | null): string =>
   n === null ? '—' : n.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+
+const fmtCompact = (n: number): string => n.toLocaleString('zh-CN', { maximumFractionDigits: 1 });
+
+/** 万元口径(卡片摘要行紧凑展示, 精确数字见展开区)。 */
+const WAN = (n: number): string => `${fmtCompact(n / 1e4)}万`;
+
+/** 卡片常驻执行摘要段(最新态): 执行百分比 / 货物 已执行/基准 / 收付款 已执行/合同额。
+ *  合同为其他角色(自然方向缺省)时只给执行百分比。 */
+function executionSegments(contract: ProjectRollupResp['contracts'][number]): string[] {
+  const ex = contract.execution;
+  if (ex.flowCount === 0) return [];
+  const agg = (ft: string, dir: 'in' | 'out') =>
+    ex.summaries.find((s) => s.flowType === ft && s.direction === dir) ?? null;
+  const segs: string[] = [];
+  const pct = ex.progress.progress;
+  if (pct !== null && pct !== undefined) segs.push(`执行 ${Math.round(pct * 100)}%`);
+  const gDir = roleNaturalDirection(contract.role, '货物流');
+  const gAgg = gDir ? agg('货物流', gDir) : null;
+  if (gDir && gAgg && gAgg.totalQuantityTon !== null) {
+    const basis = ex.progress.basis;
+    if (basis) {
+      const exec = executedInBasisUnit(ex.progress);
+      segs.push(
+        `${gDir === 'out' ? '发货' : '收货'} ${exec !== null ? fmtCompact(exec) : '—'}/${fmtCompact(basis.quantity)}${basis.unit}`,
+      );
+    } else {
+      segs.push(`${gDir === 'out' ? '发货' : '收货'} ${fmtCompact(gAgg.totalQuantityTon)}吨`);
+    }
+  }
+  for (const ft of ['资金流', '发票流'] as const) {
+    const dir = roleNaturalDirection(contract.role, ft);
+    if (!dir) continue;
+    const a = agg(ft, dir);
+    if (!a || a.totalAmount === null) continue;
+    const basisTxt = contract.amount !== null ? `/${WAN(contract.amount)}` : '';
+    segs.push(`${flowDirectionLabel(ft, dir)} ${WAN(a.totalAmount)}${basisTxt}`);
+  }
+  return segs;
+}
 
 const ROLE_BADGE: Record<string, { label: string; cls: string }> = {
   采购: { label: '采购', cls: 'bg-warning/10 text-warning border-warning/30' },
@@ -48,17 +92,21 @@ interface ContractVouchers {
   proposedCount: number;
 }
 
-/** 合同卡: 齐套率分段条 + 维度计数 chips + 可展开的凭证明细。 */
+/** 合同卡: 齐套率分段条 + 维度计数 chips + 执行摘要行 + 可展开的执行区块/凭证明细。 */
 function ContractCard({
   contract,
   vouchers,
   expanded,
   onToggle,
+  onPreviewFile,
+  onOpenParties,
 }: {
   contract: ProjectRollupResp['contracts'][number];
   vouchers: ContractVouchers;
   expanded: boolean;
   onToggle: () => void;
+  onPreviewFile: (file: FileEntry) => void;
+  onOpenParties?: () => void;
 }) {
   const entries: VoucherEntry[] = vouchers.confirmed;
   const coverage = useMemo(() => coverageOf(entries), [entries]);
@@ -67,6 +115,7 @@ function ContractCard({
     label: contract.role,
     cls: 'bg-surface/50 text-ink border-line/50',
   };
+  const execSegs = useMemo(() => executionSegments(contract), [contract]);
 
   return (
     <div className="rounded-lg border border-line bg-white overflow-hidden">
@@ -122,6 +171,13 @@ function ContractCard({
             {vouchers.proposedCount > 0 ? ` · 待确认 ${vouchers.proposedCount}` : ''}
           </span>
         </div>
+        {/* 行 2.5: 执行进度摘要(最新态; 参考值口径, 详情见展开区) */}
+        <div
+          className="mt-1.5 truncate text-[11px] text-ink-soft"
+          title="执行进度为参考值: 实际执行围绕合同约定浮动, 待执行为负即超额; 金额为未结算累计"
+        >
+          {execSegs.length > 0 ? execSegs.join(' · ') : '暂无执行记录'}
+        </div>
         {/* 行 3: 五维计数 chips(未覆盖维度弱化, 缺口一眼可见) */}
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           {VOUCHER_DIMENSIONS.map((d) => {
@@ -143,9 +199,21 @@ function ContractCard({
           })}
         </div>
       </button>
-      {/* 展开区: 凭证明细(已确认绑定在前, 文件名 / 类型 / 关系) */}
+      {/* 展开区: 执行区块(进度三行 + 时间轴回放 + 逐笔明细) + 凭证明细 */}
       {expanded && (
         <div className="border-t border-line/60">
+          <div className="p-2.5">
+            <ContractExecutionSection
+              contractNo={contract.contractNo}
+              displayContractNo={contract.displayContractNo}
+              role={contract.role}
+              contractAmount={contract.amount}
+              execution={contract.execution}
+              onPreviewFile={onPreviewFile}
+              onOpenParties={onOpenParties}
+            />
+          </div>
+          <div className="border-t border-line/60">
           {vouchers.confirmed.length === 0 ? (
             <div className="px-3 py-3 text-xs text-ink-soft">该合同尚无已确认绑定的凭证，可在「绑定」页挂执行单据</div>
           ) : (
@@ -164,13 +232,14 @@ function ContractCard({
               ))}
             </div>
           )}
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-export function ProjectLedgerView({ onOpenProjects }: { onOpenProjects?: () => void }) {
+export function ProjectLedgerView({ onOpenProjects, onOpenParties }: { onOpenProjects?: () => void; onOpenParties?: () => void }) {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -179,6 +248,7 @@ export function ProjectLedgerView({ onOpenProjects }: { onOpenProjects?: () => v
   const [overviewDocs, setOverviewDocs] = useState<LedgerDoc[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [expandedNo, setExpandedNo] = useState<string | null>(null);
+  const [previewFile, setPreviewFile] = useState<FileEntry | null>(null);
 
   const refreshProjects = useCallback(async (): Promise<ProjectSummary[]> => {
     setLoading(true);
@@ -408,6 +478,8 @@ export function ProjectLedgerView({ onOpenProjects }: { onOpenProjects?: () => v
                             vouchers={vouchersByContract.get(c.contractNo) ?? { confirmed: [], proposedCount: 0 }}
                             expanded={expandedNo === c.contractNo}
                             onToggle={() => setExpandedNo((prev) => (prev === c.contractNo ? null : c.contractNo))}
+                            onPreviewFile={setPreviewFile}
+                            onOpenParties={onOpenParties}
                           />
                         ))}
                       </div>
@@ -419,6 +491,7 @@ export function ProjectLedgerView({ onOpenProjects }: { onOpenProjects?: () => v
           </div>
         )}
       </div>
+      {previewFile && <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />}
     </div>
   );
 }

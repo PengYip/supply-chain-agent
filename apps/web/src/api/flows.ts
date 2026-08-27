@@ -4,7 +4,7 @@ export type FlowType = '资金流' | '货物流' | '发票流'
 
 export type FlowDirection = 'in' | 'out'
 
-/** 六向汇总: 按 flowType x direction 分组。 */
+/** 六向汇总: 按 flowType x direction 分组。totalMassKg 为服务端扩展字段(旧后端不带)。 */
 export interface FlowSummary {
   contractNo: string
   flowType: FlowType
@@ -12,6 +12,7 @@ export interface FlowSummary {
   entryCount: number
   totalAmount: number | null
   totalQuantityTon: number | null
+  totalMassKg?: number | null
   lastVoucherDate: string | null
 }
 
