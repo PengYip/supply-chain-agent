@@ -41,6 +41,16 @@ type FlowQty = Pick<
 > & { docType?: string };
 type LedgerFields = Record<string, { value: string | number }> | null | undefined;
 
+/**
+ * 台账数量字段常把单位写进值里(非标合同极常见, 如 "20000吨±10%"/"1000箱")。
+ * 保守解析: 前导数字 + 紧随的注册单位后缀; 解析不出返回 null(不猜)。
+ */
+function parseEmbeddedQuantity(text: string): { qty: number; unit: string } | null {
+  const m = /^([\d]+(?:\.\d+)?)(吨|千克|公斤|克|箱|件|车)/.exec(text);
+  if (!m) return null;
+  return { qty: Number(m[1]), unit: m[2]! };
+}
+
 export function computeExecutionProgress(flows: FlowQty[], ledgerFields: LedgerFields): ExecutionProgress {
   const nodes: ExecutionProgressNodes = { actualMassKg: 0, noticeMassKg: 0, actualPools: {}, noticePools: {} };
   let hasMass = false;
@@ -63,14 +73,27 @@ export function computeExecutionProgress(flows: FlowQty[], ledgerFields: LedgerF
 
   const rawQty = ledgerFields?.['数量']?.value;
   const rawUnit = ledgerFields?.['单位']?.value;
-  if (rawQty === undefined || rawUnit === undefined) {
+  if (rawQty === undefined) {
     return { basis: null, delivered, progress: null, reason: 'no-contract-basis' };
   }
-  const qty = Number(String(rawQty).replace(/[,\s]/g, ''));
-  const canon = Number.isFinite(qty) ? canonicalizeQuantity(qty, String(rawUnit)) : null;
+  const qtyText = String(rawQty).replace(/[,\s]/g, '');
+  // 单位优先级: 独立 单位 字段 > 数量值内嵌单位("20000吨±10%"); 都没有 -> 不猜。
+  let qty = Number(qtyText);
+  let unitText = rawUnit === undefined ? null : String(rawUnit);
+  if (!Number.isFinite(qty) || unitText === null) {
+    const embedded = parseEmbeddedQuantity(qtyText);
+    if (embedded) {
+      qty = embedded.qty;
+      unitText = embedded.unit;
+    }
+  }
+  if (!Number.isFinite(qty) || unitText === null) {
+    return { basis: null, delivered, progress: null, reason: 'no-contract-basis' };
+  }
+  const canon = canonicalizeQuantity(qty, unitText);
   if (!canon) return { basis: null, delivered, progress: null, reason: 'no-contract-basis' };
 
-  const basis = { quantity: qty, unit: String(rawUnit), dimension: canon.dimension, canonical: canon.canonical };
+  const basis = { quantity: qty, unit: unitText, dimension: canon.dimension, canonical: canon.canonical };
   if (canon.dimension === 'mass') {
     if (delivered.massKg === null) {
       // 有 count 池却要 mass 口径 -> 口径冲突如报 mismatch; 完全无流水 -> 尚未发生, 进度 0。

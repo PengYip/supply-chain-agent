@@ -61,6 +61,22 @@ describe('computeExecutionProgress(spec 2026-08-27 §9)', () => {
     expect(computeExecutionProgress([], wrap({ 单位: '吨' })).reason).toBe('no-contract-basis');
   });
 
+  it('dev 实例: 数量字段内嵌单位 "20000吨±10%"(无独立单位字段) -> basis 20000吨', () => {
+    const r = computeExecutionProgress([mass(3357460, '轨道衡称重单')], wrap({ 数量: '20000吨±10%' }));
+    expect(r.basis).toEqual({ quantity: 20000, unit: '吨', dimension: 'mass', canonical: 20000000 });
+    expect(r.progress).toBeCloseTo(3357460 / 20000000);
+  });
+
+  it('内嵌 count 单位 "1000箱" -> count 池口径', () => {
+    const r = computeExecutionProgress([count('箱', 500)], wrap({ 数量: '1000箱' }));
+    expect(r.basis).toEqual({ quantity: 1000, unit: '箱', dimension: 'count', canonical: 1000 });
+    expect(r.progress).toBeCloseTo(0.5);
+  });
+
+  it('内嵌单位解析不出("约2000吨" 前缀非数字) -> no-contract-basis(不猜)', () => {
+    expect(computeExecutionProgress([], wrap({ 数量: '约2000吨' })).reason).toBe('no-contract-basis');
+  });
+
   it('基准为 0 -> progress null(避免除零)', () => {
     const r = computeExecutionProgress([mass(1000)], wrap({ 数量: 0, 单位: '吨' }));
     expect(r.progress).toBeNull();
