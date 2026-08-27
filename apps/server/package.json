@@ -11,7 +11,8 @@
     "test:watch": "vitest",
     "eval": "tsx eval/run.ts",
     "eval:agent": "tsx eval/agent/run.ts",
-    "backfill:embeddings": "tsx scripts/backfillEmbeddings.ts"
+    "backfill:embeddings": "tsx scripts/backfillEmbeddings.ts",
+    "backfill:flows": "tsx scripts/backfillFlows.ts"
   },
   "dependencies": {
     "@ai-sdk/deepseek": "^2.0.52",
