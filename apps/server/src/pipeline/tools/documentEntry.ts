@@ -777,6 +777,11 @@ export interface ProcessDocumentOptions {
   userId?: string;
   /** Phase A: 图片凭证 VLM 解析依赖(同 ToolDeps.vlm)。缺省用真实 extractVoucher。 */
   vlm?: VlmDeps;
+  /** ensureDocumentExtracted only. Default true: await the parse-stage
+   *  background extraction (chat backstop needs fields ready). false (/process
+   *  fast path): return as soon as parsing settles, reporting extractionStatus
+   *  'pending' while the background flight runs. */
+  waitExtraction?: boolean;
 }
 
 export interface ProcessDocumentResult {
@@ -847,6 +852,59 @@ async function parseWithOcrRetry(
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+/**
+ * Start the parse-stage auto-extraction as a REGISTERED background flight
+ * (keyed by docId in extractionFlights). Called by processDocument right
+ * before returning, so:
+ *  - ensureDocumentExtracted's default path shares THIS run (the chat backstop
+ *    awaits fields => no duplicate model call);
+ *  - /process with waitExtraction=false returns without waiting on it.
+ * runAutoExtraction never throws; the catch here is pure defense. Timed via a
+ * dedicated [perf] bg-extract line (processDocument's own TOTAL closes early).
+ */
+function startBackgroundExtraction(
+  ctx: DbContext,
+  docId: string,
+  blockModel: BlockModel,
+  extraction: ExtractionDeps,
+  userId?: string,
+): Promise<EnsureDocumentExtractedResult> {
+  const existing = extractionFlights.get(docId);
+  if (existing) return existing;
+  const t0 = performance.now();
+  const run = (async (): Promise<EnsureDocumentExtractedResult> => {
+    try {
+      const outcome = await runAutoExtraction({
+        ctx,
+        docId,
+        blockModel,
+        userId,
+        // 接线闭环: 抽取成功后回写合同台账(writeContractLedger 永不抛出)。
+        deps: buildLedgerWritingDeps(
+          buildAutoExtractionDeps({ ctx, extraction, userId }),
+          { ctx, docType: blockModel.docType, userId },
+        ),
+      });
+      console.log(
+        `[perf] bg-extract docId=${docId} ${outcome.status}`
+        + ` ${outcome.elapsedMs ?? Math.round(performance.now() - t0)}ms f=${outcome.fieldCount ?? 0}`,
+      );
+      if (outcome.status !== 'ok') {
+        console.error(`[bg-extract] auto-extraction ${outcome.status}:`, outcome.reason ?? 'no reason');
+      }
+    } catch (e) {
+      console.error('[bg-extract] auto-extraction failed:', (e as Error).message);
+    }
+    // Read the final status (runAutoExtraction stamped ok/skipped/failed).
+    const finalStatus = await getExtractionStatus(ctx, docId, userId);
+    return { docId, parseStatus: 'parsed', extractionStatus: finalStatus ?? undefined };
+  })().finally(() => {
+    extractionFlights.delete(docId);
+  });
+  extractionFlights.set(docId, run);
+  return run;
 }
 
 /**
@@ -1003,44 +1061,22 @@ export async function processDocument(
       console.error('[processDocument] vectorization_meta persistence failed:', (e as Error).message);
     }
 
-    // 11. Lane A (2a): auto-extraction (fault-isolated; same as ingestFile).
+    // 12. Parsed FIRST: the document becomes usable (recall/search/review card)
+    //     without waiting for the extraction model. Auto-extraction moves to a
+    //     background flight registered in extractionFlights below.
+    await setDocumentParseStatus(ctx, docId, 'parsed', opts.userId);
+    perf.mark('stamp_parsed');
+
+    // 11b. Lane A backgrounded: kick off auto-extraction as a registered
+    //      single-flight. Callers that NEED fields right away
+    //      (ensureDocumentExtracted default path / chat backstop) share this
+    //      same flight; the /process route skips it via waitExtraction=false.
     if (opts.extraction) {
-      try {
-        const outcome = await runAutoExtraction({
-          ctx,
-          docId,
-          blockModel,
-          userId: opts.userId,
-          // 接线闭环: 抽取成功后回写合同台账(buildLedgerWritingDeps 挂到
-          // save 之后; writeContractLedger 永不抛出, 不影响 outcome)。
-          deps: buildLedgerWritingDeps(
-            buildAutoExtractionDeps({ ctx, extraction: opts.extraction, userId: opts.userId }),
-            { ctx, docType: blockModel.docType, userId: opts.userId },
-          ),
-        });
-        perf.mark(
-          'auto_extract',
-          outcome.status === 'ok'
-            ? `ok ${outcome.fieldCount ?? 0}f`
-            : `${outcome.status}${outcome.reason ? `:${outcome.reason}` : ''} ${outcome.elapsedMs ?? 0}ms`,
-        );
-        // Surface non-ok outcomes (timeout / model error) so a silently-missing
-        // extraction is never mistaken for success (processDocument discards the
-        // outcome otherwise).
-        if (outcome.status !== 'ok') {
-          console.error(`[processDocument] auto-extraction ${outcome.status}:`, outcome.reason ?? 'no reason');
-        }
-      } catch (e) {
-        perf.mark('auto_extract', 'exception');
-        console.error('[processDocument] auto-extraction failed:', (e as Error).message);
-      }
+      startBackgroundExtraction(ctx, docId, blockModel, opts.extraction, opts.userId);
+      perf.mark('bg_extract_kickoff');
     } else {
       perf.mark('auto_extract', 'skipped no-model');
     }
-
-    // 12. Parsed.
-    await setDocumentParseStatus(ctx, docId, 'parsed', opts.userId);
-    perf.mark('stamp_parsed');
     perf.finish();
 
     return {
@@ -1143,9 +1179,17 @@ export async function ensureDocumentExtracted(
   // 1. Ensure parsed (parse single-flight; document_not_found propagates).
   const parsed = await ensureDocumentParsed(ctx, docId, opts, userId);
 
-  // In-flight re-extraction for this doc? Share it (single-flight).
+  // In-flight re-extraction for this doc? Share it (single-flight). The
+  // parse-stage background flight (registered by processDocument before it
+  // returned) lands here too. waitExtraction=false skips the wait: /process
+  // reports 'pending' and lets the flight finish on its own.
   const inFlight = extractionFlights.get(docId);
-  if (inFlight) return inFlight;
+  if (inFlight) {
+    if (opts.waitExtraction === false) {
+      return { docId, parseStatus: parsed.parseStatus, extractionStatus: 'pending' };
+    }
+    return inFlight;
+  }
 
   // 2. Decide whether re-extraction is needed.
   const extractionStatus = await getExtractionStatus(ctx, docId, userId);
@@ -1154,6 +1198,26 @@ export async function ensureDocumentExtracted(
     extractionStatus === 'skipped' ||
     extractionStatus === 'failed' ||
     (extractionStatus === null && !hasExtractionRow);
+
+  // Fast path (waitExtraction=false, used by POST /process): NEVER make a
+  // synchronous model call here — parsing settles and /process returns while
+  // any needed extraction runs in a registered background flight ('pending').
+  if (opts.waitExtraction === false) {
+    const racing = extractionFlights.get(docId);
+    if (racing) return { docId, parseStatus: parsed.parseStatus, extractionStatus: 'pending' };
+    if (needsReExtract && opts.extraction && parsed.parseStatus === 'parsed') {
+      const blockModel = await loadDocument(ctx, docId, userId);
+      if (blockModel) {
+        startBackgroundExtraction(ctx, docId, blockModel, opts.extraction, userId);
+        return { docId, parseStatus: parsed.parseStatus, extractionStatus: 'pending' };
+      }
+    }
+    return {
+      docId,
+      parseStatus: parsed.parseStatus,
+      extractionStatus: extractionStatus ?? undefined,
+    };
+  }
 
   if (!needsReExtract) {
     return {

@@ -11,7 +11,12 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import type { LanguageModel } from 'ai';
 import { env } from '../env.js';
 import { makeLlmTagger, type ChunkTagger } from './chunkTagging.js';
-import { DeterministicEmbedder, OllamaEmbedder, type Embedder } from './embedder.js';
+import {
+  DeterministicEmbedder,
+  OllamaEmbedder,
+  OpenAICompatEmbedder,
+  type Embedder,
+} from './embedder.js';
 import type { ExtractionDeps } from './extraction.js';
 import type { ClassifierDeps } from './classifier.js';
 
@@ -35,6 +40,13 @@ export function getIngestModel(): LanguageModel {
 
 /** Match the agent's embedder choice so parse gives docs the same vector treatment. */
 export function defaultEmbedder(): Embedder {
+  if (env.SILICONFLOW_API_KEY) {
+    return new OpenAICompatEmbedder({
+      apiKey: env.SILICONFLOW_API_KEY,
+      baseUrl: env.SILICONFLOW_BASE_URL,
+      model: env.SILICONFLOW_EMBED_MODEL,
+    });
+  }
   return env.OLLAMA_BASE_URL
     ? new OllamaEmbedder({ baseUrl: env.OLLAMA_BASE_URL, model: env.OLLAMA_EMBED_MODEL })
     : new DeterministicEmbedder();

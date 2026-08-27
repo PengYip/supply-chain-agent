@@ -220,6 +220,26 @@ function maxMergedWidth(
 }
 
 /**
+ * Quick text-layer probe for uploaded PDFs (Model C): reads the extracted text
+ * length to predict 'digital' vs 'scanned' BEFORE /process runs, so the parse
+ * path can start with the right adapter instead of the digital->0-blocks->OCR
+ * detour. Cheap (~one pdf-parse pass), fault-tolerant:
+ *  - true  => enough embedded text (born-digital);
+ *  - false => little/no text (likely scanned -> MinerU OCR);
+ *  - null  => not a PDF, or the probe itself failed (caller keeps its default).
+ */
+export async function pdfHasTextLayer(buffer: Buffer): Promise<boolean | null> {
+  try {
+    const pdfParse = (await import('pdf-parse')).default;
+    const { text } = await pdfParse(buffer);
+    if (typeof text !== 'string') return null;
+    return text.replace(/\s+/g, '').length >= 32;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Ingest a born-digital file. Supports .txt/.md/.json (direct utf-8 read),
  * .pdf (pdf-parse), .docx (mammoth HTML -> GFM markdown; tables kept) and
  * .xlsx (exceljs; merges expanded, one pipe row per sheet row).
