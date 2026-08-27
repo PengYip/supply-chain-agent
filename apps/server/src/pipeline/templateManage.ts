@@ -279,7 +279,10 @@ async function typeUsageReasonsInternal(ctx: DbContext, typeId: string, typeName
 
 export async function typeUsageReasons(ctx: DbContext, typeName: string): Promise<string[]> {
   const typeId = await findTypeIdByNameAndKind(ctx, typeName.trim(), 'doc_type');
-  return typeUsageReasonsInternal(ctx, typeId ?? '', typeName.trim());
+  // 名称解析失败直接返回空: 传 '' 进内部查询会命中 er-bind-fallback
+  // (source_type_id='') 通配行, 产生伪占用原因。(软禁用链路已有 not_found 守卫。)
+  if (!typeId) return [];
+  return typeUsageReasonsInternal(ctx, typeId, typeName.trim());
 }
 
 async function ruleExistsById(ctx: DbContext, ruleId: string): Promise<boolean> {

@@ -248,10 +248,11 @@ reviewRoute.post('/:docId/process', async (c) => {
     // single-flight and is reported as extractionStatus='pending' until it
     // lands; the review card / snapshot reflects 'ok' once complete. The chat
     // backstop still awaits fields via its own default-path call.
+    // force 放在 spread 之后: 防未来 buildIngestDeps 引入同名键静默覆盖。
     const result = await ensureDocumentExtracted(
       ctx(),
       docId,
-      { docType, modality, waitExtraction: false, force, ...buildIngestDeps() },
+      { docType, modality, waitExtraction: false, ...buildIngestDeps(), force },
       user.id,
     );
     // result already carries docId + parseStatus (and the additive

@@ -208,4 +208,10 @@ describe('templateManage 业务层', () => {
     const none = await typeUsageReasons(ctx, '履约凭证');
     expect(none).toEqual([]);
   });
+
+  it('typeUsageReasons: 类型不存在 -> 空数组(名称解析失败不得走空id通配伪占用)', async () => {
+    // 若把空 id 放进内部查询, er-bind-fallback(source_type_id='')通配行会命中,
+    // 伪报「激活边规则引用」; 守卫要求解析失败直接短路返回 []。
+    expect(await typeUsageReasons(ctx, '没有的类型')).toEqual([]);
+  });
 });

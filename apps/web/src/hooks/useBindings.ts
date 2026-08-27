@@ -374,8 +374,9 @@ export function useBindings() {
     } catch (e) {
       // 台账加载失败只影响手动绑定表单, 不阻塞页面; 但不再静默——
       // 置错误位供视图层区分「台账为空」与「加载失败」并提示重试。
+      // 非 Error 抛掷用中性文案, 避免视图端拼出「台账加载失败：台账加载失败」重复。
       setContracts([]);
-      setContractsError(e instanceof Error ? e.message : '台账加载失败');
+      setContractsError(e instanceof Error ? e.message : '网络异常，请重试');
     }
   }, []);
 
