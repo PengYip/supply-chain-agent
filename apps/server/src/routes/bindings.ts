@@ -9,7 +9,7 @@ import {
   listUserDocuments, listBindingsForUser, listBindingProposals, listContractLedgerEntries,
   findBindingById, updateBindingStatus, saveBinding, findBindingByDocAndContract,
   listBindingsForContract, setBindingGraphStatus, getDocumentMeta, type BindingGraphStatus,
-  listExecutionFlows, summarizeExecutionFlows, getDocumentSourcesByIds, hasContractDocBinding,
+  listExecutionFlows, summarizeExecutionFlows, getDocumentSourcesByIds,
   findContractLedgerByNo, listTemplateTypes, listActiveEdgeRules,
 } from '../pipeline/db/repositories.js';
 import { buildBindingCandidates } from '../pipeline/bindingCandidates.js';
@@ -372,8 +372,10 @@ bindingsRoute.post('/', async (c) => {
     }
     return c.json({ ok: true, bindingId: existing.id, existing: true, graphSync: 'ok' });
   }
-  // 业务顺序门禁(2026-08-25): 执行类单据(非合同文件)绑定前, 目标合同必须已挂
-  // 合同类型文件(先建立合同实体锚点)。合同文件本身不受限——它是链条第一步。
+  // 业务顺序门禁(2026-08-25; P3 hotfix 放宽): 执行类单据(非合同文件)绑定前,
+  // 目标合同必须已建立实体锚点。锚点判据 = contract_ledger 台账行存在
+  // (唯一事实源)——旧「绑定历史」判据曾鸡生蛋死锁: 新合同从未被绑 -> 执行类
+  // 单据被拒, 而进绑定集合又需要先发生一次绑定。合同文件本身不受限。
   const srcMeta = await getDocumentMeta(db, documentId, user.id);
   // 目标类型判定(模板 props 驱动, 缺省 Contract): 读 docType 的 bindsTargetKind
   // (裁决 #5: 非硬编码; 立项书种子 props.bindsTargetKind='Project')。
@@ -385,10 +387,10 @@ bindingsRoute.post('/', async (c) => {
   }
   // Project 目标(立项书 binds->Project)豁免合同锚点门禁: contractNo 实为项目码。
   if (srcMeta && srcMeta.docType !== '合同' && targetKind !== 'Project') {
-    const established = await hasContractDocBinding(db, contractNo, user.id);
-    if (!established) {
+    const inLedger = await findContractLedgerByNo(db, contractNo, user.id);
+    if (!inLedger) {
       return c.json(
-        { error: '该合同尚未绑定合同类型文件：请先在左侧选择合同文件，手动创建到该合同的绑定（关系选"引用"），再绑定执行类单据' },
+        { error: '该合同不在合同台账中：请先完成合同文件的解析抽取（或在复核卡人工修正类型）使其进入台账，再绑定执行类单据' },
         409,
       );
     }

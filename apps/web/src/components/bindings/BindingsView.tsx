@@ -13,6 +13,7 @@ import {
   type ProposalItem,
 } from '../../hooks/useBindings';
 import { formatFlowSkipLines } from '../../lib/flowSkip';
+import { collectEstablishedContractNos } from '../../lib/bindingFormModel';
 import type { ContractSearchItem } from '../../api/contractSearch';
 import { ContractSearchBar } from '../common/ContractSearchBar';
 import { prettyDocName } from '../graph/businessTypes';
@@ -116,18 +117,15 @@ export function BindingsView({
     [overview],
   );
 
-  // 业务顺序(2026-08-25): 已挂合同文件的合同号集合——合同类型文档的非 rejected 绑定目标。
-  // 执行类单据(发票/运输单据等)只能绑定到这些合同; 服务端 POST /api/bindings 有同规则硬门禁。
-  const establishedContracts = useMemo(() => {
-    const s = new Set<string>();
-    for (const d of overview) {
-      if (d.docType !== '合同') continue;
-      for (const bk of d.bindings) {
-        if (bk.status !== 'rejected') s.add(bk.contractNo);
-      }
-    }
-    return s;
-  }, [overview]);
+  // 业务顺序(P3 hotfix): established 合同号集合 = contract_ledger 台账行存在
+  // (b.contracts 即 GET /api/bindings/contracts 的台账列表, 唯一事实源)。
+  // 旧「合同类型文档有非 rejected 绑定行」判据鸡生蛋死锁: 新合同从未被绑过 ->
+  // 执行类单据下拉灰掉, 而进集合恰恰需要先发生一次绑定。服务端 POST /api/bindings
+  // 门禁已同步放宽为台账存在; templateGuard 组合硬校验仍是真正防线。
+  const establishedContracts = useMemo(
+    () => collectEstablishedContractNos(contracts),
+    [contracts],
+  );
 
   // overview 刷新后同步 selected(文档仍存在则保留选中)。
   useEffect(() => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildProjectOptions, contractDisableReason, deriveRelation, filterContracts, needsFilter, UNASSIGNED_KEY,
+  buildProjectOptions, collectEstablishedContractNos, contractDisableReason, deriveRelation, filterContracts, needsFilter, UNASSIGNED_KEY,
 } from '../src/lib/bindingFormModel';
 import type { TemplateContext } from '../src/api/templateContext';
 
@@ -43,19 +43,27 @@ describe('buildProjectOptions', () => {
 });
 
 describe('contractDisableReason', () => {
-  const opts = { docType: '收货单', isExecutionDoc: true, established: true };
+  const opts = { docType: '收货单', isExecutionDoc: true, inLedger: true };
   it('模板不允许 -> 规则文案(含合同类型)', () => {
     const r = contractDisableReason({ contractNo: 'HT-2', contractType: '租赁', allowed: false }, opts);
     expect(r).toContain('租赁');
     expect(r).toContain('收货单');
   });
-  it('执行类单据未挂合同文件 -> 门禁文案', () => {
-    expect(contractDisableReason({ contractNo: 'HT-1', contractType: '物流', allowed: true }, { ...opts, established: false }))
-      .toContain('未挂合同文件');
+  it('执行类单据选台账外合同 -> 台账文案(P3 hotfix: 建立判据=台账行存在, 解除鸡生蛋死锁)', () => {
+    expect(contractDisableReason({ contractNo: 'HT-1', contractType: '物流', allowed: true }, { ...opts, inLedger: false }))
+      .toContain('合同台账');
   });
-  it('合同文件本身(docType=合同)不受挂靠门禁', () => {
+  it('合同文件本身(docType=合同)不受台账门禁', () => {
     expect(contractDisableReason({ contractNo: 'HT-1', contractType: null, allowed: true },
-      { docType: '合同', isExecutionDoc: false, established: false })).toBeNull();
+      { docType: '合同', isExecutionDoc: false, inLedger: false })).toBeNull();
+  });
+  it('collectEstablishedContractNos: 台账行即建立集合(替换旧绑定历史判据)', () => {
+    const s = collectEstablishedContractNos([
+      { contractNo: 'HT-A' }, { contractNo: 'HT-B' }, { contractNo: '' },
+    ]);
+    expect(s.has('HT-A')).toBe(true);
+    expect(s.has('HT-B')).toBe(true);
+    expect(s.size).toBe(2);
   });
 });
 

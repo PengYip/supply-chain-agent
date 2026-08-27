@@ -73,7 +73,8 @@ export function TemplateBindingForm({
     contractDisableReason(c, {
       docType: doc.docType,
       isExecutionDoc,
-      established: establishedContracts.has(c.contractNo),
+      // P3 hotfix: established 集合语义已改为台账行存在(父级 contracts 即台账)。
+      inLedger: establishedContracts.has(c.contractNo),
     });
 
   const chooseContract = (c: TemplateContractRef) => {

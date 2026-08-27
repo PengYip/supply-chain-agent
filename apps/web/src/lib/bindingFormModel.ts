@@ -50,17 +50,32 @@ export function deriveRelation(ctx: TemplateContext): RelationDerivation {
   return { word: ctx.bindsRelation, vocab: [ctx.bindsRelation], source: 'binds', needsChoice: false };
 }
 
-export interface DisableOptions { docType: string; isExecutionDoc: boolean; established: boolean; }
+export interface DisableOptions { docType: string; isExecutionDoc: boolean; inLedger: boolean; }
 
-/** 模板规则不允许 / 执行类单据未挂合同文件 -> 中文原因; 可选返回 null。 */
+/**
+ * 模板规则不允许 / 执行类单据选了台账外合同 -> 中文原因; 可选返回 null。
+ * P3 hotfix: 建立判据由「有绑定历史」放宽为「台账行存在」——旧判据鸡生蛋死锁
+ * (新合同从未被绑 -> 下拉灰掉, 而进绑定集合恰恰需要先发生一次绑定)。双下拉的
+ * 合同候选本身派生自台账(T7 context API), 该分支现仅为 context 与台账脱窗时的
+ * 防御兜底; allowed=false 的模板组合禁用保持不变。
+ */
 export function contractDisableReason(c: TemplateContractRef, opts: DisableOptions): string | null {
   if (!c.allowed) {
     return `模板规则：${opts.docType} 不可挂「${c.contractType ?? '未知类型'}」合同`;
   }
-  if (opts.isExecutionDoc && !opts.established) {
-    return '未挂合同文件，执行类单据不可选';
+  if (opts.isExecutionDoc && !opts.inLedger) {
+    return '合同台账暂无该合同，请先完成合同文件解析抽取入库';
   }
   return null;
+}
+
+/** 台账行 -> established 合同号集合(P3 hotfix 语义: 行存在即建立)。空号跳过。 */
+export function collectEstablishedContractNos(rows: Array<{ contractNo: string }>): Set<string> {
+  const s = new Set<string>();
+  for (const r of rows) {
+    if (r.contractNo) s.add(r.contractNo);
+  }
+  return s;
 }
 
 /** 步骤二过滤: contractNo 大小写不敏感子串匹配(全角空格忽略, 简单 includes)。 */

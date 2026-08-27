@@ -119,4 +119,34 @@ describe('bindings template guard', () => {
       warn.mockRestore();
     }
   });
+
+  // P3 hotfix: 建立判据放宽为「台账行存在」-- 旧「绑定历史」判据鸡生蛋死锁
+  // (新合同从未被绑过 -> 执行类单据下拉灰掉/服务端 409, 而进集合又需要先发生绑定)。
+  it('台账有行但无任何绑定历史的合同: 执行类单据可直接绑定(死锁解除)', async () => {
+    // 只有台账行(经抽取回写产生), 不造任何 binding 行。
+    const ledgerDoc = await createDocumentStub(ctx, { sourceUri: 'file:///c9.pdf', docType: '合同' });
+    await upsertContractLedgerEntry(ctx, {
+      contractNo: 'HT-9', displayContractNo: 'HT-9', docType: '合同',
+      documentId: ledgerDoc.docId, title: '', contractType: '销售', fields: {}, fieldMeta: {},
+      overallConfidence: 1, needsReview: false, userId: 'u1',
+    }, 'u1');
+    const { docId } = await createDocumentStub(ctx, { sourceUri: 'file:///h5.pdf', docType: '化验报告' });
+    const res = await appAs('u1').request('/api/bindings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ documentId: docId, contractNo: 'HT-9', relation: '质检' }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('台账也没有的合同: 执行类单据仍被 409 拒绝且原因可读(真正防线保留)', async () => {
+    await establishContract('HT-5'); // 干净对照: 库里存在其它合同
+    const { docId } = await createDocumentStub(ctx, { sourceUri: 'file:///h6.pdf', docType: '化验报告' });
+    const res = await appAs('u1').request('/api/bindings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ documentId: docId, contractNo: 'HT-NOT-IN-LEDGER', relation: '质检' }),
+    });
+    expect(res.status).toBe(409);
+    const data = await res.json() as { error: string };
+    expect(data.error).toContain('台账');
+  });
 });

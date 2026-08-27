@@ -53,9 +53,10 @@ export function LegacyManualForm({
       setFormError('请选择或输入关系类型');
       return;
     }
-    // 业务顺序门禁(2026-08-25): 执行类单据只能绑定到已挂合同文件的合同。
+    // 业务顺序门禁(P3 hotfix): established 语义 = 台账行存在(本表单的 contracts
+    // prop 即台账列表, 理论上恒真); 此处保留为脱窗防御, 服务端是真正防线。
     if (isExecutionDoc && !establishedContracts.has(manualContract)) {
-      setFormError('该合同尚未绑定合同类型文件：请先将合同文件绑定到该合同（关系=引用），再绑定执行类单据');
+      setFormError('该合同不在合同台账中：请先完成合同文件的解析抽取入库，再绑定执行类单据');
       return;
     }
     setFormError(null);
@@ -88,14 +89,14 @@ export function LegacyManualForm({
           }))}
           itemNote={(it) =>
             establishedContracts.has(it.contractNo)
-              ? '已挂合同文件'
+              ? '台账已有'
               : isExecutionDoc
-                ? '未挂合同文件（不可选）'
-                : '未挂合同文件'
+                ? '不在合同台账（不可选）'
+                : '不在合同台账'
           }
           onSelect={(it) => {
             if (isExecutionDoc && !establishedContracts.has(it.contractNo)) {
-              setFormError('执行类单据只能绑定「已挂合同文件」的合同；请先把合同类型文件绑定到该合同（关系选「引用」）');
+              setFormError('执行类单据只能绑定台账中的合同；请先完成合同文件的解析抽取入库');
               return;
             }
             setFormError(null);
@@ -114,7 +115,7 @@ export function LegacyManualForm({
         )}
         {isExecutionDoc && (
           <div className="mt-1 text-[11px] leading-4 text-ink-soft">
-            执行类单据只能绑定到「已挂合同文件」的合同；请先把合同类型文件绑定到该合同（关系选「引用」）
+            执行类单据只能绑定台账中的合同；台账为空时请先完成合同文件的解析抽取入库
           </div>
         )}
       </div>
