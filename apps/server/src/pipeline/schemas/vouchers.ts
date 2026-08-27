@@ -8,6 +8,7 @@
 // vlmAdapter / documentEntry 图片分支 / Phase B 复用。
 
 import { z } from 'zod';
+import type { AnchorQuantity } from '../../domain/units.js';
 
 /** 凭证类型。'其他' 为 VLM 无法归入三类时的兜底。 */
 export type VoucherType = '货转单' | '化验报告' | '付款凭证' | '其他';
@@ -97,6 +98,8 @@ export interface VoucherAnchors {
   quantityTon?: number;
   /** 数量单位(如 '吨'), 与 quantityTon 同源。字段名不带单位语义(如裸 '数量')时缺省, 不猜测。 */
   quantityUnit?: string;
+  /** 通用物化层数量投影(spec 2026-08-27 §8): 原值+原始单位+量纲+规范值。quantityTon/quantityUnit 由它投影兼容。 */
+  quantity?: AnchorQuantity;
 }
 
 function anchorStr(v: unknown): string | undefined {

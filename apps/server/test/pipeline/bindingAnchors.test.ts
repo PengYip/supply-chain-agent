@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildAnchorsFromFields, PARTY_FIELD_ALIASES } from '../../src/pipeline/bindingProposal.js';
+import { buildAnchorsFromFields, deriveAnchorsFromFields, PARTY_FIELD_ALIASES } from '../../src/pipeline/bindingProposal.js';
 
 describe('buildAnchorsFromFields(非图片凭证文档)', () => {
   it('发票: 合同号/买方/卖方/金额/日期字段映射到锚点', () => {
@@ -111,5 +111,57 @@ describe('buildAnchorsFromFields(非图片凭证文档)', () => {
   it('PARTY_FIELD_ALIASES 导出买方/卖方别名常量(供候选扫描复用)', () => {
     expect(PARTY_FIELD_ALIASES.buyer).toEqual(['买方', '甲方', '收货人', '购买方名称', '受让方']);
     expect(PARTY_FIELD_ALIASES.seller).toEqual(['卖方', '乙方', '发货人', '销售方名称', '转让方']);
+  });
+});
+
+describe('deriveAnchorsFromFields 适配表驱动(spec 2026-08-27 §8)', () => {
+  const wrap = (m: Record<string, string | number>) =>
+    Object.fromEntries(Object.entries(m).map(([k, v]) => [k, { value: v }]));
+
+  it('发货单 dev 实测形状: 发运数量无单位 -> dimension/canonical NULL, quantityTon 留原值', () => {
+    const a = deriveAnchorsFromFields('发货单', wrap({ 发运数量: 3357.46 }));
+    expect(a.quantity).toEqual({ value: 3357.46, dimension: null, canonical: null });
+    expect(a.quantityTon).toBe(3357.46);
+    expect(a.quantityUnit).toBeUndefined();
+  });
+
+  it('磅单: 合计净重 + 重量单位=吨 -> mass/canonical, 日期走称量日期', () => {
+    const a = deriveAnchorsFromFields('火运大票', wrap({ 合计净重: 3.2, 重量单位: '吨', 称量日期: '2025-03-01' }));
+    expect(a.quantity).toEqual({ value: 3.2, unit: '吨', dimension: 'mass', canonical: 3200 });
+    expect(a.quantityTon).toBe(3.2);
+    expect(a.quantityUnit).toBe('吨');
+    expect(a.date).toBe('2025-03-01');
+  });
+
+  it('数量_吨 命名即单位优先于别名字段', () => {
+    const a = deriveAnchorsFromFields('收货单', wrap({ 数量_吨: 0.5 }));
+    expect(a.quantity).toEqual({ value: 0.5, unit: '吨', dimension: 'mass', canonical: 500 });
+    expect(a.quantityTon).toBe(0.5);
+  });
+
+  it('计数单位(箱): quantityTon 为 null 不混入吨汇总', () => {
+    const a = deriveAnchorsFromFields('发货单', wrap({ 发运数量: 120, 单位: '箱' }));
+    expect(a.quantity).toEqual({ value: 120, unit: '箱', dimension: 'count', canonical: 120 });
+    expect(a.quantityTon).toBeUndefined();
+    expect(a.quantityUnit).toBe('箱');
+  });
+
+  it('未注册单位(磅): 原值照存 dimension NULL', () => {
+    const a = deriveAnchorsFromFields('发货单', wrap({ 发运数量: 10, 单位: '磅' }));
+    expect(a.quantity).toEqual({ value: 10, unit: '磅', dimension: null, canonical: null });
+    expect(a.quantityTon).toBe(10);
+  });
+
+  it('未知类型走通用兜底(合同号/主体别名行为不变)', () => {
+    const a = deriveAnchorsFromFields('其他', wrap({ 合同号: 'HT-1', 买方: '甲', 卖方: '乙' }));
+    expect(a.contractNo).toBe('HT-1');
+    expect(a.buyer).toBe('甲');
+    expect(a.seller).toBe('乙');
+  });
+
+  it('发货单金额走含税总价, 干扰项(75%货款金额)不误取', () => {
+    const a = deriveAnchorsFromFields('发货单', wrap({ 含税总价: '2,144,073.96', 发货日期: '2025年3月21日' }));
+    expect(a.amount).toBe(2144073.96);
+    expect(a.date).toBe('2025年3月21日');
   });
 });

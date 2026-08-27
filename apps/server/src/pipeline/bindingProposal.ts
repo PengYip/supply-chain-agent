@@ -12,6 +12,8 @@
 import type { VoucherAnchors } from './schemas/vouchers.js';
 import { extractAnchors, type VoucherType } from './schemas/vouchers.js';
 import { normalizeContractNo } from './contractLedger.js';
+import { FLOW_ADAPTERS, type FlowAdapter } from '../domain/tradeSemantics.js';
+import { canonicalizeQuantity, type AnchorQuantity } from '../domain/units.js';
 
 // LedgerEntry 使用 contractLedger.ts 的真实形状(ContractLedgerEntry): fields 为
 // Record<字段名, { value, sourceSpans }>, 合同字段按 ContractSchema 命名
@@ -300,7 +302,7 @@ function scoreQty(
 // ---- (c) 生成器 --------------------------------------------------------------
 
 /** 首个非空字段值(转 string)。 */
-function firstStr(fields: Record<string, { value: string | number }>, keys: string[]): string | undefined {
+function firstStr(fields: Record<string, { value: string | number }>, keys: readonly string[]): string | undefined {
   for (const k of keys) {
     const v = fields[k]?.value;
     if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
@@ -309,7 +311,7 @@ function firstStr(fields: Record<string, { value: string | number }>, keys: stri
 }
 
 /** 首个可解析为有限数的字段。 */
-function firstNum(fields: Record<string, { value: string | number }>, keys: string[]): number | undefined {
+function firstNum(fields: Record<string, { value: string | number }>, keys: readonly string[]): number | undefined {
   for (const k of keys) {
     const v = fields[k]?.value;
     if (v === undefined || v === null || String(v).trim() === '') continue;
@@ -370,46 +372,89 @@ export function buildAnchorsFromFields(
 export const GOODS_FIELD_DOCS: ReadonlySet<string> = new Set(['收货单', '发货单']);
 
 /**
- * 方向编码货物单据(收货单/发货单, 文本结构化, 无专用 voucher schema)的抽取字段
- * -> 执行流水锚点。以通用文档锚点(buildAnchorsFromFields: 合同号/主体含
- * 收货人/发货人/裸数量/_吨 数量)为底, 叠加货物单据实测别名(dev 库发货单
- * DOC-mtb032yu-8pj7): 日期 发货日期(dev 实测)/收货日期/到货日期; 金额 含税总价
- * (dev 实测; 干扰项如 '75%货款金额' 是部分货款, 不在别名内不会被误取); 数量
- * 发运数量(dev 实测)。发运数量 字段名不带 '_吨' 后缀且单据无显式 单位 字段时
- * quantityUnit 留 null(不猜测); 另接受 契约词汇 数量_吨(_吨 后缀=吨, 与台账
- * scoreQty 词表一致)。
+ * quantityTon/quantityUnit 兼容投影(spec 2026-08-27 §8): mass -> canonical/1000 吨;
+ * count -> null(箱/件不得混入吨汇总); 其余(无单位/单位未注册) -> 原值(现状行为)。
+ */
+function projectLegacyQuantity(
+  q: AnchorQuantity,
+): { quantityTon: number | null; quantityUnit?: string } {
+  if (q.dimension === 'mass' && q.canonical !== null) {
+    return { quantityTon: q.canonical / 1000, quantityUnit: '吨' };
+  }
+  if (q.dimension === 'count') {
+    return { quantityTon: null, ...(q.unit ? { quantityUnit: q.unit } : {}) };
+  }
+  return { quantityTon: q.value, ...(q.unit ? { quantityUnit: q.unit } : {}) };
+}
+
+/** 适配表数量派生: qtyFields 优先序首个数值命中; 单位 = 提示 > '_吨'后缀 > unitFields。 */
+function deriveAnchorQuantity(
+  adapter: FlowAdapter,
+  fields: Record<string, { value: string | number }>,
+): AnchorQuantity | undefined {
+  for (const [name, unitHint] of adapter.qtyFields) {
+    const value = firstNum(fields, [name]);
+    if (value === undefined) continue;
+    const unit =
+      unitHint ??
+      (name.endsWith('_吨') ? '吨' : undefined) ??
+      firstStr(fields, [...adapter.unitFields]);
+    const canon = unit ? canonicalizeQuantity(value, unit) : null;
+    return {
+      value,
+      ...(unit ? { unit } : {}),
+      dimension: canon?.dimension ?? null,
+      canonical: canon?.canonical ?? null,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * 适配表驱动的字段锚点派生(spec 2026-08-27 §8): FLOW_ADAPTERS 命中走表
+ * (数量/日期/金额别名 + 单位注册表 canonicalize), 未命中走通用兜底
+ * (buildAnchorsFromFields, 行为不变)。图片凭证不走这里(extractAnchors 专用)。
+ */
+export function deriveAnchorsFromFields(
+  docType: string,
+  fields: Record<string, { value: string | number }>,
+): VoucherAnchors {
+  const adapter = FLOW_ADAPTERS[docType];
+  if (!adapter) return buildAnchorsFromFields(docType, fields);
+  const anchors = buildAnchorsFromFields(docType, fields);
+  // 日期/金额: 表别名(按优先序首个命中)覆盖通用兜底。
+  const date = firstStr(fields, adapter.dateFields);
+  if (date) anchors.date = date;
+  const amount = firstNum(fields, adapter.amountFields);
+  if (amount !== undefined) anchors.amount = amount;
+  const qty = deriveAnchorQuantity(adapter, fields);
+  if (qty) {
+    anchors.quantity = qty;
+    const projected = projectLegacyQuantity(qty);
+    if (projected.quantityTon === null) delete anchors.quantityTon;
+    else anchors.quantityTon = projected.quantityTon;
+    if (projected.quantityUnit !== undefined) anchors.quantityUnit = projected.quantityUnit;
+    else delete anchors.quantityUnit;
+  }
+  return anchors;
+}
+
+/**
+ * 方向编码货物单据(收货单/发货单)锚点 -> 已收敛到 FLOW_ADAPTERS 适配表
+ * (spec 2026-08-27 §8); 保留导出仅为兼容既有调用方/测试, 行为与适配表同源。
  */
 export function buildGoodsDocAnchors(
   docType: string,
   fields: Record<string, { value: string | number }>,
 ): VoucherAnchors {
-  const anchors = buildAnchorsFromFields(docType, fields);
-  const date = firstStr(fields, ['发货日期', '收货日期', '到货日期']);
-  if (date) anchors.date = date;
-  const amount = firstNum(fields, ['含税总价']);
-  if (amount !== undefined) anchors.amount = amount;
-  const qtyFree = firstNum(fields, ['发运数量']);
-  if (qtyFree !== undefined) {
-    anchors.quantityTon = qtyFree;
-    anchors.quantityUnit =
-      firstStr(fields, ['单位']) === '吨' ? '吨' : undefined;
-  } else {
-    // 无单位争议的字段优先: '_吨' 后缀由命名即确定为吨。
-    const qtyTonFixed = firstNum(fields, ['数量_吨']);
-    if (qtyTonFixed !== undefined) {
-      anchors.quantityTon = qtyTonFixed;
-      anchors.quantityUnit = '吨';
-    }
-  }
-  return anchors;
+  return deriveAnchorsFromFields(docType, fields);
 }
 
 /**
  * 抽取行(docType + {value} 包装字段) -> 锚点。执行流水物化(materializeExecutionFlow /
  * refreshExecutionFlowsForDocument)与自主体候选扫描(selfPartyCandidates)共用,
  * 保证分支假设同源:
- *   - 发票          -> buildAnchorsFromFields(通用文档路径)
- *   - 收货单/发货单 -> buildGoodsDocAnchors(文本结构化货物单据)
+ *   - FLOW_ADAPTERS 命中(发票/收货单/发货单/运输三类型/进销项票) -> deriveAnchorsFromFields
  *   - 其余(付款凭证/货转单等图片凭证, 按 voucher schema 提取) -> extractAnchors
  * fields 直接收抽取行的包装形状(sourceSpans 在此不参与锚点, 被忽略)。
  */
@@ -417,7 +462,7 @@ export function anchorsForExtraction(
   docType: string,
   fields: Record<string, { value: string | number; sourceSpans?: unknown[] }>,
 ): VoucherAnchors {
-  if (docType === '发票') return buildAnchorsFromFields(docType, fields);
+  if (FLOW_ADAPTERS[docType]) return deriveAnchorsFromFields(docType, fields);
   if (GOODS_FIELD_DOCS.has(docType)) return buildGoodsDocAnchors(docType, fields);
   return extractAnchors(
     docType as VoucherType,

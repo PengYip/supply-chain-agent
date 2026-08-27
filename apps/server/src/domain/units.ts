@@ -40,3 +40,11 @@ export function canonicalizeQuantity(value: number, unit: string): CanonicalQuan
     canonical: def.dimension === 'mass' ? value * def.factorToKg : value,
   };
 }
+
+/** 锚点数量投影(物化层统一形状): 原值+原始单位+量纲+规范值。 */
+export interface AnchorQuantity {
+  readonly value: number;
+  readonly unit?: string;
+  readonly dimension: QuantityDimension | null;
+  readonly canonical: number | null;
+}
