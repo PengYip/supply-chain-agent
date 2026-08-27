@@ -124,6 +124,15 @@ export async function classifyDocument(
       );
       return { docType: coarse.object.docType as DocType, confidence: coarse.object.confidence, source: 'classified' };
     }
+    // Single fine candidate => the LLM call cannot change the outcome; skip it
+    // (saves one full generateObject round-trip per such doc type).
+    if (fineCandidates.length === 1) {
+      const only = fineCandidates[0]!;
+      console.log(
+        `[perf-classify] coarse=${coarseMs}ms fine=single-candidate -> ${only}`,
+      );
+      return { docType: only as DocType, confidence: coarse.object.confidence, source: 'classified' };
+    }
     try {
       const fineSchema = z.object({
         docType: z.enum(fineCandidates as [string, ...string[]]),

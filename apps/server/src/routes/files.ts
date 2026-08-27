@@ -42,6 +42,8 @@ import {
   listDocumentIdsWithConfirmedBindings,
 } from '../pipeline/db/repositories.js';
 import type { DocType } from '../pipeline/types.js';
+import { pdfHasTextLayer } from '../pipeline/digitalAdapter.js';
+import { setModalityHint } from '../pipeline/modalityHints.js';
 
 export const filesRoute = new Hono<AuthEnv>();
 filesRoute.use('*', requireAuth);
@@ -204,6 +206,18 @@ filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
     });
     await setDocumentMinioKey(ctx(), docId, key);
 
+    // Model C: predict digital vs scanned for PDFs NOW (cheap text-layer probe)
+    // so /process can start with the right adapter. Probe failure is silent —
+    // the response simply omits detectedModality and /process keeps its default.
+    let detectedModality: 'digital' | 'scanned' | undefined;
+    if (/\.pdf$/i.test(file.name)) {
+      const hasText = await pdfHasTextLayer(buffer);
+      if (hasText !== null) {
+        detectedModality = hasText ? 'digital' : 'scanned';
+        setModalityHint(docId, detectedModality);
+      }
+    }
+
     return c.json(
       {
         docId,
@@ -211,6 +225,7 @@ filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
         key,
         directory: directory ? '/' + directory : '/',
         parseStatus: 'uploaded',
+        ...(detectedModality ? { detectedModality } : {}),
       },
       201,
     );

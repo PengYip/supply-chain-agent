@@ -27,6 +27,7 @@ import { ensureDocumentExtracted } from '../pipeline/tools/documentEntry.js';
 import { refreshExecutionFlowsForDocument } from '../pipeline/executionFlow.js';
 import { commitDocumentGraph, syncDocumentTypeToGraph } from '../pipeline/graphCommit.js';
 import { buildIngestDeps } from '../pipeline/ingestModel.js';
+import { getModalityHint } from '../pipeline/modalityHints.js';
 import type { DocType, Modality } from '../pipeline/types.js';
 
 export const reviewRoute = new Hono<AuthEnv>();
@@ -193,14 +194,26 @@ reviewRoute.post('/:docId/process', async (c) => {
   const docId = c.req.param('docId');
   const docTypeStr = typeof body.docType === 'string' ? body.docType : '其他';
   const docType = (ALLOWED_DOCTYPES.has(docTypeStr) ? docTypeStr : '其他') as DocType;
-  const modalityStr = typeof body.modality === 'string' ? body.modality : 'digital';
-  const modality = (modalityStr === 'scanned' ? 'scanned' : 'digital') as Modality;
+  // Model C: when the caller does NOT pass an explicit modality, prefer the
+  // upload-time text-layer probe hint (if any) so a scanned PDF starts straight
+  // on MinerU instead of the digital->0-blocks->OCR detour. An explicit
+  // modality always wins; default stays 'digital'.
+  const modalityHint = getModalityHint(docId);
+  const modality: Modality =
+    body.modality === 'scanned' || body.modality === 'digital'
+      ? body.modality
+      : (modalityHint ?? 'digital');
 
   try {
+    // waitExtraction=false: the response returns as soon as PARSING settles
+    // (OCR/classify/chunk/index). Field extraction runs in a background
+    // single-flight and is reported as extractionStatus='pending' until it
+    // lands; the review card / snapshot reflects 'ok' once complete. The chat
+    // backstop still awaits fields via its own default-path call.
     const result = await ensureDocumentExtracted(
       ctx(),
       docId,
-      { docType, modality, ...buildIngestDeps() },
+      { docType, modality, waitExtraction: false, ...buildIngestDeps() },
       user.id,
     );
     // result already carries docId + parseStatus (and the additive

@@ -806,3 +806,97 @@ describe('ensureDocumentExtracted (parse + extraction assurance)', () => {
     ).rejects.toThrow(/document_not_found/);
   });
 });
+
+// Model A (parse-speed optimization): processDocument returns as soon as the
+// document is parsed+indexed; auto-extraction continues in a BACKGROUND
+// single-flight registered by processDocument itself. These tests pin down:
+//  - /process-like call returns BEFORE the (delayed) extraction model finishes,
+//    with no extraction row yet;
+//  - a follow-up ensureDocumentExtracted SHARES that same flight (model called
+//    exactly once) and resolves to extraction_status='ok';
+//  - waitExtraction=false never blocks on the model and self-heals a previously
+//    failed extraction via a background re-run reported as 'pending'.
+describe('background auto-extraction (parse decoupled from field extraction)', () => {
+  const delayedModel = () => ({
+    specificationVersion: 'v2' as const,
+    provider: 'fake',
+    modelId: 'fake-model',
+    supportedUrls: {} as Record<string, RegExp[]>,
+    calls: 0,
+    async doGenerate(this: { calls: number }) {
+      this.calls++;
+      await new Promise((r) => setTimeout(r, 80));
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify({
+              fields: {
+                合同号: {
+                  value: 'HT-2024-001',
+                  sourceSpans: [{ blockId: 'b0', start: 4, end: 15 }],
+                },
+              },
+              llmConsistency: 0.95,
+            }),
+          },
+        ],
+        finishReason: 'stop' as const,
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        warnings: [] as unknown[],
+      };
+    },
+    async doStream() {
+      throw new Error('doStream not used');
+    },
+  });
+
+  it('processDocument returns before background extraction lands; later ensure shares the flight (single model call)', async () => {
+    const f = join(dir, 'bg.txt');
+    writeFileSync(f, '合同号：HT-2024-001\n金额：100000\n', 'utf-8');
+    const { createDocumentStub, getExtractionStatus } = await import(
+      '../../../src/pipeline/db/repositories.js'
+    );
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f, docType: '合同' });
+
+    const model = delayedModel();
+    const res = await processDocument(ctx, docId, {
+      docType: '合同', modality: 'digital', extraction: { model: model as any },
+    });
+    // Parsing is done; the delayed extraction can't have finished yet.
+    expect(res.parseStatus).toBe('parsed');
+    expect(await getExtractionStatus(ctx, docId)).toBeNull();
+
+    // The chat-backstop path awaits the SAME background run (one model call).
+    const assured = await ensureDocumentExtracted(ctx, docId, {
+      modality: 'digital', extraction: { model: model as any },
+    });
+    expect(assured.extractionStatus).toBe('ok');
+    expect(model.calls).toBe(1);
+  });
+
+  it('waitExtraction=false returns pending and kicks a background re-extract for a failed doc', async () => {
+    const f = join(dir, 'bg-fail.txt');
+    writeFileSync(f, '合同号：HT-2024-002\n', 'utf-8');
+    const { createDocumentStub, setDocumentParseStatus, setExtractionStatus } = await import(
+      '../../../src/pipeline/db/repositories.js'
+    );
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f });
+    await setDocumentParseStatus(ctx, docId, 'parsed');
+    await setExtractionStatus(ctx, docId, 'failed');
+
+    const model = delayedModel();
+    const fast = await ensureDocumentExtracted(ctx, docId, {
+      modality: 'digital', extraction: { model: model as any }, waitExtraction: false,
+    });
+    expect(fast.parseStatus).toBe('parsed');
+    expect(fast.extractionStatus).toBe('pending');
+
+    // The kicked-off background flight completes and stamps 'ok'.
+    const final = await ensureDocumentExtracted(ctx, docId, {
+      modality: 'digital', extraction: { model: model as any },
+    });
+    expect(final.extractionStatus).toBe('ok');
+    expect(model.calls).toBe(1);
+  });
+});
