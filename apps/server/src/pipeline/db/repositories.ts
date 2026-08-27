@@ -30,6 +30,10 @@ import {
   deleteFileFolderPg,
   listFileFoldersUnderPg,
   renameFileFoldersPrefixPg,
+  setFolderSortOrdersPg,
+  listFileRanksPg,
+  upsertFileRanksPg,
+  deleteFileRankPg,
   // pg parity for the previously-stubbed fns.
   countDocumentsPg,
   countExtractionsNeedingReviewPg,
@@ -1247,9 +1251,66 @@ export async function listFileFolders(
 ): Promise<FileFolderRow[]> {
   if (ctx.backend === 'postgres') return listFileFoldersPg(ctx, userId);
   const rows = ctx.sqlite
-    .prepare('SELECT id, path FROM file_folders WHERE user_id = ? ORDER BY path ASC')
+    .prepare(
+      'SELECT id, path FROM file_folders WHERE user_id = ? ' +
+        "ORDER BY (sort_order IS NULL) ASC, sort_order ASC, path ASC",
+    )
     .all(userId) as Array<{ id: string; path: string }>;
   return rows.map((r) => ({ id: r.id, path: r.path }));
+}
+
+/**
+ * Persist drag-to-sort ranks. `paths` is the FULL ordered list of sibling
+ * folder paths (parent-scoped); index becomes the sort_order. Folders not in
+ * the list keep their existing rank (0 = default bucket).
+ */
+export async function setFolderSortOrders(
+  ctx: DbContext,
+  userId: string,
+  paths: string[],
+): Promise<number> {
+  if (ctx.backend === 'postgres') return setFolderSortOrdersPg(ctx, userId, paths);
+  const stmt = ctx.sqlite.prepare(
+    'UPDATE file_folders SET sort_order = ? WHERE user_id = ? AND path = ?',
+  );
+  let changed = 0;
+  for (let i = 0; i < paths.length; i += 1) {
+    const res = stmt.run(i, userId, paths[i]!);
+    changed += res.changes;
+  }
+  return changed;
+}
+
+/** Manual display rank per MinIO object key (drag-to-sort). Missing keys = no
+ *  custom order. Small per-user table -- load all and filter in memory. */
+export async function listFileRanks(ctx: DbContext, userId: string): Promise<Map<string, number>> {
+  if (ctx.backend === 'postgres') return listFileRanksPg(ctx, userId);
+  const rows = ctx.sqlite
+    .prepare('SELECT obj_key, sort_order FROM file_sort_orders WHERE user_id = ?')
+    .all(userId) as Array<{ obj_key: string; sort_order: number }>;
+  return new Map(rows.map((r) => [r.obj_key, r.sort_order]));
+}
+
+/** Upsert drag-order ranks (order = array index from the client). */
+export async function upsertFileRanks(
+  ctx: DbContext,
+  userId: string,
+  ranks: Array<{ key: string; order: number }>,
+): Promise<void> {
+  if (ctx.backend === 'postgres') return upsertFileRanksPg(ctx, userId, ranks);
+  const stmt = ctx.sqlite.prepare(
+    `INSERT INTO file_sort_orders (user_id, obj_key, sort_order) VALUES (?, ?, ?)
+     ON CONFLICT(user_id, obj_key) DO UPDATE SET sort_order = excluded.sort_order`,
+  );
+  for (const r of ranks) stmt.run(userId, r.key, r.order);
+}
+
+/** Remove a stale rank row (file deleted or moved to a new key). Best-effort. */
+export async function deleteFileRank(ctx: DbContext, userId: string, key: string): Promise<void> {
+  if (ctx.backend === 'postgres') return deleteFileRankPg(ctx, userId, key);
+  ctx.sqlite
+    .prepare('DELETE FROM file_sort_orders WHERE user_id = ? AND obj_key = ?')
+    .run(userId, key);
 }
 
 /** Insert a virtual folder row. Returns the generated id. */

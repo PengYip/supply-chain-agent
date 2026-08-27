@@ -5,10 +5,11 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { ChevronRight, FileText, Folder, FolderOpen } from 'lucide-react';
 import { type FileEntry, type FileFolder } from '../../hooks/useFiles';
-import { normalizeMoveDirectory, type TreeNode } from '../../lib/fileTree';
+import { normalizeMoveDirectory, nodeAt, type TreeNode } from '../../lib/fileTree';
 import {
   isFolderSelfDrop,
   readPayload,
+  rowZoneFromEvent,
   type DragPayload,
   type DropTarget,
 } from '../../hooks/useFileDnd';
@@ -176,6 +177,7 @@ export interface TreeCallbacks {
   folders: FileFolder[];
   contextFileKeys: Set<string>;
   parsingDocIds: Set<string>;
+  tree: TreeNode;
   // 临态高亮
   selectedKey: string | null;
   movingFileKey: string | null;
@@ -216,6 +218,26 @@ export interface TreeCallbacks {
   onRenameFolder: (from: string, newName: string) => void;
   // OS 文件/文件夹拖入（上传队列），targetDir 为落点目录
   onDropFiles: (dt: DataTransfer, targetDir: DropTarget) => void;
+  // 拖拽排序：parentPath 下文件夹名全组顺序 / directory 下文件 key 全组顺序
+  onReorderFolders: (parentPath: string, names: string[]) => void;
+  onReorderFiles: (directory: string, keys: string[]) => void;
+}
+
+/** parentOf('a/b/c') = 'a/b'；根层返回 ''。 */
+function parentOf(path: string): string {
+  const idx = path.lastIndexOf('/');
+  return idx > 0 ? path.slice(0, idx) : '';
+}
+
+/** 把 dragged（fromIndex 处）插到 targetIndex 的上/下方，返回新全组数组。 */
+function moveItem<T>(list: T[], fromIndex: number, toIndex: number, zone: 'above' | 'below'): T[] {
+  const next = [...list];
+  const [item] = next.splice(fromIndex, 1);
+  if (!item) return next;
+  let insertAt = toIndex > fromIndex ? toIndex - 1 : toIndex;
+  if (zone === 'below') insertAt += 1;
+  next.splice(insertAt, 0, item);
+  return next;
 }
 
 function FileRow(props: {
@@ -225,9 +247,46 @@ function FileRow(props: {
   cb: TreeCallbacks;
 }) {
   const { file, depth, isSelected, cb } = props;
+  const [edgeZone, setEdgeZone] = useState<'above' | 'below' | null>(null);
   const badge = parseBadge(file.parseStatus);
   // 动作区在 hover / 移动中 / 删除确认中保持可见
   const showActions = cb.movingFileKey === file.key || cb.deletingFilePath === file.key;
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!cb.dnd.dragging) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const payload = cb.dnd.dragging;
+    if (payload.kind !== 'file') return;
+    e.dataTransfer.dropEffect = 'move';
+    setEdgeZone(rowZoneFromEvent(e, false));
+  };
+
+  const handleDragLeave = () => setEdgeZone(null);
+
+  const handleDrop = (e: React.DragEvent) => {
+    setEdgeZone(null);
+    if (!cb.dnd.dragging || cb.dnd.dragging.kind !== 'file') return;
+    e.preventDefault();
+    e.stopPropagation();
+    const payload = cb.dnd.dragging;
+    const zone = rowZoneFromEvent(e, false);
+    const dir = normalizeMoveDirectory(file.directory);
+    // 仅同目录内的文件之间支持排序；跨目录落文件行 = 移到该行所在目录（尾部）。
+    if (normalizeMoveDirectory(payload.directory) !== dir) {
+      cb.onMoveFile(payload.key, dir);
+      cb.dnd.clear();
+      return;
+    }
+    const node = nodeAt(cb.tree, dir);
+    const keys = (node?.files ?? []).map((f) => f.key);
+    const from = keys.indexOf(payload.key);
+    const to = keys.indexOf(file.key);
+    if (from >= 0 && to >= 0 && from !== to) {
+      cb.onReorderFiles(dir, moveItem(keys, from, to, zone));
+    }
+    cb.dnd.clear();
+  };
 
   // 挂合同徽标：判据是「存在已确认的合同绑定」，对合同与执行单据统一表述为
   // 「挂到合同」，避免合同类文档把「未绑定」误读为「未入台账」（入台账由
@@ -311,14 +370,26 @@ function FileRow(props: {
     <div
       onClick={() => cb.onSelect(file.key)}
       draggable
-      onDragStart={cb.dnd.onDragStart({ kind: 'file', key: file.key, name: file.name })}
+      onDragStart={cb.dnd.onDragStart({ kind: 'file', key: file.key, name: file.name, directory: file.directory })}
       onDragEnd={cb.dnd.clear}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
       className={clsx(
         'group relative flex cursor-pointer items-center border-b border-line/60 pr-3 text-sm text-ink transition-colors',
         isSelected ? 'bg-primary/5' : 'hover:bg-surface',
       )}
       style={{ paddingLeft: 12 + depth * 14, paddingTop: 7, paddingBottom: 7 }}
     >
+      {edgeZone && (
+        <span
+          aria-hidden
+          className={clsx(
+            'pointer-events-none absolute right-0 left-0 z-20 h-[2px] rounded-full bg-primary',
+            edgeZone === 'above' ? 'top-0' : 'bottom-0',
+          )}
+        />
+      )}
       <div className="flex w-[18px] shrink-0 items-center justify-center text-ink-soft">
         <FileText className="h-4 w-4" aria-hidden />
       </div>
@@ -392,12 +463,13 @@ function TreeFolder(props: TreeFolderProps) {
   const { name, fullPath, node, depth, expanded, toggle, cb } = props;
   const [subName, setSubName] = useState('');
   const [renameValue, setRenameValue] = useState('');
+  const [edgeZone, setEdgeZone] = useState<'above' | 'below' | null>(null);
   const isOpen = expanded.has(fullPath);
   const hasChildren = node.files.length > 0 || Object.keys(node.subdirs).length > 0;
   const creatingHere = cb.creatingInDir === fullPath;
   const renamingHere = cb.renamingPath === fullPath;
   const highlighted =
-    !!cb.dnd.dragging && cb.dnd.dropTarget === fullPath && !isFolderSelfDrop(
+    !!cb.dnd.dragging && edgeZone === null && cb.dnd.dropTarget === fullPath && !isFolderSelfDrop(
       cb.dnd.dragging.kind === 'folder' ? cb.dnd.dragging.path : '',
       fullPath,
     );
@@ -432,6 +504,24 @@ function TreeFolder(props: TreeFolderProps) {
     e.stopPropagation();
     e.preventDefault();
     const payload = readPayload(e);
+    // 边缘区（上/下 30%）：同级文件夹排序。仅文件夹载荷参与；文件载荷忽略边缘。
+    if (edgeZone && payload?.kind === 'folder') {
+      setEdgeZone(null);
+      const parent = parentOf(fullPath);
+      const dragName = payload.path.split('/').pop() ?? '';
+      if (parentOf(payload.path) === parent && dragName !== name) {
+        const parentNode = nodeAt(cb.tree, parent);
+        const names = Object.keys(parentNode?.subdirs ?? {});
+        const from = names.indexOf(dragName);
+        const to = names.indexOf(name);
+        if (from >= 0 && to >= 0 && from !== to) {
+          cb.onReorderFolders(parent, moveItem(names, from, to, edgeZone));
+        }
+      }
+      cb.dnd.clear();
+      return;
+    }
+    setEdgeZone(null);
     if (payload) {
       if (payload.kind === 'file') {
         cb.onMoveFile(payload.key, fullPath);
@@ -446,9 +536,16 @@ function TreeFolder(props: TreeFolderProps) {
     cb.dnd.clear();
   };
 
-  // 文件夹行是独立落点：阻断冒泡，防止根区 dragOver 把 dropTarget 覆写成根。
+  // 文件夹行三区判定：上/下 30% 为排序边缘，中间为移入/上传容器语义。
   const handleRowDragOver = (e: React.DragEvent) => {
     e.stopPropagation();
+    const payload = cb.dnd.dragging;
+    let zone: 'above' | 'below' | null = null;
+    if (payload?.kind === 'folder' && !isFolderSelfDrop(payload.path, fullPath)) {
+      const raw = rowZoneFromEvent(e, true);
+      zone = raw === 'into' ? null : raw;
+    }
+    setEdgeZone(zone);
     cb.dnd.onDragOver(fullPath)(e);
   };
 
@@ -469,6 +566,15 @@ function TreeFolder(props: TreeFolderProps) {
         style={{ paddingLeft: 12 + depth * 14, paddingTop: 7, paddingBottom: 7 }}
       >
         {highlighted && <span className="absolute inset-y-0 left-0 w-[3px] rounded-full bg-primary" aria-hidden />}
+        {edgeZone && (
+          <span
+            aria-hidden
+            className={clsx(
+              'pointer-events-none absolute right-0 left-0 z-20 h-[2px] rounded-full bg-primary',
+              edgeZone === 'above' ? 'top-0' : 'bottom-0',
+            )}
+          />
+        )}
         <span
           onClick={(e) => { e.stopPropagation(); toggle(fullPath); }}
           className="mr-1 flex w-[18px] shrink-0 items-center justify-center"

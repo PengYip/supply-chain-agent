@@ -218,12 +218,27 @@ export const fileFolders = pgTable(
     id: text('id').primaryKey(),
     userId: text('user_id').notNull(),
     path: text('path').notNull(),
+    // 拖拽排序的持久化顺序；NULL = 从未手动排序，排在已排序行之后。
+    sortOrder: integer('sort_order'),
     createdAt: nowTs(),
   },
   (t) => ({
     userIdx: index('idx_file_folders_user').on(t.userId),
   }),
 );
+
+/**
+ * file_sort_orders: manual drag-order ranks for file objects, keyed by MinIO
+ * object key per user. Mirrors SQLite file_sort_orders. Ranks are lost on
+ * move/rename (the key changes) and orphaned rows are harmless read noise.
+ */
+export const fileSortOrders = pgTable('file_sort_orders', {
+  userId: text('user_id').notNull(),
+  objKey: text('obj_key').notNull(),
+  sortOrder: integer('sort_order').notNull().default(0),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.userId, t.objKey] }),
+}));
 
 /**
  * self_parties: 自主体名单 DB 侧(与 env.SELF_PARTY_NAMES 并集)。Mirrors SQLite

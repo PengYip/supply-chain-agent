@@ -190,7 +190,31 @@ export function useFiles() {
     await refresh();
   }, [refresh]);
 
-  return { files, folders, loading, refresh, downloadFile, moveFile, createFolder, removeFolder, renameFolderPath, deleteFile };
+  /** 拖拽排序：文件夹全组顺序（完整路径数组，索引即 rank）。 */
+  const reorderFolders = useCallback(async (paths: string[]) => {
+    const res = await fetch('/api/files/reorder', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'folders', paths }),
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error(`reorder failed (${res.status})`);
+    await refresh();
+  }, [refresh]);
+
+  /** 拖拽排序：文件全组顺序（MinIO key 数组，索引即 rank）。 */
+  const reorderFiles = useCallback(async (keys: string[]) => {
+    const res = await fetch('/api/files/reorder', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'files', keys }),
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error(`reorder failed (${res.status})`);
+    await refresh();
+  }, [refresh]);
+
+  return { files, folders, loading, refresh, downloadFile, moveFile, createFolder, removeFolder, renameFolderPath, reorderFolders, reorderFiles, deleteFile };
 }
 
 /** The full useFiles() return value, so App can own one instance and hand it

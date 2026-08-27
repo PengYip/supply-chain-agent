@@ -5,6 +5,10 @@ import {
   listFileFolders,
   listFileFoldersUnder,
   renameFileFoldersPrefix,
+  setFolderSortOrders,
+  listFileRanks,
+  upsertFileRanks,
+  deleteFileRank,
 } from '../../../src/pipeline/db/repositories.js';
 
 let ctx: ReturnType<typeof createDb>;
@@ -54,5 +58,40 @@ describe('listFileFoldersUnder', () => {
     await createFileFolder(ctx, 'u9', '合同');
     const rows = await listFileFoldersUnder(ctx, 'u1', '合同');
     expect(rows.map((r) => r.path).sort()).toEqual(['合同', '合同/上游']);
+  });
+});
+
+describe('drag-to-sort persistence', () => {
+  it('setFolderSortOrders reorders listing; unlisted rows fall back to path ASC', async () => {
+    await createFileFolder(ctx, 'u1', 'a');
+    await createFileFolder(ctx, 'u1', 'b');
+    await createFileFolder(ctx, 'u1', 'c');
+    // 拖 c 到最前、b 第二；a 未列入（保持 rank=0 兜底组）
+    const n = await setFolderSortOrders(ctx, 'u1', ['c', 'b']);
+    expect(n).toBe(2);
+    expect((await listFileFolders(ctx, 'u1')).map((f) => f.path)).toEqual(['c', 'b', 'a']);
+  });
+
+  it('user scoping: another user keeps default order', async () => {
+    await createFileFolder(ctx, 'u1', 'x');
+    await createFileFolder(ctx, 'u1', 'y');
+    await createFileFolder(ctx, 'u2', 'x');
+    await createFileFolder(ctx, 'u2', 'y');
+    await setFolderSortOrders(ctx, 'u1', ['y', 'x']);
+    expect((await listFileFolders(ctx, 'u1')).map((f) => f.path)).toEqual(['y', 'x']);
+    expect((await listFileFolders(ctx, 'u2')).map((f) => f.path)).toEqual(['x', 'y']);
+  });
+
+  it('file ranks upsert idempotently and delete cleanly', async () => {
+    const k = 'users/u1/a.pdf';
+    await upsertFileRanks(ctx, 'u1', [{ key: k, order: 2 }]);
+    await upsertFileRanks(ctx, 'u1', [{ key: k, order: 0 }, { key: 'users/u1/b.csv', order: 1 }]);
+    expect(await listFileRanks(ctx, 'u1')).toEqual(
+      new Map([['users/u1/b.csv', 1], [k, 0]]),
+    );
+    // 别的用户不受影响
+    expect((await listFileRanks(ctx, 'u9')).size).toBe(0);
+    await deleteFileRank(ctx, 'u1', k);
+    expect([...(await listFileRanks(ctx, 'u1')).keys()]).toEqual(['users/u1/b.csv']);
   });
 });

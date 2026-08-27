@@ -28,7 +28,7 @@ export function FileDrawer(props: FileDrawerProps) {
   const { open, onClose, onAddToConversation, contextFileKeys, filesApi, onOpenBindings } = props;
   const {
     files, folders, loading, downloadFile, moveFile, createFolder,
-    removeFolder, renameFolderPath, deleteFile, refresh,
+    removeFolder, renameFolderPath, reorderFolders, reorderFiles, deleteFile, refresh,
   } = filesApi;
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -215,6 +215,7 @@ export function FileDrawer(props: FileDrawerProps) {
     folders,
     contextFileKeys,
     parsingDocIds,
+    tree,
     selectedKey,
     movingFileKey,
     deletingFolderPath,
@@ -254,6 +255,13 @@ export function FileDrawer(props: FileDrawerProps) {
       });
     },
     onDropFiles: handleDropFiles,
+    onReorderFolders: (parentPath, names) => {
+      const paths = names.map((n) => (parentPath ? `${parentPath}/${n}` : n));
+      void reorderFolders(paths).catch((e) => console.error('reorder folders failed:', e));
+    },
+    onReorderFiles: (_directory, keys) => {
+      void reorderFiles(keys).catch((e) => console.error('reorder files failed:', e));
+    },
   };
 
   return (

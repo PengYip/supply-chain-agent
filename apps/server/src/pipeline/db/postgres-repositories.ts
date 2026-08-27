@@ -1057,10 +1057,66 @@ export async function listFileFoldersPg(
   userId: string,
 ): Promise<Array<{ id: string; path: string }>> {
   const res = await ctx.pool.query(
-    'SELECT id, path FROM file_folders WHERE user_id = $1 ORDER BY path ASC',
+    'SELECT id, path FROM file_folders WHERE user_id = $1 ORDER BY sort_order ASC NULLS LAST, path ASC',
     [userId],
   );
   return res.rows.map((r) => ({ id: r.id, path: r.path }));
+}
+
+/** pg twin of setFolderSortOrders -- see repositories.ts for the contract. */
+export async function setFolderSortOrdersPg(
+  ctx: PostgresDbContext,
+  userId: string,
+  paths: string[],
+): Promise<number> {
+  let changed = 0;
+  for (let i = 0; i < paths.length; i += 1) {
+    const res = await ctx.pool.query(
+      'UPDATE file_folders SET sort_order = $1 WHERE user_id = $2 AND path = $3',
+      [i, userId, paths[i]],
+    );
+    changed += res.rowCount ?? 0;
+  }
+  return changed;
+}
+
+/** pg twin of listFileRanks. */
+export async function listFileRanksPg(
+  ctx: PostgresDbContext,
+  userId: string,
+): Promise<Map<string, number>> {
+  const res = await ctx.pool.query(
+    'SELECT obj_key, sort_order FROM file_sort_orders WHERE user_id = $1',
+    [userId],
+  );
+  return new Map(res.rows.map((r) => [r.obj_key as string, r.sort_order as number]));
+}
+
+/** pg twin of upsertFileRanks. */
+export async function upsertFileRanksPg(
+  ctx: PostgresDbContext,
+  userId: string,
+  ranks: Array<{ key: string; order: number }>,
+): Promise<void> {
+  for (const r of ranks) {
+    await ctx.pool.query(
+      `INSERT INTO file_sort_orders (user_id, obj_key, sort_order) VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, obj_key) DO UPDATE SET sort_order = EXCLUDED.sort_order`,
+      [userId, r.key, r.order],
+    );
+  }
+}
+
+/** pg twin of deleteFileRank. */
+export async function deleteFileRankPg(
+  ctx: PostgresDbContext,
+  userId: string,
+  key: string,
+): Promise<void> {
+  await ctx.pool.query(
+    'DELETE FROM file_sort_orders WHERE user_id = $1 AND obj_key = $2',
+    [userId, key],
+  );
 }
 
 /** Insert a virtual folder row. Returns the generated id. */

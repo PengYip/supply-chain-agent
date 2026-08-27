@@ -5,6 +5,7 @@ import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.
 import {
   createFileFolder,
   listFileFolders,
+  listFileRanks,
   findDocIdsByMinioKeys,
 } from '../../src/pipeline/db/repositories.js';
 
@@ -57,6 +58,14 @@ function appAs(userId: string) {
 
 function req(app: ReturnType<typeof appAs>, body: object) {
   return app.request('/api/files/folder-path', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+function reqReorder(app: ReturnType<typeof appAs>, body: object) {
+  return app.request('/api/files/reorder', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -157,5 +166,46 @@ describe('PATCH /api/files/folder-path', () => {
     expect(minioState.removed).toContain('users/u1/新家/8f0e2c10-9d3f-4f5a-8b6c-7d1e2f3a4b5c-a.pdf');
     // folders 行未被改写
     expect((await listFileFolders(ctx, 'u1')).map((f) => f.path)).toEqual(['旧目录']);
+  });
+});
+
+describe('PATCH /api/files/reorder', () => {
+  it('400: kind 非法 / 缺数组', async () => {
+    expect((await reqReorder(appAs('u1'), {})).status).toBe(400);
+    expect((await reqReorder(appAs('u1'), { kind: 'folders' })).status).toBe(400);
+    expect((await reqReorder(appAs('u1'), { kind: 'files' })).status).toBe(400);
+  });
+
+  it('403: files 含他人前缀 key', async () => {
+    const res = await reqReorder(appAs('u1'), {
+      kind: 'files',
+      keys: ['users/u2/x.pdf'],
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('folders: 全组顺序持久化后列表按 rank 返回', async () => {
+    await createFileFolder(ctx, 'u1', 'a');
+    await createFileFolder(ctx, 'u1', 'b');
+    await createFileFolder(ctx, 'u1', 'c');
+    const res = await reqReorder(appAs('u1'), {
+      kind: 'folders',
+      paths: ['c', '/a/'],
+    });
+    expect(res.status).toBe(200);
+    // c=0, a=1（normalizeDirectory 去掉多余斜杠），b 未列入 -> 兜底最后
+    expect((await listFileFolders(ctx, 'u1')).map((f) => f.path)).toEqual(['c', 'a', 'b']);
+  });
+
+  it('files: 合法 keys upsert 后由 GET 按序返回', async () => {
+    const res = await reqReorder(appAs('u1'), {
+      kind: 'files',
+      keys: ['users/u1/z.pdf', 'users/u1/a.pdf'],
+    });
+    expect(res.status).toBe(200);
+    // 直接经 repo 断言 rank 落库
+    const ranks = await listFileRanks(ctxHolder.current!, 'u1');
+    expect(ranks.get('users/u1/z.pdf')).toBe(0);
+    expect(ranks.get('users/u1/a.pdf')).toBe(1);
   });
 });
