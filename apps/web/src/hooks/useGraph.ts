@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { normalizeTree, type GraphTree } from '../components/graph/graphTree';
 
 /** 节点类别（/api/graph 契约）：Document / Party / Commodity / Contract。 */
 export type GraphKind = 'Document' | 'Party' | 'Commodity' | 'Contract';
@@ -169,6 +170,8 @@ export function useGraph() {
   const [documents, setDocuments] = useState<GraphDocument[]>([]);
   const [docsLoading, setDocsLoading] = useState(true);
   const [docsError, setDocsError] = useState<string | null>(null);
+  // 项目树(左侧层级浏览; 树不可用不影响扁平文档兜底)
+  const [tree, setTree] = useState<GraphTree | null>(null);
 
   // 以某节点为中心的子图（画布）
   const [subgraph, setSubgraph] = useState<Subgraph | null>(null);
@@ -193,6 +196,12 @@ export function useGraph() {
       setDocsError(e instanceof Error ? e.message : '文档列表加载失败');
     } finally {
       setDocsLoading(false);
+    }
+    try {
+      const t = await getJson<unknown>('/api/graph/tree');
+      setTree(normalizeTree(t));
+    } catch {
+      setTree(null); // 树失败静默降级为空, 面板由 documents 兜底渲染
     }
   }, []);
 
@@ -241,6 +250,7 @@ export function useGraph() {
     docsLoading,
     docsError,
     refreshDocuments,
+    tree,
     subgraph,
     graphLoading,
     graphError,

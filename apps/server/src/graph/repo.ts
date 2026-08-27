@@ -233,6 +233,111 @@ export async function listDocumentNodes(docIds: string[]): Promise<GraphEntity[]
   }
 }
 
+// ---- 项目树(spec 2026-08-27 Task5): Project -> Contract -> Document 只读聚合 ----
+
+/** 履约归属边类型: 与 layeredLayout 的 FULFILLMENT_TYPES 保持同一语义集合。 */
+const TREE_FULFILLMENT_TYPES = [
+  'executes', 'references', 'binds', 'trades', 'settles', 'amends', 'granted',
+];
+
+export interface TreeContract {
+  elementId: string;
+  name: string;
+  docs: GraphEntity[];
+}
+export interface TreeProject {
+  elementId: string;
+  name: string;
+  contracts: TreeContract[];
+}
+export interface ProjectTree {
+  projects: TreeProject[];
+  /** 未归属任何项目的合同（连同其履约单据），前端渲染为「未分组」区。 */
+  orphanContracts: TreeContract[];
+}
+
+/**
+ * 项目为根的文档树: 每个项目下挂 part_of 合同，合同下挂首次满足履约类型边的单据。
+ * 单据可能被多份合同引用——这里按"归一处"原则挂在查询结果序靠前的合同上，
+ * 由服务端排序保证可复现。两次 READ 在同一 session 内完成。
+ */
+export async function projectTree(): Promise<ProjectTree> {
+  const session = getDriver().session({ defaultAccessMode: neo4j.session.READ });
+  try {
+    // 读A: 项目 -> 合同(part_of)，以及无主合同
+    const projRes = await session.executeRead((txc) =>
+      txc.run(
+        `
+        MATCH (p:Project)
+        OPTIONAL MATCH (c:Contract)-[:part_of]->(p)
+        WITH p, collect(DISTINCT c) AS cs
+        RETURN elementId(p) AS projectId, toString(p.name) AS projectName, cs
+        ORDER BY projectName
+        `,
+      ),
+    );
+    const orphanRes = await session.executeRead((txc) =>
+      txc.run(
+        `
+        MATCH (c:Contract)
+        WHERE NOT (c)-[:part_of]->(:Project)
+        RETURN elementId(c) AS contractId, toString(c.name) AS contractName
+        ORDER BY contractName
+        `,
+      ),
+    );
+    // 读B: 合同 ↔ 履约单据边（方向无关）
+    const docRes = await session.executeRead((txc) =>
+      txc.run(
+        `
+        MATCH (d:Document)-[r]-(c:Contract)
+        WHERE type(r) IN $types
+        RETURN elementId(c) AS contractId, collect(DISTINCT d) AS ds
+        `,
+        { types: TREE_FULFILLMENT_TYPES },
+      ),
+    );
+
+    const contractDocs = new Map<string, GraphEntity[]>();
+    for (const rec of docRes.records) {
+      const cid = String(rec.get('contractId'));
+      const docs = (rec.get('ds') as Node[] | null) ?? [];
+      contractDocs.set(cid, docs.map((dn) => nodeToEntity(dn)).sort((a, b) => a.name.localeCompare(b.name)));
+    }
+    const buildContract = (id: string, name: string): TreeContract => ({
+      elementId: id,
+      name,
+      docs: contractDocs.get(id) ?? [],
+    });
+
+    const orphanIds = new Set<string>();
+    for (const rec of orphanRes.records) {
+      orphanIds.add(String(rec.get('contractId')));
+    }
+
+    const projects: TreeProject[] = projRes.records.map((rec) => {
+      const contracts = ((rec.get('cs') as Node[] | null) ?? [])
+        .map(nodeToEntity)
+        .map((cn) => buildContract(cn.elementId, cn.name))
+        .filter((tc) => !orphanIds.has(tc.elementId))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      return {
+        elementId: String(rec.get('projectId')),
+        name: String(rec.get('projectName')),
+        contracts,
+      };
+    });
+
+    const orphanContracts = orphanRes.records
+      .map((rec) => buildContract(String(rec.get('contractId')), String(rec.get('contractName'))))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return { projects, orphanContracts };
+  } finally {
+    await session.close();
+  }
+}
+
 const DIR_TEMPLATES: Record<Direction, string> = {
   out: '-[:$($edgeKinds)]->',
   in: '<-[:$($edgeKinds)]-',

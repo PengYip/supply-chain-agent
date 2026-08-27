@@ -13,20 +13,16 @@ import { BUSINESS_TYPES, nodeDisplayName, prettyDocName } from './businessTypes'
 import { DocMetaProvider, buildDocMetaResolver } from './docMeta';
 import type { GraphFocus } from './focus';
 
-const DEPTH_OPTIONS = [1, 2, 3, 4, 5];
-
-const DIRECTION_OPTIONS: Array<{ value: GraphDirection; label: string }> = [
-  { value: 'both', label: '双向' },
-  { value: 'out', label: '出边' },
-  { value: 'in', label: '入边' },
-];
-
 interface CenterState {
   id: string;
   label: string;
   /** 中心是否来自左侧文档列表（用于展示「返回文档」入口） */
   fromDocument: boolean;
 }
+
+/** 分层探索固定查询参数(spec 2026-08-27 §6): 深度3/双向覆盖 项目→合同→单据 的完整链条。 */
+const FIXED_DEPTH = 3;
+const FIXED_DIRECTION: GraphDirection = 'both';
 
 export function GraphView({
   focus = null,
@@ -40,14 +36,13 @@ export function GraphView({
     docsLoading,
     docsError,
     refreshDocuments,
+    tree,
     subgraph,
     graphLoading,
     graphError,
     loadSubgraph,
   } = useGraph();
 
-  const [depth, setDepth] = useState(2);
-  const [direction, setDirection] = useState<GraphDirection>('both');
   const [selectedDoc, setSelectedDoc] = useState<GraphDocument | null>(null);
   const [center, setCenter] = useState<CenterState | null>(null);
   // 悬停即时查看，点击固定详情；固定优先展示
@@ -114,12 +109,12 @@ export function GraphView({
   const docMetaResolver = useMemo(() => buildDocMetaResolver(documents), [documents]);
 
   const query = useCallback(
-    (id: string, label: string, fromDocument: boolean, d: number, dir: GraphDirection) => {
+    (id: string, label: string, fromDocument: boolean) => {
       setCenter({ id, label, fromDocument });
       setPinned(null);
       setHovered(null);
       setSearchNotice(null);
-      void loadSubgraph(id, d, dir);
+      void loadSubgraph(id, FIXED_DEPTH, FIXED_DIRECTION);
     },
     [loadSubgraph],
   );
@@ -138,21 +133,21 @@ export function GraphView({
           setSearchNotice(`合同 ${item.displayContractNo} 尚未同步到图谱（无合同节点）`);
           return;
         }
-        query(elementId, item.displayContractNo, false, depth, direction);
+        query(elementId, item.displayContractNo, false);
       } catch {
         setSearchNotice('图谱定位失败，请稍后重试');
       }
     },
-    [query, depth, direction],
+    [query],
   );
 
   // 项目搜索选中: /entities 直接回传 elementId, 无需 resolve, 直接为中心查询。
   const handleProjectSelect = useCallback(
     (item: { elementId: string; name: string }) => {
       setSearchNotice(null);
-      query(item.elementId, item.name, false, depth, direction);
+      query(item.elementId, item.name, false);
     },
-    [query, depth, direction],
+    [query],
   );
 
   // 外部定位（绑定工作台跳入）：以合同节点为中心重新查询，替换原有中心。
@@ -162,50 +157,45 @@ export function GraphView({
     if (!focus || focus.nonce === handledFocusNonceRef.current) return;
     handledFocusNonceRef.current = focus.nonce;
     setSelectedDoc(null);
-    query(focus.elementId, focus.label, false, depth, direction);
-  }, [focus, query, depth, direction]);
+    query(focus.elementId, focus.label, false);
+  }, [focus, query]);
 
-  const handleSelectDoc = useCallback(
-    (doc: GraphDocument) => {
-      setSelectedDoc(doc);
-      query(doc.elementId, prettyDocName(doc.sourceUri), true, depth, direction);
+  // 左侧树面板选中(项目/合同/单据任意层级): 以该节点为中心展开。
+  // 单据选中时回填 selectedDoc(供「返回文档」入口), 文件名从已入库文档兜底解析。
+  const handleSelectListNode = useCallback(
+    (item: { elementId: string; label: string; kind: string }) => {
+      if (item.kind === 'Document') {
+        const meta = documents.find((d) => d.elementId === item.elementId) ?? null;
+        setSelectedDoc(
+          meta ?? { elementId: item.elementId, docId: '', docType: '', sourceUri: '', createdAt: '' },
+        );
+        const label = meta ? (prettyDocName(meta.sourceUri) || meta.docId || item.label) : item.label;
+        query(item.elementId, label, true);
+      } else {
+        setSelectedDoc(null);
+        query(item.elementId, item.label, false);
+      }
     },
-    [query, depth, direction],
+    [documents, query],
   );
 
   const handleExpandNode = useCallback(
     (node: GraphNode) => {
-      query(node.elementId, nodeDisplayName(node, docMetaResolver), false, depth, direction);
+      query(node.elementId, nodeDisplayName(node, docMetaResolver), false);
     },
-    [query, depth, direction, docMetaResolver],
-  );
-
-  const handleDepthChange = useCallback(
-    (d: number) => {
-      setDepth(d);
-      if (center) query(center.id, center.label, center.fromDocument, d, direction);
-    },
-    [center, direction, query],
-  );
-
-  const handleDirectionChange = useCallback(
-    (dir: GraphDirection) => {
-      setDirection(dir);
-      if (center) query(center.id, center.label, center.fromDocument, depth, dir);
-    },
-    [center, depth, query],
+    [query, docMetaResolver],
   );
 
   const handleRefresh = useCallback(() => {
     void refreshDocuments();
-    if (center) query(center.id, center.label, center.fromDocument, depth, direction);
-  }, [refreshDocuments, center, depth, direction, query]);
+    if (center) query(center.id, center.label, center.fromDocument);
+  }, [refreshDocuments, center, query]);
 
   const backToDocument = useCallback(() => {
     if (selectedDoc) {
-      query(selectedDoc.elementId, prettyDocName(selectedDoc.sourceUri), true, depth, direction);
+      query(selectedDoc.elementId, prettyDocName(selectedDoc.sourceUri), true);
     }
-  }, [selectedDoc, depth, direction, query]);
+  }, [selectedDoc, query]);
 
   const isCenter = useCallback((elementId: string) => center?.id === elementId, [center]);
 
@@ -278,39 +268,6 @@ export function GraphView({
         )}
 
         <div className="ml-auto flex items-center gap-3">
-          <label className="flex items-center gap-1.5 text-[12px] text-ink-soft">
-            深度
-            <select
-              value={depth}
-              onChange={(e) => handleDepthChange(Number(e.target.value))}
-              className="h-7 rounded-md border border-line bg-white px-1.5 text-[12px] text-ink focus:border-primary focus:outline-none"
-            >
-              {DEPTH_OPTIONS.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <div className="flex overflow-hidden rounded-md border border-line">
-            {DIRECTION_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => handleDirectionChange(opt.value)}
-                className={clsx(
-                  'h-7 px-2.5 text-[12px] transition-colors',
-                  direction === opt.value
-                    ? 'bg-primary text-white'
-                    : 'bg-white text-ink-soft hover:bg-surface',
-                )}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-
           <button
             type="button"
             onClick={handleRefresh}
@@ -335,16 +292,17 @@ export function GraphView({
                     hidden ? 'text-ink-soft/50 opacity-50 line-through' : 'text-ink-soft hover:bg-surface',
                   )}
                 >
-                  {bt.label === 'Document' ? (
-                    <span className="h-2 w-2 rounded-full border-2 bg-white" style={{ borderColor: bt.color }} aria-hidden />
-                  ) : (
-                    <span className="h-2 w-2 rounded-full" style={{ background: bt.color }} aria-hidden />
-                  )}
+                  <span
+                    className="h-2 w-2 rounded-[2px]"
+                    style={{ background: bt.softBg, border: `1.5px solid ${bt.color}` }}
+                    aria-hidden
+                  />
                   {bt.displayName}
                   {typeof count === 'number' && <span className="tabular-nums">({count})</span>}
                 </button>
               );
             })}
+            <span className="text-[10px] text-ink-soft/60">自上而下：项目 · 合同 · 履约</span>
           </div>
         </div>
       </div>
@@ -358,11 +316,12 @@ export function GraphView({
           )}
         >
           <DocumentListPanel
+            tree={tree}
             documents={documents}
             loading={docsLoading}
             error={docsError}
-            selectedId={selectedDoc?.elementId ?? null}
-            onSelect={handleSelectDoc}
+            selectedId={center?.id ?? null}
+            onSelectNode={handleSelectListNode}
             onRetry={() => void refreshDocuments()}
           />
         </div>
@@ -379,9 +338,9 @@ export function GraphView({
               <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10">
                 <Network className="h-7 w-7 text-primary" aria-hidden />
               </span>
-              <div className="mt-4 text-[14px] font-medium text-ink">从左侧选择一个文档</div>
+              <div className="mt-4 text-[14px] font-medium text-ink">从左侧选择一个文档或搜索节点</div>
               <div className="mt-1 max-w-[320px] text-[12px] leading-5 text-ink-soft">
-                以它为中心浏览关联的交易方、商品、合同与其他文档，点击任意节点可继续向外展开
+                在画布上浏览项目的合同与履约单据，双击任意节点向外展开
               </div>
             </div>
           )}
@@ -393,7 +352,7 @@ export function GraphView({
               <div className="mt-1 max-w-[360px] break-all text-[12px] leading-5 text-danger">{graphError}</div>
               <button
                 type="button"
-                onClick={() => center && query(center.id, center.label, center.fromDocument, depth, direction)}
+                onClick={() => center && query(center.id, center.label, center.fromDocument)}
                 className="mt-4 flex items-center gap-1 rounded-md border border-line bg-white px-3 py-1.5 text-[12px] text-ink hover:bg-surface"
               >
                 <RefreshCw className="h-3.5 w-3.5" aria-hidden />
@@ -407,7 +366,7 @@ export function GraphView({
               <Network className="h-10 w-10 text-line" aria-hidden />
               <div className="mt-3 text-[14px] font-medium text-ink">未找到关联节点</div>
               <div className="mt-1 text-[12px] leading-5 text-ink-soft">
-                该节点在当前深度和方向下没有可展示的关联，可尝试增大深度或切换方向
+                该节点暂无可展示的关联，可尝试以其他节点为中心重新展开
               </div>
             </div>
           )}
@@ -415,7 +374,7 @@ export function GraphView({
           {/* 加载中卸载画布（避免旧数据上的错误布局），数据到位后全新挂载 */}
           {hasGraph && !graphLoading && (
             <GraphCanvas
-              key={`${center?.id ?? ''}-${depth}-${direction}`}
+              key={`${center?.id ?? ''}`}
               subgraph={subgraph}
               centerElementId={center?.id ?? null}
               hiddenKinds={hiddenKinds}

@@ -1,12 +1,14 @@
-// G6 v5 画布(spec 2026-08-26 §4.4): 命令式生命周期 + 稳定 props 契约。
-// GraphView 以 key={center-depth-direction} 重挂载本组件, 内部不做增量 diff,
-// 只在 hiddenKinds 变化时 setData 重绘。@xyflow/react 退役(本期仅 BindingMiniGraph 仍用)。
+// G6 v5 画布 — 语义分层泳道布局(spec 2026-08-27)。
+// GraphView 以 key={center} 重挂载本组件, 内部不做增量 diff,
+// 只在 hiddenKinds 变化时 setData 重绘(布局随过滤结果重算)。
+// 布局为 layeredLayout 纯函数的显式坐标落位: 泳道=Combo, 节点=圆角卡片。
 import { useEffect, useMemo, useRef } from 'react';
 import { Graph as G6Graph, type EdgeData, type IElementEvent, type NodeData } from '@antv/g6';
 import type { GraphEdge, GraphNode, InspectTarget, Subgraph } from '../../hooks/useGraph';
-import { EDGE_STYLE_OVERRIDES, businessTypeOf, edgeLabel, nodeDisplayName } from './businessTypes';
+import { EDGE_STYLE_OVERRIDES, businessTypeOf, nodeDisplayName } from './businessTypes';
 import { fitCaption } from './captionFit';
 import { useDocMeta } from './docMeta';
+import { cardGeometry, classifyEdge, computeLayeredLayout } from './layeredLayout';
 
 interface GraphCanvasProps {
   subgraph: Subgraph;
@@ -17,7 +19,7 @@ interface GraphCanvasProps {
   onNodeSelect: (node: GraphNode) => void;
   onEdgeSelect: (edge: GraphEdge) => void;
   onPaneSelect: () => void;
-  /** 双击节点 = 增量展开(以该节点为新中心, Bloom 核心交互)。 */
+  /** 双击节点 = 增量展开(以该节点为新中心)。 */
   onNodeDoubleClick: (node: GraphNode) => void;
 }
 
@@ -27,12 +29,12 @@ interface CanvasDatum {
   props: Record<string, unknown> | null;
   rawNode?: GraphNode;
   rawEdge?: GraphEdge;
-  // G6 NodeData/EdgeData 的 data 字段要求 Record<string, unknown> 索引签名。
+  pseudo?: boolean;
   [key: string]: unknown;
 }
 
 export function GraphCanvas({
-  subgraph, centerElementId, hiddenKinds, onHover, onNodeSelect, onEdgeSelect, onPaneSelect, onNodeDoubleClick,
+  subgraph, hiddenKinds, onHover, onNodeSelect, onEdgeSelect, onPaneSelect, onNodeDoubleClick,
 }: GraphCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<G6Graph | null>(null);
@@ -43,109 +45,135 @@ export function GraphCanvas({
   // 已应用的类型过滤集合: 建图 effect 已按初始值渲染, hiddenKinds effect 跳过首次。
   const appliedKindsRef = useRef<ReadonlySet<string> | null>(null);
 
-  // 度数自适应 + label 画入圆内(spec 2026-08-26 §2): 度数高=连接多=节点大,
-  // 大节点装得下更多文字且给布局留出物理间距(Neo4j Browser 同款行为)。
-  // label 原本悬浮在节点下方(labelPlacement:'bottom'), radial 布局节点密集时
-  // 相邻 label 互相覆盖且 G6 preventOverlap 只约束节点圆形、不管文本。
   const buildData = (nodes: GraphNode[], edges: GraphEdge[]) => {
     const visibleNodes = nodes.filter((n) => !hiddenKinds.has(n.kind));
     const visibleIds = new Set(visibleNodes.map((n) => n.elementId));
     const visibleEdges = edges.filter(
       (e) => visibleIds.has(e.srcId) && visibleIds.has(e.dstId),
     );
-    const degree = new Map<string, number>();
-    for (const e of visibleEdges) {
-      degree.set(e.srcId, (degree.get(e.srcId) ?? 0) + 1);
-      degree.set(e.dstId, (degree.get(e.dstId) ?? 0) + 1);
-    }
-    // 直径 34-56: 弦宽上限 = 直径 - 字号(11px), 34px 恰好容纳 2 个 CJK 字,
-    // 保证外围节点至少显示两字而非退化为省略号(Neo4j 比例: 直径~50/字号10)。
-    const sizeOf = (n: GraphNode): number => {
-      const base = Math.min(Math.max(34 + (degree.get(n.elementId) ?? 0) * 3, 34), 56);
-      return n.elementId === centerElementId ? Math.max(base, 56) : base;
-    };
+
+    // 分层泳道布局: 显式坐标, 交由 Combo 圈定泳道区域
+    const layout = computeLayeredLayout(visibleNodes, visibleEdges);
+    const kindById = new Map(visibleNodes.map((n) => [n.elementId, n.kind]));
+    const nameOf = new Map(visibleNodes.map((n) => [n.elementId, nodeDisplayName(n, docMeta)]));
+
     const g6Nodes = visibleNodes.map((n) => {
       const bt = businessTypeOf(n.kind);
-      const size = sizeOf(n);
-      // Document=空心(描边家族区分, 深色文字), 实体=实心(白色文字)
-      const hollow = n.kind === 'Document';
+      const geo = cardGeometry(n.kind, n.name);
+      const pos = layout.positions[n.elementId] ?? { x: 0, y: 0 };
+      const isScatter = layout.scatterIds.has(n.elementId);
+      const isRoot = n.kind === 'Project';
       return {
         id: n.elementId,
-        // data.size 供 radial 布局的 nodeSize 回调读取(碰撞检测按真实尺寸)
-        data: { kind: n.kind, name: n.name, props: n.props, rawNode: n, size } as CanvasDatum,
+        type: 'rect',
+        combo: layout.comboOf[n.elementId],
+        data: { kind: n.kind, name: n.name, props: n.props, rawNode: n } as CanvasDatum,
         style: {
-          size,
-          fill: bt.color,
-          ...(hollow ? { fill: '#FFFFFF', lineWidth: 2, stroke: bt.color } : {}),
-          labelText: fitCaption(nodeDisplayName(n, docMeta), { diameter: size, fontSize: 11 }),
+          x: pos.x,
+          y: pos.y,
+          width: geo.width,
+          height: geo.height,
+          radius: isRoot ? 10 : 8,
+          fill: bt.softBg,
+          stroke: bt.color,
+          lineWidth: isRoot ? 0 : 1.5,
+          lineDash: isScatter ? [4, 3] : undefined,
+          ...(isRoot ? { fill: bt.color } : {}),
+          labelText: fitCaption(nameOf.get(n.elementId) ?? '', { diameter: geo.width * 0.92, fontSize: 11 }),
           labelPlacement: 'center' as const,
-          labelFill: hollow ? '#374151' : '#FFFFFF',
+          labelFill: isRoot ? '#FFFFFF' : '#374151',
           labelFontSize: 11,
-          // labelLineHeight 是 px 而非倍数(@antv/g-lite PropertySyntax.LENGTH):
-          // 1.1 会被当作 1.1px 行距导致多行挤成一团, 12px 约等于 11px 字号的 1.1 倍。
-          labelLineHeight: 12,
-          // G6 Label.defaultStyleProps.maxLines=1 会把 \n 多行 labelText 截成一行,
-          // 显式放开到 3 行与 fitCaption 的 maxLines 对齐。
-          labelMaxLines: 3,
+          labelLineHeight: 13,
+          labelMaxLines: 2,
           labelTextAlign: 'center' as const,
+          // 左侧色标(badge): kind 主色的窄竖条, 承载语义色
+          badges: [{
+            text: '',
+            placement: 'left' as const,
+            backgroundFill: bt.color,
+            padding: [0, 1],
+            fill: 'transparent',
+          }],
         },
       };
     });
-    const g6Edges = visibleEdges.map((e) => {
-      const override = EDGE_STYLE_OVERRIDES[e.type];
-      return {
-        id: e.elementId,
-        source: e.srcId,
-        target: e.dstId,
-        data: { kind: e.type, name: e.type, props: e.props, rawEdge: e } as CanvasDatum,
+
+    // 层标尺伪节点: 随画布平移缩放; 无 rawNode → 事件守卫天然免疫交互
+    for (const anchor of layout.rulerAnchors) {
+      g6Nodes.push({
+        id: anchor.id,
+        data: { kind: '__Ruler__', name: anchor.label, props: null, pseudo: true } as CanvasDatum,
         style: {
-          stroke: override?.color ?? '#94A3B8',
-          lineWidth: 1,
+          x: anchor.x,
+          y: anchor.y,
+          width: 2,
+          height: 2,
+          fill: 'transparent',
+          lineWidth: 0,
+          labelText: anchor.label,
+          labelFill: '#94A3B8',
+          labelFontSize: 11,
+        },
+      } as (typeof g6Nodes)[number]);
+    }
+
+    const g6Edges = visibleEdges.map((ed) => {
+      const override = EDGE_STYLE_OVERRIDES[ed.type];
+      const cls = classifyEdge(ed.type, kindById.get(ed.srcId) ?? '', kindById.get(ed.dstId) ?? '');
+      return {
+        id: ed.elementId,
+        type: cls === 'hierarchy' ? ('cubic-vertical' as const) : ('quadratic' as const),
+        source: ed.srcId,
+        target: ed.dstId,
+        data: { kind: ed.type, name: ed.type, props: ed.props, rawEdge: ed } as CanvasDatum,
+        style: {
+          stroke: override?.color ?? (cls === 'hierarchy' ? '#CBD5E1' : '#94A3B8'),
+          lineWidth: cls === 'hierarchy' ? 1.5 : 1,
           ...(override?.dashed ? { lineDash: [4, 3] } : {}),
-          labelText: edgeLabel(e.type),
-          labelFontSize: 10,
-          labelFill: '#6B7280',
-          // 白色衬底: 边文字不再被线穿过(label shape 的 background 系列样式)。
-          // opacity 必须为 1(半透明会让边线透出, G6 #7341), padding 默认 0
-          // 会让衬底紧贴文字而不可见, 显式给 [2,4] 留出呼吸空间。
-          labelBackground: true,
-          labelBackgroundFill: '#FFFFFF',
-          labelBackgroundRadius: 2,
-          labelBackgroundOpacity: 1,
-          labelPadding: [2, 4],
           endArrow: true,
+          endArrowSize: 6,
         },
       };
     });
-    return { nodes: g6Nodes, edges: g6Edges };
+
+    return {
+      nodes: g6Nodes,
+      edges: g6Edges,
+      combos: layout.comboIds.map((c) => ({ id: c.id })),
+    };
   };
 
   // 建图(重挂载时全量重建)
   useEffect(() => {
     if (!containerRef.current) return;
     appliedKindsRef.current = hiddenKinds;
-    const { nodes, edges } = buildData(subgraph.nodes, subgraph.edges);
+    const data = buildData(subgraph.nodes, subgraph.edges);
     const graph = new G6Graph({
       container: containerRef.current,
       autoFit: 'view',
       // 侧栏折叠/窗口缩放时自动跟随容器尺寸重排, 避免画布被裁剪。
       autoResize: true,
-      data: { nodes, edges },
-      // 力导布局在 animation:false 下节点堆叠原点(实测 G6 5.1.1), 改用径向布局:
-      // 中心节点置中、其余按环半径展开, 契合"以查询节点为中心"的探索语义。
-      layout: {
-        type: 'radial',
-        focusNode: centerElementId ?? undefined,
-        unitRadius: 110,
-        linkDistance: 90,
-        preventOverlap: true,
-        // 防重叠按各节点真实直径(data.size) + 24px 最小间距计算;
-        // 原来固定 nodeSize:30 与实际尺寸脱节, 大节点仍会被挤到一起。
-        nodeSpacing: 24,
-        nodeSize: (d: NodeData) => (d.data as CanvasDatum | undefined)?.size ?? 30,
-      },
+      data,
+      // 坐标由 layeredLayout 显式给出, 不再使用内置布局
       behaviors: ['drag-canvas', 'zoom-canvas', 'drag-element', 'click-select'],
-      plugins: [{ type: 'minimap', size: [140, 90] }],
+      node: {
+        state: {
+          selected: { stroke: '#4A6D8C', lineWidth: 2 },
+        },
+      },
+      combo: {
+        style: {
+          fill: '#FFFFFF',
+          stroke: '#E2E8F0',
+          lineWidth: 1,
+          radius: 12,
+        },
+      },
+      plugins: [
+        // 贸易蓝图点阵底纹(「贸易蓝图」视觉方案 §5.1); 手动验证若报错可移除
+        { type: 'grid-line', size: 22 },
+        { type: 'minimap', size: [140, 90] },
+      ],
       animation: false,
     });
     graphRef.current = graph;
@@ -176,10 +204,7 @@ export function GraphCanvas({
     });
     graph.on('node:pointerleave', () => onHover(null));
 
-    // 渲染入队: 销毁后跳过, 避免 G6 render 续体访问已清空的 context 抛 TypeError。
-    // 首帧延迟到 requestAnimationFrame: StrictMode 双挂载在提交阶段同步完成,
-    // 实例 A 会在 RAF 前被销毁(disposed=true), 其渲染根本不启动, 消除 G6 内部
-    // "instance has been destroyed" 中断日志。
+    // 渲染入队: 销毁后跳过。首帧延迟到 requestAnimationFrame 规避 StrictMode 双挂载竞态。
     renderChainRef.current = renderChainRef.current
       .then(
         () =>
@@ -194,8 +219,6 @@ export function GraphCanvas({
       .catch((e) => {
         if (!disposed) console.error(e);
       });
-    // 注: 不调用 focusElement — 它会把视口缩放到单个节点(实测 G6 5.1.1),
-    // autoFit:'view' + radial focusNode 已让中心节点居中, 无需二次定位。
 
     return () => {
       disposed = true;
@@ -212,11 +235,11 @@ export function GraphCanvas({
     if (!graph) return;
     if (appliedKindsRef.current === hiddenKinds) return;
     appliedKindsRef.current = hiddenKinds;
-    const { nodes, edges } = buildData(subgraph.nodes, subgraph.edges);
+    const data = buildData(subgraph.nodes, subgraph.edges);
     renderChainRef.current = renderChainRef.current
       .then(() => {
         if (graphRef.current !== graph) return; // 实例已被销毁/替换
-        graph.setData({ nodes, edges });
+        graph.setData(data);
         return graph.render();
       })
       .catch((e) => {
@@ -226,12 +249,12 @@ export function GraphCanvas({
   }, [hiddenKinds]);
 
   const tip = useMemo(
-    () => `双击节点向外展开 · 已隐藏类型 ${hiddenKinds.size || '无'}`,
+    () => `自上而下 项目 · 合同 · 履约 — 双击节点向外展开 · 已隐藏类型 ${hiddenKinds.size || '无'}`,
     [hiddenKinds],
   );
 
   return (
-    <div className="h-full w-full">
+    <div className="animate-fade-in h-full w-full">
       <div ref={containerRef} className="h-full w-full" data-testid="g6-canvas" />
       <div className="pointer-events-none absolute bottom-3 left-3 z-10 rounded-md border border-line bg-white/90 px-2 py-1 text-[10px] text-ink-soft">
         {tip}
