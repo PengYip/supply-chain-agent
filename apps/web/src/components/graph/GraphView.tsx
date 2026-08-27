@@ -239,6 +239,51 @@ export function GraphView({
   const hasGraph = !!subgraph && subgraph.nodes.length > 0;
   const graphEmpty = !!subgraph && subgraph.nodes.length === 0 && !graphLoading && !graphError;
 
+  // 关系洞察(详情面板消费): 从子图边就地聚合对手方/履约/参与等业务视图,
+  // 不依赖节点 props(图节点 props 只有薄字段, 业务信息大多在边与台账)。
+  const nodeInsights = useMemo(() => {
+    const map = new Map<string, {
+      counterparties: Array<{ name: string; role: string }>;
+      contractCount: number;
+      docCount: number;
+      participantNames: string[];
+      participantRoles: string[];
+    }>();
+    if (!subgraph) return map;
+    const FULFILL = new Set(['executes', 'references', 'binds', 'trades', 'settles', 'amends', 'granted']);
+    const entry = (id: string) => {
+      let e = map.get(id);
+      if (!e) {
+        e = { counterparties: [], contractCount: 0, docCount: 0, participantNames: [], participantRoles: [] };
+        map.set(id, e);
+      }
+      return e;
+    };
+    for (const ed of subgraph.edges) {
+      const srcName = nameLookup.get(ed.srcId);
+      const dstName = nameLookup.get(ed.dstId);
+      const srcKind = subgraph.nodes.find((n) => n.elementId === ed.srcId)?.kind;
+      const dstKind = subgraph.nodes.find((n) => n.elementId === ed.dstId)?.kind;
+      const role = typeof ed.props?.role === 'string' ? ed.props.role : '';
+      if (ed.type === 'counterparty' && srcName && dstName) {
+        const roleA = typeof ed.props?.role === 'string' ? ed.props.role : '';
+        entry(ed.srcId).counterparties.push({ name: dstName, role: roleA });
+        entry(ed.dstId).counterparties.push({ name: srcName, role: roleA });
+        continue;
+      }
+      if (FULFILL.has(ed.type)) {
+        if (srcKind === 'Contract' && dstKind === 'Document') { entry(ed.srcId).docCount += 1; entry(ed.dstId).contractCount += 1; }
+        else if (srcKind === 'Document' && dstKind === 'Contract') { entry(ed.dstId).docCount += 1; entry(ed.srcId).contractCount += 1; }
+        continue;
+      }
+      if (ed.type === 'participates' && srcName && dstName) {
+        if (role) entry(ed.dstId).participantRoles.push(role);
+        entry(ed.dstId).participantNames.push(srcName);
+      }
+    }
+    return map;
+  }, [subgraph, nameLookup]);
+
   return (
     <DocMetaProvider value={docMetaResolver}>
     <div className="flex h-full flex-col bg-surface">
@@ -437,6 +482,7 @@ export function GraphView({
             resolveName={resolveName}
             onExpand={handleExpandNode}
             partOfLinks={partOfLinks}
+            insights={nodeInsights}
             docBindingCounts={docBindingCounts}
             bindingCountsFailed={bindingCountsFailed}
             onLoadBindingCounts={loadBindingCounts}
