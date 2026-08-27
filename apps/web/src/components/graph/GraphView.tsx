@@ -4,6 +4,7 @@ import { AlertTriangle, Network, RefreshCw } from 'lucide-react';
 import { useGraph, type GraphDirection, type GraphDocument, type GraphEdge, type GraphNode, type InspectTarget } from '../../hooks/useGraph';
 import { fetchGraphSchema, type GraphLabelCount } from '../../api/contractSearch';
 import { ContractSearchBar } from '../common/ContractSearchBar';
+import { ProjectSearchBar } from './ProjectSearchBar';
 import { PanelRail } from '../shell/PanelRail';
 import { DocumentListPanel } from './DocumentListPanel';
 import { GraphCanvas } from './GraphCanvas';
@@ -145,6 +146,15 @@ export function GraphView({
     [query, depth, direction],
   );
 
+  // 项目搜索选中: /entities 直接回传 elementId, 无需 resolve, 直接为中心查询。
+  const handleProjectSelect = useCallback(
+    (item: { elementId: string; name: string }) => {
+      setSearchNotice(null);
+      query(item.elementId, item.name, false, depth, direction);
+    },
+    [query, depth, direction],
+  );
+
   // 外部定位（绑定工作台跳入）：以合同节点为中心重新查询，替换原有中心。
   // nonce 保证重复跳转同一节点也会触发；页内切换深度/方向不会误触发。
   const handledFocusNonceRef = useRef(-1);
@@ -210,6 +220,28 @@ export function GraphView({
 
   const resolveName = useCallback((elementId: string) => nameLookup.get(elementId) ?? '', [nameLookup]);
 
+  // part_of 项目归属聚合: 节点 elementId -> 对端展示名列表(去重)。
+  // 详情面板据此渲染「项目归属」区, 不再让归属关系只沉在画布边线里。
+  const partOfLinks = useMemo(() => {
+    const map = new Map<string, string[]>();
+    if (!subgraph) return map;
+    for (const e of subgraph.edges) {
+      if (e.type !== 'part_of') continue;
+      const srcName = nameLookup.get(e.srcId);
+      const dstName = nameLookup.get(e.dstId);
+      if (srcName && dstName) {
+        const push = (id: string, name: string) => {
+          const list = map.get(id) ?? [];
+          if (!list.includes(name)) list.push(name);
+          map.set(id, list);
+        };
+        push(e.dstId, srcName);
+        push(e.srcId, dstName);
+      }
+    }
+    return map;
+  }, [subgraph, nameLookup]);
+
   const inspect = pinned ?? hovered;
   const busy = graphLoading || docsLoading;
   const hasGraph = !!subgraph && subgraph.nodes.length > 0;
@@ -221,6 +253,7 @@ export function GraphView({
       {/* 二级工具条（视图标题由 AppTopbar 承担） */}
       <div className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-white px-4">
         <ContractSearchBar className="w-[300px]" onSelect={(it) => void handleSearchSelect(it)} />
+        <ProjectSearchBar className="w-[200px]" onSelect={handleProjectSelect} />
         {searchNotice && (
           <span className="max-w-[260px] truncate rounded-md bg-warning/15 px-2 py-1 text-[11px] text-warning" title={searchNotice}>
             {searchNotice}
@@ -430,6 +463,7 @@ export function GraphView({
             isCenter={isCenter}
             resolveName={resolveName}
             onExpand={handleExpandNode}
+            partOfLinks={partOfLinks}
             docBindingCounts={docBindingCounts}
             bindingCountsFailed={bindingCountsFailed}
             onLoadBindingCounts={loadBindingCounts}

@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { ArrowRight, Crosshair, MousePointerClick } from 'lucide-react';
+import { ArrowRight, Crosshair, FolderKanban, MousePointerClick } from 'lucide-react';
 import { docIdOf, docTypeName, edgeLabel, kindStyle, nodeDisplayName } from './businessTypes';
 import { useDocMeta } from './docMeta';
 import type { GraphEdge, GraphNode, InspectTarget } from '../../hooks/useGraph';
@@ -90,6 +90,8 @@ interface DetailPanelProps {
   isCenter: (elementId: string) => boolean;
   resolveName: (elementId: string) => string;
   onExpand: (node: GraphNode) => void;
+  /** part_of 归属聚合(GraphView 预计算): 节点 elementId -> 对端展示名列表。 */
+  partOfLinks?: Map<string, string[]>;
   docBindingCounts?: Map<string, DocBindingCounts> | null;
   bindingCountsFailed?: boolean;
   onLoadBindingCounts?: () => void;
@@ -101,6 +103,7 @@ export function DetailPanel({
   isCenter,
   resolveName,
   onExpand,
+  partOfLinks,
   docBindingCounts,
   bindingCountsFailed = false,
   onLoadBindingCounts,
@@ -126,6 +129,7 @@ export function DetailPanel({
             node={inspect.node}
             isCenter={isCenter(inspect.node.elementId)}
             onExpand={onExpand}
+            partOfLinks={partOfLinks}
             docBindingCounts={docBindingCounts}
             bindingCountsFailed={bindingCountsFailed}
             onLoadBindingCounts={onLoadBindingCounts}
@@ -143,6 +147,7 @@ function NodeDetail({
   node,
   isCenter,
   onExpand,
+  partOfLinks,
   docBindingCounts,
   bindingCountsFailed,
   onLoadBindingCounts,
@@ -151,6 +156,7 @@ function NodeDetail({
   node: GraphNode;
   isCenter: boolean;
   onExpand: (node: GraphNode) => void;
+  partOfLinks?: Map<string, string[]>;
   docBindingCounts?: Map<string, DocBindingCounts> | null;
   bindingCountsFailed?: boolean;
   onLoadBindingCounts?: () => void;
@@ -163,6 +169,8 @@ function NodeDetail({
     ? Object.fromEntries(Object.entries(node.props).filter(([key]) => key !== 'name'))
     : null;
   const docId = docIdOf(node);
+  const projectLinks = partOfLinks?.get(node.elementId) ?? [];
+  const projectStyle = kindStyle('Project');
 
   // Document 节点展示绑定状态: 懒加载一次 overview(幂等, 悬停/点击都会触发)。
   useEffect(() => {
@@ -194,6 +202,28 @@ function NodeDetail({
           failed={bindingCountsFailed ?? false}
           onOpenInBindings={onOpenInBindings}
         />
+      )}
+      {projectLinks.length > 0 && (
+        <div className="mt-2.5">
+          <div className="text-[11px] font-medium tracking-wide text-ink-soft">项目归属</div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {projectLinks.map((name, i) => (
+              <span
+                key={`${name}-${i}`}
+                className="inline-flex items-center gap-1 rounded border px-1.5 py-px text-[10px]"
+                style={{
+                  color: projectStyle.color,
+                  background: projectStyle.softBg,
+                  borderColor: projectStyle.softBorder,
+                }}
+                title={`经 part_of 归属：${name}`}
+              >
+                <FolderKanban className="h-3 w-3" aria-hidden />
+                {name}
+              </span>
+            ))}
+          </div>
+        </div>
       )}
       <PropsTable props={displayProps} />
       {!isCenter && (

@@ -43,11 +43,12 @@ export type InspectTarget =
 
 /* ---------- 响应解析（对齐 api/eval.ts 的错误处理，兼容 {ok,data} 信封） ---------- */
 
-async function getJson<T>(url: string): Promise<T> {
+async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(url, { credentials: 'include' });
-  } catch {
+    res = await fetch(url, { credentials: 'include', signal });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e;
     throw new Error('网络错误，请稍后重试');
   }
   if (!res.ok) {
@@ -133,6 +134,32 @@ export async function fetchGraphEntities(
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   const data = await getJson<{ entities?: unknown[] }>(`/api/graph/entities${suffix}`);
   return Array.isArray(data?.entities) ? data.entities : [];
+}
+
+/** /api/graph/entities 的类型化条目(图谱搜索框消费; 服务端每次最多返回 10 条)。 */
+export interface GraphEntityItem {
+  elementId: string;
+  kind: string;
+  name: string;
+}
+
+/** 按 kind+名称片段检索图实体(CONTAINS 匹配)。kind 如 'Project'; name 必填。 */
+export async function fetchGraphEntityItems(
+  params: { kind: string; name: string },
+  signal?: AbortSignal,
+): Promise<GraphEntityItem[]> {
+  const qs = new URLSearchParams({ kind: params.kind, name: params.name });
+  const data = await getJson<{ entities?: unknown[] }>(`/api/graph/entities?${qs.toString()}`, signal);
+  const rawList = Array.isArray(data?.entities) ? data.entities : [];
+  return rawList
+    .map((raw) => {
+      const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+      const elementId = asStr(r.elementId);
+      const name = asStr(r.name);
+      if (!elementId || !name) return null;
+      return { elementId, kind: asStr(r.kind), name } satisfies GraphEntityItem;
+    })
+    .filter((x): x is GraphEntityItem => x !== null);
 }
 
 /* ---------- Hook ---------- */
