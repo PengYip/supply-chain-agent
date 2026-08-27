@@ -16,6 +16,7 @@ import { FlowsView } from './components/flows/FlowsView';
 import { SelfPartyPanel } from './components/parties/SelfPartyPanel';
 import { FavoritesView } from './components/favorites/FavoritesView';
 import { ProjectsView } from './components/projects/ProjectsView';
+import { ProjectLedgerView } from './components/ledger/ProjectLedgerView';
 import type { GraphFocus, GraphFocusTarget } from './components/graph/focus';
 
 function App() {
@@ -205,6 +206,8 @@ function App() {
         <GraphView focus={graphFocus} onOpenInBindings={openInBindings} />
       ) : view === 'projects' ? (
         <ProjectsView />
+      ) : view === 'ledger' ? (
+        <ProjectLedgerView onOpenProjects={() => navigate('projects')} />
       ) : view === 'eval' ? (
         <EvalWorkbenchView />
       ) : null}

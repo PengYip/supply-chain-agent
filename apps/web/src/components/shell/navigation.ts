@@ -1,5 +1,6 @@
 import {
   ArrowLeftRight,
+  BookOpen,
   Building2,
   FlaskConical,
   FolderKanban,
@@ -14,6 +15,7 @@ import {
 export type ViewId =
   | 'chat'
   | 'projects'
+  | 'ledger'
   | 'graph'
   | 'bindings'
   | 'flows'
@@ -40,6 +42,7 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { id: 'chat', label: '对话', description: 'DeepSeek + 真实工具调用', icon: MessageSquare, group: 'work', enabled: true },
   { id: 'projects', label: '项目', description: '项目维度汇总（合同面 + 执行面）', icon: FolderKanban, group: 'work', enabled: true },
+  { id: 'ledger', label: '项目台账', description: '按项目归集合同的凭证齐套率', icon: BookOpen, group: 'work', enabled: true },
   { id: 'graph', label: '图谱', description: '实体关系可视化', icon: Network, group: 'work', enabled: true },
   { id: 'bindings', label: '绑定', description: '文档与合同绑定工作台', icon: Link2, group: 'work', enabled: true },
   { id: 'flows', label: '执行流水', description: '资金 / 货物 / 发票六向流水', icon: ArrowLeftRight, group: 'work', enabled: true },
