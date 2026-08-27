@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useRef, useEffect } from 'react'
 import clsx from 'clsx'
 import {
   FileText,
@@ -17,8 +17,10 @@ import {
   Check,
   Save,
   Share2,
+  PenLine,
 } from 'lucide-react'
 import { submitReview, type ReviewCorrection } from '../api/review'
+import { correctDocumentType, fetchActiveDocTypes } from '../api/documentType'
 
 /** One chunk classified under a semantic tag. `text` is server-capped (800
  *  chars + '...'); the card renders it verbatim, never truncated client-side. */
@@ -382,6 +384,22 @@ export const DocumentReviewCard: React.FC<{
   const [submitting, setSubmitting] = useState<'none' | 'corrections' | 'confirm'>('none')
   const [error, setError] = useState<string | null>(null)
 
+  // -- 类型修正(入口前移, 与绑定工作台共用 PATCH /api/documents/:docId/type):
+  //    词表懒加载一次; 下拉选中即提交; 成功就地更新 docType 并回显流水刷新数。 --
+  const [typeEditing, setTypeEditing] = useState(false)
+  const [typeOptions, setTypeOptions] = useState<string[] | null>(null)
+  const [typeOptionsLoading, setTypeOptionsLoading] = useState(false)
+  const [typePending, setTypePending] = useState(false)
+  const [typeResult, setTypeResult] = useState<{ ok: boolean; text: string; detail?: string } | null>(null)
+  const typeResultTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // 卸载时清掉结果自动消失的定时器。
+  useEffect(() => {
+    return () => {
+      if (typeResultTimerRef.current) clearTimeout(typeResultTimerRef.current)
+    }
+  }, [])
+
   const {
     docType,
     classificationConfidence,
@@ -455,6 +473,56 @@ export const DocumentReviewCard: React.FC<{
     }
   }
 
+  /** 打开改类型下拉: 首次懒加载激活词表(失败静默用兜底词表, 入口不因此关闭)。 */
+  const handleOpenTypeEdit = async () => {
+    setTypeResult(null)
+    setTypeEditing(true)
+    if (typeOptions || typeOptionsLoading) return
+    setTypeOptionsLoading(true)
+    try {
+      setTypeOptions(await fetchActiveDocTypes())
+    } catch {
+      setTypeOptions(null)
+    } finally {
+      setTypeOptionsLoading(false)
+    }
+  }
+
+  /** 下拉选中即提交(与绑定工作台一致, 不做二次确认); 值由 snapshot.docType 驱动,
+   *  失败不改本地状态, 下拉自动回显原值。 */
+  const handleChangeType = async (nextType: string) => {
+    if (typePending || !nextType || nextType === docType) return
+    setTypePending(true)
+    setTypeResult(null)
+    try {
+      const res = await correctDocumentType(snapshot.docId, nextType)
+      const applied = res.docType || nextType
+      setSnapshot((s) => ({ ...s, docType: applied }))
+      const skipNote =
+        res.skipped.length > 0
+          ? `（${res.skipped.length} 项流水未生成）`
+          : ''
+      const text =
+        res.refreshedFlows > 0
+          ? `已改为「${applied}」，刷新 ${res.refreshedFlows} 条关联流水${skipNote}`
+          : `已改为「${applied}」${skipNote}`
+      const detail = res.skipped
+        .map((s) => (s.contractNo ? `${s.contractNo}: ${s.reason}` : s.reason))
+        .join('\n')
+      setTypeResult({ ok: true, text, ...(detail ? { detail } : {}) })
+      onUpdated?.({ ...snapshot, docType: applied })
+    } catch (e) {
+      setTypeResult({
+        ok: false,
+        text: e instanceof Error ? e.message : '类型修正失败，请重试',
+      })
+    } finally {
+      setTypePending(false)
+      if (typeResultTimerRef.current) clearTimeout(typeResultTimerRef.current)
+      typeResultTimerRef.current = setTimeout(() => setTypeResult(null), 6000)
+    }
+  }
+
   return (
     <div className="rounded-lg border border-line bg-white p-3 mt-2">
       {/* Header: title + review status badge */}
@@ -479,17 +547,76 @@ export const DocumentReviewCard: React.FC<{
         {/* 1. 业务类型 */}
         <div>
           <SectionLabel icon={<FileText className="w-3 h-3" />}>业务类型</SectionLabel>
-          <div className="flex items-center gap-2 flex-wrap text-xs">
-            <span className="text-ink font-medium">{docType || '--'}</span>
-            <span className="text-ink-soft">·</span>
-            <span className="text-ink-soft">
-              分类置信度{' '}
-              <span className={clsx('font-mono', classificationLow ? 'text-warning' : 'text-primary-500')}>
-                {pct(classificationConfidence)}
+          {typeEditing ? (
+            <div className="flex items-center gap-2 flex-wrap text-xs">
+              <select
+                value={docType ?? ''}
+                onChange={(e) => void handleChangeType(e.target.value)}
+                disabled={typePending || typeOptionsLoading}
+                aria-label="修正文档类型"
+                className="h-7 min-w-0 flex-1 max-w-56 rounded-md border border-line bg-white px-2 text-xs text-ink focus:border-primary focus:outline-none disabled:opacity-50"
+              >
+                {(!docType || docType === '') && <option value="">未识别</option>}
+                {(docType && typeOptions && !typeOptions.includes(docType) ? [docType, ...typeOptions] : (typeOptions ?? []))
+                  .filter(Boolean)
+                  .map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+              </select>
+              {(typePending || typeOptionsLoading) && (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-ink-soft shrink-0" />
+              )}
+              {!typePending && !typeOptionsLoading && (
+                <button
+                  type="button"
+                  onClick={() => setTypeEditing(false)}
+                  className="text-[11px] text-ink-soft hover:text-ink shrink-0"
+                >
+                  收起
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 flex-wrap text-xs">
+              <span className="text-ink font-medium">{docType || '--'}</span>
+              <button
+                type="button"
+                onClick={() => void handleOpenTypeEdit()}
+                disabled={typePending}
+                title="修正文档类型（绑定建议与关联流水将自动刷新）"
+                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-primary hover:bg-primary/10 disabled:opacity-50 transition-colors"
+              >
+                <PenLine className="w-3 h-3" />
+                改类型
+              </button>
+              <span className="text-ink-soft">·</span>
+              <span className="text-ink-soft">
+                分类置信度{' '}
+                <span className={clsx('font-mono', classificationLow ? 'text-warning' : 'text-primary-500')}>
+                  {pct(classificationConfidence)}
+                </span>
               </span>
-            </span>
-            {classificationLow && <FlagBadge />}
-          </div>
+              {classificationLow && <FlagBadge />}
+            </div>
+          )}
+          {typeResult && (
+            <div
+              title={typeResult.detail}
+              className={clsx(
+                'mt-1.5 flex items-start gap-1.5 text-[11px] rounded px-2 py-1 border',
+                typeResult.ok
+                  ? 'text-success bg-success/5 border-success/30'
+                  : 'text-danger bg-danger/5 border-danger/30',
+              )}
+            >
+              {typeResult.ok ? (
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              )}
+              <span className="leading-relaxed">{typeResult.text}</span>
+            </div>
+          )}
         </div>
 
         {/* 1.5 合同类型 — 主体视角派生（spec 2026-08-20）; null = 非合同或未识别,
