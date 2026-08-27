@@ -252,3 +252,48 @@ describe('user isolation (legacy uid filter)', () => {
     expect(byB[0]!.userId).toBe('');
   });
 });
+
+describe('execution_flows 数量量纲列(spec 2026-08-27 §2)', () => {
+  it('upsert 写入 quantity_value/dimension/canonical 并回读', async () => {
+    await upsertExecutionFlow(ctx, {
+      ...flow({ contractNo: 'HT-Q1' }),
+      quantityTon: null,
+      unit: '箱',
+      quantityValue: 120,
+      quantityDimension: 'count',
+      quantityCanonical: 120,
+    });
+    const flows = await listExecutionFlows(ctx, 'HT-Q1');
+    expect(flows[0]!.quantityValue).toBe(120);
+    expect(flows[0]!.quantityDimension).toBe('count');
+    expect(flows[0]!.quantityCanonical).toBe(120);
+    expect(flows[0]!.unit).toBe('箱');
+    const sums = await summarizeExecutionFlows(ctx, 'HT-Q1');
+    expect(sums[0]!.totalMassKg).toBeNull();
+  });
+
+  it('mass 行 summary.totalMassKg 求和(千克)', async () => {
+    await upsertExecutionFlow(ctx, {
+      ...flow({ bindingId: 'BD-Q2', documentId: 'DOC-Q2', contractNo: 'HT-Q2', quantityTon: 1, unit: '吨' }),
+      quantityValue: 1,
+      quantityDimension: 'mass',
+      quantityCanonical: 1000,
+    });
+    await upsertExecutionFlow(ctx, {
+      ...flow({ bindingId: 'BD-Q3', documentId: 'DOC-Q3', contractNo: 'HT-Q2', quantityTon: 0.5, unit: '吨' }),
+      quantityValue: 500,
+      quantityDimension: 'mass',
+      quantityCanonical: 500,
+    });
+    const sums = await summarizeExecutionFlows(ctx, 'HT-Q2');
+    expect(sums[0]!.totalMassKg).toBe(1500);
+  });
+
+  it('旧形状行(无量纲列)回读为 NULL, 兼容不破', async () => {
+    await upsertExecutionFlow(ctx, flow());
+    const flows = await listExecutionFlows(ctx, 'HT-2024-001');
+    expect(flows[0]!.quantityValue ?? null).toBeNull();
+    expect(flows[0]!.quantityDimension ?? null).toBeNull();
+    expect(flows[0]!.quantityCanonical ?? null).toBeNull();
+  });
+});

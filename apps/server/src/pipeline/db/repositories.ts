@@ -2335,6 +2335,10 @@ export interface ExecutionFlowInput {
   quantityTon: number | null;
   /** 数量单位('吨'等), 与 quantityTon 同源; 裸 '数量' 字段不带单位语义时为 null。 */
   unit?: string | null;
+  /** 通用物化层(spec 2026-08-27 §2): 数量原值/量纲('mass'|'count')/规范值(mass=千克)。 */
+  quantityValue?: number | null;
+  quantityDimension?: 'mass' | 'count' | null;
+  quantityCanonical?: number | null;
   docType: string;
   voucherDate: string | null;
   /** 溯源: 物化时读到的抽取行 id(修正重建后指向新行, 防漂移审计线索)。 */
@@ -2356,6 +2360,8 @@ export interface ExecutionFlowSummary {
   entryCount: number;
   totalAmount: number | null;
   totalQuantityTon: number | null;
+  /** dimension='mass' 行的规范值(千克)求和; count/未知量纲不混入。 */
+  totalMassKg: number | null;
   lastVoucherDate: string | null;
 }
 
@@ -2376,8 +2382,9 @@ export async function upsertExecutionFlow(
     .prepare(
       `INSERT INTO execution_flows
          (id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton, unit,
+          quantity_value, quantity_dimension, quantity_canonical,
           doc_type, voucher_date, extraction_id, confidence, created_by, user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(binding_id, user_id) DO UPDATE SET
          document_id = excluded.document_id,
          contract_no = excluded.contract_no,
@@ -2386,6 +2393,9 @@ export async function upsertExecutionFlow(
          amount = excluded.amount,
          quantity_ton = excluded.quantity_ton,
          unit = excluded.unit,
+         quantity_value = excluded.quantity_value,
+         quantity_dimension = excluded.quantity_dimension,
+         quantity_canonical = excluded.quantity_canonical,
          doc_type = excluded.doc_type,
          voucher_date = excluded.voucher_date,
          extraction_id = excluded.extraction_id,
@@ -2402,6 +2412,9 @@ export async function upsertExecutionFlow(
       input.amount,
       input.quantityTon,
       input.unit ?? null,
+      input.quantityValue ?? null,
+      input.quantityDimension ?? null,
+      input.quantityCanonical ?? null,
       input.docType,
       input.voucherDate,
       input.extractionId ?? null,
@@ -2484,6 +2497,32 @@ export async function listConfirmedBindingsForDocument(
   return rows.map(rowToBinding);
 }
 
+/** 回填用(spec 2026-08-27 §10): 全部 confirmed 绑定(跨用户), 按 (userId, documentId) 分组由调用方做。 */
+export interface ConfirmedBindingRef {
+  id: string;
+  documentId: string;
+  contractNo: string;
+  confidence: number;
+  userId: string | null;
+}
+
+export async function listAllConfirmedBindings(ctx: DbContext): Promise<ConfirmedBindingRef[]> {
+  if (ctx.backend === 'postgres') return listAllConfirmedBindingsPg(ctx);
+  const rows = ctx.db
+    .select({
+      id: bindings.id,
+      documentId: bindings.documentId,
+      contractNo: bindings.contractNo,
+      confidence: bindings.confidence,
+      userId: bindings.userId,
+    })
+    .from(bindings)
+    .where(eq(bindings.status, 'confirmed'))
+    .orderBy(desc(bindings.createdAt))
+    .all();
+  return rows.map((r) => ({ ...r, userId: r.userId ?? null }));
+}
+
 /** SQLite execution_flows 行 -> ExecutionFlowRow(所有 SQLite 读取函数共用)。 */
 function executionFlowRowFromSqlite(r: {
   id: string;
@@ -2495,6 +2534,9 @@ function executionFlowRowFromSqlite(r: {
   amount: number | null;
   quantity_ton: number | null;
   unit: string | null;
+  quantity_value: number | null;
+  quantity_dimension: string | null;
+  quantity_canonical: number | null;
   doc_type: string;
   voucher_date: string | null;
   extraction_id: string | null;
@@ -2513,6 +2555,9 @@ function executionFlowRowFromSqlite(r: {
     amount: r.amount ?? null,
     quantityTon: r.quantity_ton ?? null,
     unit: r.unit ?? null,
+    quantityValue: r.quantity_value ?? null,
+    quantityDimension: (r.quantity_dimension ?? null) as 'mass' | 'count' | null,
+    quantityCanonical: r.quantity_canonical ?? null,
     docType: r.doc_type,
     voucherDate: r.voucher_date ?? null,
     extractionId: r.extraction_id ?? null,
@@ -2535,6 +2580,7 @@ export async function listExecutionFlows(
     ? ctx.sqlite
         .prepare(
           `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton, unit,
+                  quantity_value, quantity_dimension, quantity_canonical,
                   doc_type, voucher_date, extraction_id, confidence, created_by, user_id, created_at
            FROM execution_flows
            WHERE contract_no = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)
@@ -2544,6 +2590,7 @@ export async function listExecutionFlows(
     : ctx.sqlite
         .prepare(
           `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton, unit,
+                  quantity_value, quantity_dimension, quantity_canonical,
                   doc_type, voucher_date, extraction_id, confidence, created_by, user_id, created_at
            FROM execution_flows
            WHERE contract_no = ?
@@ -2559,6 +2606,9 @@ export async function listExecutionFlows(
     amount: number | null;
     quantity_ton: number | null;
     unit: string | null;
+    quantity_value: number | null;
+    quantity_dimension: string | null;
+    quantity_canonical: number | null;
     doc_type: string;
     voucher_date: string | null;
     extraction_id: string | null;
@@ -2582,7 +2632,9 @@ export async function summarizeExecutionFlows(
     ? ctx.sqlite
         .prepare(
           `SELECT flow_type, direction, COUNT(*) AS entry_count, SUM(amount) AS total_amount,
-                  SUM(quantity_ton) AS total_quantity_ton, MAX(voucher_date) AS last_voucher_date
+                  SUM(quantity_ton) AS total_quantity_ton,
+                  SUM(CASE WHEN quantity_dimension = 'mass' THEN quantity_canonical END) AS total_mass_kg,
+                  MAX(voucher_date) AS last_voucher_date
            FROM execution_flows
            WHERE contract_no = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)
            GROUP BY flow_type, direction
@@ -2592,7 +2644,9 @@ export async function summarizeExecutionFlows(
     : ctx.sqlite
         .prepare(
           `SELECT flow_type, direction, COUNT(*) AS entry_count, SUM(amount) AS total_amount,
-                  SUM(quantity_ton) AS total_quantity_ton, MAX(voucher_date) AS last_voucher_date
+                  SUM(quantity_ton) AS total_quantity_ton,
+                  SUM(CASE WHEN quantity_dimension = 'mass' THEN quantity_canonical END) AS total_mass_kg,
+                  MAX(voucher_date) AS last_voucher_date
            FROM execution_flows
            WHERE contract_no = ?
            GROUP BY flow_type, direction
@@ -2604,6 +2658,7 @@ export async function summarizeExecutionFlows(
     entry_count: number;
     total_amount: number | null;
     total_quantity_ton: number | null;
+    total_mass_kg: number | null;
     last_voucher_date: string | null;
   }>;
   return rows.map((r) => ({
@@ -2615,6 +2670,8 @@ export async function summarizeExecutionFlows(
     totalAmount: r.total_amount === null || r.total_amount === undefined ? null : Number(r.total_amount),
     totalQuantityTon:
       r.total_quantity_ton === null || r.total_quantity_ton === undefined ? null : Number(r.total_quantity_ton),
+    totalMassKg:
+      r.total_mass_kg === null || r.total_mass_kg === undefined ? null : Number(r.total_mass_kg),
     lastVoucherDate: r.last_voucher_date ?? null,
   }));
 }

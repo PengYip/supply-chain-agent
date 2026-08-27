@@ -51,9 +51,10 @@ import type {
   ExtractionStatus,
   ParseStatus,
   DocumentStubInput,
-  ExecutionFlowInput,
-  ExecutionFlowRow,
-  ExecutionFlowSummary,
+   ExecutionFlowInput,
+   ExecutionFlowRow,
+   ExecutionFlowSummary,
+   ConfirmedBindingRef,
   SelfPartyRow,
   DocumentSourceRow,
   ProjectRow,
@@ -1799,6 +1800,13 @@ function executionFlowRowFromPg(r: Record<string, unknown>): ExecutionFlowRow {
     amount: r.amount === null || r.amount === undefined ? null : Number(r.amount),
     quantityTon: r.quantity_ton === null || r.quantity_ton === undefined ? null : Number(r.quantity_ton),
     unit: r.unit === null || r.unit === undefined ? null : String(r.unit),
+    quantityValue: r.quantity_value === null || r.quantity_value === undefined ? null : Number(r.quantity_value),
+    quantityDimension:
+      r.quantity_dimension === null || r.quantity_dimension === undefined
+        ? null
+        : (String(r.quantity_dimension) as 'mass' | 'count'),
+    quantityCanonical:
+      r.quantity_canonical === null || r.quantity_canonical === undefined ? null : Number(r.quantity_canonical),
     docType: String(r.doc_type),
     voucherDate: r.voucher_date === null || r.voucher_date === undefined ? null : String(r.voucher_date),
     extractionId: r.extraction_id === null || r.extraction_id === undefined ? null : String(r.extraction_id),
@@ -1822,8 +1830,9 @@ export async function upsertExecutionFlowPg(
   await ctx.pool.query(
     `INSERT INTO execution_flows
        (id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton, unit,
+        quantity_value, quantity_dimension, quantity_canonical,
         doc_type, voucher_date, extraction_id, confidence, created_by, user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
      ON CONFLICT (binding_id, user_id) DO UPDATE SET
        document_id = EXCLUDED.document_id,
        contract_no = EXCLUDED.contract_no,
@@ -1832,6 +1841,9 @@ export async function upsertExecutionFlowPg(
        amount = EXCLUDED.amount,
        quantity_ton = EXCLUDED.quantity_ton,
        unit = EXCLUDED.unit,
+       quantity_value = EXCLUDED.quantity_value,
+       quantity_dimension = EXCLUDED.quantity_dimension,
+       quantity_canonical = EXCLUDED.quantity_canonical,
        doc_type = EXCLUDED.doc_type,
        voucher_date = EXCLUDED.voucher_date,
        extraction_id = EXCLUDED.extraction_id,
@@ -1847,6 +1859,9 @@ export async function upsertExecutionFlowPg(
       input.amount,
       input.quantityTon,
       input.unit ?? null,
+      input.quantityValue ?? null,
+      input.quantityDimension ?? null,
+      input.quantityCanonical ?? null,
       input.docType,
       input.voucherDate,
       input.extractionId ?? null,
@@ -1920,7 +1935,22 @@ export async function listConfirmedBindingsForDocumentPg(
   return res.rows.map(bindingRowFromPg);
 }
 
-/** 明细行(pg), 按 created_at 升序。 */
+/** 回填用(spec 2026-08-27 §10): 全部 confirmed 绑定(pg twin), 跨用户。 */
+export async function listAllConfirmedBindingsPg(ctx: PostgresDbContext): Promise<ConfirmedBindingRef[]> {
+  const res = await ctx.pool.query(
+    `SELECT id, document_id, contract_no, confidence, user_id
+     FROM bindings
+     WHERE status = 'confirmed'
+     ORDER BY created_at DESC`,
+  );
+  return res.rows.map((r) => ({
+    id: String(r.id),
+    documentId: String(r.document_id),
+    contractNo: String(r.contract_no),
+    confidence: Number(r.confidence),
+    userId: r.user_id === null || r.user_id === undefined ? null : String(r.user_id),
+  }));
+}
 export async function listExecutionFlowsPg(
   ctx: PostgresDbContext,
   contractNo: string,
@@ -1930,6 +1960,7 @@ export async function listExecutionFlowsPg(
   const res = uid
     ? await ctx.pool.query(
         `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton, unit,
+                quantity_value, quantity_dimension, quantity_canonical,
                 doc_type, voucher_date, extraction_id, confidence, created_by, user_id, created_at
          FROM execution_flows
          WHERE contract_no = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)
@@ -1938,6 +1969,7 @@ export async function listExecutionFlowsPg(
       )
     : await ctx.pool.query(
         `SELECT id, binding_id, document_id, contract_no, flow_type, direction, amount, quantity_ton, unit,
+                quantity_value, quantity_dimension, quantity_canonical,
                 doc_type, voucher_date, extraction_id, confidence, created_by, user_id, created_at
          FROM execution_flows
          WHERE contract_no = $1
@@ -1957,7 +1989,9 @@ export async function summarizeExecutionFlowsPg(
   const res = uid
     ? await ctx.pool.query(
         `SELECT flow_type, direction, COUNT(*)::int AS entry_count, SUM(amount) AS total_amount,
-                SUM(quantity_ton) AS total_quantity_ton, MAX(voucher_date) AS last_voucher_date
+                SUM(quantity_ton) AS total_quantity_ton,
+                SUM(CASE WHEN quantity_dimension = 'mass' THEN quantity_canonical END) AS total_mass_kg,
+                MAX(voucher_date) AS last_voucher_date
          FROM execution_flows
          WHERE contract_no = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)
          GROUP BY flow_type, direction
@@ -1966,7 +2000,9 @@ export async function summarizeExecutionFlowsPg(
       )
     : await ctx.pool.query(
         `SELECT flow_type, direction, COUNT(*)::int AS entry_count, SUM(amount) AS total_amount,
-                SUM(quantity_ton) AS total_quantity_ton, MAX(voucher_date) AS last_voucher_date
+                SUM(quantity_ton) AS total_quantity_ton,
+                SUM(CASE WHEN quantity_dimension = 'mass' THEN quantity_canonical END) AS total_mass_kg,
+                MAX(voucher_date) AS last_voucher_date
          FROM execution_flows
          WHERE contract_no = $1
          GROUP BY flow_type, direction
@@ -1981,6 +2017,7 @@ export async function summarizeExecutionFlowsPg(
     totalAmount: r.total_amount === null || r.total_amount === undefined ? null : Number(r.total_amount),
     totalQuantityTon:
       r.total_quantity_ton === null || r.total_quantity_ton === undefined ? null : Number(r.total_quantity_ton),
+    totalMassKg: r.total_mass_kg === null || r.total_mass_kg === undefined ? null : Number(r.total_mass_kg),
     lastVoucherDate: r.last_voucher_date === null || r.last_voucher_date === undefined ? null : String(r.last_voucher_date),
   }));
 }

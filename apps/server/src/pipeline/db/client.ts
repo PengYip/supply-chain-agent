@@ -252,6 +252,9 @@ export function migrate(sqlite: Database.Database): void {
       amount REAL,
       quantity_ton REAL,
       unit TEXT,
+      quantity_value REAL,
+      quantity_dimension TEXT,
+      quantity_canonical REAL,
       doc_type TEXT NOT NULL,
       voucher_date TEXT,
       extraction_id TEXT,
@@ -510,6 +513,19 @@ export function migrate(sqlite: Database.Database): void {
     }
   }
 
+  // 通用履约物化层(spec 2026-08-27 §2): execution_flows 数量量纲三列(原值/量纲/
+  // 规范值), 存量库补列, 同 guarded ALTER 模式。unit 列继续存原始单位名。
+  {
+    const have = new Set(
+      (sqlite.prepare('PRAGMA table_info(execution_flows)').all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    for (const col of ['quantity_value', 'quantity_dimension', 'quantity_canonical']) {
+      if (!have.has(col)) {
+        try { sqlite.exec(`ALTER TABLE execution_flows ADD COLUMN ${col} REAL`); } catch { /* concurrent */ }
+      }
+    }
+  }
+
   // Backfill created_at (+ user_id) on classifications/document_tags/extractions
   // for old prod DBs whose tables predate these columns. CREATE TABLE IF NOT
   // EXISTS adds no columns to an existing table, and these previously had no
@@ -684,6 +700,9 @@ export async function migratePostgres(pool: Pool): Promise<void> {
        amount double precision,
        quantity_ton double precision,
        unit TEXT,
+       quantity_value double precision,
+       quantity_dimension TEXT,
+       quantity_canonical double precision,
        doc_type TEXT NOT NULL,
        voucher_date TEXT,
        extraction_id TEXT,
@@ -696,6 +715,10 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_execution_flows_contract ON execution_flows(contract_no, user_id)`,
     // Traceability for pre-existing PG dev DBs (SQLite mirrors the guarded ALTER above).
     `ALTER TABLE execution_flows ADD COLUMN IF NOT EXISTS extraction_id TEXT`,
+    // 通用履约物化层(spec 2026-08-27 §2): 数量量纲三列, 存量库补列。
+    `ALTER TABLE execution_flows ADD COLUMN IF NOT EXISTS quantity_value DOUBLE PRECISION`,
+    `ALTER TABLE execution_flows ADD COLUMN IF NOT EXISTS quantity_dimension TEXT`,
+    `ALTER TABLE execution_flows ADD COLUMN IF NOT EXISTS quantity_canonical DOUBLE PRECISION`,
     // Unit as its own column (grafted from CodeX-2): bare '数量' fields carry no
     // unit semantics, so unit stays NULL rather than being guessed.
     `ALTER TABLE execution_flows ADD COLUMN IF NOT EXISTS unit TEXT`,
