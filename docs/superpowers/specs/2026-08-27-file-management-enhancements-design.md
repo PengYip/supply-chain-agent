@@ -30,6 +30,8 @@
 | 3 | 批量拖拽上传（含整个文件夹，保留层级） | 零改动 |
 | 4 | 文件/文件夹单层拖拽移动 + 拖回根目录 | 复用 /move + 新接口 |
 | 5 | 文件夹重命名 / 移动（改前缀） | **新增 PATCH /api/files/folder-path** |
+| 6 | 上传进度可视化（字节级，聊天框+抽屉两处） | 零改动 |
+| 7 | 文件管理改为停靠式可伸缩侧边栏（非浮动抽屉） | 零改动 |
 
 明确不做（YAGNI）：文件夹下载/打包、多选批量操作、回收站、聊天框选目录上传、路径 `..` 穿越防御增强（现状 `normalizeDirectory` 不处理点段且 key 恒在用户前缀内，维持并记录）。聊天输入框上传保持落根目录不变。
 
@@ -85,6 +87,19 @@ Body: `{ from: '合同', to: '合同2026' }` 或 `{ from: '合同', to: '发运/
 - `FileTree.tsx` — TreeNode/TreeFolder/FileRow 展示组件（纯搬移现有渲染逻辑）
 - `useFileDnd.ts` — 拖拽状态机 hook（载荷分流、目标判定）
 - `useFolderDropUpload.ts` — 上传队列 hook（收集、串行执行、进度汇总）
+- `uploadWithProgress.ts` — 共享上传传输层（XHR + upload.onprogress）
+
+### 停靠式可伸缩侧边栏
+
+- **形态变更**：由「遮罩 + fixed 右侧浮动 aside」改为停靠在应用主布局右侧的侧边面板：打开时压缩主内容区宽度（flex 布局参与排版），不再有遮罩，主界面在侧边栏打开时仍可交互；关闭按钮保留。
+- **伸缩**：左缘 4px 拖拽手柄（hover 显色），水平拖动实时改宽；范围 clamp 280px–560px（默认 360px）；宽度持久化 localStorage（key 如 `sca.filesPanelWidth`）。
+- **挂载点**：从 App 根部的浮层改为布局容器内的兄弟节点（App.tsx 现有 chat 主列旁）；open=false 时完全不渲染主列不占位。Esc 关闭逻辑保留，移除点遮罩关闭。
+
+### 上传进度
+
+- **传输层**：`fetch` 不支持上传进度，共享助手 `uploadWithProgress(file, directory, onProgress)` 基于 XMLHttpRequest 的 `upload.onprogress` 事件实现字节级进度（loaded/total），错误/超时映射为 reject。聊天框与抽屉队列共用此助手。
+- **抽屉批量队列**：单项显示百分比；底部汇总条显示聚合进度（已完成字节合计 / 总字节合计）+「n/m · 失败 k」，替代纯计数。
+- **聊天输入框**：现有按钮转圈态（RealChatView.tsx:823-826）替换为内联细进度条+百分比文案；完成后恢复原成功提示。
 
 ### 交互
 
@@ -107,6 +122,6 @@ Body: `{ from: '合同', to: '合同2026' }` 或 `{ from: '合同', to: '发运/
 
 - 单测：`normalizeDirectory` 边界（空串/冗余斜杠）；folder-path 守卫谓词抽纯函数测（自套娃、空 from、前缀替换正确性）。
 - 路由测试：mkdir 多级路径；folder-path 400/409 分支；move 后 minio_key 关联可查。minioClient 按 files 路由现有测试的 stub 方式处理（写计划时核对具体模式）。
-- 前端：hook 内载荷分流/层级重建逻辑抽纯函数覆盖；不强求 e2e。
+- 前端：hook 内载荷分流/层级重建逻辑抽纯函数覆盖；进度聚合（字节合计）抽纯函数测；不强求 e2e。
 
 验证顺序：build → lint → test（仓库约定）。
