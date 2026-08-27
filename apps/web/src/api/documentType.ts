@@ -73,16 +73,44 @@ export async function fetchActiveDocTypes(signal?: AbortSignal): Promise<string[
   return list.length > 0 ? list : [...DOC_TYPE_FALLBACK];
 }
 
+/** 向量化入库状态(与五维卡 DocumentReviewPayload['vectorization'] 同形)。 */
+export type VectorizationState = {
+  status: 'ok' | 'skipped' | 'failed' | 'unknown'
+  mode: string
+  chunkCount: number
+  reason?: string
+}
+
 export interface CorrectDocTypeResult {
   ok: boolean;
   docType: string;
   refreshedFlows: number;
   skipped: FlowSkipEntry[];
+  /** 类型修正后的向量回溯结果(spec 2026-08-27); 缺失时调用方保留原状态。 */
+  vectorization?: VectorizationState;
 }
 
-/** PATCH /api/documents/:docId/type: 修正文档类型, 返回回显类型与刷新的流水条数。 */
+function parseVectorization(raw: unknown): VectorizationState | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as { status?: unknown; mode?: unknown; chunkCount?: unknown; reason?: unknown };
+  const STATUSES = ['ok', 'skipped', 'failed', 'unknown'] as const;
+  const status = STATUSES.find((s) => s === r.status);
+  if (!status) return undefined;
+  return {
+    status,
+    mode: typeof r.mode === 'string' ? r.mode : 'unknown',
+    chunkCount: typeof r.chunkCount === 'number' ? r.chunkCount : 0,
+    ...(typeof r.reason === 'string' && r.reason ? { reason: r.reason } : {}),
+  };
+}
+
+/** PATCH /api/documents/:docId/type: 修正文档类型, 返回回显类型、刷新的流水条数
+ *  与向量回溯结果。 */
 export async function correctDocumentType(docId: string, docType: string): Promise<CorrectDocTypeResult> {
-  const data = await patchJson<{ ok: boolean; docType: string; refreshedFlows: number; skipped?: unknown }>(
+  const data = await patchJson<{
+    ok: boolean; docType: string; refreshedFlows: number; skipped?: unknown;
+    vectorization?: unknown;
+  }>(
     `/api/documents/${encodeURIComponent(docId)}/type`,
     { docType },
   );
@@ -91,5 +119,6 @@ export async function correctDocumentType(docId: string, docType: string): Promi
     docType: typeof data.docType === 'string' ? data.docType : docType,
     refreshedFlows: typeof data.refreshedFlows === 'number' ? data.refreshedFlows : 0,
     skipped: normalizeFlowSkips(data.skipped),
+    vectorization: parseVectorization(data.vectorization),
   };
 }

@@ -54,4 +54,18 @@ describe('ingest_document vectorization status', () => {
     expect(res.vectorization.status).toBe(cap.ok ? 'failed' : 'skipped');
     if (cap.ok) expect(res.vectorization.reason).toContain('boom');
   });
+
+  it('skips embedding for non-vectorizable doc types (hint 其他, tree-less fallback)', async () => {
+    enableVec(ctx.sqlite);
+    const calls: string[][] = [];
+    const spy: Embedder = {
+      dim: 1024, kind: 'spy',
+      embed: async (t) => { calls.push(t); return t.map(() => new Array(1024).fill(0)); },
+    };
+    const ingest = buildIngestDocumentTool({ ctx, embedder: spy });
+    const res = await ingest.execute({ sourceUri: fixture('送货单 送货数量 100'), docType: '其他', modality: 'digital' }, execOpts);
+    expect(res.vectorization.status).toBe('skipped');
+    expect(res.vectorization.reason).toContain('仅合同');
+    expect(calls.length).toBe(0);
+  });
 });

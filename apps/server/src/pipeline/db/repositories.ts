@@ -21,6 +21,7 @@ import {
   saveBindingPg,
   listBindingsForContractPg,
   saveChunksPg,
+  listChunksByDocumentPg,
   searchChunksPg,
   getChunkMetaByRowidsPg,
   setDocumentMinioKeyPg,
@@ -953,6 +954,19 @@ export async function saveChunks(
   });
   tx(chunks);
   return rowids;
+}
+
+/** Read (id, chunk_text) rows for one document in chunk order — 纠错回溯
+ *  reconcileVectorizationAfterDocTypeChange 的补嵌入输入。 */
+export async function listChunksByDocument(
+  ctx: DbContext,
+  documentId: string,
+): Promise<Array<{ id: number; text: string }>> {
+  if (ctx.backend === 'postgres') return listChunksByDocumentPg(ctx, documentId);
+  const rows = ctx.sqlite.prepare(
+    'SELECT id, chunk_text FROM doc_chunk WHERE document_id = ? ORDER BY chunk_index, id',
+  ).all(documentId) as Array<Record<string, unknown>>;
+  return rows.map((r) => ({ id: Number(r.id), text: String(r.chunk_text ?? '') }));
 }
 
 export interface ChunkMatch {
