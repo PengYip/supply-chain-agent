@@ -20,7 +20,7 @@ beforeEach(async () => {
 
 /** documentEntry.test.ts 同款调用形态(AI SDK 6 直调 execute)。 */
 const exec = (input: unknown) =>
-  tool.execute(input as never, { messages: [], toolCallId: 't', abortSignal: undefined } as never);
+  tool.execute!(input as never, { messages: [], toolCallId: 't', abortSignal: undefined } as never);
 
 describe('manage_template L2 工具', () => {
   it('create_type 最小入参 -> ok + 版本号 >=1 + DB 行 managed_by=deps.userId', async () => {
