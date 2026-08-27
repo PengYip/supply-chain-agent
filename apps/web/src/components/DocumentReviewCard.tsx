@@ -506,7 +506,12 @@ export const DocumentReviewCard: React.FC<{
     try {
       const res = await correctDocumentType(snapshot.docId, nextType)
       const applied = res.docType || nextType
-      setSnapshot((s) => ({ ...s, docType: applied }))
+      // 类型修正后回填向量回溯结果(缺失则保留原状态, 兼容旧后端)。
+      setSnapshot((s) => ({
+        ...s,
+        docType: applied,
+        ...(res.vectorization ? { vectorization: res.vectorization } : {}),
+      }))
       const skipNote =
         res.skipped.length > 0
           ? `（${res.skipped.length} 项流水未生成）`
@@ -519,9 +524,13 @@ export const DocumentReviewCard: React.FC<{
         .map((s) => (s.contractNo ? `${s.contractNo}: ${s.reason}` : s.reason))
         .join('\n')
       setTypeResult({ ok: true, text, ...(detail ? { detail } : {}) })
-      // 从 ref 展开最新值, 只覆盖 docType: snapshot 变量是本回调创建时的
-      // stale closure, 并行写操作(提交更正/确认)后的字段不能被旧值冲掉。
-      onUpdated?.({ ...snapshotRef.current, docType: applied })
+      // 从 ref 展开最新值, 只覆盖 docType/vectorization: snapshot 变量是本回调
+      // 创建时的 stale closure, 并行写操作(提交更正/确认)后的字段不能被旧值冲掉。
+      onUpdated?.({
+        ...snapshotRef.current,
+        docType: applied,
+        ...(res.vectorization ? { vectorization: res.vectorization } : {}),
+      })
     } catch (e) {
       setTypeResult({
         ok: false,
