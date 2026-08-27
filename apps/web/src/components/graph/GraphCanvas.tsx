@@ -1,8 +1,7 @@
-// G6 v5 画布 — 语义分层泳道布局(spec 2026-08-27 评审修订版)。
-// 导航优先: 初始视口聚焦中心节点所在泳道(自然缩放, 不做全局 fit),
-// 白底信息卡三层结构(类型徽标/名称加粗/概述次行), 泳道=浅灰 Combo。
-// GraphView 以 key={center} 重挂载本组件, 内部不做增量 diff,
-// 只在 hiddenKinds/showPlainEdges 变化时 setData 重绘。
+// G6 v5 画布 — 语义分层泳道布局 + HTML 信息卡节点(spec 2026-08-27 评审二轮)。
+// 节点用 type:'html' 渲染 DOM 卡片: 类型 Chip / 名称加粗自动折行 / 概述单行省略,
+// 排版交由 CSS, 从根本上解决文字溢出与徽标重叠; 坐标仍由 layeredLayout 给出。
+// 导航优先: 初始视口聚焦中心节点所在泳道; GraphView 以 key={center} 重挂载。
 import { useEffect, useMemo, useRef } from 'react';
 import { Graph as G6Graph, type EdgeData, type IElementEvent, type NodeData } from '@antv/g6';
 import type { GraphEdge, GraphNode, InspectTarget, Subgraph } from '../../hooks/useGraph';
@@ -31,41 +30,58 @@ interface CanvasDatum {
   props: Record<string, unknown> | null;
   rawNode?: GraphNode;
   rawEdge?: GraphEdge;
+  /** HTML 卡片标记串(html 节点 innerHTML 直接消费)。 */
+  html?: string;
+  size?: [number, number];
   [key: string]: unknown;
 }
 
-/** 按像素宽度手工断行(CJK≈15px / 其他≈8px @12px 字号), 保证文字不溢出卡片。 */
-function wrapLabel(text: string, maxWidthPx: number, maxLines: number): string {
-  if (!text) return '';
-  const limit = Math.max(maxWidthPx, 40);
-  const lines: string[] = [];
-  let current = '';
-  let currentW = 0;
-  for (const ch of text) {
-    const cw = ch.charCodeAt(0) > 0x2e7f ? 15 : 8;
-    if (currentW + cw > limit && current) {
-      lines.push(current);
-      current = ch;
-      currentW = cw;
-      if (lines.length === maxLines) break;
-    } else {
-      current += ch;
-      currentW += cw;
-    }
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** 概述行: Document 用业务类型, 其余取首个可读字符串 props。 */
+function subtitleOf(nd: GraphNode, docMeta: ReturnType<typeof useDocMeta>): string {
+  if (nd.kind === 'Document') return docTypeName(nd, docMeta);
+  const keysByKind: Record<string, string[]> = {
+    Contract: ['contractNo', 'status', 'amount'],
+    Party: ['role', 'country'],
+    Project: ['code', 'status'],
+  };
+  for (const k of keysByKind[nd.kind] ?? []) {
+    const v = nd.props?.[k];
+    if (typeof v === 'string' && v) return v;
   }
-  // 截断路径: 还有剩余字符则末行以省略号收尾
-  const consumed = lines.join('').length + current.length;
-  const truncated = consumed < text.length;
-  if (current && lines.length < maxLines) {
-    lines.push(current);
-    return lines.join('\n') + (truncated ? '' : '');
-  }
-  if (lines.length === maxLines && (truncated || current)) {
-    let last = lines[maxLines - 1] ?? '';
-    if (last.length > 1) last = last.slice(0, -1);
-    lines[maxLines - 1] = `${last}…`;
-  }
-  return lines.join('\n');
+  return '';
+}
+
+/** DOM 信息卡模板: 左色条 + 类型 Chip + 名称两行截断 + 概述单行省略。 */
+function cardHtml(opts: {
+  kindLabel: string; color: string; border: string; name: string; subtitle: string;
+  width: number; height: number; scatter: boolean; isRoot: boolean;
+}): string {
+  const { kindLabel, color, border, name, subtitle, width, height, scatter, isRoot } = opts;
+  const bg = isRoot ? '#F5F3FC' : '#FFFFFF';
+  const nameColor = '#0F172A';
+  return `
+<div style="width:${width}px;height:${height}px;box-sizing:border-box;background:${bg};
+  border:1px solid ${border};border-left:4px solid ${color};border-radius:10px;
+  box-shadow:0 2px 8px rgba(15,23,42,0.12);padding:9px 12px 8px 10px;
+  font-family:'PingFang SC','Microsoft YaHei',system-ui,sans-serif;
+  display:flex;flex-direction:column;gap:3px;pointer-events:none;user-select:none;overflow:hidden;">
+  <div style="display:flex;align-items:center;gap:6px;">
+    <span style="background:${color};color:#fff;font-size:10px;line-height:1;
+      padding:3px 8px;border-radius:999px;font-weight:600;">${escapeHtml(kindLabel)}</span>
+    ${scatter ? '<span style="font-size:10px;color:#94A3B8;border:1px dashed #CBD5E1;padding:2px 6px;border-radius:999px;">散件</span>' : ''}
+  </div>
+  <div style="font-size:13px;font-weight:600;color:${nameColor};line-height:18px;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${escapeHtml(name)}</div>
+  ${subtitle ? `<div style="font-size:11px;color:#64748B;line-height:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(subtitle)}</div>` : ''}
+</div>`;
 }
 
 export function GraphCanvas({
@@ -82,89 +98,44 @@ export function GraphCanvas({
   const buildData = (nodes: GraphNode[], edges: GraphEdge[]) => {
     const visibleNodes = nodes.filter((n) => !hiddenKinds.has(n.kind));
     const visibleIds = new Set(visibleNodes.map((n) => n.elementId));
+    const kindById = new Map(visibleNodes.map((n) => [n.elementId, n.kind]));
     const visibleEdges = edges.filter(
       (e) =>
         visibleIds.has(e.srcId) &&
         visibleIds.has(e.dstId) &&
-        // 边降噪: 层级履约边与绑定边恒显, 其余普通关系由开关控制
         (showPlainEdges ||
-          classifyEdge(e.type, nodes.find((n) => n.elementId === e.srcId)?.kind ?? '', nodes.find((n) => n.elementId === e.dstId)?.kind ?? '') === 'hierarchy' ||
+          classifyEdge(e.type, kindById.get(e.srcId) ?? '', kindById.get(e.dstId) ?? '') === 'hierarchy' ||
           e.type === 'binds'),
     );
 
     const layout = computeLayeredLayout(visibleNodes, visibleEdges);
-    const kindById = new Map(visibleNodes.map((n) => [n.elementId, n.kind]));
 
     const g6Nodes = visibleNodes.map((nd) => {
       const bt = businessTypeOf(nd.kind);
       const geo = cardGeometry(nd.kind, nd.name);
       const pos = layout.positions[nd.elementId] ?? { x: 0, y: 0 };
-      const isScatter = layout.scatterIds.has(nd.elementId);
-      const displayName = nodeDisplayName(nd, docMeta);
-      // 三层信息卡: 名称加粗(最多两行, 手工断行防溢出) + 概述次行(badge 承载)
-      const nameLabel = wrapLabel(displayName, geo.width - 20, 2);
-      let subtitle = '';
-      if (nd.kind === 'Document') subtitle = docTypeName(nd, docMeta);
-      else if (nd.kind === 'Contract') {
-        for (const k of ['contractNo', 'status', 'amount']) {
-          const v = nd.props?.[k];
-          if (typeof v === 'string' && v) { subtitle = v; break; }
-        }
-      } else if (nd.kind === 'Party') {
-        for (const k of ['role', 'country']) {
-          const v = nd.props?.[k];
-          if (typeof v === 'string' && v) { subtitle = v; break; }
-        }
-      } else if (nd.kind === 'Project') {
-        for (const k of ['code', 'status']) {
-          const v = nd.props?.[k];
-          if (typeof v === 'string' && v) { subtitle = v; break; }
-        }
-      }
-      const subtitleBadge = subtitle ? [{
-        text: wrapLabel(subtitle, geo.width - 26, 1),
-        placement: 'bottom' as const,
-        backgroundFill: '#F1F5F9',
-        fill: '#475569',
-        fontSize: 9,
-        padding: [1, 4],
-      }] : [];
+      const html = cardHtml({
+        kindLabel: bt.displayName,
+        color: bt.color,
+        border: bt.softBorder,
+        name: nodeDisplayName(nd, docMeta),
+        subtitle: subtitleOf(nd, docMeta),
+        width: geo.width,
+        height: geo.height,
+        scatter: layout.scatterIds.has(nd.elementId),
+        isRoot: nd.kind === 'Project',
+      });
       return {
         id: nd.elementId,
-        type: 'rect',
+        type: 'html' as const,
         combo: layout.comboOf[nd.elementId],
-        data: { kind: nd.kind, name: nd.name, props: nd.props, rawNode: nd } as CanvasDatum,
+        data: { kind: nd.kind, name: nd.name, props: nd.props, rawNode: nd, html, size: [geo.width, geo.height] } as CanvasDatum,
         style: {
           x: pos.x,
           y: pos.y,
-          width: geo.width,
-          height: geo.height,
-          radius: nd.kind === 'Project' ? 10 : 8,
-          fill: '#FFFFFF',
-          stroke: bt.color,
-          lineWidth: nd.kind === 'Project' ? 2 : 1,
-          lineDash: isScatter ? [4, 3] : undefined,
-          shadowColor: 'rgba(15,23,42,0.10)',
-          shadowBlur: 8,
-          shadowOffsetY: 2,
-          labelText: nameLabel,
-          labelPlacement: 'center' as const,
-          labelFill: '#1E293B',
-          labelFontSize: 12,
-          labelFontWeight: nd.kind === 'Project' ? ('bold' as const) : 500,
-          labelLineHeight: 16,
-          // 顶部类型徽标(chip)
-          badges: [
-            {
-              text: bt.displayName,
-              placement: 'top' as const,
-              backgroundFill: bt.color,
-              fill: '#FFFFFF',
-              fontSize: 9,
-              padding: [1, 6],
-            },
-            ...subtitleBadge,
-          ],
+          size: [geo.width, geo.height] as [number, number],
+          dx: -geo.width / 2,
+          dy: -geo.height / 2,
         },
       };
     });
@@ -179,7 +150,7 @@ export function GraphCanvas({
         target: ed.dstId,
         data: { kind: ed.type, name: ed.type, props: ed.props, rawEdge: ed } as CanvasDatum,
         style: {
-          stroke: override?.color ?? (cls === 'hierarchy' ? '#94A3B8' : '#CBD5E1'),
+          stroke: override?.color ?? (cls === 'hierarchy' ? '#64748B' : '#CBD5E1'),
           lineWidth: cls === 'hierarchy' ? 2 : 1.25,
           ...(override?.dashed ? { lineDash: [5, 4] } : {}),
           endArrow: true,
@@ -207,9 +178,19 @@ export function GraphCanvas({
       autoResize: true,
       data: built,
       behaviors: ['drag-canvas', 'zoom-canvas', 'drag-element', 'click-select'],
+      node: {
+        type: 'html',
+        style: {
+          // per-node 尺寸/偏移与卡片标记均预计算进 data
+          size: (d: NodeData) => (d.data as unknown as CanvasDatum | undefined)?.size ?? [160, 56],
+          dx: (d: NodeData) => -(((d.data as unknown as CanvasDatum | undefined)?.size?.[0] ?? 160) / 2),
+          dy: (d: NodeData) => -(((d.data as unknown as CanvasDatum | undefined)?.size?.[1] ?? 56) / 2),
+          innerHTML: (d: NodeData) => (d.data as unknown as CanvasDatum | undefined)?.html ?? '',
+        },
+      },
       combo: {
         style: {
-          fill: '#F8FAFC',
+          fill: '#F1F5F9',
           stroke: '#CBD5E1',
           lineWidth: 1,
           radius: 14,
@@ -256,17 +237,17 @@ export function GraphCanvas({
         try {
           const size = graph.getSize();
           const focusLane =
-            layout.lanes.find((l) => {
-              const owner = Object.entries(layout.comboOf).find(([id]) => id === centerElementId);
-              return owner ? l.id === layout.comboOf[owner[0]] : false;
-            }) ?? layout.lanes[0];
+            layout.lanes.find((l) =>
+              centerElementId ? layout.comboOf[centerElementId] === l.id : false,
+            ) ?? layout.lanes[0];
           const zoom = focusLane
             ? Math.min(1, Math.max(0.55, Math.min((size[0] * 0.62) / focusLane.width, (size[1] * 0.82) / focusLane.height)))
             : 1;
           await graph.zoomTo(zoom);
-          const anchorId = centerElementId && layout.positions[centerElementId]
-            ? centerElementId
-            : Object.entries(layout.comboOf).find(([, lane]) => lane === focusLane?.id)?.[0];
+          const anchorId =
+            centerElementId && layout.positions[centerElementId]
+              ? centerElementId
+              : Object.entries(layout.comboOf).find(([, lane]) => lane === focusLane?.id)?.[0];
           const fp = anchorId ? layout.positions[anchorId] : null;
           if (fp) {
             const vp = graph.getViewportByCanvas([fp.x, fp.y]);
