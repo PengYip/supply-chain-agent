@@ -41,7 +41,9 @@ const DEFAULT_COARSE = ['合同', '立项书', '履约凭证', '其他'];
 export function buildClassifierVocab(types: TemplateTypeRow[]): ClassifierVocab {
   const byId = new Map(types.map((t) => [t.id, t]));
   // 排除 alias 类型(props.aliasOf 标记, 如 提单/装箱单=货转单别名): 不进细类候选。
-  const docTypes = types.filter((t) => t.kind === 'doc_type' && !t.props.aliasOf);
+  // 同步排除 isActive=false 的置灰类型(与 bindings.ts docTypes 下拉过滤对称, 小修 2),
+  // 置灰类型仍是活跃文档的合法历史值, 但不再作为新分类候选。
+  const docTypes = types.filter((t) => t.kind === 'doc_type' && !t.props.aliasOf && t.isActive);
   const childrenOf = (id: string | null) => docTypes.filter((t) => t.parentId === id).map((t) => t.name);
   const descendants = (name: string): string[] => {
     const out: string[] = [];

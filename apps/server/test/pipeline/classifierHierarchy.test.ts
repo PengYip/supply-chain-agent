@@ -43,6 +43,16 @@ describe('buildClassifierVocab', () => {
     expect(vocab.fineByCoarse['履约凭证']).toContain('发票');
     expect(vocab.fineByCoarse['合同']).toContain('补充合同');
   });
+
+  it('isActive=false 的类型不进细类候选(与 bindings docTypes 过滤对称, 小修 2)', async () => {
+    // 置灰 收货单(履约凭证子类, 无后代) -> buildClassifierVocab 候选必须排除。
+    ctx.sqlite.prepare(`UPDATE template_types SET is_active = 0 WHERE name = '收货单'`).run();
+    const types = await listTemplateTypes(ctx);
+    const vocab = buildClassifierVocab(types);
+    expect(vocab.fineByCoarse['履约凭证']).not.toContain('收货单');
+    // 其余激活类型不受影响。
+    expect(vocab.fineByCoarse['履约凭证']).toContain('发票');
+  });
 });
 
 describe('classifyDocument 两阶段', () => {
