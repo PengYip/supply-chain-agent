@@ -196,7 +196,8 @@ export interface TreeCallbacks {
   setDeletingFolderPath: (path: string | null) => void;
   setDeletingFilePath: (key: string | null) => void;
   onOpenBindings?: (docId: string) => void;
-  onTriggerParse?: (docId: string) => void;
+  /** 触发解析: parsed 状态的重新处理需带 {force:true}(服务端终态短路放行)。 */
+  onTriggerParse?: (docId: string, opts?: { force?: boolean }) => void;
   // 子文件夹创建：creatingInDir 标记正在命名的目录（null 关闭输入行）
   creatingInDir: string | null;
   setCreatingInDir: (path: string | null) => void;
@@ -322,14 +323,15 @@ function FileRow(props: {
   );
 
   // 解析徽标：本地触发中或后端 parsing -> 「解析中」纯展示（带脉冲提示活动）；
-  // uploaded / failed 且有 docId -> 可点击触发（failed 为重试语义）；其余纯展示。
+  // uploaded / failed / parsed 且有 docId -> 可点击触发（failed 为重试语义，
+  // parsed 为重新处理语义，6b：重跑需带 force 放行服务端终态短路）；其余纯展示。
   const parseInFlight =
     (file.docId ? cb.parsingDocIds.has(file.docId) : false) || file.parseStatus === 'parsing';
   const canTriggerParse =
     !!file.docId &&
     !!cb.onTriggerParse &&
     !parseInFlight &&
-    (file.parseStatus === 'uploaded' || file.parseStatus === 'failed');
+    (file.parseStatus === 'uploaded' || file.parseStatus === 'failed' || file.parseStatus === 'parsed');
   let parseBadgeNode: ReactNode = null;
   if (parseInFlight) {
     parseBadgeNode = (
@@ -339,15 +341,20 @@ function FileRow(props: {
     );
   } else if (canTriggerParse && badge) {
     const isRetry = file.parseStatus === 'failed';
+    const isReprocess = file.parseStatus === 'parsed';
+    // 6b 文案分支: failed='解析失败，点击重试' / uploaded 维持现状 / parsed='重新处理'
+    const badgeLabel = isRetry ? '解析失败，点击重试' : isReprocess ? '重新处理' : badge.text;
     parseBadgeNode = (
       <button
         type="button"
         onClick={(e) => {
           e.stopPropagation();
-          if (file.docId && cb.onTriggerParse) cb.onTriggerParse(file.docId);
+          if (!file.docId || !cb.onTriggerParse) return;
+          if (isReprocess) cb.onTriggerParse(file.docId, { force: true });
+          else cb.onTriggerParse(file.docId);
         }}
-        title={isRetry ? '解析失败，点击重试' : '点击触发解析'}
-        aria-label={isRetry ? '解析失败，点击重试' : '点击触发解析'}
+        title={isRetry ? '解析失败，点击重试' : isReprocess ? '重新处理（覆盖已有解析与抽取结果）' : '点击触发解析'}
+        aria-label={isRetry ? '解析失败，点击重试' : isReprocess ? '重新处理（覆盖已有解析与抽取结果）' : '点击触发解析'}
         className={clsx(
           'cursor-pointer whitespace-nowrap rounded px-1.5 py-px text-[10px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary',
           isRetry
@@ -355,7 +362,7 @@ function FileRow(props: {
             : 'bg-surface text-ink-soft hover:bg-ink-soft/15 hover:text-ink',
         )}
       >
-        {badge.text}
+        {badgeLabel}
       </button>
     );
   } else {

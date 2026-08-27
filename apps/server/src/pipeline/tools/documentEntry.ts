@@ -13,6 +13,8 @@ import {
   // Lane A (2a): extraction-status reader + extraction-row probe for
   // ensureDocumentExtracted's re-extraction decision.
   getExtractionStatus, loadLatestExtractionByDocId,
+  // 6b 重跑覆盖守卫: 重解析前清空本文档旧 chunk 行(见 processDocument step 7)。
+  deleteChunksForDocument,
   // Phase B bindings state machine.
   listContractLedgerEntries, findBindingByDocAndContract, listBindingProposals,
   updateBindingStatus, listTemplateTypes,
@@ -810,6 +812,11 @@ export interface ProcessDocumentOptions {
    *  fast path): return as soon as parsing settles, reporting extractionStatus
    *  'pending' while the background flight runs. */
   waitExtraction?: boolean;
+  /** 6b 重处理入口(POST /process {force:true}): 放行 ensureDocumentParsed 对
+   *  终态 'parsed' 的短路, 重跑=覆盖重算(updateDocumentMeta 直接 UPDATE 存根)。
+   *  仅 'parsed' 可被放行——'needs_ocr' 是需要用户显式选择模态重试的用户可见
+   *  状态, 不受 force 影响。 */
+  force?: boolean;
 }
 
 export interface ProcessDocumentResult {
@@ -1039,6 +1046,11 @@ export async function processDocument(
       ? await tagChunks({ chunks: chunks.map((c) => ({ text: c.text })), taxonomy, tagger: opts.tagger })
       : chunks.map(() => null);
     perf.mark('chunk_tag', opts.tagger ? `${chunkTagResult.filter(Boolean).length}/${chunks.length} tagged` : 'tagger-off');
+    // 重跑覆盖守卫(6b): 覆盖重算要求旧解析的 chunk 行不残留(否则 FTS/向量检索
+    // 会同时命中新旧文本)。先清本文档已有 chunks(含 FTS5 行与可选 vec 行)再落
+    // 新行; 首次解析/failed 重试路径该清理为无害 no-op。ingestFile 的单块补写
+    // (:366)走 append 语义, 不在此列。
+    await deleteChunksForDocument(ctx, docId);
     const chunkRowIds = await saveChunks(ctx, docId, chunks, chunkTagResult);
     perf.mark('save_chunks');
 
@@ -1141,7 +1153,9 @@ export async function processDocument(
  * Single-flighted parse trigger (Model B). Safe to call from anywhere a docId is
  * referenced (the /process endpoint, the chat backstop):
  *  - a run already in flight for this docId -> await the SAME run (never double-parse);
- *  - terminal state ('parsed' | 'needs_ocr') -> return immediately (no re-parse);
+ *  - terminal state ('parsed' | 'needs_ocr') -> return immediately (no re-parse),
+ *    except a terminal-'parsed' doc with opts.force (POST /process {force:true},
+ *    6b re-process): it re-runs the pipeline with overwrite-recalc semantics;
  *  - 'uploaded' / 'failed' / missing -> start a run.
  * A missing doc row propagates 'document_not_found' from processDocument.
  */
@@ -1157,10 +1171,14 @@ export async function ensureDocumentParsed(
   const inFlight = parseFlights.get(docId);
   if (inFlight) return inFlight;
 
-  // 2. Terminal -> no-op. 'needs_ocr' is a user-facing state the caller decides
-  //    how to handle (e.g. tell the user honestly), never silently re-parsed.
+  // 2. Terminal -> no-op, UNLESS an explicit force re-process targets a
+  //    'parsed' doc (POST /process {force:true}, 6b): the override re-runs the
+  //    full pipeline with overwrite-recalc semantics (updateDocumentMeta UPDATEs
+  //    docType/modality/block_model in place). 'needs_ocr' is never bypassed —
+  //    it is a user-facing state whose retry must stay an explicit decision.
   const status = await getDocumentParseStatus(ctx, docId, userId);
-  if (isTerminalParseStatus(status)) {
+  const forceReprocess = opts.force === true && status === 'parsed';
+  if (isTerminalParseStatus(status) && !forceReprocess) {
     return { docId, parseStatus: status! };
   }
 
@@ -1188,6 +1206,10 @@ export async function ensureDocumentParsed(
 // no extraction_status AND no extraction row. Otherwise it returns fast — the
 // common case (already extracted) costs one status read + one extraction-row
 // probe, no model call.
+// opts (incl. 6b force) flow through to ensureDocumentParsed untouched; for a
+// forced re-parse of a terminal doc, processDocument itself kicks a fresh
+// background extraction flight before returning, so the in-flight guard below
+// observes the NEW run ('pending') rather than any stale terminal outcome.
 
 /** Result of ensureDocumentExtracted (additive extractionStatus for the API). */
 export interface EnsureDocumentExtractedResult {

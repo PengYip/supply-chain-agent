@@ -122,6 +122,7 @@ import {
   // 模板层(spec 2026-08-26 §3): pg twins for 模板三表。
   listTemplateTypesPg,
   listActiveEdgeRulesPg,
+  deleteChunksForDocumentPg,
   ensureTemplateTypePg,
   ensureEdgeRulePg,
   bumpTemplateVersionPg,
@@ -1154,6 +1155,35 @@ export async function deleteDocument(ctx: DbContext, docId: string, userId?: str
   });
   tx();
   return { deleted: true };
+}
+
+/**
+ * 6b(重新处理=覆盖重算): 清空一个文档的 chunk 行 + 外部内容 FTS5 索引
+ * (+ sqlite-vec 表存在时连带 vec 行), 不动 documents 行本身。processDocument
+ * 重跑解析路径在 saveChunks 前调用, 使旧解析的块不残留(首次解析时为无害 no-op);
+ * append 语义的散点调用方(:366 单块补写)不受影响 —— 清理只在重跑站点显式发生。
+ */
+export async function deleteChunksForDocument(ctx: DbContext, docId: string): Promise<void> {
+  if (ctx.backend === 'postgres') return deleteChunksForDocumentPg(ctx, docId);
+  const sqlite = ctx.sqlite;
+  const chunkIds = sqlite
+    .prepare('SELECT id FROM doc_chunk WHERE document_id = ?')
+    .all(docId) as { id: number }[];
+  const hasVecTable = !!sqlite
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='doc_chunk_vec'")
+    .get();
+  const tx = sqlite.transaction(() => {
+    if (chunkIds.length) {
+      // chunk ids are our own integers — safe to interpolate (同 deleteDocument)。
+      const idList = chunkIds.map((c) => c.id).join(',');
+      sqlite.exec(`DELETE FROM doc_chunk_fts WHERE rowid IN (${idList})`);
+      if (hasVecTable) {
+        sqlite.exec(`DELETE FROM doc_chunk_vec WHERE id IN (${idList})`);
+      }
+    }
+    sqlite.prepare('DELETE FROM doc_chunk WHERE document_id = ?').run(docId);
+  });
+  tx();
 }
 
 // ---- File manager: document minio_key link-back + virtual folders ----------

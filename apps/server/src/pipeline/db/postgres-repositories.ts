@@ -472,6 +472,15 @@ export async function saveChunksPg(
 }
 
 /**
+ * 6b(重新处理=覆盖重算): 清空一个文档的 chunk 行, saveChunksPg 重跑站点的前置
+ * 调用。FTS tsvector 是 doc_chunk 上的 GENERATED 列、pgvector 同样内嵌为列
+ * (对照 deleteDocumentPg:858 注释)—— 没有独立 fts/vec 表需要清理。
+ */
+export async function deleteChunksForDocumentPg(ctx: PostgresDbContext, docId: string): Promise<void> {
+  await ctx.pool.query('DELETE FROM doc_chunk WHERE document_id = $1', [docId]);
+}
+
+/**
  * Preprocess a user search query for CJK unigram FTS: insert a space after every
  * char that is not [0-9A-Za-z ], so a contiguous Chinese run becomes
  * space-separated unigrams ('违约责任' -> '违 约 责 任 '). Without this,

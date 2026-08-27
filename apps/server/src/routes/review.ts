@@ -198,12 +198,15 @@ reviewRoute.get('/:docId/review', async (c) => {
  * Single-flighted via ensureDocumentExtracted: concurrent calls for the same
  * docId share one run; terminal docs ('parsed' / 'needs_ocr') return
  * immediately, and already-extracted docs (extraction_status='ok') skip the
- * model call entirely.
+ * model call entirely. EXCEPTION (6b re-process): {force:true} on a terminal-
+ * 'parsed' doc overrides that gate and re-runs the pipeline with overwrite-
+ * recalc semantics; 'needs_ocr' stays non-bypassable.
  *
  * Request body (JSON, all optional):
- *   { docType?: string; modality?: string }
+ *   { docType?: string; modality?: string; force?: boolean }
  *   - docType: '合同'|'发票'|'提单'|'装箱单'|'其他' (default '其他')
  *   - modality: 'digital'|'scanned' (default 'digital')
+ *   - force: true -> re-parse an already-'parsed' doc (FileTree 重新处理徽标)
  *
  * Responses:
  *   200 { ok: true, docId, parseStatus: 'parsed'|'needs_ocr'|'failed',
@@ -216,7 +219,7 @@ reviewRoute.post('/:docId/process', async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
 
-  let body: { docType?: unknown; modality?: unknown };
+  let body: { docType?: unknown; modality?: unknown; force?: unknown };
   try {
     body = await c.req.json();
   } catch {
@@ -226,6 +229,9 @@ reviewRoute.post('/:docId/process', async (c) => {
   const docId = c.req.param('docId');
   const docTypeStr = typeof body.docType === 'string' ? body.docType : '其他';
   const docType = (ALLOWED_DOCTYPES.has(docTypeStr) ? docTypeStr : '其他') as DocType;
+  // 6b 重新处理入口: force=true 时 ensureDocumentParsed 放行终态 'parsed' 的
+  // 短路(覆盖重跑); 其余取值一律按缺省 false 处理。
+  const force = body.force === true;
   // Model C: when the caller does NOT pass an explicit modality, prefer the
   // upload-time text-layer probe hint (if any) so a scanned PDF starts straight
   // on MinerU instead of the digital->0-blocks->OCR detour. An explicit
@@ -245,7 +251,7 @@ reviewRoute.post('/:docId/process', async (c) => {
     const result = await ensureDocumentExtracted(
       ctx(),
       docId,
-      { docType, modality, waitExtraction: false, ...buildIngestDeps() },
+      { docType, modality, waitExtraction: false, force, ...buildIngestDeps() },
       user.id,
     );
     // result already carries docId + parseStatus (and the additive

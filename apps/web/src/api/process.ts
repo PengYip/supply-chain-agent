@@ -7,10 +7,12 @@ export type DocumentParseStatus = 'parsed' | 'needs_ocr' | 'failed'
 export type DocParseState = 'parsing' | DocumentParseStatus
 
 /** Request body for POST /api/documents/:docId/process. All fields optional —
- *  an empty body lets the backend classify on its own. */
+ *  an empty body lets the backend classify on its own. force=true 让服务端放行
+ *  终态 parsed 的短路重新跑解析(仅 parsed 可被放行, needs_ocr 不受影响)。 */
 export type ProcessRequestBody = {
   docType?: string
   modality?: string
+  force?: boolean
 }
 
 /** Success envelope (200). */
