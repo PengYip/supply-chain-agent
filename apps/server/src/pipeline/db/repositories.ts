@@ -1712,6 +1712,14 @@ export async function updateDocumentMeta(
  * (bindingCandidates)都以 extractions.doc_type 为 docType 事实来源, 因此
  * documents.doc_type 修正后必须同步到该文档的 extraction 行, 否则改类型后
  * 重建的执行流水仍按旧类型物化/落空。
+ *
+ * 级联二(Bug fix): 该 document_id 对应的 contract_ledger 行 doc_type 同步为
+ * 新类型(否则用户验收场景「补充合同 -> 合同」后台账仍显示旧类型)。且当新类型
+ * 为 合同 且 台账行 contract_type 为 NULL 且标题/字段可重派生时, 用与录入写回
+ * 同一规则(deriveContractType + effectiveSelfPartyNamesForDerivation)重派生
+ * contract_type; 已有值的行不动(人工修正不被覆盖), 重派生失败静默跳过(doc_type
+ * 主级联不受影响)。离开 合同 粗类时不清洗 contract_type —— 类型再改回 合同 时
+ * 派生信息仍有价值。
  */
 export async function updateDocumentType(
   ctx: DbContext,
@@ -1732,8 +1740,68 @@ export async function updateDocumentType(
   if (res.changes === 0) return false;
   // 级联到 extraction 行(见函数头注释)。所有权已由 documents 侧判定通过。
   ctx.sqlite.prepare('UPDATE extractions SET doc_type = ? WHERE document_id = ?').run(docType, docId);
+  // 级联到 contract_ledger 行(Bug fix): doc_type 必须跟随; 条件性重派生
+  // contract_type。故障隔离: 台账级联失败不翻转已成功的 documents/extractions 更新。
+  try {
+    const rows = ctx.sqlite
+      .prepare('SELECT id, contract_type, title, fields FROM contract_ledger WHERE document_id = ?')
+      .all(docId) as Array<{ id: string; contract_type: string | null; title: string; fields: string }>;
+    if (rows.length > 0) {
+      ctx.sqlite
+        .prepare(`UPDATE contract_ledger SET doc_type = ?, updated_at = datetime('now') WHERE document_id = ?`)
+        .run(docType, docId);
+      if (docType === '合同') {
+        let selfNames: string[] = [];
+        try { selfNames = await effectiveSelfPartyNamesForDerivation(ctx); } catch { selfNames = []; }
+        for (const row of rows) {
+          if (row.contract_type !== null && row.contract_type !== '') continue;
+          const derivation = deriveContractType({
+            docType,
+            fields: ledgerRowFieldsToProjection(row.fields),
+            selfPartyNames: selfNames,
+          });
+          if (derivation.contractType === null) continue;
+          ctx.sqlite.prepare('UPDATE contract_ledger SET contract_type = ? WHERE id = ?').run(
+            derivation.contractType,
+            row.id,
+          );
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[updateDocumentType] contract_ledger 级联失败:', (e as Error).message);
+  }
   return true;
 }
+
+/**
+ * contract_ledger 行 fields -> 最小字段投影({name, value})。SQLite 存 JSON 文本,
+ * pg jsonb 经 node-pg 反序列化为对象 -- 两种形状都接受(含 {value, sourceSpans}
+ * 包装); 损坏输入返回 [](派生自然为 null), 绝不抛出。pg twin 复用。
+ */
+export function ledgerRowFieldsToProjection(
+  fields: unknown,
+): Array<{ name: string; value: string | number }> {
+  let parsed: Record<string, unknown> | null;
+  if (typeof fields === 'string') {
+    try {
+      parsed = JSON.parse(fields) as Record<string, unknown>;
+    } catch {
+      return []; // 损坏的 fields JSON -> 无字段可派生。
+    }
+  } else {
+    parsed = (fields && typeof fields === 'object' ? fields : null) as Record<string, unknown> | null;
+  }
+  const out: Array<{ name: string; value: string | number }> = [];
+  if (!parsed) return out;
+  for (const [name, f] of Object.entries(parsed)) {
+    const v = (f as { value?: unknown })?.value;
+    if (typeof v === 'string' || typeof v === 'number') out.push({ name, value: v });
+  }
+  return out;
+}
+
+/** contract_ledger 行 fields(JSON 文本, {value, sourceSpans} 包装) -> 最小字段投影。 */
 
 /**
  * Set the parse_status lifecycle on a document. Mirrors setReviewStatus's raw

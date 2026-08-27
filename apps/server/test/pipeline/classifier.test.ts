@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Block, DocType } from '../../src/pipeline/types.js';
-import { classifyDocument } from '../../src/pipeline/classifier.js';
+import { classifyDocument, buildCoarsePrompt } from '../../src/pipeline/classifier.js';
 
 // Reuse the stub-model seam from documentEntry.test.ts. Its doGenerate returns
 // JSON that generateObject parses against the classifier zod schema.
@@ -74,5 +74,31 @@ describe('classifyDocument', () => {
     expect(res.docType).toBe('提单');
     expect(res.source).toBe('hint');
     expect(res.confidence).toBe(0);
+  });
+});
+
+// Bug A(用户验收): 8 份合同全被粗类判成「补充合同」。根因: 粗类四选一
+// (合同/立项书/履约凭证/其他), 但 prompt 未说明 补充合同 是合同的子类, 模型见
+// 标题含"补充协议"就输出子类名或保守拐走。本组断言粗类 prompt 必须携带判别说明
+// (纯字符串断言, 无需真实 LLM)。
+describe('buildCoarsePrompt 粗类判别说明(Bug A)', () => {
+  const prompt = buildCoarsePrompt(['合同', '立项书', '履约凭证', '其他']);
+
+  it('声明粗类只允许输出给定取值之一', () => {
+    expect(prompt).toContain('只允许输出');
+    expect(prompt).toContain('合同 / 立项书 / 履约凭证 / 其他');
+  });
+
+  it('说明文件名/标题含补充协议或补充合同的仍属合同粗类', () => {
+    expect(prompt).toContain('补充协议');
+    expect(prompt).toContain('补充合同');
+    expect(prompt).toContain('合同的子类');
+  });
+
+  it('说明出库单/收货单/结算凭证等履约类归履约凭证粗类', () => {
+    expect(prompt).toContain('出库单');
+    expect(prompt).toContain('收货单');
+    expect(prompt).toContain('结算凭证');
+    expect(prompt).toContain('履约凭证');
   });
 });

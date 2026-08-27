@@ -664,7 +664,14 @@ export async function ingestFile(opts: IngestOptions): Promise<{
         docId,
         blockModel,
         userId,
-        deps: buildAutoExtractionDeps({ ctx, extraction, userId }),
+        // 接线闭环(Bug fix): 快捷路径同样挂台账回写 -- buildLedgerWritingDeps
+        // 挂到 save 之后(与 processDocument / extractionBackfill 同语义), 使经
+        // ingestFile 上传并抽取的合同立即进入 contract_ledger; writeContractLedger
+        // 永不抛出, 不影响 outcome。
+        deps: buildLedgerWritingDeps(
+          buildAutoExtractionDeps({ ctx, extraction, userId }),
+          { ctx, docType: blockModel.docType, userId },
+        ),
       });
       // Fault isolation is silent by design; surface non-ok outcomes (timeout /
       // model error) so a silently-missing extraction is never mistaken for success.

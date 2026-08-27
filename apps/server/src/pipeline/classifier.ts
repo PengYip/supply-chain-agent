@@ -61,10 +61,18 @@ export function buildClassifierVocab(types: TemplateTypeRow[]): ClassifierVocab 
   return { coarse: DEFAULT_COARSE, fineByCoarse };
 }
 
-function buildCoarsePrompt(coarse: string[]): string {
+/**
+ * 粗类四选一的 system prompt。导出供测试做字符串断言(Bug A: 8 份合同全被判
+ * 「补充合同」的根因是 prompt 缺判别说明, 模型见标题含"补充协议"就输出子类名
+ * 或保守拐走)。判别说明随子类语义演进维护在这里。
+ */
+export function buildCoarsePrompt(coarse: string[]): string {
   return [
     '你是供应链单据分类器。只依据给定原文判断这份单据属于哪个粗类。',
-    `粗类取值: ${coarse.join(' / ')}。`,
+    `粗类只允许输出以下${coarse.length}个值之一, 不得输出细类或其他名称: ${coarse.join(' / ')}。`,
+    '判别说明:',
+    '- 粗类看大类不看细类: 文件名或标题含"补充协议"/"补充合同"的单据仍属"合同"粗类(补充合同是合同的子类, 细类阶段才会落到补充合同)。',
+    '- 出库单/收货单/发货单/结算凭证等履约过程凭证一律归"履约凭证"粗类。',
     'confidence 是自评置信度 (0..1); 不确定就给较低值。',
     '严禁凭空臆造原文中不存在的单据类型信号。',
     '严格以 JSON 格式输出, 不要包含任何注释或解释文字。',

@@ -24,7 +24,7 @@ import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.
 import { normalizeCompanyName } from '../../domain/flowDirection.js';
 import { deriveContractType } from '../../domain/contractType.js';
 import type { ContractType } from '../../domain/tradeSemantics.js';
-import { parseGraphStatus, effectiveSelfPartyNamesForDerivation, normalizeProjectCode } from './repositories.js';
+import { parseGraphStatus, effectiveSelfPartyNamesForDerivation, normalizeProjectCode, ledgerRowFieldsToProjection } from './repositories.js';
 import type {
   ExtractionInput,
   BindingInput,
@@ -1456,7 +1456,10 @@ export async function updateDocumentMetaPg(
  * 修正文档的 docType(pg twin of updateDocumentType)。UPDATE documents 仅改
  * doc_type 单列; uid 在 scope 时按 3-way OR 过滤所有权。返回是否有行被更新。
  * 级联到 extractions.doc_type(执行流水物化/候选扫描以 extraction docType 为
- * 事实来源, 见 repositories.ts 的函数头注释)。
+ * 事实来源, 见 repositories.ts 的函数头注释)。级联二(Bug fix): contract_ledger
+ * 行 doc_type 同步跟随, 且新类型=合同 且行内 contract_type 为 NULL 且可重派生时,
+ * 以 deriveContractType + effectiveSelfPartyNamesForDerivation 重派生(与 SQLite
+ * 分支同规则); 级联失败只记日志, 不翻转已成功的 documents/extractions 更新。
  */
 export async function updateDocumentTypePg(
   ctx: PostgresDbContext,
@@ -1474,6 +1477,38 @@ export async function updateDocumentTypePg(
     : await ctx.pool.query('UPDATE documents SET doc_type = $1 WHERE id = $2', [docType, docId]);
   if ((res.rowCount ?? 0) === 0) return false;
   await ctx.pool.query('UPDATE extractions SET doc_type = $1 WHERE document_id = $2', [docType, docId]);
+  // 级联二(Bug fix): contract_ledger 行(与 repositories.ts 同规则)。
+  try {
+    const sel = await ctx.pool.query(
+      'SELECT id, contract_type, fields FROM contract_ledger WHERE document_id = $1',
+      [docId],
+    );
+    if (sel.rows.length > 0) {
+      await ctx.pool.query(
+        'UPDATE contract_ledger SET doc_type = $1, updated_at = NOW() WHERE document_id = $2',
+        [docType, docId],
+      );
+      if (docType === '合同') {
+        let selfNames: string[] = [];
+        try { selfNames = await effectiveSelfPartyNamesForDerivation(ctx); } catch { selfNames = []; }
+        for (const row of sel.rows as Array<{ id: string; contract_type: string | null; fields: unknown }>) {
+          if (row.contract_type !== null && row.contract_type !== '') continue;
+          const derivation = deriveContractType({
+            docType,
+            fields: ledgerRowFieldsToProjection(row.fields),
+            selfPartyNames: selfNames,
+          });
+          if (derivation.contractType === null) continue;
+          await ctx.pool.query('UPDATE contract_ledger SET contract_type = $1 WHERE id = $2', [
+            derivation.contractType,
+            row.id,
+          ]);
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[updateDocumentTypePg] contract_ledger 级联失败:', (e as Error).message);
+  }
   return true;
 }
 
