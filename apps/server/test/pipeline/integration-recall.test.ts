@@ -277,8 +277,8 @@ describe('integration: document-entry -> hybrid recall chain', () => {
     // create_entity + link_entities + graph_query + graph_find_entity +
     // present_document_review + update_document_fields + list_binding_proposals
     // + project_rollup + link_contracts + link_projects + link_amends + template_overview + manage_quota +
-    // query_quota_usage = 27 live trader tools.
-    expect(names).toHaveLength(27);
+    // query_quota_usage = 27 live trader tools; 2026-08-28 P4 adds manage_template = 28.
+    expect(names).toHaveLength(28);
     expect(names).toContain('recall_documents');
     expect(names).toContain('ingest_document');
     expect(names).toContain('extract_fields');

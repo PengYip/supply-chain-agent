@@ -357,6 +357,9 @@ export const templateTypes = pgTable(
     parentId: text('parent_id'),
     props: text('props').notNull().default('{}'),
     isActive: integer('is_active').notNull().default(1),
+    // P4 managed-wins: NULL=纯种子行(boot seed 可覆写); 非空=DB 状态优先。
+    managedAt: timestamp('managed_at', { withTimezone: true }),
+    managedBy: text('managed_by'),
     createdAt: text('created_at').notNull().default(sql`now()`),
     updatedAt: text('updated_at').notNull().default(sql`now()`),
   },
@@ -377,6 +380,9 @@ export const templateEdgeRules = pgTable(
     anchorWeights: text('anchor_weights'),
     isActive: integer('is_active').notNull().default(1),
     templateVersion: integer('template_version').notNull().default(1),
+    // P4 managed-wins: 同 template_types, NULL=纯种子行。
+    managedAt: timestamp('managed_at', { withTimezone: true }),
+    managedBy: text('managed_by'),
     createdAt: text('created_at').notNull().default(sql`now()`),
   },
   (t) => [

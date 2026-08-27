@@ -1,12 +1,36 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { Hono } from 'hono';
 import { env } from '../../src/env.js';
+import type { AuthEnv } from '../../src/lib/auth-middleware.js';
+import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.js';
+import { getDocumentMeta } from '../../src/pipeline/db/repositories.js';
 import {
   exceedsUploadLimit,
   contentTypeForKey,
   validateFolderPathChange,
   rewriteKeyPrefix,
   isPathUnderFolder,
+  filesRoute,
 } from '../../src/routes/files.js';
+
+// ---- 小修 6a 测试基建(照 reviewType.test.ts 模式) ----
+// 路由的 DbContext 经 getDbContext 解析 -> 注入内存库; MinIO 双桩(putObject/
+// fGetObject)挡掉对象存储, 路由测试聚焦「回执字段 === 存根写入值」等值。
+const { ctxHolder } = vi.hoisted(() => ({
+  ctxHolder: { current: null as DbContext | null },
+}));
+vi.mock('../../src/pipeline/db/dbBackend.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../src/pipeline/db/dbBackend.js')>();
+  return { ...mod, getDbContext: () => ctxHolder.current };
+});
+vi.mock('../../src/lib/minio.js', () => ({
+  MINIO_BUCKET: 'sca-files',
+  minioClient: {
+    putObject: async () => {},
+    fGetObject: async () => {},
+    removeObject: async () => {},
+  },
+}));
 
 describe('exceedsUploadLimit (upload size guard predicate)', () => {
   const limit = env.MAX_UPLOAD_BYTES;
@@ -117,5 +141,57 @@ describe('rewriteKeyPrefix (MinIO key relocation math)', () => {
       .toBe('users/u1/合同化/a.pdf');
     expect(rewriteKeyPrefix('users/u2/合同/a.pdf', 'u1', '合同', '合同2'))
       .toBe('users/u2/合同/a.pdf');
+  });
+});
+
+// ---- 小修 6a: 上传回执携带存储 docType(叙述修正 G 的服务端一半) ----
+describe('POST /api/files (upload receipt echoes the STORED docType)', () => {
+  function appAs(userId: string) {
+    const app = new Hono<AuthEnv>();
+    app.use('*', async (c, next) => {
+      c.set('user', { id: userId, email: 't@t', role: 'trader' } as never);
+      await next();
+    });
+    app.route('/api/files', filesRoute);
+    return app;
+  }
+
+  beforeAll(async () => {
+    const ctx = createDb(':memory:');
+    migrate(ctx.sqlite);
+    ctxHolder.current = ctx;
+  });
+
+  async function upload(docType?: string) {
+    const fd = new FormData();
+    fd.append('file', new File(['采购合同内容'], '采购合同.txt', { type: 'text/plain' }));
+    if (docType !== undefined) fd.append('docType', docType);
+    const res = await appAs('u1').request('/api/files', { method: 'POST', body: fd });
+    return { res, body: (await res.json()) as Record<string, unknown> };
+  }
+
+  it('回执 docType === 存根写入值(合法传入原样落库并回显)', async () => {
+    const { res, body } = await upload('发票');
+    expect(res.status).toBe(201);
+    expect(body.docType).toBe('发票');
+    // 等值断言: 响应字段 === createDocumentStub 落库后的真实存储值。
+    const meta = await getDocumentMeta(ctxHolder.current!, String(body.docId), 'u1');
+    expect(meta?.docType).toBe(body.docType);
+  });
+
+  it('非法 docType 走 ALLOWED_DOCTYPES 兜底为 其他, 回执与存根一致', async () => {
+    const { res, body } = await upload('不是合法类型');
+    expect(res.status).toBe(201);
+    expect(body.docType).toBe('其他');
+    const meta = await getDocumentMeta(ctxHolder.current!, String(body.docId), 'u1');
+    expect(meta?.docType).toBe(body.docType);
+  });
+
+  it('缺省 docType 兜底为 其他, 回执与存根一致', async () => {
+    const { res, body } = await upload();
+    expect(res.status).toBe(201);
+    expect(body.docType).toBe('其他');
+    const meta = await getDocumentMeta(ctxHolder.current!, String(body.docId), 'u1');
+    expect(meta?.docType).toBe(body.docType);
   });
 });

@@ -144,6 +144,13 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
   },
+  // 2026-08-28 P4: 模板维护 manage_template(新增类型/改词表/软禁用激活)。
+  // Agent 传入类型名/id 与词表为可信输入, 全部转调 templateManage 落三表 SSOT +
+  // 版本审计 -> persist 'business', output 'raw' / injection 'safe'。L2 软门控。
+  manage_template: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'business', risk: { level: 'L2', injection: 'safe' },
+  },
   // 2026-08-26 模板: 类型层级/允许挂接查询(只读)。返回模板本体数据 -> output
   // 'raw' / injection 'safe'。只读不落库 -> signal 'env', persist 'business'。L1。
   template_overview: {

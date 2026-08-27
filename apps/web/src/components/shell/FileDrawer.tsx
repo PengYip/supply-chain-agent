@@ -151,14 +151,16 @@ export function FileDrawer(props: FileDrawerProps) {
   const [parsingDocIds, setParsingDocIds] = useState<Set<string>>(() => new Set());
 
   const triggerParse = useCallback(
-    async (docId: string) => {
+    async (docId: string, opts?: { force?: boolean }) => {
       setParsingDocIds((prev) => {
         const next = new Set(prev);
         next.add(docId);
         return next;
       });
       try {
-        await processDocument(docId);
+        // parsed 文档的「重新处理」带 {force:true} 放行服务端终态短路(6b);
+        // uploaded/failed 维持既有空请求形状。
+        await processDocument(docId, opts?.force ? { force: true } : undefined);
       } catch (e) {
         console.error('triggerParse failed:', e);
       } finally {

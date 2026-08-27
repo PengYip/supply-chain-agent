@@ -742,6 +742,68 @@ describe('ensureDocumentParsed (single-flight on-demand parse)', () => {
     expect(r2.parseStatus).toBe('parsed');
     expect(await getDocumentParseStatus(ctx, docId)).toBe('parsed');
   });
+
+  // 6b: force re-process of a terminal-'parsed' doc (POST /process {force:true}).
+  it('force:true overrides the parsed-terminal gate and re-runs the pipeline', async () => {
+    const f = join(dir, 'force-rerun.txt');
+    writeFileSync(f, '合同号：HT-F1\n', 'utf-8');
+    const { createDocumentStub, getDocumentParseStatus } = await import(
+      '../../../src/pipeline/db/repositories.js'
+    );
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f });
+
+    const r1 = await ensureDocumentParsed(ctx, docId, { modality: 'digital' });
+    expect(r1.parseStatus).toBe('parsed');
+    expect(await getDocumentParseStatus(ctx, docId)).toBe('parsed');
+
+    // Default (no force): the terminal short-circuit holds — one classification
+    // row total, i.e. the pipeline did NOT re-run.
+    const again = await ensureDocumentParsed(ctx, docId, { modality: 'digital' });
+    expect(again.parseStatus).toBe('parsed');
+    const before = ctx.sqlite
+      .prepare('SELECT COUNT(*) AS n FROM classifications WHERE document_id = ?')
+      .get(docId) as { n: number };
+    expect(before.n).toBe(1);
+    const chunksBefore = ctx.sqlite
+      .prepare('SELECT COUNT(*) AS n FROM doc_chunk WHERE document_id = ?')
+      .get(docId) as { n: number };
+    expect(chunksBefore.n).toBeGreaterThan(0);
+
+    // force:true: the gate lets a 'parsed' doc through -> full pipeline re-run
+    // (parse/classify/chunks overwrite-recalc) landing back on 'parsed'.
+    const forced = await ensureDocumentParsed(ctx, docId, { modality: 'digital', force: true });
+    expect(forced.parseStatus).toBe('parsed');
+    expect(await getDocumentParseStatus(ctx, docId)).toBe('parsed');
+    const after = ctx.sqlite
+      .prepare('SELECT COUNT(*) AS n FROM classifications WHERE document_id = ?')
+      .get(docId) as { n: number };
+    expect(after.n).toBe(2);
+    // 覆盖语义: 重跑后 chunk 行不翻倍 —— 旧块先清后插(deleteChunksForDocument),
+    // FTS/向量检索不会同时命中新旧两代文本。
+    const chunksAfter = ctx.sqlite
+      .prepare('SELECT COUNT(*) AS n FROM doc_chunk WHERE document_id = ?')
+      .get(docId) as { n: number };
+    expect(chunksAfter.n).toBe(chunksBefore.n);
+  });
+
+  it("force:true does NOT bypass a needs_ocr doc (the override is parsed-only)", async () => {
+    const f = join(dir, 'force-ocr.txt');
+    writeFileSync(f, '', 'utf-8');
+    const { createDocumentStub, getDocumentParseStatus } = await import(
+      '../../../src/pipeline/db/repositories.js'
+    );
+    const { docId } = await createDocumentStub(ctx, { sourceUri: f });
+    const r1 = await ensureDocumentParsed(ctx, docId, { modality: 'digital' });
+    expect(r1.parseStatus).toBe('needs_ocr');
+
+    // Feed the source real content AFTER the terminal state: if needs_ocr were
+    // force-bypassable this re-parse would succeed and flip to 'parsed'.
+    // Asserting it stays needs_ocr pins the gate to parsed-only.
+    writeFileSync(f, '合同号：HT-F2\n', 'utf-8');
+    const r2 = await ensureDocumentParsed(ctx, docId, { modality: 'digital', force: true });
+    expect(r2.parseStatus).toBe('needs_ocr');
+    expect(await getDocumentParseStatus(ctx, docId)).toBe('needs_ocr');
+  });
 });
 
 // Model B bug fix: auto-extraction could be silently killed by the 60s timeout

@@ -320,6 +320,8 @@ export function useBindings() {
   const templateContextAbortRef = useRef<AbortController | null>(null);
 
   const [contracts, setContracts] = useState<ContractOption[]>([]);
+  // 台账拉取失败态(小修 6c): 空列表语义可能被误读为「无台账」, 用显式错误位区分。
+  const [contractsError, setContractsError] = useState<string | null>(null);
 
   // 文档类型可选值: 初始为兜底常量, overview 响应携带 docTypes 时以后端为准。
   const [docTypes, setDocTypes] = useState<string[]>(DOC_TYPE_OPTIONS);
@@ -361,6 +363,7 @@ export function useBindings() {
   }, []);
 
   const loadContracts = useCallback(async () => {
+    setContractsError(null);
     try {
       const data = await getJson<{ contracts?: unknown[] }>('/api/bindings/contracts');
       const rawList = Array.isArray(data?.contracts) ? data.contracts : [];
@@ -368,9 +371,12 @@ export function useBindings() {
         .map((raw) => (raw && typeof raw === 'object' ? normalizeContract(raw as Record<string, unknown>) : null))
         .filter((c): c is ContractOption => c !== null);
       setContracts(rows);
-    } catch {
-      // 台账加载失败只影响手动绑定表单, 不阻塞页面。
+    } catch (e) {
+      // 台账加载失败只影响手动绑定表单, 不阻塞页面; 但不再静默——
+      // 置错误位供视图层区分「台账为空」与「加载失败」并提示重试。
+      // 非 Error 抛掷用中性文案, 避免视图端拼出「台账加载失败：台账加载失败」重复。
       setContracts([]);
+      setContractsError(e instanceof Error ? e.message : '网络异常，请重试');
     }
   }, []);
 
@@ -544,6 +550,9 @@ export function useBindings() {
     templateContextError,
     loadTemplateContext,
     contracts,
+    contractsError,
+    /** 手动重试台账拉取(loadContracts 同一实现, 语义别名供失败重试按钮使用)。 */
+    retryContracts: loadContracts,
     docTypes,
     confirmBinding,
     rejectBinding,

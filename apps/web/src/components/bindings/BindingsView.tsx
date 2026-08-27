@@ -802,6 +802,8 @@ export function BindingsView({
           error={b.candidatesError}
           focusedKey={focusedKey}
           contracts={contracts}
+          contractsError={b.contractsError}
+          onRetryContracts={() => void b.retryContracts()}
           establishedContracts={establishedContracts}
           batchErrors={batchErrors}
           pending={pending}

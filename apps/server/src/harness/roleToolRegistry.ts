@@ -12,6 +12,7 @@ import { buildExecuteCodeTool } from '../pipeline/tools/executeCode.js';
 import { buildCreateEntityTool, buildLinkEntitiesTool, buildGraphQueryTool, buildGraphFindEntityTool } from '../graph/tools.js';
 import { buildLinkContractsTool, buildLinkProjectsTool, buildLinkAmendsTool } from '../pipeline/tools/graphLinkTools.js';
 import { buildTemplateOverviewTool } from '../pipeline/tools/templateOverviewTool.js';
+import { buildManageTemplateTool } from '../pipeline/tools/manageTemplateTool.js';
 import { buildManageQuotaTool, buildQueryQuotaUsageTool } from '../pipeline/tools/quotaTools.js';
 import type { DbContext } from '../pipeline/db/client.js';
 import type { ExtractionDeps } from '../pipeline/extraction.js';
@@ -83,7 +84,7 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
 // though constructing their instances requires a DbContext (see getToolsForRole).
 // query_contract is listed here too: after the BASE removal above its name would
 // otherwise drop out of listToolNames (it is still always registered for trader).
-const TRADER_CTX_TOOL_NAMES = ['query_contract', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'query_execution_flows', 'project_rollup', 'link_contracts', 'link_projects', 'link_amends', 'template_overview', 'manage_quota', 'query_quota_usage'] as const;
+const TRADER_CTX_TOOL_NAMES = ['query_contract', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'query_execution_flows', 'project_rollup', 'link_contracts', 'link_projects', 'link_amends', 'template_overview', 'manage_template', 'manage_quota', 'query_quota_usage'] as const;
 
 export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
   const base: GatedTool[] = (BASE_TOOLS_FOR_ROLE[role] ?? []).map((t) => ({ ...t }));
@@ -132,6 +133,9 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
         // link_amends is L2 (2026-08-26 模板): 补充合同修订关系(amends), 落
         // graph_links SSOT + best-effort 边投影, 与 link_contracts 同款软门控。
         { ...buildLinkAmendsTool({ ctx, userId }), name: 'link_amends', needsApproval: true },
+        // manage_template is L2 (2026-08-28 P4): 模板维护唯一写入面(新增类型/
+        // 改词表/软禁用激活), 转 templateManage 与管理 REST 共享业务规则, 软门控。
+        { ...buildManageTemplateTool({ ctx, userId }), name: 'manage_template', needsApproval: true },
         // template_overview is L1 (2026-08-26 模板): 类型层级/允许挂接合同类型与词表。
         { ...buildTemplateOverviewTool({ ctx, userId }), name: 'template_overview' },
         // manage_quota is L2 (2026-08-25 方案A §6): 两层额度创建/调整/停用,

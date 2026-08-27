@@ -39,7 +39,6 @@ import {
   countDocumentsPg,
   countExtractionsNeedingReviewPg,
   listUserDocumentsPg,
-  hasContractDocBindingPg,
   loadExtractionPg,
   saveClassificationPg,
   loadClassificationPg,
@@ -122,10 +121,14 @@ import {
   updateQuotaUsedPg,
   // 模板层(spec 2026-08-26 §3): pg twins for 模板三表。
   listTemplateTypesPg,
-  findTemplateTypeByNamePg,
   listActiveEdgeRulesPg,
+  deleteChunksForDocumentPg,
   ensureTemplateTypePg,
   ensureEdgeRulePg,
+  bumpTemplateVersionPg,
+  listAllEdgeRulesPg,
+  listTemplateTypesManagedPg,
+  insertTemplateEdgeRulePg,
   migrateDocTypeAliasesPg,
 } from './postgres-repositories.js';
 
@@ -713,32 +716,6 @@ export async function listBindingsForContract(
   return ctx.db.select().from(bindings).where(eq(bindings.contractNo, contractNo)).all().map(rowToBinding);
 }
 
-/**
- * 业务顺序门禁(2026-08-25): 目标合同是否已挂合同类型文件(存在非 rejected 绑定,
- * 且来源文档 doc_type='合同')。执行类单据(发票/运输单据等)手动绑定前必须为真——
- * 先有合同文件建立实体锚点, 再挂执行单据。按文档归属过滤用户(legacy 行兼容同前)。
- */
-export async function hasContractDocBinding(
-  ctx: DbContext,
-  contractNo: string,
-  userId?: string,
-): Promise<boolean> {
-  if (ctx.backend === 'postgres') return hasContractDocBindingPg(ctx, contractNo, userId);
-  const uid = effectiveUserId(userId);
-  if (!uid) return false;
-  const row = ctx.sqlite
-    .prepare(
-      `SELECT 1 AS ok
-         FROM bindings b
-         JOIN documents d ON d.id = b.document_id
-        WHERE b.contract_no = ? AND b.status != 'rejected' AND d.doc_type = '合同'
-          AND (d.user_id = ? OR d.user_id = '' OR d.user_id IS NULL)
-        LIMIT 1`,
-    )
-    .get(contractNo, uid);
-  return row !== undefined;
-}
-
 // ---- Phase B: bindings 状态机 -------------------------------------------------
 
 /**
@@ -1178,6 +1155,35 @@ export async function deleteDocument(ctx: DbContext, docId: string, userId?: str
   });
   tx();
   return { deleted: true };
+}
+
+/**
+ * 6b(重新处理=覆盖重算): 清空一个文档的 chunk 行 + 外部内容 FTS5 索引
+ * (+ sqlite-vec 表存在时连带 vec 行), 不动 documents 行本身。processDocument
+ * 重跑解析路径在 saveChunks 前调用, 使旧解析的块不残留(首次解析时为无害 no-op);
+ * append 语义的散点调用方(:366 单块补写)不受影响 —— 清理只在重跑站点显式发生。
+ */
+export async function deleteChunksForDocument(ctx: DbContext, docId: string): Promise<void> {
+  if (ctx.backend === 'postgres') return deleteChunksForDocumentPg(ctx, docId);
+  const sqlite = ctx.sqlite;
+  const chunkIds = sqlite
+    .prepare('SELECT id FROM doc_chunk WHERE document_id = ?')
+    .all(docId) as { id: number }[];
+  const hasVecTable = !!sqlite
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='doc_chunk_vec'")
+    .get();
+  const tx = sqlite.transaction(() => {
+    if (chunkIds.length) {
+      // chunk ids are our own integers — safe to interpolate (同 deleteDocument)。
+      const idList = chunkIds.map((c) => c.id).join(',');
+      sqlite.exec(`DELETE FROM doc_chunk_fts WHERE rowid IN (${idList})`);
+      if (hasVecTable) {
+        sqlite.exec(`DELETE FROM doc_chunk_vec WHERE id IN (${idList})`);
+      }
+    }
+    sqlite.prepare('DELETE FROM doc_chunk WHERE document_id = ?').run(docId);
+  });
+  tx();
 }
 
 // ---- File manager: document minio_key link-back + virtual folders ----------
@@ -3440,14 +3446,6 @@ export async function listTemplateTypes(ctx: DbContext): Promise<TemplateTypeRow
   return rows.map(templateTypeFromRow);
 }
 
-export async function findTemplateTypeByName(ctx: DbContext, kind: string, name: string): Promise<TemplateTypeRow | null> {
-  if (ctx.backend === 'postgres') return findTemplateTypeByNamePg(ctx, kind, name);
-  const r = ctx.sqlite.prepare(
-    `SELECT ${TEMPLATE_TYPE_COLS} FROM template_types WHERE kind = ? AND name = ?`,
-  ).get(kind, name) as Record<string, unknown> | undefined;
-  return r ? templateTypeFromRow(r) : null;
-}
-
 export async function listActiveEdgeRules(ctx: DbContext): Promise<TemplateEdgeRuleRow[]> {
   if (ctx.backend === 'postgres') return listActiveEdgeRulesPg(ctx);
   const rows = ctx.sqlite.prepare(
@@ -3462,7 +3460,9 @@ export async function ensureTemplateType(
   if (ctx.backend === 'postgres') return ensureTemplateTypePg(ctx, input);
   ctx.sqlite.prepare(
     `INSERT INTO template_types (id, kind, name, parent_id, props) VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id, props = excluded.props`,
+     ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id, props = excluded.props
+     -- P4 managed-wins(种子冲突策略): managed_at 非空=已管理行, boot seed 跳过覆写。
+     WHERE template_types.managed_at IS NULL`,
   ).run(input.id, input.kind, input.name, input.parentId ?? null, JSON.stringify(input.props ?? {}));
 }
 
@@ -3479,10 +3479,74 @@ export async function ensureEdgeRule(
        is_active = excluded.is_active,
        -- anchor_weights 覆写防护(小修 3): seed/幂等重跑不带权重(传入 NULL)时保留
        -- 既有值(manage_template 设的权重不被 boot 重跑抹掉); 显式传值照常覆写。
-       anchor_weights = COALESCE(excluded.anchor_weights, template_edge_rules.anchor_weights)`,
+       anchor_weights = COALESCE(excluded.anchor_weights, template_edge_rules.anchor_weights)
+     -- P4 managed-wins(种子冲突策略): 已管理行整行冻结(anchor_weights 一并不触碰,
+     -- 权重的显式写入走 manage 入口)。
+     WHERE template_edge_rules.managed_at IS NULL`,
   ).run(input.id, input.sourceTypeId, input.targetTypeId ?? '', input.edgeType,
     JSON.stringify(input.allowedVocab), input.isActive === false ? 0 : 1,
     input.anchorWeights ? JSON.stringify(input.anchorWeights) : null);
+}
+
+/**
+ * 模板版本审计(spec §3.3/§5): 每次管理性变更递增一个版本号。
+ * 单列自增无并发竞争面(管理操作低频且前台单实例 Hono), 不做事务锁。
+ */
+export async function bumpTemplateVersion(
+  ctx: DbContext, input: { changedBy: string; changeSummary: string },
+): Promise<number> {
+  if (ctx.backend === 'postgres') return bumpTemplateVersionPg(ctx, input);
+  const cur = ctx.sqlite.prepare('SELECT MAX(version) AS v FROM template_versions').get() as { v: number | null };
+  const next = (cur.v ?? 0) + 1;
+  ctx.sqlite.prepare(
+    'INSERT INTO template_versions (version, changed_by, change_summary) VALUES (?, ?, ?)',
+  ).run(next, input.changedBy, input.changeSummary);
+  return next;
+}
+
+// ---- 模板管理 REST 读/存储面(Task 3 /api/templates) --------------------------
+
+/** 全量边规则行(GET /api/templates/rules): 含登记不启用(is_active=0)行, 幂等种子与管理视图共用读面。 */
+export async function listAllEdgeRules(ctx: DbContext): Promise<TemplateEdgeRuleRow[]> {
+  if (ctx.backend === 'postgres') return listAllEdgeRulesPg(ctx);
+  const rows = ctx.sqlite.prepare(
+    `SELECT ${TEMPLATE_RULE_COLS} FROM template_edge_rules ORDER BY id`,
+  ).all() as Record<string, unknown>[];
+  return rows.map(templateRuleFromRow);
+}
+
+/** 类型行 + 管理戳(managed_at/managed_by), GET /api/templates/types 的"含 managed 元数据"读面。 */
+export interface TemplateTypeManageMeta { managedAt: string | null; managedBy: string | null }
+
+export async function listTemplateTypesManaged(
+  ctx: DbContext,
+): Promise<Array<TemplateTypeRow & TemplateTypeManageMeta>> {
+  if (ctx.backend === 'postgres') return listTemplateTypesManagedPg(ctx);
+  const rows = ctx.sqlite.prepare(
+    `SELECT ${TEMPLATE_TYPE_COLS}, managed_at, managed_by FROM template_types ORDER BY kind, name`,
+  ).all() as Record<string, unknown>[];
+  return rows.map((r) => ({
+    ...templateTypeFromRow(r),
+    managedAt: r.managed_at == null ? null : String(r.managed_at),
+    managedBy: r.managed_by == null ? null : String(r.managed_by),
+  }));
+}
+
+/**
+ * 新建边规则(POST /api/templates/rules 存储面, Task 3): 登记先行(spec §3.2),
+ * 允许悬空 source/target 引用; 创建即打管理戳(managed-wins => boot seed 不再覆写)。
+ * 版本审计由调用方经 bumpTemplateVersion 记账(changeSummary `rule.create <id>`)。
+ */
+export async function insertTemplateEdgeRule(
+  ctx: DbContext, input: { id: string; sourceTypeId: string; targetTypeId?: string; edgeType: string; allowedVocab: string[]; isActive?: boolean; managedBy: string },
+): Promise<void> {
+  if (ctx.backend === 'postgres') return insertTemplateEdgeRulePg(ctx, input);
+  ctx.sqlite.prepare(
+    `INSERT INTO template_edge_rules
+       (id, source_type_id, target_type_id, edge_type, allowed_vocab, is_active, anchor_weights, managed_at, managed_by)
+     VALUES (?, ?, ?, ?, ?, ?, NULL, datetime('now'), ?)`,
+  ).run(input.id, input.sourceTypeId, input.targetTypeId ?? '', input.edgeType,
+    JSON.stringify(input.allowedVocab), input.isActive === false ? 0 : 1, input.managedBy);
 }
 
 /** 存量数据幂等迁移(spec §3.1): 提单/装箱单并入货转单(别名)。重复执行无副作用。 */
