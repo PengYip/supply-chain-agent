@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { ChevronRight, FileText, Folder, FolderOpen } from 'lucide-react';
 import { type FileEntry, type FileFolder } from '../../hooks/useFiles';
+import { normalizeMoveDirectory, type TreeNode } from '../../lib/fileTree';
 import {
   isFolderSelfDrop,
   readPayload,
@@ -12,44 +13,11 @@ import {
   type DropTarget,
 } from '../../hooks/useFileDnd';
 
-export interface TreeNode {
-  files: FileEntry[];
-  subdirs: Record<string, TreeNode>;
-}
-
 function formatSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-export function pathSegments(p: string | undefined): string[] {
-  if (!p) return [];
-  return p.split('/').map((s) => s.trim()).filter((s) => s.length > 0);
-}
-
-export function buildTree(files: FileEntry[], folders: FileFolder[]): TreeNode {
-  const root: TreeNode = { files: [], subdirs: {} };
-  const getOrCreate = (segs: string[]): TreeNode => {
-    let node = root;
-    for (const seg of segs) {
-      if (!node.subdirs[seg]) node.subdirs[seg] = { files: [], subdirs: {} };
-      node = node.subdirs[seg];
-    }
-    return node;
-  };
-  for (const folder of folders) getOrCreate(pathSegments(folder.path));
-  for (const file of files) getOrCreate(pathSegments(file.directory)).files.push(file);
-  return root;
-}
-
-export function normalizeMoveDirectory(directory: string): string {
-  return directory
-    .split('/')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
-    .join('/');
 }
 
 /** 文件行的解析状态徽标。null（无解析记录）不渲染。uploaded/parsing 均显示

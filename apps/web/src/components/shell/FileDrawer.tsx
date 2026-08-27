@@ -5,7 +5,8 @@ import { Folder, X } from 'lucide-react';
 import { type FileEntry, type FilesApi } from '../../hooks/useFiles';
 import { processDocument } from '../../api/process';
 import { FilePreviewModal } from '../FilePreviewModal';
-import { buildTree, FileTree, normalizeMoveDirectory, type TreeCallbacks } from './FileTree';
+import { buildTree, normalizeMoveDirectory } from '../../lib/fileTree';
+import { FileTree, type TreeCallbacks } from './FileTree';
 import { readPayload, useFileDnd, type DropTarget } from '../../hooks/useFileDnd';
 import {
   collectDropItems,
@@ -173,20 +174,6 @@ export function FileDrawer(props: FileDrawerProps) {
   );
 
   const tree = useMemo(() => buildTree(files, folders), [files, folders]);
-
-  // 关闭时清空所有临态（选中/移动/删除确认/新建输入/预览）
-  useEffect(() => {
-    if (!open) {
-      setMovingFileKey(null);
-      setDeletingFolderPath(null);
-      setDeletingFilePath(null);
-      setCreatingFolder(false);
-      setSelectedKey(null);
-      setPreviewingFile(null);
-      setCreatingInDir(null);
-      setRenamingPath(null);
-    }
-  }, [open]);
 
   // Esc 关闭抽屉。文件夹命名输入中的 Esc 由输入框自行消费（stopPropagation）。
   useEffect(() => {
