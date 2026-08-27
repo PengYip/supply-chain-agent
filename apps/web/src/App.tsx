@@ -163,6 +163,18 @@ function App() {
       filesOpen={fileDrawerOpen}
       user={user}
       onSignOut={() => void handleSignOut()}
+      filesPanel={
+        fileDrawerOpen ? (
+          <FileDrawer
+            open
+            onClose={() => setFileDrawerOpen(false)}
+            onAddToConversation={addToConversation}
+            contextFileKeys={contextFileKeys}
+            filesApi={filesApi}
+            onOpenBindings={openBindingsForDoc}
+          />
+        ) : undefined
+      }
     >
       {view === 'chat' ? (
         <ChatWorkspace
@@ -196,14 +208,6 @@ function App() {
       ) : view === 'eval' ? (
         <EvalWorkbenchView />
       ) : null}
-      <FileDrawer
-        open={fileDrawerOpen}
-        onClose={() => setFileDrawerOpen(false)}
-        onAddToConversation={addToConversation}
-        contextFileKeys={contextFileKeys}
-        filesApi={filesApi}
-        onOpenBindings={openBindingsForDoc}
-      />
     </AppShell>
   );
 }

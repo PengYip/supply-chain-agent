@@ -44,6 +44,46 @@ export function FileDrawer(props: FileDrawerProps) {
   // 面板内部拖拽移动状态机
   const dnd = useFileDnd();
 
+  // -- 停靠面板宽度（左缘手柄拖拽，280–560px，记忆于 localStorage） --
+  const PANEL_MIN = 280;
+  const PANEL_MAX = 560;
+  const [panelWidth, setPanelWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('sca.filesPanelWidth'));
+    return Number.isFinite(saved) && saved >= PANEL_MIN && saved <= PANEL_MAX ? saved : 360;
+  });
+  useEffect(() => {
+    if (!open) return;
+    let startW = 0;
+    let startX = 0;
+    const onMove = (e: MouseEvent) => {
+      const next = Math.min(PANEL_MAX, Math.max(PANEL_MIN, startW + (startX - e.clientX)));
+      setPanelWidth(next);
+    };
+    const onUp = (e: MouseEvent) => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.userSelect = '';
+      const next = Math.min(PANEL_MAX, Math.max(PANEL_MIN, startW + (startX - e.clientX)));
+      localStorage.setItem('sca.filesPanelWidth', String(next));
+    };
+    const onDown = (e: MouseEvent) => {
+      startW = panelWidth;
+      startX = e.clientX;
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+      e.preventDefault();
+    };
+    const handle = document.getElementById('files-panel-resize-handle');
+    handle?.addEventListener('mousedown', onDown);
+    return () => {
+      handle?.removeEventListener('mousedown', onDown);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.userSelect = '';
+    };
+  }, [open, panelWidth]);
+
   /** 上传队列：先把层级里的缺失目录补齐，再逐个串行上传。 */
   const uploadQueue = useFolderDropUpload({
     ensureDirs: useCallback(
@@ -230,11 +270,20 @@ export function FileDrawer(props: FileDrawerProps) {
   };
 
   return (
-    <>
-      {/* 遮罩：点击关闭 */}
-      <div className="animate-fade-in fixed inset-0 z-40 bg-ink/30" onClick={onClose} />
-      <aside className="animate-slide-in-right fixed inset-y-0 right-0 z-drawer flex w-[360px] max-w-[90vw] flex-col border-l border-line bg-white">
-        {/* 头部：标题 + 新建文件夹 + 关闭 */}
+    <aside
+      className="relative flex h-full shrink-0 flex-col border-l border-line bg-white"
+      style={{ width: panelWidth, minWidth: 280, maxWidth: 560 }}
+      aria-label="文件管理"
+    >
+      {/* 左缘手柄：拖拽伸缩宽度 */}
+      <div
+        id="files-panel-resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整面板宽度"
+        className="absolute inset-y-0 left-0 z-30 w-1 cursor-col-resize bg-transparent transition-colors hover:bg-primary/40"
+      />
+      {/* 头部：标题 + 新建文件夹 + 关闭 */}
         <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-3">
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold leading-tight text-ink">文件管理</div>
@@ -357,8 +406,7 @@ export function FileDrawer(props: FileDrawerProps) {
         )}
 
         {previewingFile && <FilePreviewModal file={previewingFile} onClose={() => setPreviewingFile(null)} />}
-      </aside>
-    </>
+    </aside>
   );
 }
 
