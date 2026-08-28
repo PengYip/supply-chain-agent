@@ -63,8 +63,8 @@ describe('tradeSemantics (L1 行业词汇表)', () => {
   });
 
   describe('CHUNK_TAG_TAXONOMY / getTaxonomy', () => {
-    it('covers all docType keys (P2 轨道衡称重单后 25 类)', () => {
-      expect(Object.keys(CHUNK_TAG_TAXONOMY).length).toBe(25);
+    it('covers all docType keys (v2.1 重量凭证/水尺计重单后 27 类)', () => {
+      expect(Object.keys(CHUNK_TAG_TAXONOMY).length).toBe(27);
     });
 
     it('returns 13 tags for 合同', () => {

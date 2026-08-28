@@ -36,8 +36,13 @@ import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
 import { validateSpan, type SpanMatchStrength } from '../spanValidator.js';
 import { buildLedgerEntryFromExtraction } from '../contractLedger.js';
 import { upsertContractLedgerEntry } from '../db/repositories.js';
-import { extractVoucher, mimeForExtension, type VlmResult } from '../vlmAdapter.js';
-import { VOUCHER_SCHEMAS, validateVoucher, type VoucherType } from '../schemas/vouchers.js';
+import { extractVoucher, extractVoucherTyped, mimeForExtension, type VlmResult } from '../vlmAdapter.js';
+import { classifyForm, type FormClassifyResult } from '../vlmClassifier.js';
+import { buildFormTypeIndex, collectFormTypes } from '../formTypeRegistry.js';
+import { renderPdfPages, type RenderedPage } from '../pdfRender.js';
+import { extractWeightDoc, type WeightDocType } from '../pageRecords.js';
+import { pdfHasTextLayer } from '../digitalAdapter.js';
+import { VOUCHER_SCHEMAS, WEIGHT_AGGREGATE_DOCTYPES, validateVoucher, type VoucherType } from '../schemas/vouchers.js';
 import { extractAnchors } from '../schemas/vouchers.js';
 import { generateBindingProposals, type BindingRoute } from '../bindingProposal.js';
 import { ancestorChain, matchEdgeRule } from '../templateGuard.js';
@@ -48,10 +53,27 @@ import type { ContractType } from '../../domain/tradeSemantics.js';
 import { proposeProjectMemberships } from '../projectProposal.js';
 import { createProject, upsertProjectMembership } from '../db/repositories.js';
 import { StageProfiler } from '../perf.js';
+import { env } from '../../env.js';
 
-/** Phase A: 图片凭证 VLM 解析依赖(可注入 fake 供测试; 缺省用真实 extractVoucher)。 */
+/** Phase A: 图片凭证 VLM 解析依赖(可注入 fake 供测试; 缺省用真实 extractVoucher)。
+ *  v2.1 双分支: 可选注入 classify/extractTyped/extractOne, 缺省用真实实现。 */
 export interface VlmDeps {
   extract: (buffer: Buffer, mime: string) => Promise<VlmResult>;
+  /** VLM 表单分类注入(缺省真实 classifyForm, 需 VLM 配置)。 */
+  classify?: (input: {
+    page: { mime: string; buffer: Buffer };
+    formTypes: string[];
+  }) => Promise<FormClassifyResult>;
+  /** 按已知类型多图提取注入(缺省真实 extractVoucherTyped)。 */
+  extractTyped?: (
+    images: Array<{ mime: string; buffer: Buffer }>,
+    docType: string,
+  ) => Promise<{ fields: Record<string, unknown>; 字段置信度: Record<string, number> }>;
+  /** 重量组单页提取注入(缺省真实 extractVoucherTyped 单图)。 */
+  extractOne?: (
+    image: { mime: string; buffer: Buffer },
+    docType: string,
+  ) => Promise<{ fields: Record<string, unknown> }>;
 }
 
 export interface ToolDeps {
@@ -275,6 +297,9 @@ interface VoucherIngestInput {
   embedder?: Embedder;
   userId?: string;
   vlm?: VlmDeps;
+  /** v2.1 双分支: PDF 凭证路由命中时携带(已渲染页 + 路由确定的业务类型)。
+   *  存在时跳过单图读取, 走逐页聚合(重量组)或多图一次提取(其余组)。 */
+  pdfVoucher?: { docType: DocType; pages: RenderedPage[] };
 }
 
 /** runVoucherPipeline / ingestVoucherImage 的返回形状(与 ingestFile 一致)。 */
@@ -301,33 +326,62 @@ interface VoucherPipelineResult {
  * 置 'failed' 并 rethrow(调用方决定转 STATE)。
  */
 async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPipelineResult> {
-  const { ctx, sourcePath, docId, embedder, userId, vlm } = input;
+  const { ctx, sourcePath, docId, embedder, userId, vlm, pdfVoucher } = input;
   const perf = new StageProfiler(`voucher docId=${docId}`);
   try {
     // 2. VLM 提取(可注入 fake; 缺省真实 extractVoucher, 未配置时抛明确错误)。
-    const ext = sourcePath.split('.').pop() ?? '';
-    const mime = mimeForExtension(ext);
-    if (!mime) {
-      throw new Error(`不支持的图片扩展名 .${ext}，仅支持 jpg/jpeg/png`);
+    //    v2.1 双分支: pdfVoucher 携带路由确定的 docType + 渲染页 -> 重量组逐页聚合,
+    //    其余组多图一次提取; 无 pdfVoucher = 现有单图路径(jpg/png, 类型由 VLM 自报)。
+    let result: VlmResult;
+    let routeWarnings: string[] = [];
+    if (pdfVoucher) {
+      const dt = pdfVoucher.docType;
+      if (!(dt in VOUCHER_SCHEMAS)) {
+        throw new Error(`凭证类型 ${dt} 无注册 schema, 不应进入 VLM 凭证分支`);
+      }
+      if (WEIGHT_AGGREGATE_DOCTYPES.has(dt as VoucherType)) {
+        const agg = await extractWeightDoc(pdfVoucher.pages, dt as WeightDocType, {
+          extractOne: vlm?.extractOne
+            ? async (image, d) => vlm.extractOne!(image, d)
+            : undefined,
+        });
+        result = { voucherType: dt as VoucherType, fields: agg.fields, 字段置信度: {} };
+        routeWarnings = agg.warnings;
+        perf.mark('vlm_extract_pages', `${dt} ok=${agg.okPages.length} failed=${agg.failedPages.length}`);
+      } else {
+        const typed = await (vlm?.extractTyped ?? extractVoucherTyped)(
+          pdfVoucher.pages.map((p) => ({ mime: p.mime, buffer: p.buffer })),
+          dt as Exclude<VoucherType, '其他'>,
+        );
+        result = { voucherType: dt as VoucherType, fields: typed.fields, 字段置信度: typed.字段置信度 };
+        perf.mark('vlm_extract_typed', `${dt}`);
+      }
+    } else {
+      const ext = sourcePath.split('.').pop() ?? '';
+      const mime = mimeForExtension(ext);
+      if (!mime) {
+        throw new Error(`不支持的图片扩展名 .${ext}，仅支持 jpg/jpeg/png`);
+      }
+      const buffer = readFileSync(sourcePath);
+      const extract = vlm?.extract ?? extractVoucher;
+      result = await extract(buffer, mime);
     }
-    const buffer = readFileSync(sourcePath);
-    const extract = vlm?.extract ?? extractVoucher;
-    const result = await extract(buffer, mime);
     perf.mark('vlm_extract', `${result.voucherType}`);
 
     // 3. zod 校验(按 voucherType 选 schema; '其他' 无 schema 跳过)。
-    const schema = result.voucherType === '其他' ? undefined : VOUCHER_SCHEMAS[result.voucherType];
+    const voucherType = result.voucherType;
+    const schema = voucherType === '其他' ? undefined : VOUCHER_SCHEMAS[voucherType];
     if (schema) {
       const parsed = schema.safeParse(result.fields);
       if (!parsed.success) {
         const detail = parsed.error.issues
           .map((i) => `${i.path.join('.') || '(root)'} ${i.message}`)
           .join('; ');
-        throw new Error(`凭证字段校验失败(${result.voucherType}): ${detail}`);
+        throw new Error(`凭证字段校验失败(${voucherType}): ${detail}`);
       }
     }
-    const warnings = validateVoucher(result.voucherType, result.fields);
-    const docType = result.voucherType as DocType;
+    const warnings = [...validateVoucher(voucherType, result.fields), ...routeWarnings];
+    const docType = voucherType as DocType;
     perf.mark('validate', `${warnings.length} warnings`);
 
     // 4. 真实 block_model: 单合成块(与 schema 兼容, 无文本块可 span 接地)。
@@ -352,9 +406,11 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
     await updateDocumentMeta(ctx, docId, { docType, modality: 'scanned', blockModel }, userId);
     perf.mark('save_meta');
 
-    // 5. 分类: source 'classified', confidence 用 VLM 自报类型置信或 0.9。
+    // 5. 分类: source 'classified', confidence 用 VLM 自报类型置信;
+    //    pdfVoucher 路径类型由路由确定(无自报), 有路由 warnings 时降到 0.7。
     const typeConf = result.字段置信度['voucherType'] ?? result.字段置信度['凭证类型'];
-    const classificationConfidence = typeof typeConf === 'number' ? typeConf : 0.9;
+    const classificationConfidence =
+      typeof typeConf === 'number' ? typeConf : routeWarnings.length > 0 ? 0.7 : 0.9;
     await saveClassification(
       ctx,
       { documentId: docId, docType, confidence: classificationConfidence, source: 'classified', hint: docType },
@@ -844,49 +900,63 @@ function isTerminalParseStatus(status: ParseStatus | null): boolean {
 }
 
 /**
- * Parse a stub with a one-shot digital->scanned (MinerU OCR) retry. A 'digital'
- * parse that throws or yields 0 blocks is retried ONCE as 'scanned' before the
- * caller settles on 'needs_ocr'; an already-'scanned' parse that fails stays
- * failed. Throws the last parse error when both attempts fail.
+ * v2.1 双分支门控(spec 2026-08-28 §4): 图像型 PDF(无文字层, digital 尝试失败或
+ * 显式 scanned)在落入 MinerU OCR 之前, 渲染第 1 页做一次 VLM 表单分类。
+ * 命中 voucher 路由(置信度达标 + 表单类型已映射 + 业务类型有注册 schema)时
+ * 走 VLM 凭证提取并返回 parsed 结果; 其余一切情况(document/unknown/低置信/
+ * VLM 未配置/任何异常)返回 null 回落 OCR——永不劣于现状。
  */
-async function parseWithOcrRetry(
-  sourceUri: string,
-  docType: DocType,
+const VLM_ROUTE_CONFIDENCE_FLOOR = 0.6;
+
+async function tryVoucherRouteForPdf(
+  ctx: DbContext,
   docId: string,
-  modality: Modality | undefined,
-): Promise<BlockModel> {
-  const first = modality ?? 'digital';
-  let lastError: unknown;
-  const attempt = async (m: Modality): Promise<BlockModel | null> => {
-    const model = await parseDocument({
-      sourcePath: assertWithinRoot(sourceUri),
-      docType,
-      docId,
-      modality: m,
-    });
-    return model.blocks.length > 0 ? model : null;
-  };
+  sourceUri: string,
+  opts: ProcessDocumentOptions,
+): Promise<ProcessDocumentResult | null> {
+  if (!/\.pdf$/i.test(sourceUri)) return null;
+  if (!env.VLM_BASE_URL || !env.VLM_API_KEY) return null; // 未配置 = 现状行为
   try {
-    const m = await attempt(first);
-    if (m) return m;
-    lastError = new Error('文件解析得到 0 个内容块');
+    const types = await listTemplateTypes(ctx);
+    const formTypes = collectFormTypes(types);
+    if (formTypes.length === 0) return null;
+    const pages = await renderPdfPages(sourceUri);
+    const firstPage = pages[0]!;
+    const classify = opts.vlm?.classify;
+    const { formType, confidence } = await classifyForm(
+      { page: { mime: firstPage.mime, buffer: firstPage.buffer }, formTypes },
+      classify ? { call: async (_p, page) => {
+        const r = await classify({ page, formTypes });
+        return JSON.stringify(r);
+      } } : {},
+    );
+    const idx = buildFormTypeIndex(types);
+    const route = idx.routeOf(formType);
+    const mapped = idx.docTypeOf(formType);
+    const routable =
+      confidence >= VLM_ROUTE_CONFIDENCE_FLOOR &&
+      route === 'voucher' &&
+      mapped !== undefined &&
+      mapped in VOUCHER_SCHEMAS;
+    console.log(
+      `[perf-route] ${docId} vlm-classify formType=${formType} conf=${confidence.toFixed(2)}`
+      + ` route=${route} -> ${routable ? `voucher(${mapped})` : 'ocr-fallback'}`,
+    );
+    if (!routable || mapped === undefined) return null;
+    const v = await runVoucherPipeline({
+      ctx, sourcePath: sourceUri, docId,
+      embedder: opts.embedder, userId: opts.userId, vlm: opts.vlm,
+      pdfVoucher: { docType: mapped, pages },
+    });
+    return {
+      docId, parseStatus: 'parsed' as const, blockCount: v.blockCount,
+      classifiedDocType: v.classifiedDocType, classificationConfidence: v.classificationConfidence,
+      classificationSource: v.classificationSource, tags: v.tags, vectorization: v.vectorization,
+    };
   } catch (e) {
-    lastError = e;
+    console.warn('[perf-route] VLM 凭证路由失败, 回落 OCR:', (e as Error).message);
+    return null;
   }
-  // digital failed (0 blocks or threw): retry ONCE as scanned (MinerU OCR).
-  // The OCR retry only applies to PDFs (a scanned doc is a PDF phenomenon);
-  // other formats (.txt/.md/.json/.docx) are born-digital by construction, so
-  // a MinerU retry would only burn a subprocess on a guaranteed failure.
-  if (first === 'digital' && /\.pdf$/i.test(sourceUri)) {
-    try {
-      const m = await attempt('scanned');
-      if (m) return m;
-      lastError = new Error('文件解析得到 0 个内容块');
-    } catch (e) {
-      lastError = e;
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 /**
@@ -993,14 +1063,60 @@ export async function processDocument(
     }
   }
 
-  // 3. Parse with a one-shot digital->scanned OCR retry. OCR failure -> a
-  //    'needs_ocr' STATE (no throw), so upload/parse decoupling holds.
-  let blockModel: BlockModel;
-  try {
-    blockModel = await parseWithOcrRetry(sourceUri, opts.docType ?? '其他', docId, opts.modality);
-    perf.mark('parse', `${blockModel.modality}, ${blockModel.blocks.length} blocks`);
-  } catch (e) {
-    const reason = e instanceof Error ? e.message : String(e);
+  // 3. Parse(v2.1 双分支): PDF 先做文字层廉价探测——图像型(无文字层或显式
+  //    scanned)先过 VLM 凭证路由门控, 未命中再进 MinerU OCR; 文字层 PDF 走
+  //    digital(parseDocument 内部保留 0 块 OCR 兜底)。OCR/parse 失败 -> 'needs_ocr'
+  //    STATE(no throw), upload/parse 解耦保持。
+  let blockModel: BlockModel | null = null;
+  const parseErrors: unknown[] = [];
+  const firstModality: Modality = opts.modality ?? 'digital';
+  const isPdf = /\.pdf$/i.test(sourceUri);
+  const attemptParse = async (m: Modality): Promise<BlockModel | null> => {
+    const model = await parseDocument({
+      sourcePath: assertWithinRoot(sourceUri),
+      docType: opts.docType ?? '其他',
+      docId,
+      modality: m,
+    });
+    return model.blocks.length > 0 ? model : null;
+  };
+
+  // 图像型预判: 显式 scanned 直接算; digital 用文字层探测(null=非PDF/探测失败 -> 原路径)。
+  let imageLike = firstModality === 'scanned';
+  if (!imageLike && isPdf) {
+    try {
+      const hasText = await pdfHasTextLayer(readFileSync(sourceUri));
+      imageLike = hasText === false;
+    } catch (e) {
+      console.warn('[perf-route] 文字层探测失败, 保持 digital 路径:', (e as Error).message);
+    }
+  }
+
+  if (imageLike) {
+    const routed = await tryVoucherRouteForPdf(ctx, docId, sourceUri, opts);
+    if (routed) {
+      perf.finish('voucher-routed');
+      return routed;
+    }
+    // 未命中: 跳过注定 0 块的 digital 尝试, 直接 MinerU OCR。
+    try {
+      blockModel = await attemptParse('scanned');
+      if (blockModel) perf.mark('ocr', `scanned, ${blockModel.blocks.length} blocks`);
+    } catch (e) {
+      parseErrors.push(e);
+    }
+  } else {
+    try {
+      blockModel = await attemptParse(firstModality);
+      if (blockModel) perf.mark('parse', `${blockModel.modality}, ${blockModel.blocks.length} blocks`);
+    } catch (e) {
+      parseErrors.push(e);
+    }
+  }
+
+  if (!blockModel) {
+    const last = parseErrors[parseErrors.length - 1];
+    const reason = last instanceof Error ? last.message : '文件解析得到 0 个内容块';
     await setDocumentParseStatus(ctx, docId, 'needs_ocr', opts.userId).catch(() => {});
     perf.finish(`needs_ocr: ${reason}`);
     return { docId, parseStatus: 'needs_ocr', blockCount: 0, reason };
