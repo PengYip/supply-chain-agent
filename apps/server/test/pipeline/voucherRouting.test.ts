@@ -28,6 +28,12 @@ const savedEnv = {
 };
 
 beforeEach(async () => {
+  // 门控的 VLM 已配置检查读 env 快照: CI 无根 .env, 此处显式置上并保存,
+  // 保证用例不依赖宿主环境泄漏(VLM 未配置用例在用例内显式置 undefined)。
+  savedEnv.base = env.VLM_BASE_URL;
+  savedEnv.key = env.VLM_API_KEY;
+  env.VLM_BASE_URL = 'https://vlm.test';
+  env.VLM_API_KEY = 'test-key';
   ctx = createDb(':memory:');
   migrate(ctx.sqlite);
   await ensureTemplateSeed(ctx);
