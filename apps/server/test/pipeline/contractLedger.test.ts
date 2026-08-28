@@ -58,6 +58,32 @@ describe('buildLedgerEntryFromExtraction', () => {
     expect(entry).toBeNull();
   });
 
+  it('空值保底字段: 合同号在 -> 台账行含空字段且 needsReview; 合同号空 -> 无台账行', () => {
+    const entry = buildLedgerEntryFromExtraction({
+      documentId: 'DOC-1',
+      docType: '合同',
+      fields: {
+        合同号: { value: 'HT-1', sourceSpans: [] },
+        质量标准: { value: '', sourceSpans: [] },
+      },
+      fieldMeta: {
+        合同号: { strength: 'exact', confidence: 0.95 },
+        质量标准: { strength: 'none', confidence: 0 },
+      },
+    });
+    expect(entry).not.toBeNull();
+    expect(entry!.fields['质量标准']!.value).toBe('');
+    expect(entry!.needsReview).toBe(true);
+
+    const noEntry = buildLedgerEntryFromExtraction({
+      documentId: 'DOC-1',
+      docType: '合同',
+      fields: { 质量标准: { value: '', sourceSpans: [] } },
+      fieldMeta: { 质量标准: { strength: 'none', confidence: 0 } },
+    });
+    expect(noEntry).toBeNull();
+  });
+
   it('builds an entry with normalized key, 标的物 title fallback and mean confidence', () => {
     const entry = buildLedgerEntryFromExtraction({
       documentId: 'DOC-1',

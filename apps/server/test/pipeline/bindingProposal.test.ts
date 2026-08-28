@@ -217,6 +217,15 @@ describe('generateBindingProposals (路由)', () => {
     expect(generateBindingProposals(货转单Anchors, [])).toEqual([]);
   });
 
+  it('台账锚点为空串(模板保底空值) -> 中性分 0.5 不误报', () => {
+    const anchors: VoucherAnchors = { amount: 1000, quantityTon: 10, date: '2024-07-15' };
+    const contract = ledger('HT-2024-001', { 金额: '', 数量: '', 交货日期: '' });
+    const proposals = generateBindingProposals(anchors, [contract]);
+    expect(proposals[0]!.evidence.amountScore).toBe(0.5);
+    expect(proposals[0]!.evidence.qtyScore).toBe(0.5);
+    expect(proposals[0]!.evidence.timeScore).toBe(0.5);
+  });
+
   it('买卖方向错配 -> partyScore 0', () => {
     const anchors: VoucherAnchors = {
       buyer: '内蒙古伊泰煤炭股份有限公司',
