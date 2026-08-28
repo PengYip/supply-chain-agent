@@ -5,6 +5,7 @@ import {
   Bot,
   User,
   AlertCircle,
+  BookOpen,
   CheckCircle2,
   Loader2,
   Database,
@@ -317,6 +318,8 @@ const RealToolStep: React.FC<{
   // generic one-line result box. The error shape ({status:'error'}) and any
   // other output fall back to the generic box below.
   const reviewPayload = isReviewResult(step.toolName, step.result)
+  // load_skill 成功结果走专属 SkillCard(2026-08-28 Skill 化); 失败回落通用框。
+  const skillPayload = isSkillPayload(step.toolName, step.result)
   return (
     <div className="flex items-start gap-3 py-2">
       <div className="relative flex flex-col items-center">
@@ -341,7 +344,9 @@ const RealToolStep: React.FC<{
         ) : (
           <>
             {isCompleted && step.result !== undefined && (
-              reviewPayload ? (
+              skillPayload ? (
+                <SkillCard payload={skillPayload} />
+              ) : reviewPayload ? (
                 <DocumentReviewCard payload={reviewPayload} onOpenBindings={onOpenBindings} />
               ) : (
                 <ToolResultBox result={step.result} />
@@ -369,6 +374,80 @@ function isReviewResult(toolName: string, result: unknown): DocumentReviewPayloa
   if (r.status === 'error') return null
   if (typeof r.docId !== 'string') return null
   return r as unknown as DocumentReviewPayload
+}
+
+// ── load_skill 专属卡(2026-08-28 Skill 化) ────────────────────────────
+// 技能装载不是业务数据查询而是装载一套标准作业流程, 用区别于通用结果框的
+// 样式呈现(主色调 + 文档图标 + SKILL 徽标 + 全文 markdown 可折叠)。
+// success:false(未登记名/逃逸路径)不走此卡, 回落通用框以暴露错误信息。
+
+interface SkillPayload {
+  name: string
+  file?: string
+  description: string
+  content: string
+  files: string[]
+  truncated: boolean
+}
+
+function isSkillPayload(toolName: string, result: unknown): SkillPayload | null {
+  if (toolName !== 'load_skill') return null
+  if (result === null || typeof result !== 'object') return null
+  const r = result as Record<string, unknown>
+  if (r.success !== true) return null
+  if (typeof r.name !== 'string' || typeof r.content !== 'string') return null
+  return {
+    name: r.name,
+    file: typeof r.file === 'string' ? r.file : undefined,
+    description: typeof r.description === 'string' ? r.description : '',
+    content: r.content,
+    files: Array.isArray(r.files) ? r.files.filter((f): f is string => typeof f === 'string') : [],
+    truncated: r.truncated === true,
+  }
+}
+
+const SkillCard: React.FC<{ payload: SkillPayload }> = ({ payload }) => {
+  const [expanded, setExpanded] = useState(false)
+  const isRef = payload.file !== undefined
+  return (
+    <div className="mt-1.5 rounded-lg border border-primary-500/30 bg-primary-500/5 px-3 py-2">
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <BookOpen className="w-3.5 h-3.5 text-primary-500 shrink-0" />
+        <span className="text-xs font-semibold text-ink">
+          {isRef ? `技能参考 · ${payload.name}/${payload.file}` : `技能已装载 · ${payload.name}`}
+        </span>
+        <span className="text-[10px] font-mono text-primary-500 bg-white/60 rounded px-1 py-0.5 border border-primary-500/30">
+          SKILL
+        </span>
+        {payload.truncated && (
+          <span className="text-[10px] text-amber-600 bg-white/60 rounded px-1 py-0.5 border border-line">已截断</span>
+        )}
+      </div>
+      {!isRef && payload.description && (
+        <div className="mt-1 text-[11px] text-ink-soft leading-relaxed">{payload.description}</div>
+      )}
+      {!isRef && payload.files.length > 0 && (
+        <div className="mt-1.5 flex items-center gap-1 flex-wrap">
+          <span className="text-[10px] text-ink-soft">附属文件:</span>
+          {payload.files.map((f) => (
+            <span key={f} className="text-[10px] font-mono text-primary-500 bg-white/60 rounded px-1 py-0.5 border border-line/60">
+              {f}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className={clsx('mt-1.5 pr-1', expanded ? 'max-h-80 overflow-auto' : 'line-clamp-3')}>
+        <MarkdownContent>{payload.content}</MarkdownContent>
+      </div>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="mt-1 text-[11px] text-primary-500 hover:text-primary transition-colors"
+      >
+        {expanded ? '收起全文' : '展开全文'}
+      </button>
+    </div>
+  )
 }
 
 export const RealMessageItem: React.FC<{

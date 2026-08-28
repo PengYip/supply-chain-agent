@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   discoverSkills, discoverSkillsFrom, loadSkillFrom, loadSkillByName, resetSkillCache, buildSkillIndexSection,
+  listSkillFilesFrom, listSkillFiles, loadSkillFileFrom, loadSkillFileByName,
 } from '../../src/harness/skillDiscovery.js';
 
 // Skill 发现层单测(2026-08-28 Skill 化): frontmatter 解析/坏技能跳过/按名加载/索引段。
@@ -78,5 +79,42 @@ describe('skillDiscovery', () => {
     expect(section).toContain('可用技能');
     expect(section).toContain('demo-skill');
     expect(section).toContain('load_skill');
+  });
+
+  it('listSkillFilesFrom: 列出附属文件(含子目录), 不含 SKILL.md; 未知名 -> 空', () => {
+    mkdirSync(join(root, 'demo-skill', 'references', 'sub'), { recursive: true });
+    writeFileSync(join(root, 'demo-skill', 'SKILL.md'), GOOD, 'utf-8');
+    writeFileSync(join(root, 'demo-skill', 'references', 'a.md'), 'A', 'utf-8');
+    writeFileSync(join(root, 'demo-skill', 'references', 'sub', 'b.md'), 'B', 'utf-8');
+    writeFileSync(join(root, 'demo-skill', 'notes.txt'), 'N', 'utf-8');
+    const files = listSkillFilesFrom(root, 'demo-skill');
+    expect(files).toEqual(['notes.txt', 'references/a.md', 'references/sub/b.md']);
+    expect(listSkillFilesFrom(root, 'nope')).toEqual([]);
+  });
+
+  it('loadSkillFileFrom: 命中读全文; 逃逸/绝对路径/未登记 -> null', () => {
+    mkdirSync(join(root, 'demo-skill', 'references'), { recursive: true });
+    writeFileSync(join(root, 'demo-skill', 'SKILL.md'), GOOD, 'utf-8');
+    writeFileSync(join(root, 'demo-skill', 'references', 'a.md'), '参考内容A', 'utf-8');
+    writeFileSync(join(root, '..', 'outside.md'), 'SECRET', 'utf-8');
+    expect(loadSkillFileFrom('demo-skill', 'references/a.md', root)?.content).toBe('参考内容A');
+    expect(loadSkillFileFrom('demo-skill', '../outside.md', root)).toBeNull();
+    expect(loadSkillFileFrom('demo-skill', '/etc/passwd', root)).toBeNull();
+    expect(loadSkillFileFrom('demo-skill', 'C:/win/x.md', root)).toBeNull();
+    expect(loadSkillFileFrom('demo-skill', 'a\\b.md', root)).toBeNull();
+    expect(loadSkillFileFrom('demo-skill', 'references/none.md', root)).toBeNull();
+    expect(loadSkillFileFrom('nope', 'references/a.md', root)).toBeNull();
+  });
+
+  it('loadSkillFileByName 走默认目录: 真实技能的参考文件可读且显式截断', async () => {
+    resetSkillCache();
+    const skills = discoverSkills();
+    if (!skills.some((s) => s.name === 'settlement-valuation')) return;
+    const files = await listSkillFiles('settlement-valuation');
+    if (files.length === 0) return;
+    const def = await loadSkillFileByName('settlement-valuation', files[0]!);
+    expect(def?.path).toBe(`skills/settlement-valuation/${files[0]}`);
+    expect(typeof def?.content).toBe('string');
+    expect(await loadSkillFileByName('settlement-valuation', '../escape.md')).toBeNull();
   });
 });

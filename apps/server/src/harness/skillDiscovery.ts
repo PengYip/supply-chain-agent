@@ -73,6 +73,103 @@ export async function loadSkillByName(name: string): Promise<SkillDefinition | n
   return readEntry(entry);
 }
 
+// ── 附属文件(references 契约, 2026-08-28) ────────────────────────────
+// SKILL.md 之外的技能目录内文件(如 references/*.md)。防逃逸是双重的:
+//   (1) sanitizeRelFile 拒绝绝对路径/盘符/反斜杠/.. 段;
+//   (2) 读取前经"目录实时扫描白名单"二次校验, 不在清单内的名字一律拒绝。
+// 超长文件显式截断并标注截断量(禁止静默截断)。
+
+/** 显式截断阈值(字符)。超出部分丢弃并在文末标注, 供模型如实告知用户。 */
+const MAX_SKILL_FILE_CHARS = 64 * 1024;
+
+/** 相对路径清洗: 通过返回规范化 posix 相对路径, 不通过返回 null。 */
+function sanitizeRelFile(file: string): string | null {
+  if (typeof file !== 'string' || file.length === 0 || file.length > 256) return null;
+  if (file.includes('\\')) return null;
+  if (file.startsWith('/') || /^[a-zA-Z]:/.test(file)) return null;
+  const parts = file.split('/');
+  if (parts.some((p) => p === '' || p === '.' || p === '..')) return null;
+  return parts.join('/');
+}
+
+function listFilesSync(absDir: string, relPrefix: string, out: string[]): void {
+  let names: string[];
+  try {
+    names = readdirSync(absDir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const abs = join(absDir, name);
+    let isDir = false;
+    try {
+      isDir = statSync(abs).isDirectory();
+    } catch {
+      continue;
+    }
+    if (isDir) {
+      listFilesSync(abs, `${relPrefix}${name}/`, out);
+    } else if (name !== 'SKILL.md') {
+      out.push(`${relPrefix}${name}`);
+    }
+  }
+}
+
+/** 技能目录内附属文件清单(posix 相对路径, 排序确定, 不含 SKILL.md)。 */
+export function listSkillFilesFrom(root: string, name: string): string[] {
+  const absDir = join(root, name);
+  if (!existsSync(absDir)) return [];
+  const out: string[] = [];
+  listFilesSync(absDir, '', out);
+  return out.sort();
+}
+
+/** 默认目录版 listSkillFilesFrom(未登记技能 -> 空数组)。 */
+export async function listSkillFiles(name: string): Promise<string[]> {
+  if (!cache) cache = scanSync(skillsRoot());
+  if (!cache.some((e) => e.name === name)) return [];
+  return listSkillFilesFrom(skillsRoot(), name);
+}
+
+export interface SkillFileDefinition {
+  path: string;
+  content: string;
+  truncated: boolean;
+}
+
+function readSkillFileAbs(absFile: string, displayPath: string): SkillFileDefinition | null {
+  let raw: string;
+  try {
+    raw = readFileSync(absFile, 'utf-8');
+  } catch {
+    return null;
+  }
+  if (raw.length > MAX_SKILL_FILE_CHARS) {
+    return {
+      path: displayPath,
+      content: `${raw.slice(0, MAX_SKILL_FILE_CHARS)}\n\n[已截断: 原文 ${raw.length} 字符, 仅保留前 ${MAX_SKILL_FILE_CHARS}; 请拆分该参考文件]`,
+      truncated: true,
+    };
+  }
+  return { path: displayPath, content: raw, truncated: false };
+}
+
+/** root 注入版: 清洗 + 白名单双重校验后读取附属文件; 任何不过关返回 null。 */
+export function loadSkillFileFrom(name: string, file: string, root: string): SkillFileDefinition | null {
+  const rel = sanitizeRelFile(file);
+  if (!rel) return null;
+  const allowed = listSkillFilesFrom(root, name);
+  if (!allowed.includes(rel)) return null;
+  return readSkillFileAbs(join(root, name, ...rel.split('/')), `skills/${name}/${rel}`);
+}
+
+/** 默认目录版: load_skill 工具的 file 参数走这里。 */
+export async function loadSkillFileByName(name: string, file: string): Promise<SkillFileDefinition | null> {
+  if (!cache) cache = scanSync(skillsRoot());
+  if (!cache.some((e) => e.name === name)) return null;
+  return loadSkillFileFrom(name, file, skillsRoot());
+}
+
 function scanSync(root: string): Entry[] {
   let dirNames: string[];
   try {
