@@ -3,6 +3,7 @@ import { useSessionMessages } from '../hooks/useSessionMessages'
 import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, Paperclip, Check, Star } from 'lucide-react'
 import { getFavorite, setFavorite, clearFavorite, type FavoriteProbe } from '../api/favorites'
 import { RealMessageItem, ErrorMessage } from './RealMessageItem'
+import AutoGrowTextarea from './AutoGrowTextarea'
 import { HumanAgentStatusBar } from './HumanAgentStatusBar'
 import { useHumanAgentStatus } from '../hooks/useHumanAgentStatus'
 import { type ContextFile } from '../hooks/useFiles'
@@ -903,7 +904,7 @@ export const RealChatView: React.FC<{
             >
               <Paperclip className="w-4 h-4" />
             </button>
-            <textarea
+            <AutoGrowTextarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -914,7 +915,8 @@ export const RealChatView: React.FC<{
               }}
               placeholder="试试：查一下合同 HT-2024-001 的执行情况"
               rows={1}
-              className="flex-1 min-h-[44px] max-h-[120px] p-2.5 rounded-lg border border-line text-sm text-ink placeholder:text-ink-soft focus:outline-none focus:border-primary-500 resize-none"
+              maxHeight={200}
+              className="flex-1 min-h-[44px] p-2.5 rounded-lg border border-line text-sm text-ink placeholder:text-ink-soft focus:outline-none focus:border-primary-500"
             />
             <button
               type="submit"
