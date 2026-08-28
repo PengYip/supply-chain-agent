@@ -9,7 +9,7 @@ beforeEach(() => { resetSkillCache(); });
 
 function execute(input: unknown): Promise<Record<string, unknown>> {
   const t = buildLoadSkillTool();
-  return t.execute!.call({ toolCallId: 't', messages: [] }, input as never, {} as never) as Promise<Record<string, unknown>>;
+  return t.execute!.call({ toolCallId: 't', messages: [] }, input as never, {} as never) as unknown as Promise<Record<string, unknown>>;
 }
 
 describe('load_skill tool', () => {
