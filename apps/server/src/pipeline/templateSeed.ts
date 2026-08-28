@@ -6,30 +6,36 @@ import { ensureEdgeRule, ensureTemplateType } from './db/repositories.js';
 /** doc_type 种子——类型划分 v2(spec 2026-08-26 §3.1, 业务确认 2026-08-26)。
  *  Phase 1 登记全树(类型是被动注册表, 不影响行为); 新类型的边规则登记不启用。
  *  旧 8 类全部保留(分类器仍在用, 行为零变化); 提单/装箱单挂货转单下待 Phase 2 并入;
- *  化验报告→质检报告更名, 旧名保留; 发票保留为发票凭证的合法粗类。 */
+ *  化验报告→质检报告更名, 旧名保留; 发票保留为发票凭证的合法粗类。
+ *  v2.1(spec 2026-08-28 双分支解析): 履约凭证下新增 重量凭证 中间节点, 收编
+ *  汽运磅单/轨道衡称重单(id 不变, 边规则按类型名引用不受重挂影响), 新增叶子
+ *  水尺计重单。formTypes props = 表单类型->业务类型映射(VLM 分类的数据源,
+ *  见 formTypeRegistry.ts)。 */
 const DOC_TYPE_SEED: Array<{ name: string; parent?: string; props?: Record<string, unknown> }> = [
-  { name: '合同', props: { requiredFields: ['合同号', '甲方', '乙方', '标的物', '数量', '单位', '金额', '签订日'], fieldHints: { 合同号: '合同编号/合同号', 甲方: '买方/甲方', 乙方: '卖方/乙方' } } },
+  { name: '合同', props: { requiredFields: ['合同号', '甲方', '乙方', '标的物', '数量', '单位', '金额', '签订日'], fieldHints: { 合同号: '合同编号/合同号', 甲方: '买方/甲方', 乙方: '卖方/乙方' }, formTypes: ['合同扫描件'] } },
   { name: '补充合同', parent: '合同' },
   { name: '立项书', props: { bindsTargetKind: 'Project' } },
   { name: '履约凭证' },
-  { name: '货转单', parent: '履约凭证' },
+  { name: '重量凭证', parent: '履约凭证' },
+  { name: '货转单', parent: '履约凭证', props: { formTypes: ['货权转移证明'] } },
   { name: '提单', parent: '货转单', props: { aliasOf: '货转单' } },
   { name: '装箱单', parent: '货转单', props: { aliasOf: '货转单' } },
   { name: '质检报告', parent: '履约凭证' },
-  { name: '化验报告', parent: '质检报告' },
-  { name: '结算单', parent: '履约凭证' },
+  { name: '化验报告', parent: '质检报告', props: { formTypes: ['化验报告'] } },
+  { name: '结算单', parent: '履约凭证', props: { formTypes: ['结算单'] } },
   { name: '运输凭证', parent: '履约凭证' },
-  { name: '收货单', parent: '运输凭证' },
+  { name: '收货单', parent: '运输凭证', props: { formTypes: ['货物交接清单'] } },
   { name: '发货单', parent: '运输凭证' },
-  { name: '汽运磅单', parent: '运输凭证' },
-  { name: '火运大票', parent: '运输凭证' },
-  { name: '轨道衡称重单', parent: '运输凭证' },
-  { name: '派船通知单', parent: '运输凭证' },
+  { name: '汽运磅单', parent: '重量凭证', props: { formTypes: ['汽车过磅单票据'] } },
+  { name: '火运大票', parent: '运输凭证', props: { formTypes: ['火运大票'] } },
+  { name: '轨道衡称重单', parent: '重量凭证', props: { formTypes: ['轨道衡称重记录'] } },
+  { name: '水尺计重单', parent: '重量凭证', props: { formTypes: ['水尺计重单'] } },
+  { name: '派船通知单', parent: '运输凭证', props: { formTypes: ['派船通知单'] } },
   { name: '资金凭证', parent: '履约凭证' },
   { name: '付款单', parent: '资金凭证' },
-  { name: '付款凭证', parent: '资金凭证' },
+  { name: '付款凭证', parent: '资金凭证', props: { formTypes: ['银行回单'] } },
   { name: '发票凭证', parent: '履约凭证' },
-  { name: '发票', parent: '发票凭证' },
+  { name: '发票', parent: '发票凭证', props: { formTypes: ['发票'] } },
   { name: '进项票', parent: '发票凭证' },
   { name: '销项票', parent: '发票凭证' },
   { name: '其他', parent: '履约凭证' },
@@ -81,6 +87,10 @@ const EDGE_RULE_SEED: Array<{
   { id: 'er-settle-huoyun', src: '火运大票', edge: 'settles', vocab: ['收货', '发货'] },
   { id: 'er-settle-guidaocheng', src: '轨道衡称重单', edge: 'settles', vocab: ['收货', '发货'] },
   { id: 'er-settle-paichuan', src: '派船通知单', edge: 'settles', vocab: ['收货', '发货'] },
+  // v2.1(spec 2026-08-28): 重量凭证组登记不启用——水尺计重单与中间节点 重量凭证
+  // 的 settles 词表对齐 运输三类型先例, 激活随 Phase 2 模板管理评估。
+  { id: 'er-settle-shuichi', src: '水尺计重单', edge: 'settles', vocab: ['收货', '发货'], active: false },
+  { id: 'er-settle-zhongliang', src: '重量凭证', edge: 'settles', vocab: ['收货', '发货'], active: false },
   // 付款单(申请单, 付款前): 登记不启用——不物化资金流(它不是支付证据)
   { id: 'er-bind-fukuandan', src: '付款单', edge: 'binds', vocab: ['付款申请'], active: false },
   // 结算单: 合同级结算凭证

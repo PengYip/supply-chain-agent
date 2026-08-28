@@ -59,4 +59,21 @@ describe('template seed', () => {
     const b = (await listTemplateTypes(ctx)).length + (await listActiveEdgeRules(ctx)).length;
     expect(b).toBe(a);
   });
+
+  it('v2.1: 重量凭证中间节点收编汽运磅单/轨道衡称重单, 新增水尺计重单 + formTypes', async () => {
+    await ensureTemplateSeed(ctx);
+    const rows = await listTemplateTypes(ctx);
+    const byName = new Map(rows.filter((r) => r.kind === 'doc_type').map((r) => [r.name, r]));
+    expect(byName.get('重量凭证')?.parentId).toBe('dt-履约凭证');
+    expect(byName.get('汽运磅单')?.parentId).toBe('dt-重量凭证');
+    expect(byName.get('轨道衡称重单')?.parentId).toBe('dt-重量凭证');
+    expect(byName.get('水尺计重单')?.parentId).toBe('dt-重量凭证');
+    expect(byName.get('汽运磅单')?.props.formTypes).toContain('汽车过磅单票据');
+    expect(byName.get('轨道衡称重单')?.props.formTypes).toContain('轨道衡称重记录');
+    expect(byName.get('水尺计重单')?.props.formTypes).toContain('水尺计重单');
+    expect(byName.get('合同')?.props.formTypes).toContain('合同扫描件');
+    // 登记不启用的边规则不进活跃列表
+    const active = await listActiveEdgeRules(ctx);
+    expect(active.find((r) => r.edgeType === 'settles' && r.sourceTypeId === 'dt-水尺计重单')).toBeUndefined();
+  });
 });
