@@ -86,6 +86,14 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'todo',
     persist: 'session', risk: { level: 'L1', injection: 'safe' },
   },
+  // 2026-08-28 Skill 化: load_skill 返回仓库内置技能文档全文(随代码部署、
+  // git 审阅的内部流程知识, 非外部文档文本) -> output 'raw' / injection 'safe'。
+  // budget 'full': 全文加载是本工具的存在意义, 截断即失效(与 escalate 同理)。
+  // 只读 -> signal 'counter'; 不落任何业务存储, 内容只活在对话里 -> persist 'session'。
+  load_skill: {
+    output: 'raw', budget: 'full', signal: 'counter',
+    persist: 'session', risk: { level: 'L1', injection: 'safe' },
+  },
   verify_document_fields: {
     output: 'tagged', budget: 'summary', signal: 'counter',
     persist: 'session', risk: { level: 'L1', injection: 'external' },

@@ -18,6 +18,7 @@ const EXPECTED_TOOLS = [
   'query_orders',
   'cross_check',
   'escalate_to_human',
+  'load_skill',
   'verify_document_fields',
   'ingest_document',
   'extract_fields',
