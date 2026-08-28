@@ -27,6 +27,18 @@ import { env } from '../env.js';
 // MVP roles. Later phases add risk / finance / management with their own toolsets.
 export type Role = 'trader';
 
+/**
+ * CubeSandbox is a deployment concern (tool-inventory methodology, 2026-08-28):
+ * mount execute_code only on deployments that explicitly opt in via
+ * CUBE_SANDBOX_ENABLED=true. Read straight off process.env (not the zod env
+ * contract) so tests / air-gapped hosts default to the safe minimal toolset --
+ * same direct-env pattern as defaultEmbedder(). Unset -> the tool is ABSENT
+ * from the list, not a runtime error the model has to stumble into.
+ */
+export function isCubeSandboxEnabled(e: NodeJS.ProcessEnv = process.env): boolean {
+  return e.CUBE_SANDBOX_ENABLED === 'true';
+}
+
 // Runtime deps threaded through tool construction. The doc-entry tools (T8) need
 // a DbContext to persist/loaded BlockModels; extract_fields additionally needs
 // an injected LanguageModel (ExtractionDeps); ingest_document + recall_documents
@@ -153,16 +165,20 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
         // recall_documents is L1: FTS5/vector/hybrid recall over ingested chunks
         // (+ optional bge-reranker precision stage from env).
         { ...buildRecallDocumentsTool({ ctx, embedder, reranker, userId }), name: 'recall_documents' },
-        // execute_code is L1: run Python in an isolated CubeSandbox microVM.
-        {
+      );
+      // execute_code is L1: run Python in an isolated CubeSandbox microVM.
+      // Env-gated: absent from the toolset unless the deployment opted in
+      // (isCubeSandboxEnabled). See docs/tool-inventory.json.
+      if (isCubeSandboxEnabled()) {
+        base.push({
           ...buildExecuteCodeTool({
             cubeApiUrl: env.CUBE_API_URL,
             sandboxDomain: env.CUBE_SANDBOX_DOMAIN,
             templateAlias: env.CUBE_TEMPLATE_ALIAS,
           }),
           name: 'execute_code',
-        },
-      );
+        });
+      }
     }
   }
   return base;

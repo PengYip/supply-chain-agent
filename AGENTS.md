@@ -228,6 +228,28 @@ server.
 - Stage only the files relevant to the current change; do not sweep in
   unrelated untracked files (e.g. stray docs/plans).
 
+## Tool design methodology
+
+Tools are governed by a verifiable methodology (2026-08-28, distilled from
+ai-agent-book ch4 + the Pi/Codex minimal-tool reference designs):
+
+- **SSOT inventory**: `docs/tool-inventory.json` — every mounted tool needs an
+  entry with `whenToUse` / `boundary` / `rationale`; removed tools go on a
+  blacklist that must never reappear; approved merges are recorded under
+  `merges.plans` before implementation.
+- **CI gate**: `apps/server/test/harness/toolInventory.test.ts` asserts a
+  bijection between the registry and the inventory, plus metadata completeness.
+  Adding a tool without an inventory entry fails CI — the surface cannot grow
+  silently.
+- **Env gating**: deployment-bound tools mount only behind an explicit flag
+  (e.g. `execute_code` needs `CUBE_SANDBOX_ENABLED=true`; unset = the tool does
+  not exist, not a runtime error).
+- **Process**: 砍死 -> 并相似 -> 挂场景 -> Skill 化。 Full write-up and the
+  five description-writing rules: `docs/tool-design-methodology.md`.
+
+When changing the tool surface, edit the inventory first, then the registry,
+then run the inventory test.
+
 ## When docs conflict with code
 
 Trust executable sources (`package.json`, `tsconfig.json`, CI, `env.ts`,

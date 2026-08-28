@@ -1,0 +1,355 @@
+{
+  "version": "2026-08-28",
+  "methodology": "docs/tool-design-methodology.md",
+  "description": "工具清单 SSOT。新增/删除/合并工具必须先改本清单（含 whenToUse/boundary/rationale），再改 registry；apps/server/test/harness/toolInventory.test.ts 断言两侧一致。",
+  "policy": {
+    "maxToolsMountedPerScenario": 10,
+    "requiresWhenToUse": true,
+    "requiresBoundary": true,
+    "statusVocabulary": ["active", "deprecated"],
+    "mountVocabulary": ["always", "env"]
+  },
+  "tools": [
+    {
+      "name": "query_orders",
+      "layer": "感知",
+      "level": "L1",
+      "status": "deprecated",
+      "mount": "always",
+      "whenToUse": "（演示遗留）按合同号查种子订单执行状态。",
+      "boundary": "数据来自硬编码种子，真实合同号永远 notFound；不做任何真实查询。",
+      "rationale": "纯演示工具，2026-08-28 工具精简第一阶段的移除对象。",
+      "removalPlan": "工具精简阶段1（砍死）：从 BASE_TOOLS_FOR_ROLE 移除并挪入 removed 黑名单。"
+    },
+    {
+      "name": "cross_check",
+      "layer": "感知",
+      "level": "L1",
+      "status": "deprecated",
+      "mount": "always",
+      "whenToUse": "（演示遗留）对种子合同做订单/发票交叉核验。",
+      "boundary": "仅种子数据，无真实数据路径。",
+      "rationale": "纯演示工具，移除对象。",
+      "removalPlan": "工具精简阶段1（砍死）：随 query_orders 一并移除。"
+    },
+    {
+      "name": "escalate_to_human",
+      "layer": "协作",
+      "level": "L1",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "检索/判定无法给出可靠结论（如合同未约定某指标）、或操作超出权限时，向用户求助并说明缺口。",
+      "boundary": "只是求助通道，不产生任何业务数据写入；不得用它替代如实说明'未命中'。",
+      "rationale": "HITL 原语，Agent 求助人工的唯一出口。"
+    },
+    {
+      "name": "verify_document_fields",
+      "layer": "感知",
+      "level": "L1",
+      "status": "deprecated",
+      "mount": "always",
+      "whenToUse": "（早期 HITL 演示）校验文档字段。",
+      "boundary": "已被 present_document_review + update_document_fields 复核闭环取代。",
+      "rationale": "功能被正式复核闭环覆盖，保留会造成双轨。",
+      "removalPlan": "工具精简阶段1：确认无流程引用后移除。"
+    },
+    {
+      "name": "query_contract",
+      "layer": "感知",
+      "level": "L1",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "查合同基本信息/枚举台账全部合同（盘点类问题必须用它，不要用 recall_documents 翻找）。",
+      "boundary": "只给台账结构化字段，不含条款原文；找原文片段用 recall_documents；未录入且无种子时如实返回。",
+      "rationale": "合同台账 SSOT 的点查/枚举入口。",
+      "mergeInto": "query_business(entity=contract)"
+    },
+    {
+      "name": "ingest_document",
+      "layer": "执行",
+      "level": "L1",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "从文件路径录入单据：解析、分块、打标、向量化、分类、自动抽取、生成绑定建议。",
+      "boundary": "只接受 INGEST_ROOT 白名单内的路径；不绑定、不写台账（绑定走 bind_document 人工确认）。",
+      "rationale": "单据录入链的入口。"
+    },
+    {
+      "name": "extract_fields",
+      "layer": "感知",
+      "level": "L1",
+      "status": "deprecated",
+      "mount": "always",
+      "whenToUse": "（遗留）对已录入文档手动重跑字段抽取。",
+      "boundary": "ingest_document 内部已自动抽取；仅在需要强制重抽时有意义。",
+      "rationale": "与 ingest 的自动抽取链重叠。",
+      "removalPlan": "工具精简阶段1：确认无独立调用场景后移除。"
+    },
+    {
+      "name": "bind_document",
+      "layer": "执行",
+      "level": "L2",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "把已录入单据绑定到合同号（用户确认后）。",
+      "boundary": "L2 需用户同意（needsApproval）；不校验业务合法性，只落绑定关系。",
+      "rationale": "绑定是台账/流水物化的前提，独立审计点。"
+    },
+    {
+      "name": "recall_documents",
+      "layer": "感知",
+      "level": "L1",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "按内容召回已录入单据片段（fts/vector/hybrid + reranker + wantTags/contractNo 过滤）。",
+      "boundary": "只能召回已录入且通过权限过滤的 chunk；未命中返回空数组，不得编造；台账结构化信息用 query_contract。",
+      "rationale": "唯一的通用文本召回入口；fullText 模式见 docs/superpowers/specs 设计。"
+    },
+    {
+      "name": "execute_code",
+      "layer": "执行",
+      "level": "L1",
+      "status": "active",
+      "mount": "env",
+      "requiresEnv": "CUBE_SANDBOX_ENABLED=true",
+      "whenToUse": "在隔离沙盒里跑 Python 做确定性计算（统计、换算、批量处理）。",
+      "boundary": "仅限 CubeSandbox 微 VM；沙盒未启用的部署上该工具不存在；不得用于绕过业务工具直接查库。",
+      "rationale": "通用计算元能力，但属部署资源；未配置时挂载只会产生必败调用，故环境门控。"
+    },
+    {
+      "name": "inspect_extraction",
+      "layer": "感知",
+      "level": "L1",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "对单个已抽取字段做证据下钻（按 span 回放原文）。",
+      "boundary": "只读、单字段粒度；不做重新抽取，不做跨字段汇总。",
+      "rationale": "字段级审计诉求，参数形态与其他查询差异大，保留独立。"
+    },
+    {
+      "name": "tag_document",
+      "layer": "执行",
+      "level": "L2",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "录入后给文档补打人工/Agent 标签。",
+      "boundary": "L2 需用户同意；只改标签不改字段。",
+      "rationale": "与 update_document_fields 同为'改文档标注'，计划并入。",
+      "mergeInto": "update_document_fields"
+    },
+    {
+      "name": "create_entity",
+      "layer": "执行",
+      "level": "L2",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "在图谱中手工创建实体节点。",
+      "boundary": "L2 需用户同意；bind/link 流水线会自动建实体，手工创建仅用于补图。",
+      "rationale": "候选精简项：自动同步（bindingGraphSync 等）可能已覆盖其场景，待评估后决定并入或移除。"
+    },
+    {
+      "name": "link_entities",
+      "layer": "执行",
+      "level": "L2",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "在图谱中手工连接两个实体。",
+      "boundary": "L2 需用户同意；业务关系优先走 bind_document/link_documents（有 SSOT 回写）。",
+      "rationale": "候选精简项：与 link_documents 职责重叠，待评估。"
+    },
+    {
+      "name": "graph_query",
+      "layer": "感知",
+      "level": "L1",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "图谱遍历查询（关系/邻域/路径）。",
+      "boundary": "只读；按 elementId 遍历，按名称找实体应先用 graph_find_entity。",
+      "rationale": "关系类问题的检索面。"
+    },
+    {
+      "name": "graph_find_entity",
+      "layer": "感知",
+      "level": "L1",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "按名称查找图谱实体，拿到 elementId 后再交给 graph_query。",
+      "boundary": "只做名称解析，不做遍历；查台账字段用 query_contract。",
+      "rationale": "graph_query 缺的'用户说名称'入口。"
+    },
+    {
+      "name": "present_document_review",
+      "layer": "感知",
+      "level": "L1",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "展示单据五维复核卡（业务类型/字段/关系/TAG/向量化）供人工确认。",
+      "boundary": "只读展示；修正要走 update_document_fields。",
+      "rationale": "复核闭环的读取半边。"
+    },
+    {
+      "name": "update_document_fields",
+      "layer": "执行",
+      "level": "L2",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "应用用户对抽取字段的修正（人工确认后）。",
+      "boundary": "L2 需用户同意；只改字段值，不做重新解析。",
+      "rationale": "复核闭环的写入半边；计划吸收 tag_document。"
+    },
+    {
+      "name": "list_binding_proposals",
+      "layer": "感知",
+      "level": "L1",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "查询待确认的凭证-合同绑定建议。",
+      "boundary": "只读建议列表；确认走 bind_document。",
+      "rationale": "绑定闭环的读取半边。"
+    },
+    {
+      "name": "query_execution_flows",
+      "layer": "感知",
+      "level": "L1",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "查某合同的六向执行流水（资金/货物/发票 x 进/出）汇总与逐笔明细。",
+      "boundary": "只读物化结果；流水在绑定确认后才存在。",
+      "rationale": "执行视图 SSOT 点查。",
+      "mergeInto": "query_business(entity=flow)"
+    },
+    {
+      "name": "project_rollup",
+      "layer": "感知",
+      "level": "L1",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "按项目编号汇总合同金额、毛差、应收应付、流水与校验提示。",
+      "boundary": "项目维度聚合；单合同明细用 query_contract/query_execution_flows。",
+      "rationale": "项目报表聚合。",
+      "mergeInto": "query_business(entity=project)"
+    },
+    {
+      "name": "link_contracts",
+      "layer": "执行",
+      "level": "L2",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "建立背靠背购销合同对应关系（correlates）。",
+      "boundary": "L2 需用户同意；只处理 correlates 关系。",
+      "rationale": "与 link_projects/link_amends 同一实现（GraphLinkKind 三选一），计划三合一。",
+      "mergeInto": "link_documents(relation=correlates)"
+    },
+    {
+      "name": "link_projects",
+      "layer": "执行",
+      "level": "L2",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "建立合同与项目的关联（relates）。",
+      "boundary": "L2 需用户同意；只处理 relates 关系。",
+      "rationale": "同上，计划三合一。",
+      "mergeInto": "link_documents(relation=relates)"
+    },
+    {
+      "name": "link_amends",
+      "layer": "执行",
+      "level": "L2",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "建立补充合同对主合同的修订关系（amends）。",
+      "boundary": "L2 需用户同意；只处理 amends 关系。",
+      "rationale": "同上，计划三合一。",
+      "mergeInto": "link_documents(relation=amends)"
+    },
+    {
+      "name": "template_overview",
+      "layer": "感知",
+      "level": "L1",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "查看单据模板类型层级、允许挂接的合同类型与字段词表。",
+      "boundary": "只读；维护走 manage_template。",
+      "rationale": "模板体系读取面。",
+      "mergeInto": "query_business(entity=template)"
+    },
+    {
+      "name": "manage_template",
+      "layer": "执行",
+      "level": "L2",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "模板维护唯一写入面（新增类型/改词表/软禁用激活）。",
+      "boundary": "L2 需用户同意；不做文档级操作。",
+      "rationale": "模板写入面需独立审计。"
+    },
+    {
+      "name": "manage_quota",
+      "layer": "执行",
+      "level": "L2",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "两层额度的创建/调整/停用。",
+      "boundary": "L2 需用户同意；只改额度定义，占用查询走 query_quota_usage。",
+      "rationale": "额度写入面需独立审计。"
+    },
+    {
+      "name": "query_quota_usage",
+      "layer": "感知",
+      "level": "L1",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "只读查询额度占用（读对账桥物化结果）。",
+      "boundary": "只读物化；调整额度走 manage_quota。",
+      "rationale": "额度读取面。",
+      "mergeInto": "query_business(entity=quota)"
+    },
+    {
+      "name": "gather_settlement_evidence",
+      "layer": "感知",
+      "level": "L1",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "结算取证：一次打包合同条款+数量流水+质量凭证+历史结算，作为结算计算前的必经步骤。",
+      "boundary": "只取证不计算、不落库；确认结算走 confirm_settlement。",
+      "rationale": "高频复合取证包，合并进 query_business 会破坏其'一次给齐'语义。"
+    },
+    {
+      "name": "confirm_settlement",
+      "layer": "执行",
+      "level": "L2",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "结算结果经人工确认后落 settlement_records 台账（金额锚点）。",
+      "boundary": "L2 需用户同意；只落已确认结果，不做金额计算。",
+      "rationale": "金额锚点写入，必须独立审计。"
+    }
+  ],
+  "removed": [
+    {
+      "name": "create_payment",
+      "reason": "系统内无资金类工具闭环（历史 BASE 工具，早已移除）。",
+      "removedOn": "早于 2026-08-28，登记进黑名单防止回潮。"
+    }
+  ],
+  "merges": {
+    "description": "已批准、尚未实施的合并计划（工具精简阶段2）。合并落地后：旧名从 tools 挪入 removed，新工具以完整条目登记。",
+    "plans": [
+      {
+        "target": "query_business",
+        "absorbs": ["query_contract", "query_execution_flows", "project_rollup", "query_quota_usage", "template_overview"],
+        "rationale": "结构化 SSOT 的点查/枚举/汇总，功能相似+场景重叠+参数简单 -> 统一入口+entity 类型参数。"
+      },
+      {
+        "target": "link_documents",
+        "absorbs": ["link_contracts", "link_projects", "link_amends"],
+        "rationale": "同一 GraphLinkKind 实现的三个人为拆分。"
+      },
+      {
+        "target": "update_document_fields",
+        "absorbs": ["tag_document"],
+        "rationale": "同为'改文档标注'的 L2 写。"
+      }
+    ]
+  }
+}

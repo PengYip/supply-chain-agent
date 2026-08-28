@@ -3,6 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ModelMessage } from 'ai';
 import { runStream, buildGatedTools } from '../../src/harness/agent.js';
+import { isCubeSandboxEnabled } from '../../src/harness/roleToolRegistry.js';
 import { createDb, migrate } from '../../src/pipeline/db/client.js';
 import { env } from '../../src/env.js';
 
@@ -125,8 +126,10 @@ describe('agent e2e loop (stub model)', () => {
     // link_contracts + link_projects = 23; 2026-08-26 模板 adds link_amends = 24;
     // template_overview = 25; manage_quota/query_quota_usage = 27;
     // 2026-08-28 P4 adds manage_template = 28; 2026-08-27 §15 adds
-    // gather_settlement_evidence/confirm_settlement = 30.
-    expect(capturedNames).toHaveLength(30);
+    // gather_settlement_evidence/confirm_settlement = 30; 2026-08-28
+    // tool-inventory methodology env-gates execute_code behind
+    // CUBE_SANDBOX_ENABLED (default off) -> 29 + (gated ? 1 : 0).
+    expect(capturedNames).toHaveLength(29 + (isCubeSandboxEnabled() ? 1 : 0));
     for (const n of ['ingest_document', 'extract_fields', 'bind_document', 'query_contract', 'escalate_to_human', 'recall_documents', 'project_rollup']) {
       expect(capturedNames).toContain(n);
     }
