@@ -188,6 +188,9 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     // {contractNo, _summarized: true} and could not answer). 'snippets' keeps the
     // first 10 matches' document_id/chunk_index/snippet(<=500)/source so the model
     // can actually read the retrieved content. signal 'counter' (a read).
+    // fullText mode (2026-08-28 spec): short docs additionally carry
+    // mode/documents[]/degradedDocIds -- compressSnippetsOutput preserves those
+    // (the per-document texts are the evidence, bounded <=16K chars upstream).
     // persist 'vector' is CONCEPTUAL here: v1 stores the index in FTS5 (not
     // pgvector/sqlite-vec); the field marks the recall layer's logical target for
     // when the vector path lands.

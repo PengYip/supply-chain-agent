@@ -295,6 +295,51 @@ export function GraphCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 容器尺寸变化(面板折叠/展开的 transition-[width]、窗口缩放)。G6 的
+  // autoResize 只监听 window resize 事件, 不观察容器 —— 侧栏开合后画布表面
+  // 不同步, 会以旧宽度溢出盖住相邻侧栏; 窗口缩放时相机(zoom/translate)也不动。
+  // 这里监听容器尺寸, 尺寸稳定后: (1) 显式 graph.resize 双向同步表面;
+  // (2) 把「旧视口中心处的内容点」平移回新视口中心 —— 保持用户正在看的节点
+  // 不跑位(fitCenter 会跳到整图中心, 丢失当前焦点)。
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    // 上一次同步过的稳定尺寸, 作为焦点取样视口
+    let stableW = el.clientWidth;
+    let stableH = el.clientHeight;
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth === stableW && el.clientHeight === stableH) return;
+      if (timer) clearTimeout(timer);
+      // 宽度有 200ms 过渡: 等尺寸稳定再处理一次, 避免过渡帧反复重排。
+      timer = setTimeout(() => {
+        timer = null;
+        const graph = graphRef.current;
+        const w = el.clientWidth;
+        const h = el.clientHeight;
+        if (!graph || (w === stableW && h === stableH)) return;
+        try {
+          graph.resize(w, h);
+          const [cw, ch] = graph.getSize();
+          const focusCanvas = graph.getCanvasByViewport([stableW / 2, stableH / 2]);
+          const vp = graph.getViewportByCanvas(focusCanvas);
+          const dx = cw / 2 - vp[0];
+          const dy = ch / 2 - vp[1];
+          if (Number.isFinite(dx) && Number.isFinite(dy)) graph.translateBy([dx, dy]);
+        } catch (e) {
+          console.warn('[graph] resize recenter failed', e);
+        }
+        stableW = w;
+        stableH = h;
+      }, 250);
+    });
+    ro.observe(el);
+    return () => {
+      if (timer) clearTimeout(timer);
+      ro.disconnect();
+    };
+  }, []);
+
   // 过滤条件变化: 重算布局后整页 setData 重绘(不重建实例)。
   useEffect(() => {
     const graph = graphRef.current;

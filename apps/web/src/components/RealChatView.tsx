@@ -456,6 +456,38 @@ export const RealChatView: React.FC<{
   const [callbackError, setCallbackError] = useState<string | null>(null)
   const [lastApprovalApproved, setLastApprovalApproved] = useState(true)
   const [lastApprovalKind, setLastApprovalKind] = useState<'L2' | 'L3'>('L3')
+
+  // 服务端权威 pending 名单(L2 approvalId + L3 ticketId; null = 尚未加载)。
+  // 持久化消息的 part 在审批解决后仍保持 approval-requested / blocked 终态
+  // (L3 blocked 输出从不回写; L2 在 resume run 失败时残留), 仅凭 part 状态
+  // 判断会让已确认过的卡片在从历史恢复会话时再次弹出 —— 卡片可见性以
+  // pending_approvals 表为准(GET /api/sessions/:id/pending-approvals)。
+  const [approvalsPendingIds, setApprovalsPendingIds] = useState<Set<string> | null>(null)
+  const refreshPendingApprovals = useCallback(() => {
+    if (!liveSessionId) {
+      setApprovalsPendingIds(null)
+      return
+    }
+    fetch(`/api/sessions/${encodeURIComponent(liveSessionId)}/pending-approvals`)
+      .then(async (res) => (res.ok ? ((await res.json()) as { pendingApprovalIds?: string[] }) : null))
+      .then((data) => {
+        setApprovalsPendingIds(new Set(Array.isArray(data?.pendingApprovalIds) ? data.pendingApprovalIds : []))
+      })
+      .catch(() => {
+        /* 保留当前名单; 下一个触发点(run 结束/重进会话)重试 */
+      })
+  }, [liveSessionId])
+  // 会话切换: 名单作废, 等空闲拉取(下方 effect 在 isBusy=false 时执行)。
+  useEffect(() => {
+    setApprovalsPendingIds(null)
+  }, [liveSessionId])
+  // 名单在空闲时拉取/刷新: run 期间审批可能被记录或解决(L2 记录在 run 收尾
+  // 才落库, L3 工单在 execute 中落库), 忙碌期名单必然失真, 不拉。
+  useEffect(() => {
+    if (isBusy) return
+    refreshPendingApprovals()
+  }, [isBusy, refreshPendingApprovals])
+
   // 复核卡的选项与补充意见（choice + note 作为一条人工判断原子提交）。
   const [reviewChoice, setReviewChoice] = useState<'approve' | 'deny' | null>(null)
   const [reviewNote, setReviewNote] = useState('')
@@ -553,7 +585,15 @@ export const RealChatView: React.FC<{
 
   // 复核卡展示数据：escalate 入参优先（issue 是抛给人的问题），缺失时回退
   // 到工具返回的 blocked.message。
-  const pendingL3 = pendingApproval && pendingApproval.kind === 'L3' ? pendingApproval : null
+  const pendingL3Raw = pendingApproval && pendingApproval.kind === 'L3' ? pendingApproval : null
+  // 恢复防重放门: 运行中放行(实时升级的工单尚未进名单); 空闲时以名单为准 —
+  // 名单已加载且不含该工单 => 服务端已解决, 不再弹卡; 名单未加载 => 暂不出卡
+  // (避免已解决卡片闪现)。真实待办只延迟一个请求往返。
+  const pendingL3 =
+    pendingL3Raw &&
+    (isBusy || (approvalsPendingIds !== null && approvalsPendingIds.has(pendingL3Raw.ticketId)))
+      ? pendingL3Raw
+      : null
   const escalateInfo = pendingL3 ? parseEscalateArgs(pendingL3.args) : null
   const issueText = pendingL3 ? (escalateInfo?.issue || pendingL3.message || '').trim() : ''
 
@@ -758,6 +798,7 @@ export const RealChatView: React.FC<{
               key={item.id}
               item={item}
               isStreaming={isStreaming && item.role === 'assistant' && item.id === renderItems[renderItems.length - 1]?.id}
+              approvalsPendingIds={approvalsPendingIds}
               onApprove={handleApprove}
               onDeny={handleDeny}
               onOpenBindings={onOpenBindings}
