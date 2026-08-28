@@ -10,6 +10,7 @@ import {
   updateQuotaUsed, type QuotaRow,
 } from './db/repositories.js';
 import { rollupProject } from './projectRollup.js';
+import { isEmptyValue, firstNonEmpty } from './fieldValue.js';
 import { writeQuotaUsageToGraph } from './quotaGraphSync.js';
 import { updateNodeProps, findEntities } from '../graph/repo.js';
 import { normalizeCompanyName } from '../domain/flowDirection.js';
@@ -88,7 +89,7 @@ export const defaultReconcileGraphIo: ReconcileGraphIo = {
 };
 
 function parseAmount(raw: string | number | undefined): number | null {
-  if (raw === undefined) return null;
+  if (raw === undefined || isEmptyValue(raw)) return null;
   const n = typeof raw === 'number' ? raw : Number(String(raw).replace(/[,，\s]/g, ''));
   return Number.isFinite(n) ? n : null;
 }
@@ -109,8 +110,8 @@ export function computeCounterpartyUsage(
   if (!owner) return 0;
   let used = 0;
   for (const e of entries) {
-    const buyer = normalizeCompanyName(String(e.fields['买方']?.value ?? e.fields['甲方']?.value ?? ''));
-    const seller = normalizeCompanyName(String(e.fields['卖方']?.value ?? e.fields['乙方']?.value ?? ''));
+    const buyer = normalizeCompanyName(String(firstNonEmpty([e.fields['买方']?.value, e.fields['甲方']?.value]) ?? ''));
+    const seller = normalizeCompanyName(String(firstNonEmpty([e.fields['卖方']?.value, e.fields['乙方']?.value]) ?? ''));
     if (buyer !== owner && seller !== owner) continue;
     const amount = ledgerAmount(e);
     if (amount === null) continue;

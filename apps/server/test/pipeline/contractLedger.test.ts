@@ -48,6 +48,24 @@ describe('buildLedgerEntryFromExtraction', () => {
     expect(entry).toBeNull();
   });
 
+  it('合同名称为空串(模板保底空值)时标题回退 标的物, 不被空串遮蔽', () => {
+    const entry = buildLedgerEntryFromExtraction({
+      documentId: 'DOC-1',
+      docType: '合同',
+      fields: {
+        合同号: { value: 'HT-1', sourceSpans: [] },
+        合同名称: { value: '', sourceSpans: [] },
+        标的物: { value: '动力煤', sourceSpans: [] },
+      },
+      fieldMeta: {
+        合同号: { strength: 'exact', confidence: 0.95 },
+        合同名称: { strength: 'none', confidence: 0 },
+        标的物: { strength: 'exact', confidence: 0.9 },
+      },
+    });
+    expect(entry!.title).toBe('动力煤');
+  });
+
   it('returns null when the contract number normalizes to empty', () => {
     const entry = buildLedgerEntryFromExtraction({
       documentId: 'DOC-1',

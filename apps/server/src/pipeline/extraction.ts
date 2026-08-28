@@ -4,6 +4,7 @@ import type { BlockModel, DocType, SourceSpan } from './types.js';
 import { validateSpan, type SpanMatchStrength } from './spanValidator.js';
 import { computeFieldConfidence, decisionForField } from './confidence.js';
 import { REQUIRED_CONTRACT_FIELDS } from './schemas/contract.js';
+import { isEmptyValue } from './fieldValue.js';
 import type { ProposedRelationship, ProposedEdge } from './db/repositories.js';
 import { TRADE_VOCAB, type TradeVocabulary } from '../domain/tradeSemantics.js';
 
@@ -248,10 +249,8 @@ export async function extractGroundedFields(
   };
 }
 
-/** 空值判定: 空串/纯空白 = 原文缺失(保底语义下的"存空")。 */
-export function isEmptyValue(v: string | number): boolean {
-  return typeof v === 'string' && v.trim().length === 0;
-}
+/** 空值判定: 空串/纯空白 = 原文缺失(保底语义下的"存空")。实现在 ./fieldValue.js, 此处再导出保持既有 API。 */
+export { isEmptyValue };
 
 /** 确定性保底(spec 2026-08-28): 输出 ⊇ required 恒成立。模型漏抽的保底字段补
  *  空值占位(strength none/confidence 0/needsReview), 模型多抽的字段原样保留。

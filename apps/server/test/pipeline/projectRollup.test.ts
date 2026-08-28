@@ -123,6 +123,22 @@ describe('buildRollup (纯函数)', () => {
     expect(r.pendingMemberships).toEqual([{ contractNo: 'HT-X1', role: '采购' }]);
   });
 
+  it('金额为空串(模板保底空值)的合同 amount=null(等同缺失, 触发 amount_missing 而非 0)', () => {
+    const r = buildRollup({
+      project,
+      memberships: [membership('HT-S1', '销售', 'confirmed')],
+      ledgers: new Map([
+        ['HT-S1', ledger('HT-S1', { 金额: '' })],
+      ]),
+      flowSummaries: [],
+      flowRows: new Map(),
+      selfPartyNames: selfNames,
+    });
+    expect(r.metrics.salesAmount).toBe(0);
+    expect(r.contracts[0]!.amount).toBeNull();
+    expect(r.checks.some((c) => c.code === 'amount_missing')).toBe(true);
+  });
+
   it('应收/应付未清: receivable = sales - 发票out - 资金in; payable = purchase - 发票in - 资金out', () => {
     const r = buildRollup({
       project,

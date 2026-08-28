@@ -5,6 +5,7 @@
 import type { SourceSpan } from './types.js';
 import type { SpanMatchStrength } from './spanValidator.js';
 import type { ContractType } from '../domain/tradeSemantics.js';
+import { firstNonEmpty } from './fieldValue.js';
 
 export interface ContractLedgerEntry {
   /** Normalized contract number (unique-key component). Non-empty. */
@@ -79,9 +80,9 @@ export function buildLedgerEntryFromExtraction(args: {
 
   const confidences = Object.values(args.fieldMeta).map((m) => m.confidence);
 
-  // Title: prefer 合同名称, fall back to 标的物, else ''.
-  const titleSource = args.fields['合同名称'] ?? args.fields['标的物'];
-  const title = titleSource !== undefined ? String(titleSource.value) : '';
+  // Title: prefer 合同名称, fall back to 标的物, else ''. 空串保底字段不遮蔽回退链(spec 2026-08-28)。
+  const titleSource = firstNonEmpty([args.fields['合同名称']?.value, args.fields['标的物']?.value]);
+  const title = titleSource !== undefined ? String(titleSource) : '';
 
   return {
     contractNo,

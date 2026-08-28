@@ -6,6 +6,7 @@ import {
   type ProjectMembershipRow, type ExecutionFlowSummary, type ExecutionFlowRow,
 } from './db/repositories.js';
 import { computeExecutionProgress, type ExecutionProgress } from './executionProgress.js';
+import { isEmptyValue, firstNonEmpty } from './fieldValue.js';
 import { getEffectiveSelfPartyNames } from './executionFlow.js';
 import { resolveSelfSide } from '../domain/flowDirection.js';
 import type { ContractLedgerEntry } from './contractLedger.js';
@@ -56,15 +57,15 @@ export interface ProjectRollup {
 const EXPENSE_ROLES = new Set(['物流', '租赁', '服务']);
 
 function parseAmount(raw: string | number | undefined): number | null {
-  if (raw === undefined) return null;
+  if (raw === undefined || isEmptyValue(raw)) return null;
   const n = typeof raw === 'number' ? raw : Number(String(raw).replace(/[,，\s]/g, ''));
   return Number.isFinite(n) ? n : null;
 }
 
 function counterpartyOf(entry: ContractLedgerEntry | null | undefined, selfNames: string[]): string | null {
   if (!entry) return null;
-  const buyer = String(entry.fields['买方']?.value ?? entry.fields['甲方']?.value ?? '').trim();
-  const seller = String(entry.fields['卖方']?.value ?? entry.fields['乙方']?.value ?? '').trim();
+  const buyer = String(firstNonEmpty([entry.fields['买方']?.value, entry.fields['甲方']?.value]) ?? '').trim();
+  const seller = String(firstNonEmpty([entry.fields['卖方']?.value, entry.fields['乙方']?.value]) ?? '').trim();
   if (!buyer || !seller) return null;
   const side = resolveSelfSide(selfNames, { buyer, seller });
   if (!side) return null;
