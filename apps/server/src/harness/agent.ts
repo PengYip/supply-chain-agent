@@ -1,4 +1,5 @@
 import { streamText, stepCountIs, type Tool, type ModelMessage, type LanguageModel } from 'ai';
+import { detectScenario, scenarioActiveTools } from './scenarios.js';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { env } from '../env.js';
 import { getToolsForRole, type Role, type HarnessDeps } from './roleToolRegistry.js';
@@ -33,7 +34,7 @@ export const SYSTEM_PROMPT = [
   '2. 如果工具未返回数据或返回 notFound=true，必须明确告知用户"数据不可得/未找到该记录"，不得编造。',
   '3. 不要猜测合同号、订单号、发票号；如用户描述模糊，先用工具按已知字段查询。',
   '4. 你可以多次调用工具综合回答；回答时简要引用工具返回的关键数字与对象。',
-  '5. 写操作（如绑定单据 bind_document、标注 tag_document）需用户确认后执行。若工具被请求确认（tool-approval-request），必须如实告知用户"该操作需要你确认后才会执行"，不得谎称已执行。',
+  '5. 写操作（如绑定单据 bind_document、标注/改字段 update_document_fields、建关系 link_documents）需用户确认后执行。若工具被请求确认（tool-approval-request），必须如实告知用户"该操作需要你确认后才会执行"，不得谎称已执行。',
   '6. 付款/退款/合同变更属于资金或不可逆操作，系统内没有对应的执行工具，禁止声称已完成或编造执行流程；如需人工决策或人工执行，必须调用 escalate_to_human 生成工单转人工，并如实告知用户。',
   '7. 不确定回退：当遇到数据冲突、置信度低、数据缺失、或业务规则边界等无法确定的情况，必须调用 escalate_to_human 工具转人工，生成工单号 ESC-xxx，不得自行编造或猜测。需明确告知用户已生成工单号。',
   '8. 单据字段核验：涉及提单/发票等单据的字段核验时调用 verify_document_fields；对返回 needsReview=true 的字段，必须如实告知用户"OCR 置信度低，建议人工复核"，不得自行决定该字段值。',
@@ -41,11 +42,28 @@ export const SYSTEM_PROMPT = [
   '- 数字零幻觉(硬约束): extract_fields 返回的每个值都已与原文 span 比对。任何 strength=none 或置信度低于复核阈值的字段必须如实告知用户, 不得编造; 关键字段(合同号/金额/发票号/价税合计)未达自动接受阈值时, 主动建议人工复核或调 escalate_to_human。',
   '- 业务绑定需授权: bind_document 为 L2 操作, 需要人工确认后方可执行。',
   '- 复核卡展示(硬约束): 单据录入完成(上传自动录入或 ingest_document)后, 一旦 extract_fields 对该 docId 成功返回, 必须立即调用 present_document_review 向用户呈现五维复核卡(业务类型/结构化字段/待确认关系/文本TAG/向量化入库状态); 若用户在复核卡上纠正了字段, 需调用 update_document_fields 应用更正(L2, 需用户确认后方可执行)。update_document_fields 的 value 必须原样转传用户原话(含单位, 如 "20万吨" 就传 "20万吨"), 禁止单位换算或数值化(传 20/200000 均属错误)。',
-  '- 文档检索(recall_documents): 需按内容召回已录入单据片段时调用。query 为检索文本; strategy=hybrid(默认)会对 query 做语义向量+FTS5 关键词融合检索(想用同义词/意图而非精确词时用 vector 或 hybrid, 不要只靠关键词)。每个 chunk 入库时已按文档类型打了语义标签(合同:当事人信息/标的物/数量与计量/价格与金额/付款条款/交付与运输/检验与验收/权利义务/违约责任/不可抗力/争议解决/期限与生效/签署信息; 发票/提单/装箱单各有体系), 用 wantTags[] 可按标签过滤召回, tagMode any=命中任一即保留, all=须命中全部。建议: 用户问某类条款时, 用语义 query 配 wantTags 组合(如"付款金额和币种"配 wantTags:["价格与金额","付款条款"])提升精度。未命中返回空数组, 不得编造。',
-  '- 合同台账(接线闭环): 录入的合同经抽取回写后可用 query_contract 查到(source=ledger)。query_contract 有两种模式: 不带 contractNo 调用=枚举台账全部合同的摘要列表(盘点/枚举类问题如"系统里都录入了哪些合同"必须用它, 一次调用即可找全, 不要用 recall_documents 或图检索反复翻找); 带 contractNo=点查该合同详情。查具体合同条款时, query_contract 命中后应接着用 recall_documents 传 contractNo(加条款关键词如 交货/违约)检索原文片段作答, 并以返回的 document_id 说明出处; recall 返回 tagFilterFallback=true 表示标签过滤已自动放宽, 如实说明即可。',
-  '- 图关系交互: 用户询问实体/单据关系("XX合同关联了哪些发票/单据"、"XX供应商有哪些合同")时, 先用 graph_find_entity 按名称定位实体拿到 elementId, 再用 graph_query 从该实体遍历(direction=both 双向命中); 用户要求建立/修正文件间关系("把这张发票挂到XX合同下"、"这两份合同背靠背")时, 用 graph_find_entity 定位两端实体后调 link_entities(L2, 需用户确认), 边类型优先复用词表 party/commodity/references/executes/back_to_back(购销方向写在 props.role)。经复核卡确认的单据已由系统自动写入图库, 不要再手动重建 party/commodity/references/executes 边。图工具返回错误(图不可用)时如实告知, 不得编造图数据。',
-  '- 项目维度: 项目(Project)是统计维度实体, 合同经 part_of 边归属到项目, 项目节点的 name 是项目编号(如 PRJ-2026-001)。采购合同的对手方在该项目中角色是供应商, 销售合同的对手方角色是客户(由系统按合同类型自动派生 participates 边)。用户问"XX项目有哪些合同/对手方"时用 graph_find_entity(kind=Project)定位项目再 graph_query 遍历; 归属确认/拒绝由项目工作台或 API 完成, 不要手动 link_entities 建 part_of 边。按项目统计(该项目销售额/采购额/毛差/应收应付/发票执行进度)时优先用 project_rollup 工具: 传项目编号, 返回合同面/六向流水/指标/校验提示; 工具未注册或返回 notFound 时如实告知, 不得自行拼凑数字。',
+   '- 文档检索(recall_documents): 需按内容召回已录入单据片段时调用。query 为检索文本; strategy=hybrid(默认)会对 query 做语义向量+FTS5 关键词融合检索(想用同义词/意图而非精确词时用 vector 或 hybrid, 不要只靠关键词)。每个 chunk 入库时已按文档类型打了语义标签(合同:当事人信息/标的物/数量与计量/价格与金额/付款条款/交付与运输/检验与验收/权利义务/违约责任/不可抗力/争议解决/期限与生效/签署信息; 发票/提单/装箱单各有体系), 用 wantTags[] 可按标签过滤召回, tagMode any=命中任一即保留, all=须命中全部。建议: 用户问某类条款时, 用语义 query 配 wantTags 组合(如"付款金额和币种"配 wantTags:["价格与金额","付款条款"])提升精度。命中短文档时返回整篇全文(mode=fullText, documents[] 含 document_id+完整文本): 此时直接通读全文作答(包括确认"合同未约定某指标"这类结论), 引用以 document_id 为准, **同一文档已拿到全文就不要再对它发起第二次召回**; 超出全文预算的文档仍以 matches 片段返回并列在 degradedDocIds, 如实说明。contractNo 过滤下返回空时不要重复堆相似关键词, 换专有名词(对手方/煤矿/品名)或减少到 1-2 个关键词再试。未命中返回空数组, 不得编造。',
+   '- 合同台账(接线闭环): 录入的合同经抽取回写后可用 query_business(entity="contract") 查到(source=ledger)。两种模式: 不带 contractNo=枚举台账全部合同的摘要列表(盘点/枚举类问题如"系统里都录入了哪些合同"必须用它, 一次调用即可找全, 不要用 recall_documents 或图检索反复翻找); 带 contractNo=点查该合同详情。查具体合同条款时, 先用 entity="contract" 命中合同, 再用 recall_documents 传 contractNo(加条款关键词如 交货/违约/质量)检索原文片段作答, 并以返回的 document_id 说明出处; 命中短文档会返回整篇全文(mode=fullText); recall 返回 tagFilterFallback=true 表示标签过滤已自动放宽, 如实说明即可。查执行流水用 entity="flow"(必传 contractNo), 查额度占用用 entity="quota", 查模板词表用 entity="template"。',
+   '- 图关系交互: 用户询问实体/单据关系("XX合同关联了哪些发票/单据"、"XX供应商有哪些合同")时, 先用 graph_find_entity 按名称定位实体拿到 elementId, 再用 graph_query 从该实体遍历(direction=both 双向命中); 用户要求建立/修正文件间关系("把这张发票挂到XX合同下"、"这两份合同背靠背")时, 用 graph_find_entity 定位两端实体后调 link_entities(L2, 需用户确认), 边类型优先复用词表 party/commodity/references/executes/back_to_back(购销方向写在 props.role)。经复核卡确认的单据已由系统自动写入图库, 不要再手动重建 party/commodity/references/executes 边。图工具返回错误(图不可用)时如实告知, 不得编造图数据。',
+   '- 项目维度: 项目(Project)是统计维度实体, 合同经 part_of 边归属到项目, 项目节点的 name 是项目编号(如 PRJ-2026-001)。采购合同的对手方在该项目中角色是供应商, 销售合同的对手方角色是客户(由系统按合同类型自动派生 participates 边)。用户问"XX项目有哪些合同/对手方"时用 graph_find_entity(kind=Project)定位项目再 graph_query 遍历; 归属确认/拒绝由项目工作台或 API 完成, 不要手动 link_entities 建 part_of 边。按项目统计(该项目销售额/采购额/毛差/应收应付/发票执行进度)时优先用 query_business(entity="project", projectCode): 返回合同面/六向流水/指标/校验提示; 返回 notFound 或 error 时如实告知, 不得自行拼凑数字。',
 ].join('\n');
+
+/** Extract the trailing user message's text for scenario detection (阶段3). */
+function lastUserText(msgs: ModelMessage[]): string {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i]!;
+    if (m.role !== 'user') continue;
+    if (typeof m.content === 'string') return m.content;
+    if (Array.isArray(m.content)) {
+      return m.content
+        .map((p) => (p && typeof p === 'object' && (p as { type?: string }).type === 'text'
+          ? String((p as { text?: string }).text ?? '')
+          : ''))
+        .join(' ');
+    }
+  }
+  return '';
+}
 
 // Apply the PermissionGate to the role's toolset:
 //   L1 -> auto execute
@@ -241,6 +259,12 @@ export interface RunStreamOpts {
    * ordering.)
    */
   skipStatusMessage?: boolean;
+
+  /**
+   * 阶段3 场景挂载: 显式钉死本回合场景('all' = 不收窄)。缺省时按最后一条
+   * 用户消息自动检测。测试与上游调用方(如审批恢复)可传入以固定可见工具集。
+   */
+  scenario?: import('./scenarios.js').ScenarioOrAll;
 }
 
 // Scan a turn's response messages for v6 tool-approval-request parts (emitted
@@ -336,7 +360,7 @@ export async function buildAgentStatusSnapshot({
 // to pre-H1 behavior. When supplied (tests), no provider client is constructed and
 // no network/env is required, so the agent loop can be exercised offline against
 // a canned fake model + in-memory DbContext.
-export async function runStream({ messages, role, auditTraceId, model, deps, userId, sessionId, abortSignal, skipStatusMessage }: RunStreamOpts) {
+export async function runStream({ messages, role, auditTraceId, model, deps, userId, sessionId, abortSignal, skipStatusMessage, scenario: scenarioOverride }: RunStreamOpts) {
   // Production default: real DeepSeek model. If a model was injected, skip
   // building the provider client so tests need no API key / network.
   //
@@ -386,6 +410,11 @@ export async function runStream({ messages, role, auditTraceId, model, deps, use
   // so the status message is replaced fresh on every turn.
   const snapshot = sessionId && !skipStatusMessage ? await buildAgentStatusSnapshot({ sessionId, userId, ctx }) : null;
   const messagesForModel = appendStatusMessage(messages, snapshot);
+  // 阶段3 场景挂载(tool-inventory methodology): 按当前用户消息把本回合可见
+  // 工具收窄到 场景集 ∪ CORE; 检测保守(无命中/涉及模板维护 -> 'all' 不收窄)。
+  // prepareStep 的末步 activeTools:[] 覆盖本值, 收尾行为不变。
+  const scenario = scenarioOverride ?? detectScenario(lastUserText(messagesForModel));
+  const scenarioTools = scenarioActiveTools(scenario, Object.keys(tools));
   return streamText({
     // Chat Completions API (.chat) -- DeepSeek's Responses-API compatibility
     // corrupts tool-call id correlation.
@@ -393,6 +422,8 @@ export async function runStream({ messages, role, auditTraceId, model, deps, use
     system: SYSTEM_PROMPT,
     messages: messagesForModel,
     tools,
+    // 场景挂载: 'all'(检测不确定)时为 undefined, 不收窄。
+    ...(scenarioTools ? { activeTools: [...scenarioTools] } : {}),
     // L5 circuit breaker: stop after N consecutive tool failures (infra
     // errors, not business ok:false -- those return success:true with the
     // payload). Kept alongside the step cap so the loop still terminates on

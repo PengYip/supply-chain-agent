@@ -1,0 +1,168 @@
+{
+  "version": "2026-08-28",
+  "description": "工具选择评估集 (tool-use eval dataset)。三层用法: (1) test/eval/toolUse.dataset.test.ts 离线断言——场景路由覆盖 expectedTools、forbiddenTools 不可见、黑名单工具永不回归; (2) npm run eval:tools 用真实模型跑工具选择, 首个 tool-call 必须落在 expectedTools 内; (3) L2 用例额外校验 needsApproval。新增用例先加这里, 两个 runner 自动生效。",
+  "cases": [
+    {
+      "id": "ledger-enumerate",
+      "query": "系统里都录入了哪些合同？",
+      "expectedScenario": "qa",
+      "expectedTools": [
+        "query_business"
+      ],
+      "forbiddenTools": [],
+      "notes": "枚举聚合语义必须走台账且首个调用为 query_business(由 eval:tools 首调断言); recall_documents 是 CORE 始终可见, 后续补充检索合法"
+    },
+    {
+      "id": "ledger-lookup",
+      "query": "查一下合同 CJXC-2025-001 的金额和对方客商",
+      "expectedScenario": "qa",
+      "expectedTools": [
+        "query_business"
+      ],
+      "forbiddenTools": [],
+      "notes": "台账点查, entity=contract + contractNo"
+    },
+    {
+      "id": "clause-recall",
+      "query": "合同 CJXC-2025-001 里关于质量奖罚的条款原文是什么？",
+      "expectedScenario": "qa",
+      "expectedTools": [
+        "recall_documents"
+      ],
+      "forbiddenTools": [],
+      "notes": "条款原文必须走检索(短文档返回全文); 台账只有结构化字段"
+    },
+    {
+      "id": "execution-flows",
+      "query": "CJXC-2025-001 这份合同的执行流水怎么样了？",
+      "expectedScenario": "qa",
+      "expectedTools": [
+        "query_business"
+      ],
+      "forbiddenTools": [],
+      "notes": "entity=flow, 必传 contractNo"
+    },
+    {
+      "id": "project-rollup",
+      "query": "PRJ-2026-001 这个项目赚了多少？还差多少发票？",
+      "expectedScenario": "qa",
+      "expectedTools": [
+        "query_business"
+      ],
+      "forbiddenTools": [],
+      "notes": "entity=project + projectCode"
+    },
+    {
+      "id": "quota-over-limit",
+      "query": "现在有哪些额度超限了？",
+      "expectedScenario": "settlement",
+      "expectedTools": [
+        "query_business"
+      ],
+      "forbiddenTools": [],
+      "notes": "查占用是读(entity=quota); manage_quota 同场景可见但 L2 软门控拦写"
+    },
+    {
+      "id": "template-overview",
+      "query": "收货单能挂什么合同类型？",
+      "expectedScenario": "qa",
+      "expectedTools": [
+        "query_business"
+      ],
+      "forbiddenTools": [],
+      "notes": "query_business(entity=template) 在 CORE 中, qa 可见; 问句无模板维护字样不触发 all"
+    },
+    {
+      "id": "entry-ingest",
+      "query": "请录入这份采购合同并解析",
+      "expectedScenario": "entry",
+      "expectedTools": [
+        "ingest_document"
+      ],
+      "forbiddenTools": [
+        "confirm_settlement",
+        "manage_quota"
+      ],
+      "notes": "录入态; 结算/额度写工具应不可见"
+    },
+    {
+      "id": "entry-correct-and-tag",
+      "query": "复核卡上数量不对，改成 20万吨，顺便给这份单据打上“重点”标签",
+      "expectedScenario": "entry",
+      "expectedTools": [
+        "update_document_fields"
+      ],
+      "forbiddenTools": [
+        "tag_document",
+        "link_documents"
+      ],
+      "notes": "阶段2b: tags 并入 update_document_fields; tag_document 已入黑名单"
+    },
+    {
+      "id": "bind-voucher",
+      "query": "把这张发票绑定到合同 CJXC-2025-001",
+      "expectedScenario": "entry",
+      "expectedTools": [
+        "bind_document"
+      ],
+      "forbiddenTools": [],
+      "notes": "L2: 断言 needsApproval=true"
+    },
+    {
+      "id": "back-to-back",
+      "query": "把采购合同 CG-001 和销售合同 XS-001 对应起来，背靠背",
+      "expectedScenario": "qa",
+      "expectedTools": [
+        "link_documents"
+      ],
+      "forbiddenTools": [
+        "link_contracts",
+        "link_projects",
+        "link_amends"
+      ],
+      "notes": "阶段2b 三合一; relation=correlates"
+    },
+    {
+      "id": "amends-register",
+      "query": "这份补充合同是对 CJXC-2025-001 的修订，登记一下",
+      "expectedScenario": "qa",
+      "expectedTools": [
+        "link_documents"
+      ],
+      "forbiddenTools": [],
+      "notes": "relation=amends, 必传 docId + baseContractNo"
+    },
+    {
+      "id": "settlement-calc",
+      "query": "这批煤炭按合同结算，质量扣款怎么算？",
+      "expectedScenario": "settlement",
+      "expectedTools": [
+        "gather_settlement_evidence"
+      ],
+      "forbiddenTools": [
+        "ingest_document"
+      ],
+      "notes": "取证是计算前必经步骤; confirm_settlement 同场景可见但 L2 需人工确认后才执行"
+    },
+    {
+      "id": "escalate-on-missing",
+      "query": "这批货的灰分 19.83% 达标吗？",
+      "expectedScenario": "qa",
+      "expectedTools": [
+        "recall_documents"
+      ],
+      "forbiddenTools": [],
+      "notes": "未命中或合同未约定时允许 escalate_to_human, 但禁止编造限值"
+    },
+    {
+      "id": "template-mgmt",
+      "query": "新增一个单据类型“质押清单”",
+      "expectedScenario": "all",
+      "expectedTools": [
+        "manage_template"
+      ],
+      "forbiddenTools": [],
+      "notes": "模板维护走 all 不收窄; L2 需授权"
+    }
+  ]
+}

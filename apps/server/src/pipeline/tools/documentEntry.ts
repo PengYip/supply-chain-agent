@@ -1876,39 +1876,55 @@ export function buildUpdateDocumentFieldsTool(deps: ToolDeps) {
     description:
       '用户在复核卡上纠正字段后应用更正: 将纠正值合并到已抽取字段(保留未更正字段的置信度/原文span接地信息), ' +
       '更正字段置信度置1.0(人工确认)并标记 reviewStatus=corrected。需用户确认才执行(L2)。\n' +
+      '也可同时为单据打显式标签(tags 参数, 阶段2b 吸收原 tag_document; 标签来源 explicit, 与 ingest 自动标签区分)。\n' +
       '边界(硬约束): corrections[].value 必须原样转传用户给出的文本, 禁止单位换算/数值化/格式改写。' +
       '用户说"数量 20万吨"就必须传字符串 "20万吨", 传 20 或 200000 都是错误; ' +
-      '只有用户原话就是纯数字(如 "改成 16800")时才传 number。不确定原话时先向用户确认, 不要自行归一化。',
+      '只有用户原话就是纯数字(如 "改成 16800")时才传 number。不确定原话时先向用户确认, 不要自行归一化。' +
+      'corrections 与 tags 至少提供一个。',
     inputSchema: z.object({
       docId: z.string().min(1),
       corrections: z.array(z.object({
         name: z.string().min(1),
         value: z.union([z.string(), z.number()]),
-      })).min(1),
-    }),
-    execute: async ({ docId, corrections }) => {
-      const exists = await getReviewSnapshot(deps.ctx, docId, deps.userId);
-      if (!exists) return { status: 'error' as const, reason: 'document_not_found' };
-      // Merge + write delegated to the shared applyDocumentCorrections (Feature:
-      // in-card correction HITL route reuses the same logic). Returns null when
-      // no extraction exists for the doc. Preserves the prior tool contract
-      // (extraction_not_found) without duplicating the merge code here.
-      const snapshot = await applyDocumentCorrections(deps.ctx, docId, corrections, deps.userId);
-      if (!snapshot) return { status: 'error' as const, reason: 'extraction_not_found' };
-      // 修正后的防漂移钩子(旁路): 该文档已确认绑定的执行流水按最新抽取重建。
-      // 失败仅告警, 绝不影响修正主流程。
-      try {
-        await refreshExecutionFlowsForDocument(deps.ctx, docId, deps.userId);
-      } catch (e) {
-        console.warn('[executionFlow] 修正后重建执行流水失败:', docId, (e as Error).message);
+      })).optional(),
+      tags: z.array(z.string().min(1)).optional().describe('可选: 为单据添加显式标签(至少一个)'),
+    })
+      .refine((v) => (v.corrections?.length ?? 0) > 0 || (v.tags?.length ?? 0) > 0, {
+        message: 'corrections 与 tags 至少提供一个',
+      }),
+    execute: async ({ docId, corrections, tags }, opts) => {
+      // corrections 与 tags 至少一个(schema refine 已保证); 各自独立执行,
+      // 合并返回 -- 单次调用可同时改字段并打标签(阶段2b 吸收 tag_document)。
+      let out: Record<string, unknown> = { ok: true as const, docId };
+      if (corrections && corrections.length > 0) {
+        const exists = await getReviewSnapshot(deps.ctx, docId, deps.userId);
+        if (!exists) return { status: 'error' as const, reason: 'document_not_found' };
+        // Merge + write delegated to the shared applyDocumentCorrections (Feature:
+        // in-card correction HITL route reuses the same logic). Returns null when
+        // no extraction exists for the doc. Preserves the prior tool contract
+        // (extraction_not_found) without duplicating the merge code here.
+        const snapshot = await applyDocumentCorrections(deps.ctx, docId, corrections, deps.userId);
+        if (!snapshot) return { status: 'error' as const, reason: 'extraction_not_found' };
+        // 修正后的防漂移钩子(旁路): 该文档已确认绑定的执行流水按最新抽取重建。
+        // 失败仅告警, 绝不影响修正主流程。
+        try {
+          await refreshExecutionFlowsForDocument(deps.ctx, docId, deps.userId);
+        } catch (e) {
+          console.warn('[executionFlow] 修正后重建执行流水失败:', docId, (e as Error).message);
+        }
+        out = {
+          ...out,
+          reviewStatus: 'corrected' as const,
+          correctedFields: corrections.map((c) => c.name),
+          snapshot,
+        };
       }
-      return {
-        ok: true as const,
-        docId,
-        reviewStatus: 'corrected' as const,
-        correctedFields: corrections.map((c) => c.name),
-        snapshot,
-      };
+      if (tags && tags.length > 0) {
+        const tagTool = buildTagDocumentTool(deps);
+        const tagRes = await tagTool.execute!({ docId, tags }, opts);
+        out.tagsResult = tagRes;
+      }
+      return out;
     },
   });
 }

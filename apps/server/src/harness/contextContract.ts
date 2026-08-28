@@ -64,7 +64,13 @@ export interface ToolContextContract {
 //  - Reads (query_*, cross_check): signal 'counter'; writes that mutate
 //    business state (link/bind, e.g. bind_document): signal 'env'.
 export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract>> = {
-  query_contract: {
+  // 阶段2 工具合并(2026-08-28): 结构化 SSOT 统一读入口, 原 query_contract /
+  // query_execution_flows / query_quota_usage / project_rollup / template_overview
+  // 五合一。全部为只读台账/物化数据(数值与短字符串, 无文档原文) -> output 'raw' /
+  // injection 'safe'。子查询输出形态不一(枚举列表/汇总/模板层级), 取最宽松
+  // budget 'full' 以免截掉枚举结果(与原 query_contract/quota/template 一致)。
+  // signal 'counter'(读)。persist 'business' 标记它读取的业务存储。
+  query_business: {
     output: 'raw', budget: 'full', signal: 'counter',
     persist: 'business', risk: { level: 'L1', injection: 'safe' },
   },
@@ -105,14 +111,8 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
   },
-  tag_document: {
-    // Explicit user/agent labels -> trusted agent input (like bind_document's
-    // contractNo), so output 'raw' / injection 'safe'. Tags are short strings ->
-    // budget 'full'. Mutates persistent doc state -> signal 'env', persist
-    // 'business'. L2 write (soft gate).
-    output: 'raw', budget: 'full', signal: 'env',
-    persist: 'business', risk: { level: 'L2', injection: 'safe' },
-  },
+  // 阶段2b: tag_document 并入 update_document_fields(标签来源 explicit),
+  // 后者契约不变(L2 写, output 'raw' / injection 'safe')。
   // Graph layer (§7): create/link/query entities in Neo4j. Agent-supplied open
   // kind/name/props are trusted input (no document-derived text returned), so
   // output 'raw' / injection 'safe'. Returns short handles/summaries -> budget
@@ -126,21 +126,12 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'graph', risk: { level: 'L2', injection: 'safe' },
   },
-  // 2026-08-25 方案A §6: 背靠背购销对应(correlates)与项目级关联(relates)。
-  // Agent 传入的合同号/项目码/份额为可信输入(与 link_entities 同源), 返回短
-  // handle -> output 'raw' / injection 'safe'。落 graph_links SSOT + 图边投影
-  // -> signal 'env', persist 'business'(SSOT 在关系库, 图只是投影)。L2 软门控。
-  link_contracts: {
-    output: 'raw', budget: 'full', signal: 'env',
-    persist: 'business', risk: { level: 'L2', injection: 'safe' },
-  },
-  link_projects: {
-    output: 'raw', budget: 'full', signal: 'env',
-    persist: 'business', risk: { level: 'L2', injection: 'safe' },
-  },
-  // 2026-08-26 模板: 补充合同修订关系(amends)。Agent 传入 docId/合同号为可信
-  // 输入, 落 graph_links SSOT + 图边投影 -> persist 'business'。L2 软门控。
-  link_amends: {
+  // 阶段2b(2026-08-28): link_documents 三合一(GraphLinkKind correlates/relates/
+  // amends, 原 link_contracts/link_projects/link_amends)。Agent 传入的合同号/
+  // 项目码/docId/份额为可信输入(与 link_entities 同源), 返回短 handle ->
+  // output 'raw' / injection 'safe'。落 graph_links SSOT + 图边投影 ->
+  // signal 'env', persist 'business'(SSOT 在关系库, 图只是投影)。L2 软门控。
+  link_documents: {
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
   },
@@ -151,22 +142,12 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
   },
-  // 2026-08-26 模板: 类型层级/允许挂接查询(只读)。返回模板本体数据 -> output
-  // 'raw' / injection 'safe'。只读不落库 -> signal 'env', persist 'business'。L1。
-  template_overview: {
-    output: 'raw', budget: 'full', signal: 'env',
-    persist: 'business', risk: { level: 'L1', injection: 'safe' },
-  },
   // 2026-08-25 方案A §6: 两层额度管控。manage_quota 落 quotas SSOT + granted
-  // 投影 + 即时占用重算 -> persist 'business'。query_quota_usage 只读 DB 物化
-  // 结果 -> persist 'business'(读路由同源), injection 'safe'。金额/限额为可信数值输入。
+  // 投影 + 即时占用重算 -> persist 'business'。占用查询并入 query_business。
+  // 金额/限额为可信数值输入。
   manage_quota: {
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
-  },
-  query_quota_usage: {
-    output: 'raw', budget: 'full', signal: 'env',
-    persist: 'business', risk: { level: 'L1', injection: 'safe' },
   },
   graph_query: {
     output: 'raw', budget: 'full', signal: 'env',
@@ -188,6 +169,9 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     // {contractNo, _summarized: true} and could not answer). 'snippets' keeps the
     // first 10 matches' document_id/chunk_index/snippet(<=500)/source so the model
     // can actually read the retrieved content. signal 'counter' (a read).
+    // fullText mode (2026-08-28 spec): short docs additionally carry
+    // mode/documents[]/degradedDocIds -- compressSnippetsOutput preserves those
+    // (the per-document texts are the evidence, bounded <=16K chars upstream).
     // persist 'vector' is CONCEPTUAL here: v1 stores the index in FTS5 (not
     // pgvector/sqlite-vec); the field marks the recall layer's logical target for
     // when the vector path lands.
@@ -218,22 +202,6 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     // Phase B: 待确认的凭证-合同绑定建议(只读)。返回系统生成的 contractNo/score/
     // evidence(details 为人类可读的中文说明, 无文档原文) -> output 'raw' /
     // injection 'safe'。条数有界 -> budget 'summary'。signal 'counter'(读)。
-    output: 'raw', budget: 'summary', signal: 'counter',
-    persist: 'business', risk: { level: 'L1', injection: 'safe' },
-  },
-  query_execution_flows: {
-    // 执行流水六向汇总(只读)。返回存储层物化的汇总数字与流水明细
-    // (amount/quantityTon 为数值或 null, 凭证文本不回流) -> output 'raw' /
-    // injection 'safe'。明细条数有界 -> budget 'summary'。signal 'counter'(读)。
-    // persist 'business' 标记它读取的业务存储。
-    output: 'raw', budget: 'summary', signal: 'counter',
-    persist: 'business', risk: { level: 'L1', injection: 'safe' },
-  },
-  project_rollup: {
-    // 项目维度统计汇总(只读关系库: memberships + 台账 + 执行流水, 不依赖图)。
-    // 返回聚合数字与合同摘要(数值/短字符串, 无文档原文) -> output 'raw' /
-    // injection 'safe'。合同面 + 指标 + 校验的结构化摘要 -> budget 'summary'。
-    // signal 'counter'(读)。persist 'business' 标记它读取的业务存储。
     output: 'raw', budget: 'summary', signal: 'counter',
     persist: 'business', risk: { level: 'L1', injection: 'safe' },
   },

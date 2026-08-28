@@ -73,6 +73,7 @@ async function drainToolCall(toolName: string, input: unknown) {
     auditTraceId: 'h4',
     model: fake as any,
     deps: { ctx, extraction: { model: fake as any } },
+    scenario: 'all',
   });
   for await (const _ of result.fullStream as AsyncIterable<any>) {
     /* drain to completion so execute + audit wrapper fire */
@@ -103,10 +104,10 @@ describe('audit uniformity (H4)', () => {
     expect(rec?.durationMs).toBeGreaterThanOrEqual(0);
   });
 
-  it('existing tool (query_contract) still emits an audit record (no regression)', async () => {
-    await drainToolCall('query_contract', { contractNo: 'HT-2024-001' });
+  it('existing tool (query_business) still emits an audit record (no regression)', async () => {
+    await drainToolCall('query_business', { entity: 'contract', contractNo: 'HT-2024-001' });
 
-    const rec = auditRecorder.records.find((r) => r.toolName === 'query_contract');
+    const rec = auditRecorder.records.find((r) => r.toolName === 'query_business');
     expect(rec).toBeDefined();
     // HT-2024-001 is seeded, so the result is the contract object (not notFound).
     expect(rec?.result).toMatchObject({ contractNo: 'HT-2024-001' });

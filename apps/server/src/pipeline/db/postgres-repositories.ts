@@ -544,15 +544,38 @@ export function windowSnippet(text: string, query: string, max = 800): string {
 }
 
 /**
+ * Query-side tsquery builder (OR semantics, incident 2026-08-28 session
+ * d6cb688f). toPgFtsQuery unigram-izes the raw query with the SAME per-char
+ * transform as the fts_vector GENERATED column (write side -- must stay in
+ * sync per-term); this builder then joins the terms with ' | ' (to_tsquery
+ * OR) instead of plainto_tsquery's implicit AND. Multi-keyword contract
+ * queries ("结算 两票制 发热量 扣款 结算单价 基准价格") previously required
+ * EVERY unigram to appear in ONE chunk and structurally zero-hit. With OR,
+ * ts_rank still favors chunks matching MORE terms, so the best document
+ * floats up while partial matches survive. Pure-number tokens (19.83 / 5300)
+ * are dropped: they OR-match huge swaths of the corpus and only pollute
+ * ranking. Terms are double-quoted so stray ASCII operators cannot be
+ * injected into to_tsquery syntax.
+ */
+export function toPgFtsQueryOr(q: string): string {
+  const terms = toPgFtsQuery(q).split(/\s+/).filter((t) => t.length > 0);
+  const meaningful = terms.filter((t) => !/^[0-9.,%]+$/.test(t));
+  const used = meaningful.length > 0 ? meaningful : terms;
+  return used.map((t) => `"${t.replace(/"/g, '')}"`).join(' | ');
+}
+
+/**
  * FTS keyword recall over doc_chunk via the GENERATED fts_vector column +
- * plainto_tsquery (safe against arbitrary input -- no operator injection). Ranks
+ * OR-joined tsquery (toPgFtsQueryOr: safe against arbitrary input -- every
+ * term is quoted). Ranks
  * with ts_rank (higher=better); we negate to keep the SQLite bm25 convention
  * (more negative=better, ascending ORDER = best first). Returns [] for an
  * empty/all-stopword query.
  *
- * The query is preprocessed with toPgFtsQuery (CJK unigram) before being fed to
- * plainto_tsquery -- the SAME transformation the fts_vector GENERATED column
- * applies on write, so Chinese multi-char queries match their unigrams.
+ * The query is preprocessed with toPgFtsQueryOr (CJK unigram + OR join) before
+ * being fed to to_tsquery -- the per-char unigramization is the SAME
+ * transformation the fts_vector GENERATED column applies on write, so Chinese
+ * multi-char queries match their unigrams.
  *
  * Snippets are produced TS-side via windowSnippet (NOT ts_headline): the default
  * headline parser lexes a contiguous CJK run as ONE lexeme while the query is
@@ -568,7 +591,7 @@ export async function searchChunksPg(
 ): Promise<ChunkMatch[]> {
   const trimmed = query.trim();
   if (!trimmed) return [];
-  const ftsQuery = toPgFtsQuery(trimmed);
+  const ftsQuery = toPgFtsQueryOr(trimmed);
   const safeLimit = limit > 0 ? Math.floor(limit) : 5;
   const uid = effectiveUserId(userId);
   // Phase 2: when userId is in scope, JOIN documents and filter on user_id so
@@ -589,10 +612,10 @@ export async function searchChunksPg(
          c.document_id   AS "documentId",
          c.chunk_index   AS "chunkIndex",
          c.chunk_text    AS "rawText",
-         ts_rank(c.fts_vector, plainto_tsquery('simple', $1)) AS rank
+         ts_rank(c.fts_vector, to_tsquery('simple', $1)) AS rank
        FROM doc_chunk AS c
        ${join}
-       WHERE c.fts_vector @@ plainto_tsquery('simple', $1)
+       WHERE c.fts_vector @@ to_tsquery('simple', $1)
        ${userFilter}
        ORDER BY rank DESC
        LIMIT $2`,
@@ -974,17 +997,26 @@ export async function listChunksByDocumentPg(
   ctx: PostgresDbContext,
   queryVec: number[],
   k: number,
+  docIds?: readonly string[],
 ): Promise<VecKnnHit[]> {
   const safeK = k > 0 ? Math.floor(k) : 5;
+  // Scoped KNN (incident 2026-08-28 session d6cb688f): when a docId allow-list
+  // is given, filter INSIDE the KNN query -- a global top-k followed by a
+  // caller-side doc filter starves scoped recalls (bound docs' chunks never
+  // crack the global top-k in a large library).
+  const docFilter =
+    docIds && docIds.length > 0 ? 'AND document_id = ANY($2::text[])' : '';
+  const params: unknown[] = [vecLiteral(queryVec), safeK];
+  if (docFilter) params.push(docIds);
   let res;
   try {
     res = await ctx.pool.query(
       `SELECT id AS "chunkRowId", embedding <=> $1::vector AS distance
        FROM doc_chunk
-       WHERE embedding IS NOT NULL
+       WHERE embedding IS NOT NULL ${docFilter}
        ORDER BY embedding <=> $1::vector
-       LIMIT $2`,
-      [vecLiteral(queryVec), safeK],
+       LIMIT $${docFilter ? 3 : 2}`,
+      params,
     );
   } catch {
     return [];

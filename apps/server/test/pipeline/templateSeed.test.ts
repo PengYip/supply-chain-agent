@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createDb, migrate } from '../../src/pipeline/db/client.js';
 import { ensureTemplateSeed } from '../../src/pipeline/templateSeed.js';
 import { listActiveEdgeRules, listTemplateTypes } from '../../src/pipeline/db/repositories.js';
+import { CONTRACT_TEMPLATE_FIELDS } from '../../src/pipeline/schemas/contract.js';
 
 const ctx = createDb();
 beforeEach(() => migrate(ctx.sqlite));
@@ -29,6 +30,18 @@ describe('template seed', () => {
     const caigou = types.find((t) => t.name === '采购')!;
     const maimai = types.find((t) => t.name === '买卖合同')!;
     expect(caigou.parentId).toBe(maimai.id);
+  });
+
+  it('合同模板 props 逐名覆盖保底字段集(SSOT), 锚点字段在列', async () => {
+    await ensureTemplateSeed(ctx);
+    const types = await listTemplateTypes(ctx);
+    const hetong = types.find((t) => t.name === '合同')!;
+    const req = hetong.props.requiredFields as string[];
+    expect(req).toHaveLength(CONTRACT_TEMPLATE_FIELDS.length);
+    for (const f of CONTRACT_TEMPLATE_FIELDS) expect(req).toContain(f);
+    for (const anchor of ['合同号', '合同类型', '甲方', '乙方', '标的物', '数量', '单位', '金额', '签订日', '生效日', '交货期', '项目编号']) {
+      expect(req).toContain(anchor);
+    }
   });
 
   it('种子规则覆盖现状硬编码语义 + 兜底通配', async () => {

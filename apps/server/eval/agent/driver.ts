@@ -76,6 +76,9 @@ async function runAgentTurnInner(
     model: opts.agentModel,
     deps: opts.deps as HarnessDeps,
     skipStatusMessage,
+    // eval episode 自带 verifiers 校验工具使用, 需要全量工具面:
+    // 钉死 'all' 关闭阶段3场景收窄(与生产 chat 的自动路由不同)。
+    scenario: 'all',
   });
   const toolResults: ToolCallObservation[] = [];
   const usage: UsageSummary = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };

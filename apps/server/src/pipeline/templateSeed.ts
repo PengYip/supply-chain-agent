@@ -2,6 +2,7 @@
 // 修改这些行 = 修改绑定协议, 需带测试走。Phase 2 起模板经 /api/templates 演化。
 import type { DbContext } from './db/client.js';
 import { ensureEdgeRule, ensureTemplateType } from './db/repositories.js';
+import { CONTRACT_FIELD_HINTS, CONTRACT_TEMPLATE_FIELDS } from './schemas/contract.js';
 
 /** doc_type 种子——类型划分 v2(spec 2026-08-26 §3.1, 业务确认 2026-08-26)。
  *  Phase 1 登记全树(类型是被动注册表, 不影响行为); 新类型的边规则登记不启用。
@@ -12,7 +13,7 @@ import { ensureEdgeRule, ensureTemplateType } from './db/repositories.js';
  *  水尺计重单。formTypes props = 表单类型->业务类型映射(VLM 分类的数据源,
  *  见 formTypeRegistry.ts)。 */
 export const DOC_TYPE_SEED: Array<{ name: string; parent?: string; props?: Record<string, unknown> }> = [
-  { name: '合同', props: { requiredFields: ['合同号', '甲方', '乙方', '标的物', '数量', '单位', '金额', '签订日'], fieldHints: { 合同号: '合同编号/合同号', 甲方: '买方/甲方', 乙方: '卖方/乙方' }, formTypes: ['合同扫描件'] } },
+  { name: '合同', props: { requiredFields: [...CONTRACT_TEMPLATE_FIELDS], fieldHints: { ...CONTRACT_FIELD_HINTS }, formTypes: ['合同扫描件'] } },
   { name: '补充合同', parent: '合同' },
   { name: '立项书', props: { bindsTargetKind: 'Project' } },
   { name: '履约凭证' },

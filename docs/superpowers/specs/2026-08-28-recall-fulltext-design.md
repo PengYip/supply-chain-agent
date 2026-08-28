@@ -1,7 +1,7 @@
 # recall_documents 全文返回模式（fullText）设计
 
 日期：2026-08-28
-状态：设计已确认，待实现
+状态：已实现（fts/vector/hybrid 全路径 + SQLite/PG 双后端 + 压缩层保留 + 单测/PG 集成测试）
 背景：合同 GMNH-JBKZ-20250303HNWH 第三条 3.1/3.2 质量条款多轮 fts/hybrid/vector
 检索均未命中，导致煤质报告合规判定失败。根因分析见本文件末尾附录。
 

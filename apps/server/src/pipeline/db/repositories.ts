@@ -961,12 +961,14 @@ export interface ChunkMatch {
 }
 
 /**
- * Turn a free-text query into a safe FTS5 MATCH expression. Each whitespace-
- * separated term is double-quoted as a phrase (internal quotes doubled), joined
- * with implicit AND. Returns '' for an all-empty query so the caller returns no
- * matches rather than throwing. CJK works at the character-token level because
- * unicode61 emits one token per CJK char, so a contiguous CJK phrase matches as
- * a consecutive char sequence.
+ * Turn a free-text query into a safe FTS5 MATCH expression (OR semantics,
+ * incident 2026-08-28): each whitespace-separated term is double-quoted as a
+ * phrase (internal quotes doubled) and joined with OR -- AND semantics made
+ * multi-keyword queries structurally zero-hit (every term had to appear in ONE
+ * chunk). bm25 ranks chunks matching more terms higher. Returns '' for an
+ * all-empty query so the caller returns no matches rather than throwing. CJK
+ * works at the character-token level because unicode61 emits one token per CJK
+ * char, so a contiguous CJK phrase matches as a consecutive char sequence.
  */
 export function sanitizeFtsQuery(query: string): string {
   return query
@@ -974,7 +976,7 @@ export function sanitizeFtsQuery(query: string): string {
     .map((t) => t.trim())
     .filter((t) => t.length > 0)
     .map((t) => `"${t.replace(/"/g, '""')}"`)
-    .join(' ');
+    .join(' OR ');
 }
 
 /**

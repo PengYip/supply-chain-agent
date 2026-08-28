@@ -245,10 +245,24 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
     expect(hits[0]!.snippet).not.toContain('<b>');
     expect(hits[0]!.snippet).not.toContain('违 约');
 
-    // Mixed CJK + ASCII query (AND semantics: cjxc & 交 & 货).
+    // Mixed CJK + ASCII query (OR semantics since incident 2026-08-28).
     const mixed = await searchChunks(ctx, 'CJXC 交货', 10);
     expect(mixed.length).toBeGreaterThan(0);
     expect(mixed.some((h) => h.documentId === 'DOC-PG-1')).toBe(true);
+  });
+
+  it('searchChunks OR semantics: multi-keyword query hits on partial matches (incident d6cb688f)', async () => {
+    // The incident: "结算 两票制 发热量 扣款 结算单价 轨道衡" required EVERY
+    // unigram in ONE chunk under AND -> structurally 0 hits despite relevant
+    // chunks existing. With OR, chunks matching ANY term surface and ts_rank
+    // floats multi-term matches up.
+    await saveChunks(ctx, 'DOC-PG-OR', [
+      { text: '第四条 煤炭价格与结算方式：基准到站含税包干价，发热量调整扣款。', index: 0 },
+      { text: '货物到达甲方指定地点交付，轨道衡验收数量为结算依据。', index: 1 },
+    ]);
+    const hits = await searchChunks(ctx, '结算 两票制 发热量 扣款 结算单价 轨道衡', 10);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.some((h) => h.documentId === 'DOC-PG-OR')).toBe(true);
   });
 
   it('getChunkMetaByRowids maps rowid -> meta', async () => {
@@ -294,6 +308,35 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
     // Nearest first (ascending distance).
     const dists = hits.map((h) => h.distance);
     expect(dists).toEqual([...dists].sort((a, b) => a - b));
+  });
+
+  it('vectorKnn scoped by docIds filters INSIDE the KNN (incident d6cb688f)', async () => {
+    await saveDocument(ctx, mkModel('DOC-PG-SCOPED-A'));
+    await saveDocument(ctx, mkModel('DOC-PG-SCOPED-B'));
+    const rowsA = await saveChunks(ctx, 'DOC-PG-SCOPED-A', [
+      { text: 'scoped knn target coal settlement', index: 0 },
+    ]);
+    const rowsB = await saveChunks(ctx, 'DOC-PG-SCOPED-B', [
+      { text: 'unrelated other document cargo manifest', index: 0 },
+    ]);
+    const [va, vb, q] = await embedder.embed([
+      'scoped knn target coal settlement',
+      'unrelated other document cargo manifest',
+      'scoped knn coal',
+    ]);
+    await saveChunkVectors(ctx, [
+      { chunkRowId: rowsA[0]!, vec: va ?? [] },
+      { chunkRowId: rowsB[0]!, vec: vb ?? [] },
+    ]);
+    // Scoped to doc A: only A's chunks may return, even though k=5 exceeds A's
+    // chunk count. (Pre-fix, a global top-k + caller-side filter starved
+    // contractNo-scoped recalls.)
+    const scoped = await vectorKnn(ctx, q ?? [], 5, { docIds: ['DOC-PG-SCOPED-A'] });
+    expect(scoped.length).toBeGreaterThan(0);
+    const scopedMeta = await getChunkMetaByRowids(ctx, scoped.map((h) => h.chunkRowId));
+    for (const [, m] of scopedMeta) {
+      expect(m.documentId).toBe('DOC-PG-SCOPED-A');
+    }
   });
 
   // ---- tool bodies end-to-end on a Postgres ctx -----------------------------
@@ -342,6 +385,25 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
     expect(hybridRes.matchCount).toBeGreaterThan(0);
     // hybrid fused at least one vector contribution (pgvector KNN hit).
     expect(hybridRes.matches.some((m) => m.vector_distance !== null)).toBe(true);
+  });
+
+  it('recall_documents fullText: short doc returns whole-document text on Postgres', async () => {
+    const file = join(env.INGEST_ROOT, `pg-fulltext-${Date.now()}.txt`);
+    writeFileSync(file, '质量奖罚条款全文锚点 PGFT-1\n灰分未约定时的判定依据见第三条', 'utf-8');
+    const ingest = buildIngestDocumentTool({ ctx, embedder });
+    const { docId } = await ingest.execute(
+      { sourceUri: file, docType: '合同', modality: 'digital' },
+      execOpts,
+    );
+    const recall = buildRecallDocumentsTool({ ctx, embedder });
+    const res = (await recall.execute(
+      { query: '质量奖罚条款全文锚点', strategy: 'fts', limit: 5, tagMode: 'any' },
+      execOpts,
+    )) as { mode?: string; documents?: Array<{ document_id: string; text: string }> };
+    expect(res.mode).toBe('fullText');
+    expect(
+      (res.documents ?? []).some((d) => d.document_id === docId && d.text.includes('PGFT-1')),
+    ).toBe(true);
   });
 
   // ---- execution_flows (六向执行流水) ----------------------------------------

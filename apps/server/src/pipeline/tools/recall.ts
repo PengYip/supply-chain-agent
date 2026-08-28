@@ -6,6 +6,7 @@ import {
   getChunkMetaByRowids,
   listBindingsForContract,
   findContractLedgerByNo,
+  listChunksByDocument,
   type ChunkMeta,
   type ChunkMatch,
 } from '../db/repositories.js';
@@ -58,15 +59,22 @@ const VECTOR_SNIPPET_MAX = 400;
 /** Hard ceiling on documents sent to the reranker per recall call (payload/
  *  provider bound); candidates beyond this keep fusion order unscored. */
 export const RERANK_MAX_DOCS = 50;
+/** fullText mode: a document joins the full-text payload only if its joined
+ *  chunk text fits this budget (chars). Bigger docs stay snippet-only. */
+export const FULLTEXT_PER_DOC_CHARS = 8000;
+/** fullText mode: cumulative budget across all included documents (chars). */
+export const FULLTEXT_TOTAL_CHARS = 16000;
 
 /**
  * 合同号过滤无命中时的如实说明: 区分"该合同号根本没有绑定文档"与"有绑定但本次
- * 检索未命中其内容片段"两种情形, 避免把检索失败误报成"未找到绑定"。
+ * 检索未命中其中的相关内容片段"两种情形, 避免把检索失败误报成"未找到绑定"。
+ * 附带重试指引(incident 2026-08-28): 多关键词 AND 检索易结构性空手, 引导模型
+ * 换专有名词/减少关键词, 而不是重复堆相似词。
  */
 function contractNoMissNote(docIdSet: Set<string>): string {
-  return docIdSet.size === 0
-    ? '未找到与该合同号绑定的文档'
-    : `该合同号绑定了 ${docIdSet.size} 个文档，但本次检索未命中其中的相关内容片段`;
+  if (docIdSet.size === 0) return '未找到与该合同号绑定的文档';
+  return `该合同号绑定了 ${docIdSet.size} 个文档，但本次检索未命中其中的相关内容片段。`
+    + '建议换一种查法：用对手方企业名/煤矿名/品名等专有名词，或大幅减少关键词（每次 1-2 个），不要重复堆砌相似关键词';
 }
 
 interface FusedMatch {
@@ -241,6 +249,89 @@ export async function applyRerank<T>(
   }
 }
 
+/** Unique documentIds in candidate rank order (dedupe by first appearance). */
+function rankedDocIds(candidates: Array<{ documentId: string }>): string[] {
+  return [...new Set(candidates.map((c) => c.documentId))];
+}
+
+interface FullTextDoc {
+  document_id: string;
+  chars: number;
+  chunk_count: number;
+  /** Joined chunk text (chunk_index order), tagExternal-wrapped (untrusted). */
+  text: string;
+}
+
+/**
+ * Full-text payload for the ranked hit documents (spec 2026-08-28
+ * recall-fulltext): a doc joins when its joined chunk text fits
+ * FULLTEXT_PER_DOC_CHARS and the cumulative FULLTEXT_TOTAL_CHARS budget;
+ * everything else is reported in degradedDocIds so the model can say what it
+ * only saw as snippets. Ordering follows candidate rank (best first).
+ */
+async function buildFullTextDocs(
+  ctx: DbContext,
+  userId: string | undefined,
+  docIds: string[],
+): Promise<{ docs: FullTextDoc[]; degraded: string[] }> {
+  const docs: FullTextDoc[] = [];
+  const degraded: string[] = [];
+  let total = 0;
+  for (const id of docIds) {
+    if (total >= FULLTEXT_TOTAL_CHARS) {
+      degraded.push(id);
+      continue;
+    }
+    // Chunks were already scope-proven: docId came from userId-scoped
+    // candidates, so the read is safe without a second user filter.
+    const chunks = await listChunksByDocument(ctx, id);
+    const text = chunks.map((c) => c.text).join('\n');
+    if (chunks.length === 0 || text.length === 0
+      || text.length > FULLTEXT_PER_DOC_CHARS
+      || total + text.length > FULLTEXT_TOTAL_CHARS) {
+      degraded.push(id);
+      continue;
+    }
+    total += text.length;
+    docs.push({
+      document_id: id,
+      chars: text.length,
+      chunk_count: chunks.length,
+      text: tagExternal(text),
+    });
+  }
+  return { docs, degraded };
+}
+
+/**
+ * Post-process a recall output into fullText mode when applicable (spec
+ * 2026-08-28). `fullText === false` opts out entirely; otherwise the ranked
+ * hit documents are checked against the budgets and -- when at least one
+ * qualifies -- the output gains `mode:'fullText'` + `documents[]` +
+ * `degradedDocIds[]`. The matches array is kept so degraded docs still carry
+ * their snippets. No qualifying doc -> output returned untouched.
+ */
+async function withFullText(
+  deps: RecallToolDeps,
+  output: Record<string, unknown>,
+  candidates: Array<{ documentId: string }>,
+  fullText: boolean | undefined,
+): Promise<Record<string, unknown>> {
+  if (fullText === false) return output;
+  const ids = rankedDocIds(candidates);
+  if (ids.length === 0) return output;
+  const { docs, degraded } = await buildFullTextDocs(deps.ctx, deps.userId, ids);
+  if (docs.length === 0) return output;
+  return {
+    ...output,
+    mode: 'fullText' as const,
+    documents: docs,
+    ...(degraded.length > 0 ? { degradedDocIds: degraded } : {}),
+    note: '短文档已返回整篇全文(documents); 超出全文预算的文档仅以 matches 片段返回'
+      + (degraded.length > 0 ? `, 共 ${degraded.length} 份(见 degradedDocIds)` : ''),
+  };
+}
+
 export function buildRecallDocumentsTool(deps: RecallToolDeps) {
   return tool({
     description:
@@ -253,6 +344,8 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
       'vector/hybrid 在 sqlite-vec 不可用时自动降级为 fts。' +
       'contractNo 可按合同号过滤, 只返回绑定到该合同的文档片段。' +
       'wantTags 标签过滤无命中时已自动放宽(响应带 tagFilterFallback=true, 如实说明即可)。' +
+      '命中短文档时返回整篇全文: mode=fullText, documents[] 按命中序给出 document_id+完整文本(引用以 document_id 为准); ' +
+      '超出全文预算(单份>8000字或合计>16000字)的文档仍只返回 matches 片段, 并列在 degradedDocIds; fullText:false 可强制只返回片段。' +
       '调用示例: 1) 按单据号精确找原文 {query: "BL-2024-0920-002", strategy: "fts"}; ' +
       '2) 语义召回并按合同过滤 {query: "烧碱采购付款条款", strategy: "hybrid", contractNo: "HT-2024-001", limit: 5}。',
     inputSchema: z.object({
@@ -285,8 +378,14 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
         .string()
         .optional()
         .describe('可选: 按合同号过滤, 只返回绑定到该合同的文档片段'),
+      fullText: z
+        .boolean()
+        .optional()
+        .describe(
+          '可选: false 强制只返回片段; 缺省时命中的短文档(单份<=8000字且合计<=16000字)自动返回整篇全文(mode=fullText)',
+        ),
     }),
-    execute: async ({ query, limit, strategy, wantTags, tagMode, contractNo }) => {
+    execute: async ({ query, limit, strategy, wantTags, tagMode, contractNo, fullText }) => {
       const effective = await resolveStrategy(strategy, deps.ctx);
 
       // contractNo 过滤(接线闭环): 归一化后先从合同台账取绑定文档, 再对 bindings
@@ -340,7 +439,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
           tagFilterFallback = true;
         }
         const matches = candidates.slice(0, limit);
-        return {
+        return withFullText(deps, {
           query,
           strategy: 'fts' as const,
           matchCount: matches.length,
@@ -355,7 +454,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
           })),
           ...contractNoField,
           ...(tagFilterFallback ? { tagFilterFallback: true as const } : {}),
-        };
+        }, candidates, fullText);
       }
 
       // Vector path (needs an embedder). If none is wired, degrade to fts so the
@@ -367,7 +466,14 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
       }
       if (embedder) {
         const [queryVec] = await embedder.embed([query]);
-        const knn = await vectorKnn(deps.ctx, queryVec ?? [], candidateLimit);
+        // Scoped KNN (incident 2026-08-28): with a contractNo doc allow-list,
+        // restrict KNN to those docs -- a global top-k starves scoped recalls.
+        const knn = await vectorKnn(
+          deps.ctx,
+          queryVec ?? [],
+          candidateLimit,
+          docIdSet ? { docIds: [...docIdSet] } : undefined,
+        );
 
         if (effective === 'vector') {
           const meta = await getChunkMetaByRowids(
@@ -407,7 +513,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
             (k) => meta.get(k.chunkRowId)?.text ?? '',
           );
           const matches = reranked.slice(0, limit);
-          return {
+          return withFullText(deps, {
             query,
             strategy: 'vector' as const,
             matchCount: matches.length,
@@ -426,7 +532,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
             ...(rerankedApplied ? { reranked: true as const } : {}),
             ...contractNoField,
             ...(tagFilterFallback ? { tagFilterFallback: true as const } : {}),
-          };
+          }, candidates.map((k) => ({ documentId: meta.get(k.chunkRowId)?.documentId ?? '' })), fullText);
         }
 
         // hybrid: RRF over fts + vector. When filtering, meta must cover FTS-only
@@ -478,7 +584,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
           (f) => rerankMeta.get(f.chunkRowId)?.text ?? f.snippet,
         );
         const matches = reranked.slice(0, limit);
-        return {
+        return withFullText(deps, {
           query,
           strategy: 'hybrid' as const,
           matchCount: matches.length,
@@ -494,7 +600,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
           ...(rerankedApplied ? { reranked: true as const } : {}),
           ...contractNoField,
           ...(tagFilterFallback ? { tagFilterFallback: true as const } : {}),
-        };
+        }, candidates, fullText);
       }
 
       // Fallback (no embedder, or vec unavailable): emit fts results. Report
@@ -520,7 +626,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
         tagFilterFallback = true;
       }
       const matches = candidates.slice(0, limit);
-      return {
+      return withFullText(deps, {
         query,
         strategy: 'fts' as const,
         matchCount: matches.length,
@@ -535,7 +641,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
         })),
         ...contractNoField,
         ...(tagFilterFallback ? { tagFilterFallback: true as const } : {}),
-      };
+      }, candidates, fullText);
     },
   });
 }
