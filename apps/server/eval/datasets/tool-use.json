@@ -145,6 +145,26 @@
       "notes": "取证是计算前必经步骤; confirm_settlement 同场景可见但 L2 需人工确认后才执行"
     },
     {
+      "id": "valuation-provisional",
+      "query": "CJXC-2025-001 这批货先暂估一下货值",
+      "expectedScenario": "settlement",
+      "expectedTools": [
+        "load_skill"
+      ],
+      "forbiddenTools": [],
+      "notes": "货值暂估命中 settlement-valuation 技能, 首调应为 load_skill 取流程; 数字仍须来自业务工具"
+    },
+    {
+      "id": "valuation-settlement",
+      "query": "按实际质检结果算一下 CJXC-2025-001 的最终货值",
+      "expectedScenario": "settlement",
+      "expectedTools": [
+        "load_skill"
+      ],
+      "forbiddenTools": [],
+      "notes": "货值结算同样先 load_skill(settlement-valuation), 再按四步取证/计算/确认"
+    },
+    {
       "id": "escalate-on-missing",
       "query": "这批货的灰分 19.83% 达标吗？",
       "expectedScenario": "qa",

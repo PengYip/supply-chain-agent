@@ -139,6 +139,8 @@ describe('tool inventory gate', () => {
     expect(detectScenario('帮我维护一下模板词表')).toBe('all');
     expect(detectScenario('')).toBe('all');
     expect(detectScenario('这个项目结算扣款怎么算')).toBe('settlement');
+    // 货值暂估/结算与结算同域(2026-08-28 settlement-valuation 技能)
+    expect(detectScenario('这批货值多少？先暂估一下')).toBe('settlement');
     expect(detectScenario('请录入这份合同并解析')).toBe('entry');
     expect(detectScenario('这两份合同是什么关系')).toBe('qa');
   });
