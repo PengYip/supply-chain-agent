@@ -160,3 +160,48 @@ describe('mimeForExtension', () => {
     expect(mimeForExtension('pdf')).toBeUndefined();
   });
 });
+// ---- v2.1: extractVoucherTyped(按已知类型多图提取) ---------------------------
+
+import { extractVoucherTyped } from '../../src/pipeline/vlmAdapter.js';
+import { VOUCHER_PAGE_PROMPTS, VOUCHER_DOC_PROMPTS } from '../../src/pipeline/schemas/vouchers.js';
+
+describe('extractVoucherTyped', () => {
+  const img = (n = 1) => ({ mime: 'image/png', buffer: Buffer.alloc(64, n) });
+
+  it('重量页级类型用页级 prompt, 请求体含全部图片', async () => {
+    const call = vi.fn().mockResolvedValue(JSON.stringify({
+      编号: 'ERP1', 车号: '渝DD5739', 毛重_吨: 48.82, 皮重_吨: 16.18, 净重_吨: 32.64,
+      字段置信度: { 净重_吨: 0.95 },
+    }));
+    const r = await extractVoucherTyped([img(1), img(2)], '汽运磅单', { call });
+    expect(r.fields['净重_吨']).toBe(32.64);
+    expect(r.字段置信度['净重_吨']).toBe(0.95);
+    const prompt = call.mock.calls[0]![0] as string;
+    expect(prompt).toBe(VOUCHER_PAGE_PROMPTS['汽运磅单']);
+    const sentImages = call.mock.calls[0]![1] as unknown[];
+    expect(sentImages).toHaveLength(2);
+  });
+
+  it('文档级类型用文档级 prompt', async () => {
+    const call = vi.fn().mockResolvedValue(JSON.stringify({
+      船名: '硕隆817', 卸货量_吨: 72079, 字段置信度: {},
+    }));
+    await extractVoucherTyped([img()], '水尺计重单', { call });
+    expect(call.mock.calls[0]![0] as string).toBe(VOUCHER_DOC_PROMPTS['水尺计重单']);
+  });
+
+  it('未注册类型抛错; 失败回灌重试 1 次', async () => {
+    await expect(extractVoucherTyped([img()], '其他' as never, { call: vi.fn() })).rejects.toThrow('无注册 prompt');
+    const call = vi.fn().mockRejectedValueOnce(new Error('bad json')).mockResolvedValue('{"船名":"x","卸货量_吨":1}');
+    const r = await extractVoucherTyped([img()], '水尺计重单', { call });
+    expect(r.fields['船名']).toBe('x');
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it('顶层即 fields 的输出形状可解析(容错)', async () => {
+    const call = vi.fn().mockResolvedValue('{"编号":"ERP2","毛重_吨":48.5}');
+    const r = await extractVoucherTyped([img()], '汽运磅单', { call });
+    expect(r.fields['毛重_吨']).toBe(48.5);
+    expect(r.字段置信度).toEqual({});
+  });
+});

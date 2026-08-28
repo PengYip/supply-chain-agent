@@ -11,6 +11,7 @@
 
 import { env } from '../env.js';
 import type { VoucherType } from './schemas/vouchers.js';
+import { VOUCHER_PAGE_PROMPTS, VOUCHER_DOC_PROMPTS } from './schemas/vouchers.js';
 
 export interface VlmResult {
   voucherType: VoucherType;
@@ -166,5 +167,114 @@ export async function extractVoucher(
     } catch (second) {
       throw second instanceof Error ? second : new Error(String(second));
     }
+  }
+}
+
+// ---- v2.1: 按已知类型的多图提取(spec 2026-08-28 §5) --------------------------
+// 类型由路由确定(formTypeRegistry), prompt 按 VOUCHER_*_PROMPTS 注册表选取;
+// 重量行类型(汽运磅单/轨道衡)用页级 prompt(逐页聚合), 其余用文档级 prompt。
+
+export interface TypedImage {
+  mime: string;
+  buffer: Buffer;
+}
+
+export interface TypedVlmResult {
+  fields: Record<string, unknown>;
+  字段置信度: Record<string, number>;
+}
+
+export type TypedVlmCall = (prompt: string, images: TypedImage[]) => Promise<string>;
+
+async function typedVlmFetch(prompt: string, images: TypedImage[]): Promise<string> {
+  if (!env.VLM_BASE_URL || !env.VLM_API_KEY) {
+    throw new Error('VLM 未配置，无法解析图片凭证');
+  }
+  for (const img of images) {
+    if (!ALLOWED_VOUCHER_MIME.has(img.mime)) {
+      throw new Error(`不支持的图片类型 ${img.mime}，仅支持 jpg/jpeg/png`);
+    }
+    if (img.buffer.length > MAX_VOUCHER_IMAGE_BYTES) {
+      throw new Error(`图片超过 10MB 上限(${img.buffer.length} 字节)，无法解析`);
+    }
+  }
+  const url = `${env.VLM_BASE_URL.replace(/\/+$/, '')}/chat/completions`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${env.VLM_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: env.VLM_MODEL,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            ...images.map((img) => ({
+              type: 'image_url' as const,
+              image_url: { url: `data:${img.mime};base64,${img.buffer.toString('base64')}` },
+            })),
+          ],
+        },
+      ],
+      response_format: { type: 'json_object' },
+    }),
+    signal: AbortSignal.timeout(env.VLM_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    throw new Error(`VLM /chat/completions 失败 (${res.status} ${res.statusText})`);
+  }
+  const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) throw new Error('VLM 返回空内容');
+  return content;
+}
+
+/** 容忍输出形状差异: 取 fields 对象与 字段置信度(缺省空对象, 不硬失败)。 */
+function normalizeTypedResult(parsed: unknown): TypedVlmResult {
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('VLM 输出不是 JSON 对象');
+  }
+  const src = parsed as Record<string, unknown>;
+  const fields = (src.fields ?? src) as Record<string, unknown>;
+  if (fields === null || typeof fields !== 'object' || Array.isArray(fields)) {
+    throw new Error('VLM 输出缺少 fields 对象');
+  }
+  const conf = src['字段置信度'] ?? src.fieldConfidence ?? {};
+  if (typeof conf !== 'object' || conf === null || Array.isArray(conf)) {
+    throw new Error('VLM 输出缺少 字段置信度 对象');
+  }
+  return { fields, 字段置信度: conf as Record<string, number> };
+}
+
+/**
+ * 按已知凭证类型提取(prompt 注册表)。页级类型(汽运磅单/轨道衡称重单)输出单页行,
+ * 由 pageRecords 聚合; 其余类型输出整单 schema。失败回灌重试 1 次, 两次失败抛错。
+ */
+export async function extractVoucherTyped(
+  images: TypedImage[],
+  docType: Exclude<VoucherType, '其他'>,
+  opts: { call?: TypedVlmCall; validate?: (fields: Record<string, unknown>) => void } = {},
+): Promise<TypedVlmResult> {
+  if (images.length === 0) throw new Error('extractVoucherTyped 需要至少一张图片');
+  const prompt =
+    VOUCHER_PAGE_PROMPTS[docType] ?? VOUCHER_DOC_PROMPTS[docType];
+  if (!prompt) throw new Error(`凭证类型 ${docType} 无注册 prompt`);
+  const call = opts.call ?? typedVlmFetch;
+
+  const once = async (p: string): Promise<TypedVlmResult> => {
+    const content = await call(p, images);
+    const parsed: unknown = JSON.parse(content);
+    const result = normalizeTypedResult(parsed);
+    opts.validate?.(result.fields);
+    return result;
+  };
+  try {
+    return await once(prompt);
+  } catch (first) {
+    const hint = first instanceof Error ? first.message : String(first);
+    return once(`${prompt}\n\n上次解析失败，请修正输出(${hint})。必须严格输出规定 JSON。`);
   }
 }
