@@ -165,6 +165,25 @@ describe('applyDocumentCorrections', () => {
     expect(await applyDocumentCorrections(ctx, 'DOC-ac2', [{ name: 'x', value: 'y' }])).toBeNull();
     expect(await applyDocumentCorrections(ctx, 'DOC-missing', [{ name: 'x', value: 'y' }])).toBeNull();
   });
+
+  // 回归(2026-08-28 用户报告 "数量录入20万吨保存后变成20"): 服务端必须原样存储
+  // 带单位的更正值 — 数值字段收到非纯数字字符串时不得静默数值化。
+  it('stores a unit-qualified correction ("20万吨") verbatim on a numeric field', async () => {
+    await saveDocument(ctx, mkModel('DOC-ac3'));
+    await saveExtraction(ctx, {
+      documentId: 'DOC-ac3', docType: '合同',
+      fields: { 数量: { value: 20, sourceSpans: [] } },
+      fieldMeta: { 数量: { strength: 'exact', confidence: 0.9 } },
+      overallConfidence: 0.9, needsReview: false,
+    });
+    const snap = await applyDocumentCorrections(ctx, 'DOC-ac3', [{ name: '数量', value: '20万吨' }], 'u1');
+    const qty = snap?.fields.find((f) => f.name === '数量');
+    expect(qty?.value).toBe('20万吨');
+    expect(qty?.confidence).toBe(1.0);
+    // 重读快照一致(卡片保存后的回显路径)
+    const reread = await getReviewSnapshot(ctx, 'DOC-ac3');
+    expect(reread?.fields.find((f) => f.name === '数量')?.value).toBe('20万吨');
+  });
 });
 
 // ---- Lane B: chunk tags on the review snapshot (分段标签) -------------------
