@@ -145,8 +145,8 @@ describe('L4 vector recall - RRF hybrid', () => {
       { query: 'diesel contract', strategy: 'fts' },
       execOpts,
     )) as { matchCount: number; matches: Array<{ document_id: string }> };
-    // FTS5 AND: only C has both tokens.
-    expect(ftsRes.matchCount).toBe(1);
+    // OR semantics (2026-08-28): A(diesel)/B(contract)/C(both) all match; C ranks first.
+    expect(ftsRes.matchCount).toBe(3);
     expect(ftsRes.matches[0]!.document_id).toBe(docC);
 
     const hybridRes = (await recall.execute(
@@ -165,8 +165,8 @@ describe('L4 vector recall - RRF hybrid', () => {
       }>;
     };
     expect(hybridRes.strategy).toBe('hybrid');
-    // Hybrid union (RRF) strictly broader than fts-only: A and B surface.
-    expect(hybridRes.matchCount).toBeGreaterThan(ftsRes.matchCount);
+    // Hybrid union covers all three docs (fts lane already matches all under OR).
+    expect(hybridRes.matchCount).toBe(3);
     const docIds = hybridRes.matches.map((m) => m.document_id);
     expect(docIds).toContain(docA);
     expect(docIds).toContain(docB);

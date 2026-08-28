@@ -67,12 +67,14 @@ export const FULLTEXT_TOTAL_CHARS = 16000;
 
 /**
  * 合同号过滤无命中时的如实说明: 区分"该合同号根本没有绑定文档"与"有绑定但本次
- * 检索未命中其内容片段"两种情形, 避免把检索失败误报成"未找到绑定"。
+ * 检索未命中其中的相关内容片段"两种情形, 避免把检索失败误报成"未找到绑定"。
+ * 附带重试指引(incident 2026-08-28): 多关键词 AND 检索易结构性空手, 引导模型
+ * 换专有名词/减少关键词, 而不是重复堆相似词。
  */
 function contractNoMissNote(docIdSet: Set<string>): string {
-  return docIdSet.size === 0
-    ? '未找到与该合同号绑定的文档'
-    : `该合同号绑定了 ${docIdSet.size} 个文档，但本次检索未命中其中的相关内容片段`;
+  if (docIdSet.size === 0) return '未找到与该合同号绑定的文档';
+  return `该合同号绑定了 ${docIdSet.size} 个文档，但本次检索未命中其中的相关内容片段。`
+    + '建议换一种查法：用对手方企业名/煤矿名/品名等专有名词，或大幅减少关键词（每次 1-2 个），不要重复堆砌相似关键词';
 }
 
 interface FusedMatch {
@@ -464,7 +466,14 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
       }
       if (embedder) {
         const [queryVec] = await embedder.embed([query]);
-        const knn = await vectorKnn(deps.ctx, queryVec ?? [], candidateLimit);
+        // Scoped KNN (incident 2026-08-28): with a contractNo doc allow-list,
+        // restrict KNN to those docs -- a global top-k starves scoped recalls.
+        const knn = await vectorKnn(
+          deps.ctx,
+          queryVec ?? [],
+          candidateLimit,
+          docIdSet ? { docIds: [...docIdSet] } : undefined,
+        );
 
         if (effective === 'vector') {
           const meta = await getChunkMetaByRowids(

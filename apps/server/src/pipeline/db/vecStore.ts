@@ -192,19 +192,38 @@ export function saveChunkVectorsSqlite(sqlite: Database.Database, rows: VectorRo
  * -- callers that need a "no match" semantic must use the FTS5 strategy or apply
  * a threshold.
  */
-export function vectorKnnSqlite(sqlite: Database.Database, queryVec: number[], k: number): VecKnnHit[] {
+export function vectorKnnSqlite(
+  sqlite: Database.Database,
+  queryVec: number[],
+  k: number,
+  docIds?: readonly string[],
+): VecKnnHit[] {
   if (!isVecReadySqlite(sqlite)) return [];
   const safeK = k > 0 ? Math.floor(k) : 5;
+  // Scoped variant (incident 2026-08-28): vec0 MATCH cannot filter on
+  // document_id, so over-fetch (8x, cap 400) and narrow to the allow-list via
+  // a doc_chunk lookup before truncating to k.
+  const fetchK = docIds && docIds.length > 0 ? Math.min(safeK * 8, 400) : safeK;
   try {
     const rows = sqlite
       .prepare(
         'SELECT id AS chunkRowId, distance FROM doc_chunk_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?',
       )
-      .all(packVec(queryVec), safeK) as Array<{ chunkRowId: number | bigint; distance: number }>;
-    return rows.map((r) => ({
+      .all(packVec(queryVec), fetchK) as Array<{ chunkRowId: number | bigint; distance: number }>;
+    let hits = rows.map((r) => ({
       chunkRowId: Number(r.chunkRowId),
       distance: Number(r.distance),
     }));
+    if (docIds && docIds.length > 0) {
+      const allowed = new Set<number>();
+      const idList = docIds.map((d) => `'${d.replace(/'/g, "''")}'`).join(',');
+      const owned = sqlite
+        .prepare(`SELECT id FROM doc_chunk WHERE document_id IN (${idList})`)
+        .all() as Array<{ id: number | bigint }>;
+      for (const r of owned) allowed.add(Number(r.id));
+      hits = hits.filter((h) => allowed.has(h.chunkRowId)).slice(0, safeK);
+    }
+    return hits;
   } catch {
     return [];
   }
@@ -259,7 +278,13 @@ export async function clearChunkVectorsForDocument(ctx: DbContext, documentId: s
  * first. Returns [] when the vector backend is unavailable (sqlite-vec missing)
  * or when no embeddings are stored yet.
  */
-export async function vectorKnn(ctx: DbContext, queryVec: number[], k: number): Promise<VecKnnHit[]> {
-  if (ctx.backend === 'postgres') return vectorKnnPg(ctx, queryVec, k);
-  return vectorKnnSqlite(ctx.sqlite, queryVec, k);
+export async function vectorKnn(
+  ctx: DbContext,
+  queryVec: number[],
+  k: number,
+  opts?: { docIds?: readonly string[] },
+): Promise<VecKnnHit[]> {
+  const docIds = opts?.docIds;
+  if (ctx.backend === 'postgres') return vectorKnnPg(ctx, queryVec, k, docIds);
+  return vectorKnnSqlite(ctx.sqlite, queryVec, k, docIds);
 }
