@@ -11,7 +11,7 @@ import { ensureEdgeRule, ensureTemplateType } from './db/repositories.js';
  *  汽运磅单/轨道衡称重单(id 不变, 边规则按类型名引用不受重挂影响), 新增叶子
  *  水尺计重单。formTypes props = 表单类型->业务类型映射(VLM 分类的数据源,
  *  见 formTypeRegistry.ts)。 */
-const DOC_TYPE_SEED: Array<{ name: string; parent?: string; props?: Record<string, unknown> }> = [
+export const DOC_TYPE_SEED: Array<{ name: string; parent?: string; props?: Record<string, unknown> }> = [
   { name: '合同', props: { requiredFields: ['合同号', '甲方', '乙方', '标的物', '数量', '单位', '金额', '签订日'], fieldHints: { 合同号: '合同编号/合同号', 甲方: '买方/甲方', 乙方: '卖方/乙方' }, formTypes: ['合同扫描件'] } },
   { name: '补充合同', parent: '合同' },
   { name: '立项书', props: { bindsTargetKind: 'Project' } },
