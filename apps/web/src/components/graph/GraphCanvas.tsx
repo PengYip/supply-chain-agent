@@ -295,6 +295,36 @@ export function GraphCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 面板折叠/展开(transition-[width])或窗口缩放会改变容器尺寸。G6 的
+  // autoResize 只重设画布表面, 相机(zoom/translate)不动 —— 内容仍锚在旧视口
+  // 原点, 表现为「画布变大但绘图区域没变大」(新增区域空白)。监听容器尺寸,
+  // 尺寸稳定后保持当前缩放把内容整体居中(fitCenter), 让扩出的区域真正可用。
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let lastW = el.clientWidth;
+    let lastH = el.clientHeight;
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth === lastW && el.clientHeight === lastH) return;
+      lastW = el.clientWidth;
+      lastH = el.clientHeight;
+      if (timer) clearTimeout(timer);
+      // 宽度有 200ms 过渡: 等尺寸稳定再居中一次, 避免过渡帧反复重排。
+      timer = setTimeout(() => {
+        timer = null;
+        const graph = graphRef.current;
+        if (!graph) return;
+        graph.fitCenter().catch((e) => console.warn('[graph] resize recenter failed', e));
+      }, 250);
+    });
+    ro.observe(el);
+    return () => {
+      if (timer) clearTimeout(timer);
+      ro.disconnect();
+    };
+  }, []);
+
   // 过滤条件变化: 重算布局后整页 setData 重绘(不重建实例)。
   useEffect(() => {
     const graph = graphRef.current;

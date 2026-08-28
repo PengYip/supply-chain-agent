@@ -1757,7 +1757,10 @@ export function buildUpdateDocumentFieldsTool(deps: ToolDeps) {
   return tool({
     description:
       '用户在复核卡上纠正字段后应用更正: 将纠正值合并到已抽取字段(保留未更正字段的置信度/原文span接地信息), ' +
-      '更正字段置信度置1.0(人工确认)并标记 reviewStatus=corrected。需用户确认才执行(L2)。',
+      '更正字段置信度置1.0(人工确认)并标记 reviewStatus=corrected。需用户确认才执行(L2)。\n' +
+      '边界(硬约束): corrections[].value 必须原样转传用户给出的文本, 禁止单位换算/数值化/格式改写。' +
+      '用户说"数量 20万吨"就必须传字符串 "20万吨", 传 20 或 200000 都是错误; ' +
+      '只有用户原话就是纯数字(如 "改成 16800")时才传 number。不确定原话时先向用户确认, 不要自行归一化。',
     inputSchema: z.object({
       docId: z.string().min(1),
       corrections: z.array(z.object({
