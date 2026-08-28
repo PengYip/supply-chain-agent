@@ -10,7 +10,7 @@ import {
   buildExtractFieldsTool,
 } from '../../src/pipeline/tools/documentEntry.js';
 import { buildRecallDocumentsTool } from '../../src/pipeline/tools/recall.js';
-import { getToolsForRole } from '../../src/harness/roleToolRegistry.js';
+import { getToolsForRole, isCubeSandboxEnabled } from '../../src/harness/roleToolRegistry.js';
 import { assertAllToolsContracted } from '../../src/harness/contextContract.js';
 
 // End-to-end integration of the §7 document-entry -> hybrid recall chain. The 7
@@ -273,13 +273,15 @@ describe('integration: document-entry -> hybrid recall chain', () => {
     });
     const names = tools.map((t) => t.name);
     // base 4 (create_payment removed: no in-system money tools) + 3 doc-entry +
-    // recall_documents + execute_code + inspect_extraction + tag_document +
+    // recall_documents + inspect_extraction + tag_document +
     // create_entity + link_entities + graph_query + graph_find_entity +
     // present_document_review + update_document_fields + list_binding_proposals
     // + project_rollup + link_contracts + link_projects + link_amends + template_overview + manage_quota +
-    // query_quota_usage = 27 live trader tools; 2026-08-28 P4 adds manage_template = 28;
-    // 2026-08-27 §15 adds gather_settlement_evidence/confirm_settlement = 30.
-    expect(names).toHaveLength(30);
+    // query_quota_usage = 30 live trader tools; 2026-08-28 tool-inventory
+    // methodology env-gates execute_code behind CUBE_SANDBOX_ENABLED (default
+    // off), so expected = 29 + (gated ? 1 : 0).
+    const expected = 29 + (isCubeSandboxEnabled() ? 1 : 0);
+    expect(names).toHaveLength(expected);
     expect(names).toContain('recall_documents');
     expect(names).toContain('ingest_document');
     expect(names).toContain('extract_fields');
