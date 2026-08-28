@@ -32,4 +32,10 @@ describe('renderPdfPages', () => {
   it('throws a clear error for a non-PDF file', async () => {
     await expect(renderPdfPages('no-such-file.txt')).rejects.toThrow(/pdf/i);
   });
+
+  it('first:1 只渲染第 1 页(160 页批量件的分类路径)', async () => {
+    const pages = await renderPdfPages(pdfPath, { first: 1 });
+    expect(pages).toHaveLength(1);
+    expect(pages[0]!.page).toBe(1);
+  });
 });

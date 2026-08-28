@@ -17,7 +17,7 @@ export function dpiToScale(dpi = 150): number {
 
 export async function renderPdfPages(
   sourcePath: string,
-  opts: { dpi?: number } = {},
+  opts: { dpi?: number; /** 只渲染前 N 页(分类只需第 1 页; 160 页批量件不必全渲)。 */ first?: number } = {},
 ): Promise<RenderedPage[]> {
   let ok = false;
   try {
@@ -32,6 +32,7 @@ export async function renderPdfPages(
   for await (const img of doc) {
     page += 1;
     out.push({ page, mime: 'image/png', buffer: Buffer.from(img) });
+    if (opts.first !== undefined && page >= opts.first) break;
   }
   if (out.length === 0) throw new Error(`PDF 渲染得到 0 页: ${sourcePath}`);
   return out;

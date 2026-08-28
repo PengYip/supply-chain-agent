@@ -920,8 +920,9 @@ async function tryVoucherRouteForPdf(
     const types = await listTemplateTypes(ctx);
     const formTypes = collectFormTypes(types);
     if (formTypes.length === 0) return null;
-    const pages = await renderPdfPages(sourceUri);
-    const firstPage = pages[0]!;
+    // 分类只需第 1 页(160 页批量件不全渲); 命中 voucher 后才全量渲染供提取。
+    const [firstPage] = await renderPdfPages(sourceUri, { first: 1 });
+    if (!firstPage) return null;
     const classify = opts.vlm?.classify;
     const { formType, confidence } = await classifyForm(
       { page: { mime: firstPage.mime, buffer: firstPage.buffer }, formTypes },
@@ -943,6 +944,7 @@ async function tryVoucherRouteForPdf(
       + ` route=${route} -> ${routable ? `voucher(${mapped})` : 'ocr-fallback'}`,
     );
     if (!routable || mapped === undefined) return null;
+    const pages = await renderPdfPages(sourceUri);
     const v = await runVoucherPipeline({
       ctx, sourcePath: sourceUri, docId,
       embedder: opts.embedder, userId: opts.userId, vlm: opts.vlm,
