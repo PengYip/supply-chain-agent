@@ -33,6 +33,7 @@
     "minio": "^8.0.7",
     "neo4j-driver": "^6.2.0",
     "pdf-parse": "^1.1.4",
+    "pdf-to-img": "^6.3.0",
     "pg": "^8.22.0",
     "sqlite-vec": "^0.1.9",
     "turndown": "^7.2.4",
@@ -47,6 +48,7 @@
     "@types/turndown": "^5.0.6",
     "drizzle-kit": "^0.31.10",
     "jszip": "^3.10.1",
+    "pdf-lib": "^1.17.1",
     "tsx": "^4.23.5",
     "typescript": "^5.6.0",
     "vitest": "^4.1.10"
