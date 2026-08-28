@@ -4,6 +4,7 @@ import type { BlockModel, DocType, SourceSpan } from './types.js';
 import { validateSpan, type SpanMatchStrength } from './spanValidator.js';
 import { computeFieldConfidence, decisionForField } from './confidence.js';
 import { REQUIRED_CONTRACT_FIELDS } from './schemas/contract.js';
+import { isEmptyValue } from './fieldValue.js';
 import type { ProposedRelationship, ProposedEdge } from './db/repositories.js';
 import { TRADE_VOCAB, type TradeVocabulary } from '../domain/tradeSemantics.js';
 
@@ -203,12 +204,12 @@ export async function extractGroundedFields(
   deps: ExtractionDeps,
   input: ExtractionInput,
 ): Promise<ExtractionResult> {
-  // 模板 props 驱动提示词: 必填字段清单 + 字段提示(别名/取值说明)动态拼接;
+  // 模板 props 驱动提示词: 保底字段清单 + 字段提示(别名/取值说明)动态拼接;
   // 无 props 时走原静态 prompt(缺省行为不变)。
-  const required = input.requiredFields ?? (input.docType === '合同' ? (REQUIRED_CONTRACT_FIELDS as readonly string[]) : []);
+  const required = input.requiredFields ?? (input.docType === '合同' ? REQUIRED_CONTRACT_FIELDS : []);
   const hints = input.fieldHints ?? {};
   const dynamicPrompt = [
-    ...(required.length ? [`必填字段: ${required.join('、')}。缺失时在 missingRequired 中列出。`] : []),
+    ...(required.length ? [`保底字段(必须逐个出现在输出中, 此规则优先于"原文不存在则不列"; 原文缺失时 value 置空字符串、sourceSpans 置空数组): ${required.join('、')}。真实缺失的保底字段列入 missingRequired。`] : []),
     ...(Object.keys(hints).length ? [`字段提示: ${Object.entries(hints).map(([k, v]) => `${k}(${v})`).join('; ')}。`] : []),
   ].join('\n');
   const system = dynamicPrompt ? `${GROUNDED_EXTRACTION_PROMPT}\n${dynamicPrompt}` : GROUNDED_EXTRACTION_PROMPT;
@@ -232,19 +233,47 @@ export async function extractGroundedFields(
   }));
 
   const fields = attachConfidence(input.blockModel, grounded, object.llmConsistency);
-  const overallConfidence = fields.length
-    ? fields.reduce((s, f) => s + f.confidence, 0) / fields.length
+  const padded = padTemplateFields(fields, required);
+  const nonEmpty = padded.fields.filter((f) => !isEmptyValue(f.value));
+  const overallConfidence = nonEmpty.length
+    ? nonEmpty.reduce((s, f) => s + f.confidence, 0) / nonEmpty.length
     : 0;
 
-  const present = new Set(fields.map((f) => f.name));
-  const missingRequired = required.filter((r) => !present.has(r));
-
   return {
-    fields,
+    fields: padded.fields,
     overallConfidence: Math.round(overallConfidence * 1000) / 1000,
-    needsReview: fields.some((f) => f.needsReview) || missingRequired.length > 0,
-    missingRequired,
-    proposedRelationships: deriveProposedRelationships(fields),
+    needsReview: padded.fields.some((f) => f.needsReview) || padded.missingRequired.length > 0,
+    missingRequired: padded.missingRequired,
+    proposedRelationships: deriveProposedRelationships(padded.fields),
     llmRaw: object,
   };
+}
+
+/** 空值判定: 空串/纯空白 = 原文缺失(保底语义下的"存空")。实现在 ./fieldValue.js, 此处再导出保持既有 API。 */
+export { isEmptyValue };
+
+/** 确定性保底(spec 2026-08-28): 输出 ⊇ required 恒成立。模型漏抽的保底字段补
+ *  空值占位(strength none/confidence 0/needsReview), 模型多抽的字段原样保留。
+ *  required 为空数组时原样返回(no-op)。 */
+export function padTemplateFields(
+  fields: ExtractedField[],
+  required: readonly string[],
+): { fields: ExtractedField[]; missingRequired: string[] } {
+  const present = new Map(fields.map((f) => [f.name, f] as const));
+  const padded: ExtractedField[] = [];
+  const missingRequired: string[] = [];
+  for (const name of required) {
+    const hit = present.get(name);
+    if (!hit) {
+      padded.push({
+        name, value: '', sourceSpans: [],
+        strength: 'none', confidence: 0,
+        needsReview: true, autoAccepted: false, citedText: null,
+      });
+      missingRequired.push(name);
+    } else if (isEmptyValue(hit.value)) {
+      missingRequired.push(name);
+    }
+  }
+  return { fields: required.length ? [...fields, ...padded] : fields, missingRequired };
 }

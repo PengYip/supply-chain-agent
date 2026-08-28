@@ -48,6 +48,24 @@ describe('buildLedgerEntryFromExtraction', () => {
     expect(entry).toBeNull();
   });
 
+  it('合同名称为空串(模板保底空值)时标题回退 标的物, 不被空串遮蔽', () => {
+    const entry = buildLedgerEntryFromExtraction({
+      documentId: 'DOC-1',
+      docType: '合同',
+      fields: {
+        合同号: { value: 'HT-1', sourceSpans: [] },
+        合同名称: { value: '', sourceSpans: [] },
+        标的物: { value: '动力煤', sourceSpans: [] },
+      },
+      fieldMeta: {
+        合同号: { strength: 'exact', confidence: 0.95 },
+        合同名称: { strength: 'none', confidence: 0 },
+        标的物: { strength: 'exact', confidence: 0.9 },
+      },
+    });
+    expect(entry!.title).toBe('动力煤');
+  });
+
   it('returns null when the contract number normalizes to empty', () => {
     const entry = buildLedgerEntryFromExtraction({
       documentId: 'DOC-1',
@@ -56,6 +74,32 @@ describe('buildLedgerEntryFromExtraction', () => {
       fieldMeta: { 合同号: { strength: 'none', confidence: 0.5 } },
     });
     expect(entry).toBeNull();
+  });
+
+  it('空值保底字段: 合同号在 -> 台账行含空字段且 needsReview; 合同号空 -> 无台账行', () => {
+    const entry = buildLedgerEntryFromExtraction({
+      documentId: 'DOC-1',
+      docType: '合同',
+      fields: {
+        合同号: { value: 'HT-1', sourceSpans: [] },
+        质量标准: { value: '', sourceSpans: [] },
+      },
+      fieldMeta: {
+        合同号: { strength: 'exact', confidence: 0.95 },
+        质量标准: { strength: 'none', confidence: 0 },
+      },
+    });
+    expect(entry).not.toBeNull();
+    expect(entry!.fields['质量标准']!.value).toBe('');
+    expect(entry!.needsReview).toBe(true);
+
+    const noEntry = buildLedgerEntryFromExtraction({
+      documentId: 'DOC-1',
+      docType: '合同',
+      fields: { 质量标准: { value: '', sourceSpans: [] } },
+      fieldMeta: { 质量标准: { strength: 'none', confidence: 0 } },
+    });
+    expect(noEntry).toBeNull();
   });
 
   it('builds an entry with normalized key, 标的物 title fallback and mean confidence', () => {

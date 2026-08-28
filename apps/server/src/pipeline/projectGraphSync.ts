@@ -10,6 +10,7 @@
 // 派生边不追删(spec §8 已知简化): 下一次任一归属确认时按最新 SSOT 重 MERGE 收敛。
 import { createEntity, mergeEdge, removeEdge, findEntities } from '../graph/repo.js';
 import { normalizeName } from '../graph/normalize.js';
+import { isEmptyValue, firstNonEmpty } from './fieldValue.js';
 import { resolveSelfSide } from '../domain/flowDirection.js';
 import { TRADE_VOCAB } from '../domain/tradeSemantics.js';
 import { getEffectiveSelfPartyNames } from './executionFlow.js';
@@ -56,14 +57,14 @@ function anchorsFromLedger(entry: ContractLedgerEntry): { buyer?: string; seller
 }
 
 function fieldNum(v: unknown): number | null {
-  if (v === undefined) return null;
+  if (v === undefined || isEmptyValue(v as string | number)) return null;
   const n = typeof v === 'number' ? v : Number(String(v).replace(/[,，\s]/g, ''));
   return Number.isFinite(n) ? n : null;
 }
 
 function commodityOf(entry: ContractLedgerEntry | null): string | null {
   if (!entry) return null;
-  const raw = String(entry.fields['标的物']?.value ?? entry.fields['商品']?.value ?? '').trim();
+  const raw = String(firstNonEmpty([entry.fields['标的物']?.value, entry.fields['商品']?.value]) ?? '').trim();
   return raw ? normalizeName(raw) : null;
 }
 
