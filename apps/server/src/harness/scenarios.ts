@@ -22,6 +22,7 @@ export const SCENARIO_CORE: readonly string[] = [
   'recall_documents',
   'escalate_to_human',
   'inspect_extraction',
+  'load_skill',
 ] as const;
 
 const CORE = [...SCENARIO_CORE];
@@ -61,7 +62,8 @@ export const SCENARIO_TOOLS: Record<Scenario, readonly string[]> = {
   settlement: SETTLEMENT,
 };
 
-const SETTLEMENT_RE = /结算|扣款|额度|对账|质保金|煤款结算|结算单/;
+// 暂估/货值 与结算同属货值计算域(settlement-valuation 技能的两阶段), 2026-08-28。
+const SETTLEMENT_RE = /结算|扣款|额度|对账|质保金|煤款结算|结算单|暂估|货值/;
 // 录入动词要求带宾语指示(这份/文件/合同...), 避免"系统里都录入了哪些合同"
 // 这类枚举问句被误路由到 entry(那是台账问答, 走 query_business)。
 const ENTRY_RE = /上传|解析|复核|重新抽取|绑定|纠错|更正字段|打标签?|标注|录入这|录入该|录入一份|录入文件|录入合同|录入发票|录入单据/;

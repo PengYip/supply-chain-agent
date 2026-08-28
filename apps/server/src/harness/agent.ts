@@ -17,6 +17,7 @@ import {
 import { appendStatusMessage, type AgentStatusSnapshot } from './agentStatus.js';
 import { getToolCallCounts } from './statusAggregator.js';
 import { countDocuments, countExtractionsNeedingReview } from '../pipeline/db/repositories.js';
+import { discoverSkills, buildSkillIndexSection } from './skillDiscovery.js';
 // defaultEmbedder priority chain lives in ingestModel.ts (single source of
 // truth, shared with the parse path / backfill).
 import { defaultEmbedder } from '../pipeline/ingestModel.js';
@@ -46,6 +47,10 @@ export const SYSTEM_PROMPT = [
    '- 合同台账(接线闭环): 录入的合同经抽取回写后可用 query_business(entity="contract") 查到(source=ledger)。两种模式: 不带 contractNo=枚举台账全部合同的摘要列表(盘点/枚举类问题如"系统里都录入了哪些合同"必须用它, 一次调用即可找全, 不要用 recall_documents 或图检索反复翻找); 带 contractNo=点查该合同详情。查具体合同条款时, 先用 entity="contract" 命中合同, 再用 recall_documents 传 contractNo(加条款关键词如 交货/违约/质量)检索原文片段作答, 并以返回的 document_id 说明出处; 命中短文档会返回整篇全文(mode=fullText); recall 返回 tagFilterFallback=true 表示标签过滤已自动放宽, 如实说明即可。查执行流水用 entity="flow"(必传 contractNo), 查额度占用用 entity="quota", 查模板词表用 entity="template"。',
    '- 图关系交互: 用户询问实体/单据关系("XX合同关联了哪些发票/单据"、"XX供应商有哪些合同")时, 先用 graph_find_entity 按名称定位实体拿到 elementId, 再用 graph_query 从该实体遍历(direction=both 双向命中); 用户要求建立/修正文件间关系("把这张发票挂到XX合同下"、"这两份合同背靠背")时, 用 graph_find_entity 定位两端实体后调 link_entities(L2, 需用户确认), 边类型优先复用词表 party/commodity/references/executes/back_to_back(购销方向写在 props.role)。经复核卡确认的单据已由系统自动写入图库, 不要再手动重建 party/commodity/references/executes 边。图工具返回错误(图不可用)时如实告知, 不得编造图数据。',
    '- 项目维度: 项目(Project)是统计维度实体, 合同经 part_of 边归属到项目, 项目节点的 name 是项目编号(如 PRJ-2026-001)。采购合同的对手方在该项目中角色是供应商, 销售合同的对手方角色是客户(由系统按合同类型自动派生 participates 边)。用户问"XX项目有哪些合同/对手方"时用 graph_find_entity(kind=Project)定位项目再 graph_query 遍历; 归属确认/拒绝由项目工作台或 API 完成, 不要手动 link_entities 建 part_of 边。按项目统计(该项目销售额/采购额/毛差/应收应付/发票执行进度)时优先用 query_business(entity="project", projectCode): 返回合同面/六向流水/指标/校验提示; 返回 notFound 或 error 时如实告知, 不得自行拼凑数字。',
+   // Skill 索引(方法论第4步 Skill 化, 2026-08-28): 模块加载时同步扫描一次
+   // apps/server/skills/, 把技能清单拼进静态系统提示词尾部; 运行期不变
+   // (KV cache 静态前缀)。扫描失败/无技能 -> 空串, 不阻塞启动。
+   ...buildSkillIndexSection(discoverSkills()).split('\n'),
 ].join('\n');
 
 /** Extract the trailing user message's text for scenario detection (阶段3). */

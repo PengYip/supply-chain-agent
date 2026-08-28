@@ -2,6 +2,7 @@ import type { Tool } from 'ai';
 import { queryOrders, crossCheck } from '../tools/queries.js';
 import { buildQueryBusinessTool } from '../pipeline/tools/queryBusiness.js';
 import { escalateToHuman, verifyDocumentFields } from '../tools/hitl.js';
+import { buildLoadSkillTool } from '../tools/skillTool.js';
 import {
   buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool, buildInspectExtractionTool,
   buildPresentDocumentReviewTool, buildUpdateDocumentFieldsTool,
@@ -85,6 +86,7 @@ export type GatedTool = Tool<any, any> & { name: string };
 // trader 无条件 push(无 ctx 时降级为纯 seed 行为)。
 const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
   trader: [
+    { ...buildLoadSkillTool(), name: 'load_skill' },
     { ...queryOrders, name: 'query_orders' },
     { ...crossCheck, name: 'cross_check' },
     { ...escalateToHuman, name: 'escalate_to_human' },

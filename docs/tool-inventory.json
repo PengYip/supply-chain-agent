@@ -3,7 +3,7 @@
   "methodology": "docs/tool-design-methodology.md",
   "description": "工具清单 SSOT。新增/删除/合并工具必须先改本清单（含 whenToUse/boundary/rationale），再改 registry；apps/server/test/harness/toolInventory.test.ts 断言两侧一致。",
   "policy": {
-    "maxToolsMountedPerScenario": 10,
+    "maxToolsMountedPerScenario": 11,
     "requiresWhenToUse": true,
     "requiresBoundary": true,
     "statusVocabulary": [
@@ -47,6 +47,16 @@
       "whenToUse": "检索/判定无法给出可靠结论（如合同未约定某指标）、或操作超出权限时，向用户求助并说明缺口。",
       "boundary": "只是求助通道，不产生任何业务数据写入；不得用它替代如实说明'未命中'。",
       "rationale": "HITL 原语，Agent 求助人工的唯一出口。"
+    },
+    {
+      "name": "load_skill",
+      "layer": "感知",
+      "level": "L1",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "系统提示词'可用技能'清单中的场景出现时(如货值暂估/结算计算), 先加载技能全文再严格按流程执行; 用户问'你有什么技能'时也用它取名单。",
+      "boundary": "只接受技能清单中登记的名字, 未登记返回 success:false 与可用名单; 返回的是操作指导文本, 本身不执行计算/写操作, 数字必须另行来自业务工具返回的数据。",
+      "rationale": "Skill 化(方法论第4步, 2026-08-28): '怎么做'的流程知识按需加载, 不占常驻描述 token, 不进工具面名额; 索引在 SYSTEM_PROMPT 静态尾部, 全文走工具结果持久进入对话。"
     },
     {
       "name": "verify_document_fields",
