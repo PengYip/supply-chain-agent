@@ -74,8 +74,8 @@ export async function startSessionRun(
       } else {
         const rawMessage = err instanceof Error ? err.message : String(err);
         console.error('[runManager] run failed:', rawMessage);
-        // Provider 级失败分类（当前仅欠费）：run.error 附带机器可读 code 与
-        // 用户文案；未命中归为 run_failed，事件形状向后兼容（多出字段而已）。
+        // Provider 级失败分类（当前仅欠费）：run.error 附带机器可读 code；
+        // 未命中归为 run_failed。展示文案由前端按 code 渲染，事件不下发。
         const cls = classifyProviderError(err);
         await emit({
           type: 'run.error',
@@ -83,7 +83,6 @@ export async function startSessionRun(
           runId,
           message: rawMessage,
           code: cls.code ?? 'run_failed',
-          userMessage: cls.userMessage ?? undefined,
         });
       }
     } finally {

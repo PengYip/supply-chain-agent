@@ -125,7 +125,7 @@ describe('runManager', () => {
     unsub();
     expect(seen.length).toBe(1);
     expect(seen[0]!.code).toBe('provider_arrears');
-    expect(String(seen[0]!.userMessage)).toContain('管理员');
+    expect(seen[0]!.userMessage).toBeUndefined();
     // 原始错误文本保留（排障用）
     expect(seen[0]!.message).toBe('Insufficient Balance');
   });

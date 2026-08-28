@@ -11,11 +11,10 @@ interface SessionEvent {
 
 /** Structured run/connection error surfaced to the UI. `code` is the
  *  server-side verdict ('provider_arrears' = 模型欠费, 'run_failed' = 其他，
- *  缺省视为 run_failed); `userMessage` is the ready-to-show Chinese copy. */
+ *  缺省视为 run_failed); 展示文案由 UI 按 code 渲染。 */
 export interface SessionError {
   code?: string
   message: string
-  userMessage?: string
 }
 
 export interface SessionEventHandlers {
@@ -90,12 +89,11 @@ export function useSessionEvents(
           handlersRef.current.onRunAborted?.(event.runId as string)
           break
         case 'run.error': {
-          // 老 runManager 版本（重放缓冲里的历史事件）没有 code/userMessage
-          // 字段：一律回退 run_failed，UI 走 generic 路径。
+          // 老 runManager 版本（重放缓冲里的历史事件）没有 code 字段：一律
+          // 回退 run_failed，UI 走 generic 路径。
           const err: SessionError = {
             code: typeof event.code === 'string' ? event.code : 'run_failed',
-            message: (event.message as string) ?? 'run error',
-            userMessage: typeof event.userMessage === 'string' ? event.userMessage : undefined,
+            message: typeof event.message === 'string' ? event.message : 'run error',
           }
           handlersRef.current.onRunError?.(event.runId as string | undefined, err)
           setError(err)
