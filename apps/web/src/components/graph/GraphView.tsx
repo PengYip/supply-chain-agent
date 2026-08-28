@@ -390,7 +390,8 @@ export function GraphView({
           onToggle={() => setDocsCollapsed((v) => !v)}
         />
 
-        <main className="relative min-w-0 flex-1">
+        {/* overflow-hidden: 画布表面尺寸短暂滞后于容器时不得溢出盖住相邻侧栏 */}
+        <main className="relative min-w-0 flex-1 overflow-hidden">
           {!center && !graphLoading && !graphError && (
             <div className="flex h-full flex-col items-center justify-center px-6 text-center">
               <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10">
