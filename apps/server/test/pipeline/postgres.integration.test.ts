@@ -344,6 +344,25 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
     expect(hybridRes.matches.some((m) => m.vector_distance !== null)).toBe(true);
   });
 
+  it('recall_documents fullText: short doc returns whole-document text on Postgres', async () => {
+    const file = join(env.INGEST_ROOT, `pg-fulltext-${Date.now()}.txt`);
+    writeFileSync(file, '质量奖罚条款全文锚点 PGFT-1\n灰分未约定时的判定依据见第三条', 'utf-8');
+    const ingest = buildIngestDocumentTool({ ctx, embedder });
+    const { docId } = await ingest.execute(
+      { sourceUri: file, docType: '合同', modality: 'digital' },
+      execOpts,
+    );
+    const recall = buildRecallDocumentsTool({ ctx, embedder });
+    const res = (await recall.execute(
+      { query: '质量奖罚条款全文锚点', strategy: 'fts', limit: 5, tagMode: 'any' },
+      execOpts,
+    )) as { mode?: string; documents?: Array<{ document_id: string; text: string }> };
+    expect(res.mode).toBe('fullText');
+    expect(
+      (res.documents ?? []).some((d) => d.document_id === docId && d.text.includes('PGFT-1')),
+    ).toBe(true);
+  });
+
   // ---- execution_flows (六向执行流水) ----------------------------------------
 
   it('upsertExecutionFlow is idempotent per (binding_id, user_id); summarize aggregates', async () => {
