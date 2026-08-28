@@ -9,6 +9,15 @@ interface SessionEvent {
   [key: string]: unknown
 }
 
+/** Structured run/connection error surfaced to the UI. `code` is the
+ *  server-side verdict ('provider_arrears' = 模型欠费, 'run_failed' = 其他，
+ *  缺省视为 run_failed); `userMessage` is the ready-to-show Chinese copy. */
+export interface SessionError {
+  code?: string
+  message: string
+  userMessage?: string
+}
+
 export interface SessionEventHandlers {
   /** A UIMessageChunk arrived (event type 'message.part', field 'part'). */
   onChunk?: (part: UIMessageChunk) => void
@@ -22,7 +31,7 @@ export interface SessionEventHandlers {
   /** A background run was aborted (event type 'run.aborted'). */
   onRunAborted?: (runId: string) => void
   /** A background run errored (event type 'run.error'). */
-  onRunError?: (runId: string | undefined, message: string) => void
+  onRunError?: (runId: string | undefined, error: SessionError) => void
 }
 
 /**
@@ -38,11 +47,11 @@ export interface SessionEventHandlers {
 export function useSessionEvents(
   sessionId: string | null,
   handlers: SessionEventHandlers,
-): { status: SessionStatus; error: string | null } {
+): { status: SessionStatus; error: SessionError | null } {
   const handlersRef = useRef(handlers)
   handlersRef.current = handlers
   const [status, setStatus] = useState<SessionStatus>('idle')
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<SessionError | null>(null)
 
   useEffect(() => {
     if (!sessionId) {
@@ -80,13 +89,18 @@ export function useSessionEvents(
         case 'run.aborted':
           handlersRef.current.onRunAborted?.(event.runId as string)
           break
-        case 'run.error':
-          handlersRef.current.onRunError?.(
-            event.runId as string | undefined,
-            (event.message as string) ?? 'unknown error',
-          )
-          setError((event.message as string) ?? 'run error')
+        case 'run.error': {
+          // 老 runManager 版本（重放缓冲里的历史事件）没有 code/userMessage
+          // 字段：一律回退 run_failed，UI 走 generic 路径。
+          const err: SessionError = {
+            code: typeof event.code === 'string' ? event.code : 'run_failed',
+            message: (event.message as string) ?? 'run error',
+            userMessage: typeof event.userMessage === 'string' ? event.userMessage : undefined,
+          }
+          handlersRef.current.onRunError?.(event.runId as string | undefined, err)
+          setError(err)
           break
+        }
       }
     }
 
@@ -96,7 +110,7 @@ export function useSessionEvents(
       // error if the connection is permanently closed (readyState CLOSED).
       if (closed) return
       if (es.readyState === EventSource.CLOSED) {
-        setError('连接已断开')
+        setError({ message: '连接已断开' })
       }
     }
 

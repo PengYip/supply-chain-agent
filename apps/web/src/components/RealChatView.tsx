@@ -805,7 +805,7 @@ export const RealChatView: React.FC<{
               onOpenBindings={onOpenBindings}
             />
           ))}
-          <ErrorMessage error={error ? new Error(error) : null} />
+          <ErrorMessage error={error ? new Error(error.message) : null} />
           <div ref={bottomRef} />
         </div>
       </div>
