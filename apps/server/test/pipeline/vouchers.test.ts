@@ -261,3 +261,92 @@ describe('validateVoucher (交叉校验 warnings)', () => {
     expect(validateVoucher('其他', {})).toEqual([]);
   });
 });
+// ---- v2.1 重量凭证组(汽运磅单/轨道衡称重单/水尺计重单) ----------------------
+
+import {
+  汽运磅单Schema,
+  轨道衡称重单Schema,
+  水尺计重单Schema,
+  VOUCHER_SCHEMAS,
+  WEIGHT_AGGREGATE_DOCTYPES,
+} from '../../src/pipeline/schemas/vouchers.js';
+
+describe('汽运磅单 schema + 校验', () => {
+  const rows = [
+    { 编号: 'ERP1', 车号: '渝DD5739', 毛重_吨: 48.82, 皮重_吨: 16.18, 净重_吨: 32.64, 毛重时间: '2025-09-10 09:25', 皮重时间: '2025-09-10 09:44', 称号: '#6轻磅' },
+    { 编号: 'ERP2', 车号: '贵F31172', 毛重_吨: 48.5, 皮重_吨: 16.02, 净重_吨: 32.48 },
+  ];
+  const fields = { 明细行: rows, 总净重_吨: 65.12, 页数: 2, 失败页: [] };
+
+  it('schema parse 通过(实测样例形状)', () => {
+    expect(汽运磅单Schema.safeParse(fields).success).toBe(true);
+  });
+  it('缺 总净重_吨 拒绝', () => {
+    const { 总净重_吨: _drop, ...rest } = fields;
+    expect(汽运磅单Schema.safeParse(rest).success).toBe(false);
+  });
+  it('毛重-皮重 != 净重 -> warning', () => {
+    const bad = { ...fields, 明细行: [{ ...rows[0]!, 净重_吨: 30 }] };
+    const w = validateVoucher('汽运磅单', bad);
+    expect(w.some((x) => x.includes('明细行1'))).toBe(true);
+  });
+  it('行净重合计 != 总净重 -> warning; 一致 -> 空', () => {
+    const w = validateVoucher('汽运磅单', { ...fields, 总净重_吨: 60 });
+    expect(w.some((x) => x.includes('总净重'))).toBe(true);
+    expect(validateVoucher('汽运磅单', fields)).toEqual([]);
+  });
+  it('失败页落 fields 且参与校验不产生额外 warning', () => {
+    const w = validateVoucher('汽运磅单', { ...fields, 失败页: [7] });
+    expect(w).toEqual([]);
+  });
+});
+
+describe('轨道衡称重单 schema + 校验', () => {
+  const rows = [
+    { 车型: 'C70', 车号: '1616368', 毛重_吨: 85.2, 皮重_吨: 22.4, 净重_吨: 62.8, 票重_吨: 70, 盈亏_吨: -7.2 },
+    { 车型: 'C64K', 车号: '4895414', 毛重_吨: 80.1, 皮重_吨: 20.2, 净重_吨: 59.9, 票重_吨: 61, 盈亏_吨: -1.1 },
+  ];
+  const fields = { 编号: '2494', 称量日期: '2024-08-27', 明细行: rows, 总净重_吨: 122.7, 页数: 2, 失败页: [] };
+
+  it('schema parse 通过', () => {
+    expect(轨道衡称重单Schema.safeParse(fields).success).toBe(true);
+  });
+  it('毛重-皮重 != 净重 -> warning', () => {
+    const bad = { ...fields, 明细行: [{ ...rows[0]!, 净重_吨: 60 }] };
+    expect(validateVoucher('轨道衡称重单', bad).some((x) => x.includes('第1行'))).toBe(true);
+  });
+  it('净重-票重 != 盈亏 -> warning', () => {
+    const bad = { ...fields, 明细行: [{ ...rows[0]!, 盈亏_吨: 0 }] };
+    expect(validateVoucher('轨道衡称重单', bad).some((x) => x.includes('盈亏'))).toBe(true);
+  });
+  it('合计一致且行自洽 -> 空 warnings', () => {
+    expect(validateVoucher('轨道衡称重单', fields)).toEqual([]);
+  });
+});
+
+describe('水尺计重单 schema + 锚点', () => {
+  const fields = { 船名: '硕隆817', 航次: '2511', 泊位: '泉州沙格码头', 货名: '煤炭', 卸货量_吨: 72079, 检测日期: '2025.6.22' };
+  it('schema parse 通过; 缺船名/卸货量拒绝', () => {
+    expect(水尺计重单Schema.safeParse(fields).success).toBe(true);
+    expect(水尺计重单Schema.safeParse({ ...fields, 船名: '' }).success).toBe(false);
+  });
+  it('anchors: quantityTon=卸货量 date=检测日期', () => {
+    const a = extractAnchors('水尺计重单', fields);
+    expect(a.quantityTon).toBe(72079);
+    expect(a.date).toBe('2025.6.22');
+  });
+  it('磅单 anchors: quantityTon=总净重', () => {
+    const a = extractAnchors('汽运磅单', { 明细行: [], 总净重_吨: 65.12 });
+    expect(a.quantityTon).toBe(65.12);
+  });
+});
+
+describe('VOUCHER_SCHEMAS 注册表与聚合模式集合', () => {
+  it('三种重量类型已注册且有聚合标记', () => {
+    for (const t of ['汽运磅单', '轨道衡称重单', '水尺计重单'] as const) {
+      expect(VOUCHER_SCHEMAS[t]).toBeDefined();
+      expect(WEIGHT_AGGREGATE_DOCTYPES.has(t)).toBe(true);
+    }
+    expect(WEIGHT_AGGREGATE_DOCTYPES.has('货转单')).toBe(false);
+  });
+});

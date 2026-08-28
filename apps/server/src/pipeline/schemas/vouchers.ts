@@ -10,8 +10,11 @@
 import { z } from 'zod';
 import type { AnchorQuantity } from '../../domain/units.js';
 
-/** 凭证类型。'其他' 为 VLM 无法归入三类时的兜底。 */
-export type VoucherType = '货转单' | '化验报告' | '付款凭证' | '其他';
+/** 凭证类型。'其他' 为 VLM 无法归入时的兜底。v2.1 增重量凭证三类型。 */
+export type VoucherType =
+  | '货转单' | '化验报告' | '付款凭证'
+  | '汽运磅单' | '轨道衡称重单' | '水尺计重单'
+  | '其他';
 
 // ---- 货转单 (货权转移单) ----------------------------------------------------
 
@@ -79,12 +82,73 @@ export const 化验报告Schema = z.object({
   指标: z.array(化验指标Schema).nullable().optional(),
 });
 
+// ---- 汽运磅单 (一页一车, 文档级由聚合器组装) --------------------------------
+
+export const 汽运磅单行Schema = z.object({
+  编号: z.string().nullable().optional(),
+  卡号: z.string().nullable().optional(),
+  车号: z.string().nullable().optional(),
+  毛重_吨: z.number(),
+  皮重_吨: z.number(),
+  净重_吨: z.number(),
+  毛重时间: z.string().nullable().optional(),
+  皮重时间: z.string().nullable().optional(),
+  称号: z.string().nullable().optional(),
+});
+
+export const 汽运磅单Schema = z.object({
+  明细行: z.array(汽运磅单行Schema).min(1),
+  总净重_吨: z.number(),
+  页数: z.number().int().positive(),
+  失败页: z.array(z.number().int().positive()),
+});
+
+// ---- 轨道衡称重单 (逐车厢行, 可跨多页) --------------------------------------
+
+export const 轨道衡行Schema = z.object({
+  车型: z.string().nullable().optional(),
+  车号: z.string().nullable().optional(),
+  毛重_吨: z.number(),
+  皮重_吨: z.number(),
+  净重_吨: z.number(),
+  票重_吨: z.number().nullable().optional(),
+  盈亏_吨: z.number().nullable().optional(),
+});
+
+export const 轨道衡称重单Schema = z.object({
+  编号: z.string().nullable().optional(),
+  称量日期: z.string().nullable().optional(),
+  明细行: z.array(轨道衡行Schema).min(1),
+  总净重_吨: z.number(),
+  页数: z.number().int().positive(),
+  失败页: z.array(z.number().int().positive()),
+});
+
+// ---- 水尺计重单 (单页表单) ---------------------------------------------------
+
+export const 水尺计重单Schema = z.object({
+  船名: z.string().min(1),
+  航次: z.string().nullable().optional(),
+  泊位: z.string().nullable().optional(),
+  货名: z.string().nullable().optional(),
+  卸货量_吨: z.number(),
+  检测日期: z.string().nullable().optional(),
+});
+
 /** voucherType -> 对应 zod schema 的查找表。'其他' 无 schema(不校验)。 */
 export const VOUCHER_SCHEMAS: Record<Exclude<VoucherType, '其他'>, z.ZodTypeAny> = {
   货转单: 货转单Schema,
   付款凭证: 付款凭证Schema,
   化验报告: 化验报告Schema,
+  汽运磅单: 汽运磅单Schema,
+  轨道衡称重单: 轨道衡称重单Schema,
+  水尺计重单: 水尺计重单Schema,
 };
+
+/** 重量聚合模式类型(spec 2026-08-28 §5.1): 逐页提取行 + 服务端 Σ净重聚合。 */
+export const WEIGHT_AGGREGATE_DOCTYPES: ReadonlySet<VoucherType> = new Set([
+  '汽运磅单', '轨道衡称重单', '水尺计重单',
+]);
 
 // ---- 锚点提取 (Phase B 绑定/台账用) -----------------------------------------
 
@@ -144,6 +208,25 @@ export function extractAnchors(
       const qtyTon = anchorNum(fields['重量_吨']);
       return {
         buyer: anchorStr(fields['送检单位']) ?? anchorStr(fields['委托方']),
+        date: anchorStr(fields['检测日期']),
+        quantityTon: qtyTon,
+        quantityUnit: qtyTon !== undefined ? '吨' : undefined,
+      };
+    }
+    case '汽运磅单':
+    case '轨道衡称重单': {
+      // quantityTon = 服务端聚合总净重(聚合零幻觉), 不取模型输出。
+      const qtyTon = anchorNum(fields['总净重_吨']);
+      const rows = Array.isArray(fields['明细行']) ? (fields['明细行'] as unknown[]) : [];
+      const first = rows[0] as Record<string, unknown> | null | undefined;
+      const date =
+        anchorStr(first?.['毛重时间']) ?? anchorStr(fields['称量日期']);
+      return { date, quantityTon: qtyTon, quantityUnit: qtyTon !== undefined ? '吨' : undefined };
+    }
+    case '水尺计重单': {
+      const qtyTon = anchorNum(fields['卸货量_吨']);
+      return {
+        buyer: anchorStr(fields['船名']),
         date: anchorStr(fields['检测日期']),
         quantityTon: qtyTon,
         quantityUnit: qtyTon !== undefined ? '吨' : undefined,
@@ -312,6 +395,38 @@ export function validateVoucher(
     const adWater = adRow?.['水分_百分比'];
     if (typeof arWater === 'number' && typeof adWater === 'number' && arWater <= adWater) {
       warnings.push(`全水(ar) ${arWater} 应大于 水分(ad) ${adWater}`);
+    }
+  }
+
+  // v2.1 重量凭证组(spec 2026-08-28 §5.1): 行内自洽 + 合计守恒, warnings 不硬失败。
+  if (voucherType === '汽运磅单' || voucherType === '轨道衡称重单') {
+    const rows = Array.isArray(fields['明细行']) ? fields['明细行'] : [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i] as Record<string, unknown> | null;
+      const g = r?.['毛重_吨'];
+      const t = r?.['皮重_吨'];
+      const n = r?.['净重_吨'];
+      if (
+        typeof g === 'number' && typeof t === 'number' && typeof n === 'number' &&
+        Math.abs(g - t - n) > 0.01
+      ) {
+        const label = voucherType === '汽运磅单' ? `明细行${i + 1}` : `第${i + 1}行`;
+        warnings.push(`${label} 毛重${g} - 皮重${t} != 净重${n}`);
+      }
+      if (voucherType === '轨道衡称重单') {
+        const tp = r?.['票重_吨'];
+        const yk = r?.['盈亏_吨'];
+        if (
+          typeof n === 'number' && typeof tp === 'number' && typeof yk === 'number' &&
+          Math.abs(n - tp - yk) > 0.05
+        ) {
+          warnings.push(`第${i + 1}行 净重${n} - 票重${tp} != 盈亏${yk}`);
+        }
+      }
+    }
+    const total = fields['总净重_吨'];
+    if (typeof total === 'number' && Math.abs(sumRows(rows, '净重_吨') - total) > 0.01) {
+      warnings.push(`明细行净重合计 ${sumRows(rows, '净重_吨')} 与总净重 ${total} 不一致`);
     }
   }
 
