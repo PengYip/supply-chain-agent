@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react'
 import { useSessionMessages } from '../hooks/useSessionMessages'
 import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, Paperclip, Check, Star } from 'lucide-react'
 import { getFavorite, setFavorite, clearFavorite, type FavoriteProbe } from '../api/favorites'
-import { RealMessageItem, ErrorMessage } from './RealMessageItem'
+import { RealMessageItem, ErrorMessage, ArrearsNotice } from './RealMessageItem'
 import AutoGrowTextarea from './AutoGrowTextarea'
 import { HumanAgentStatusBar } from './HumanAgentStatusBar'
 import { useHumanAgentStatus } from '../hooks/useHumanAgentStatus'
@@ -805,7 +805,9 @@ export const RealChatView: React.FC<{
               onOpenBindings={onOpenBindings}
             />
           ))}
-          <ErrorMessage error={error ? new Error(error.message) : null} />
+          {error?.code === 'provider_arrears'
+            ? <ArrearsNotice />
+            : <ErrorMessage error={error ? new Error(error.message) : null} />}
           <div ref={bottomRef} />
         </div>
       </div>

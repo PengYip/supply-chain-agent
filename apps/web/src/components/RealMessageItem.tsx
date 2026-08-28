@@ -556,3 +556,22 @@ export const ErrorMessage: React.FC<{ error: Error | null | undefined }> = ({ er
     </div>
   )
 }
+
+/** 模型服务欠费专用提示卡（run.error code='provider_arrears'）。临时 UI 状态：
+ *  不持久化、不入会话历史；充值后重新发送消息即可恢复。视觉上与 ErrorMessage
+ *  同位同类（danger 色系），但文案面向最终用户给出明确行动指引。 */
+export const ArrearsNotice: React.FC = () => {
+  return (
+    <div className="flex gap-3 animate-slide-up">
+      <div className="w-8 h-8 rounded-lg bg-danger/10 flex items-center justify-center shrink-0">
+        <AlertCircle className="w-4 h-4 text-danger" />
+      </div>
+      <div className="max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed bg-white border border-danger/20 rounded-tl-sm">
+        <div className="font-medium text-danger">AI 模型服务欠费</div>
+        <p className="text-ink mt-1">
+          模型服务商账户余额不足，本轮回复未能生成。请联系管理员为 DeepSeek / 千问账户充值，充值后重新发送消息即可继续对话。
+        </p>
+      </div>
+    </div>
+  )
+}
