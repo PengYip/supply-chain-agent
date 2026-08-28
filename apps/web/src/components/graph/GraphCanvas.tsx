@@ -295,27 +295,42 @@ export function GraphCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 面板折叠/展开(transition-[width])或窗口缩放会改变容器尺寸。G6 的
-  // autoResize 只重设画布表面, 相机(zoom/translate)不动 —— 内容仍锚在旧视口
-  // 原点, 表现为「画布变大但绘图区域没变大」(新增区域空白)。监听容器尺寸,
-  // 尺寸稳定后保持当前缩放把内容整体居中(fitCenter), 让扩出的区域真正可用。
+  // 容器尺寸变化(面板折叠/展开的 transition-[width]、窗口缩放)。G6 的
+  // autoResize 只监听 window resize 事件, 不观察容器 —— 侧栏开合后画布表面
+  // 不同步, 会以旧宽度溢出盖住相邻侧栏; 窗口缩放时相机(zoom/translate)也不动。
+  // 这里监听容器尺寸, 尺寸稳定后: (1) 显式 graph.resize 双向同步表面;
+  // (2) 把「旧视口中心处的内容点」平移回新视口中心 —— 保持用户正在看的节点
+  // 不跑位(fitCenter 会跳到整图中心, 丢失当前焦点)。
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    let lastW = el.clientWidth;
-    let lastH = el.clientHeight;
+    // 上一次同步过的稳定尺寸, 作为焦点取样视口
+    let stableW = el.clientWidth;
+    let stableH = el.clientHeight;
     const ro = new ResizeObserver(() => {
-      if (el.clientWidth === lastW && el.clientHeight === lastH) return;
-      lastW = el.clientWidth;
-      lastH = el.clientHeight;
+      if (el.clientWidth === stableW && el.clientHeight === stableH) return;
       if (timer) clearTimeout(timer);
-      // 宽度有 200ms 过渡: 等尺寸稳定再居中一次, 避免过渡帧反复重排。
+      // 宽度有 200ms 过渡: 等尺寸稳定再处理一次, 避免过渡帧反复重排。
       timer = setTimeout(() => {
         timer = null;
         const graph = graphRef.current;
-        if (!graph) return;
-        graph.fitCenter().catch((e) => console.warn('[graph] resize recenter failed', e));
+        const w = el.clientWidth;
+        const h = el.clientHeight;
+        if (!graph || (w === stableW && h === stableH)) return;
+        try {
+          graph.resize(w, h);
+          const [cw, ch] = graph.getSize();
+          const focusCanvas = graph.getCanvasByViewport([stableW / 2, stableH / 2]);
+          const vp = graph.getViewportByCanvas(focusCanvas);
+          const dx = cw / 2 - vp[0];
+          const dy = ch / 2 - vp[1];
+          if (Number.isFinite(dx) && Number.isFinite(dy)) graph.translateBy([dx, dy]);
+        } catch (e) {
+          console.warn('[graph] resize recenter failed', e);
+        }
+        stableW = w;
+        stableH = h;
       }, 250);
     });
     ro.observe(el);

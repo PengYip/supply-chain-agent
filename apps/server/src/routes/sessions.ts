@@ -17,6 +17,7 @@ import {
   listSessionsForUser,
   listSessionEventsSince,
   loadSession,
+  listPending,
   purgeEmptySessionsForUser,
   sessionBelongsTo,
 } from '../harness/sessionStore.js';
@@ -77,6 +78,25 @@ sessionsRoute.get('/:id', async (c) => {
   const loaded = await loadSession(id);
   if (!loaded) return c.json({ error: 'not found' }, 404);
   return c.json({ id: loaded.id, role: loaded.role, messages: loaded.messages, title: loaded.title });
+});
+
+// Pending-approval roster for the session-restore path. Persisted message
+// parts stay in approval-requested (L2) / blocked (L3) terminal state after an
+// approval resolves (L3 blocked outputs are never rewritten; L2 stays stale
+// when a resume run fails), so the client gates approval/review card visibility
+// on THIS list (pending_approvals.status='pending') instead of part states.
+// Row ids equal the ids the client holds back: L2 rows carry the SDK
+// approvalId, L3 rows carry the ESC ticketId (see recordPendingApproval).
+sessionsRoute.get('/:id/pending-approvals', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const id = c.req.param('id');
+  if (!(await sessionBelongsTo(id, user.id))) {
+    // 404 (not 403) to avoid confirming an id an untrusted user does not own.
+    return c.json({ error: 'not found' }, 404);
+  }
+  const pending = await listPending(id);
+  return c.json({ pendingApprovalIds: pending.map((p) => p.id) });
 });
 
 // Delete a session -- only if the authenticated user owns it. Also cascades to
