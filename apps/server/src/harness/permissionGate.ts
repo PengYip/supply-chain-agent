@@ -67,12 +67,9 @@ registerPermission('list_binding_proposals', 'L1'); // Phase B: 待确认的凭�
 // L2 write confirm
 registerPermission('advance_contract_stage', 'L2');
 registerPermission('bind_document', 'L2'); // T9: bind document to contract
-registerPermission('tag_document', 'L2'); // Phase 2: explicit document labeling
 registerPermission('create_entity', 'L2'); // Phase 4 §7: graph entity create
 registerPermission('link_entities', 'L2'); // Phase 4 §7: graph edge create
-registerPermission('link_contracts', 'L2'); // 2026-08-25 方案A: 背靠背购销对应(correlates)
-registerPermission('link_projects', 'L2'); // 2026-08-25 方案A: 项目级关联(relates)
-registerPermission('link_amends', 'L2'); // 2026-08-26 模板: 补充合同修订关系(amends)
+registerPermission('link_documents', 'L2'); // 阶段2b 三合一: GraphLinkKind correlates/relates/amends(原 link_contracts/link_projects/link_amends)
 registerPermission('manage_template', 'L2'); // 2026-08-28 P4: 模板维护(新增类型/改词表/软禁用激活)
 registerPermission('manage_quota', 'L2'); // 2026-08-25 方案A §6: 额度创建/调整/停用
 registerPermission('update_document_fields', 'L2'); // post-ingest field correction (write)

@@ -3,7 +3,8 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ModelMessage } from 'ai';
 import { runStream, buildGatedTools } from '../../src/harness/agent.js';
-import { isCubeSandboxEnabled } from '../../src/harness/roleToolRegistry.js';
+import { isCubeSandboxEnabled, listToolNames } from '../../src/harness/roleToolRegistry.js';
+import { scenarioActiveTools } from '../../src/harness/scenarios.js';
 import { createDb, migrate } from '../../src/pipeline/db/client.js';
 import { env } from '../../src/env.js';
 
@@ -117,21 +118,17 @@ describe('agent e2e loop (stub model)', () => {
     // (d) stream + telemetry path completes without throwing.
     expect(threw).toBe(false);
 
-    // (a) the live streamText call received the full trader toolset. base 4
-    // (create_payment removed: no in-system money tools) + 3 doc-entry +
-    // recall_documents + execute_code + inspect_extraction + tag_document +
-    // create_entity + link_entities + graph_query + graph_find_entity +
-    // present_document_review + update_document_fields + list_binding_proposals
-    // + project_rollup = 21 live trader tools; 2026-08-25 方案A adds
-    // link_contracts + link_projects = 23; 2026-08-26 模板 adds link_amends = 24;
-    // template_overview = 25; manage_quota/query_quota_usage = 27;
-    // 2026-08-28 P4 adds manage_template = 28; 2026-08-27 §15 adds
-    // gather_settlement_evidence/confirm_settlement = 30; 2026-08-28
-    // tool-inventory methodology env-gates execute_code behind
-    // CUBE_SANDBOX_ENABLED (default off); 阶段2 合并 folds
-    // query_contract/project_rollup/query_quota_usage/template_overview/
-    // query_execution_flows into query_business -> 25 + (gated ? 1 : 0).
-    expect(capturedNames).toHaveLength(25 + (isCubeSandboxEnabled() ? 1 : 0));
+    // (a) the live streamText call received the scenario-narrowed toolset
+    // (阶段3 场景挂载): mounted set is 22 + gated(execute_code); user text
+    // '请录入这份合同' routes to the ENTRY scenario, so the model sees
+    // SCENARIO_TOOLS.entry ∩ mounted = 10 tools (CORE + doc-entry chain),
+    // which still covers the canned ingest_document call.
+    const mounted = listToolNames('trader').filter(
+      (n) => n !== 'execute_code' || isCubeSandboxEnabled(),
+    );
+    const expectedNames = scenarioActiveTools('entry', mounted)!;
+    expect(capturedNames).toHaveLength(expectedNames.length);
+    expect([...capturedNames].sort()).toEqual([...expectedNames].sort());
     for (const n of ['ingest_document', 'extract_fields', 'bind_document', 'query_business', 'escalate_to_human', 'recall_documents']) {
       expect(capturedNames).toContain(n);
     }

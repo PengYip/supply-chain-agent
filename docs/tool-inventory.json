@@ -6,8 +6,14 @@
     "maxToolsMountedPerScenario": 10,
     "requiresWhenToUse": true,
     "requiresBoundary": true,
-    "statusVocabulary": ["active", "deprecated"],
-    "mountVocabulary": ["always", "env"]
+    "statusVocabulary": [
+      "active",
+      "deprecated"
+    ],
+    "mountVocabulary": [
+      "always",
+      "env"
+    ]
   },
   "tools": [
     {
@@ -126,17 +132,6 @@
       "rationale": "字段级审计诉求，参数形态与其他查询差异大，保留独立。"
     },
     {
-      "name": "tag_document",
-      "layer": "执行",
-      "level": "L2",
-      "status": "active",
-      "mount": "always",
-      "whenToUse": "录入后给文档补打人工/Agent 标签。",
-      "boundary": "L2 需用户同意；只改标签不改字段。",
-      "rationale": "与 update_document_fields 同为'改文档标注'，计划并入。",
-      "mergeInto": "update_document_fields"
-    },
-    {
       "name": "create_entity",
       "layer": "执行",
       "level": "L2",
@@ -177,6 +172,16 @@
       "rationale": "graph_query 缺的'用户说名称'入口。"
     },
     {
+      "name": "link_documents",
+      "layer": "执行",
+      "level": "L2",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "建立业务关系(L2 需授权), relation 区分: correlates=采购/销售合同背靠背对应; relates=项目关联; amends=补充合同修订基础合同。",
+      "boundary": "缺必填参数(如 correlates 需 purchase/salesContractNo)返回 error 不猜测; 不做金额分摊录入(走工作台 PATCH /api/graph/links/:id/props)。",
+      "rationale": "阶段2b 合并(2026-08-28): 同一 GraphLinkKind 实现的三个人为拆分合一, 底层委托原实现。"
+    },
+    {
       "name": "present_document_review",
       "layer": "感知",
       "level": "L1",
@@ -192,9 +197,9 @@
       "level": "L2",
       "status": "active",
       "mount": "always",
-      "whenToUse": "应用用户对抽取字段的修正（人工确认后）。",
-      "boundary": "L2 需用户同意；只改字段值，不做重新解析。",
-      "rationale": "复核闭环的写入半边；计划吸收 tag_document。"
+      "whenToUse": "复核卡字段纠正(corrections)与显式打标(tags, 原 tag_document 能力)可在一次调用中完成; L2 需用户确认。",
+      "boundary": "corrections[].value 必须原样转传用户原话(含单位), 禁止换算/数值化; corrections 与 tags 至少提供一个。",
+      "rationale": "复核闭环写入半边; 阶段2b 吸收 tag_document(同为改文档标注)。"
     },
     {
       "name": "list_binding_proposals",
@@ -205,39 +210,6 @@
       "whenToUse": "查询待确认的凭证-合同绑定建议。",
       "boundary": "只读建议列表；确认走 bind_document。",
       "rationale": "绑定闭环的读取半边。"
-    },
-    {
-      "name": "link_contracts",
-      "layer": "执行",
-      "level": "L2",
-      "status": "active",
-      "mount": "always",
-      "whenToUse": "建立背靠背购销合同对应关系（correlates）。",
-      "boundary": "L2 需用户同意；只处理 correlates 关系。",
-      "rationale": "与 link_projects/link_amends 同一实现（GraphLinkKind 三选一），计划三合一。",
-      "mergeInto": "link_documents(relation=correlates)"
-    },
-    {
-      "name": "link_projects",
-      "layer": "执行",
-      "level": "L2",
-      "status": "active",
-      "mount": "always",
-      "whenToUse": "建立合同与项目的关联（relates）。",
-      "boundary": "L2 需用户同意；只处理 relates 关系。",
-      "rationale": "同上，计划三合一。",
-      "mergeInto": "link_documents(relation=relates)"
-    },
-    {
-      "name": "link_amends",
-      "layer": "执行",
-      "level": "L2",
-      "status": "active",
-      "mount": "always",
-      "whenToUse": "建立补充合同对主合同的修订关系（amends）。",
-      "boundary": "L2 需用户同意；只处理 amends 关系。",
-      "rationale": "同上，计划三合一。",
-      "mergeInto": "link_documents(relation=amends)"
     },
     {
       "name": "manage_template",
@@ -315,21 +287,34 @@
       "reason": "阶段2 合并: 并入 query_business(entity=template)。",
       "removedOn": "2026-08-28",
       "mergedInto": "query_business"
+    },
+    {
+      "name": "link_contracts",
+      "reason": "阶段2b 合并: 并入 link_documents(relation=correlates)。",
+      "removedOn": "2026-08-28",
+      "mergedInto": "link_documents"
+    },
+    {
+      "name": "link_projects",
+      "reason": "阶段2b 合并: 并入 link_documents(relation=relates)。",
+      "removedOn": "2026-08-28",
+      "mergedInto": "link_documents"
+    },
+    {
+      "name": "link_amends",
+      "reason": "阶段2b 合并: 并入 link_documents(relation=amends)。",
+      "removedOn": "2026-08-28",
+      "mergedInto": "link_documents"
+    },
+    {
+      "name": "tag_document",
+      "reason": "阶段2b 合并: 标注能力并入 update_document_fields(tags 参数)。",
+      "removedOn": "2026-08-28",
+      "mergedInto": "update_document_fields"
     }
   ],
   "merges": {
     "description": "已批准、尚未实施的合并计划（工具精简阶段2）。合并落地后：旧名从 tools 挪入 removed，新工具以完整条目登记。",
-    "plans": [
-      {
-        "target": "link_documents",
-        "absorbs": ["link_contracts", "link_projects", "link_amends"],
-        "rationale": "同一 GraphLinkKind 实现的三个人为拆分。"
-      },
-      {
-        "target": "update_document_fields",
-        "absorbs": ["tag_document"],
-        "rationale": "同为'改文档标注'的 L2 写。"
-      }
-    ]
+    "plans": []
   }
 }

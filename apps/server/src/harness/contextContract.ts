@@ -111,14 +111,8 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
   },
-  tag_document: {
-    // Explicit user/agent labels -> trusted agent input (like bind_document's
-    // contractNo), so output 'raw' / injection 'safe'. Tags are short strings ->
-    // budget 'full'. Mutates persistent doc state -> signal 'env', persist
-    // 'business'. L2 write (soft gate).
-    output: 'raw', budget: 'full', signal: 'env',
-    persist: 'business', risk: { level: 'L2', injection: 'safe' },
-  },
+  // 阶段2b: tag_document 并入 update_document_fields(标签来源 explicit),
+  // 后者契约不变(L2 写, output 'raw' / injection 'safe')。
   // Graph layer (§7): create/link/query entities in Neo4j. Agent-supplied open
   // kind/name/props are trusted input (no document-derived text returned), so
   // output 'raw' / injection 'safe'. Returns short handles/summaries -> budget
@@ -132,21 +126,12 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'graph', risk: { level: 'L2', injection: 'safe' },
   },
-  // 2026-08-25 方案A §6: 背靠背购销对应(correlates)与项目级关联(relates)。
-  // Agent 传入的合同号/项目码/份额为可信输入(与 link_entities 同源), 返回短
-  // handle -> output 'raw' / injection 'safe'。落 graph_links SSOT + 图边投影
-  // -> signal 'env', persist 'business'(SSOT 在关系库, 图只是投影)。L2 软门控。
-  link_contracts: {
-    output: 'raw', budget: 'full', signal: 'env',
-    persist: 'business', risk: { level: 'L2', injection: 'safe' },
-  },
-  link_projects: {
-    output: 'raw', budget: 'full', signal: 'env',
-    persist: 'business', risk: { level: 'L2', injection: 'safe' },
-  },
-  // 2026-08-26 模板: 补充合同修订关系(amends)。Agent 传入 docId/合同号为可信
-  // 输入, 落 graph_links SSOT + 图边投影 -> persist 'business'。L2 软门控。
-  link_amends: {
+  // 阶段2b(2026-08-28): link_documents 三合一(GraphLinkKind correlates/relates/
+  // amends, 原 link_contracts/link_projects/link_amends)。Agent 传入的合同号/
+  // 项目码/docId/份额为可信输入(与 link_entities 同源), 返回短 handle ->
+  // output 'raw' / injection 'safe'。落 graph_links SSOT + 图边投影 ->
+  // signal 'env', persist 'business'(SSOT 在关系库, 图只是投影)。L2 软门控。
+  link_documents: {
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
   },

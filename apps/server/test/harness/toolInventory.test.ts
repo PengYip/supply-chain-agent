@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { listToolNames, getToolsForRole, isCubeSandboxEnabled } from '../../src/harness/roleToolRegistry.js';
+import { SCENARIO_TOOLS, SCENARIO_CORE, detectScenario, scenarioActiveTools } from '../../src/harness/scenarios.js';
 import { createDb, migrate } from '../../src/pipeline/db/client.js';
 
 // Tool-inventory methodology gate (docs/tool-design-methodology.md, 2026-08-28).
@@ -119,5 +120,26 @@ describe('tool inventory gate', () => {
     } else {
       expect(names, 'execute_code must stay unmounted unless CUBE_SANDBOX_ENABLED=true').not.toContain('execute_code');
     }
+  });
+
+  it('scenario mounting (阶段3): every scenario subset of mounted, within the cap, CORE always visible', () => {
+    const mounted = new Set(listToolNames('trader'));
+    const cap = inventory.policy.maxToolsMountedPerScenario;
+    for (const [scenario, tools] of Object.entries(SCENARIO_TOOLS)) {
+      for (const core of SCENARIO_CORE) {
+        expect(tools, `${scenario} must include CORE tool ${core}`).toContain(core);
+      }
+      const visible = scenarioActiveTools(scenario as keyof typeof SCENARIO_TOOLS, [...mounted])!;
+      expect(visible.length, `${scenario} exceeds the per-scenario cap of ${cap}`).toBeLessThanOrEqual(cap);
+      for (const t of visible) {
+        expect(mounted.has(t), `${scenario} exposes unmounted tool ${t}`).toBe(true);
+      }
+    }
+    // conservative router: unknown/template text -> 'all' (no narrowing)
+    expect(detectScenario('帮我维护一下模板词表')).toBe('all');
+    expect(detectScenario('')).toBe('all');
+    expect(detectScenario('这个项目结算扣款怎么算')).toBe('settlement');
+    expect(detectScenario('请录入这份合同并解析')).toBe('entry');
+    expect(detectScenario('这两份合同是什么关系')).toBe('qa');
   });
 });

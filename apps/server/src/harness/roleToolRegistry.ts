@@ -4,13 +4,13 @@ import { buildQueryBusinessTool } from '../pipeline/tools/queryBusiness.js';
 import { escalateToHuman, verifyDocumentFields } from '../tools/hitl.js';
 import {
   buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool, buildInspectExtractionTool,
-  buildTagDocumentTool, buildPresentDocumentReviewTool, buildUpdateDocumentFieldsTool,
+  buildPresentDocumentReviewTool, buildUpdateDocumentFieldsTool,
   buildListBindingProposalsTool,
 } from '../pipeline/tools/documentEntry.js';
 import { buildRecallDocumentsTool } from '../pipeline/tools/recall.js';
 import { buildExecuteCodeTool } from '../pipeline/tools/executeCode.js';
 import { buildCreateEntityTool, buildLinkEntitiesTool, buildGraphQueryTool, buildGraphFindEntityTool } from '../graph/tools.js';
-import { buildLinkContractsTool, buildLinkProjectsTool, buildLinkAmendsTool } from '../pipeline/tools/graphLinkTools.js';
+import { buildLinkDocumentsTool } from '../pipeline/tools/linkDocuments.js';
 import { buildManageTemplateTool } from '../pipeline/tools/manageTemplateTool.js';
 import { buildManageQuotaTool } from '../pipeline/tools/quotaTools.js';
 import { buildGatherSettlementEvidenceTool, buildConfirmSettlementTool } from '../pipeline/tools/settlementTools.js';
@@ -96,7 +96,7 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
 // though constructing their instances requires a DbContext (see getToolsForRole).
 // query_contract is listed here too: after the BASE removal above its name would
 // otherwise drop out of listToolNames (it is still always registered for trader).
-const TRADER_CTX_TOOL_NAMES = ['query_business', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'link_contracts', 'link_projects', 'link_amends', 'manage_template', 'manage_quota', 'gather_settlement_evidence', 'confirm_settlement'] as const;
+const TRADER_CTX_TOOL_NAMES = ['query_business', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'link_documents', 'manage_template', 'manage_quota', 'gather_settlement_evidence', 'confirm_settlement'] as const;
 
 export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
   const base: GatedTool[] = (BASE_TOOLS_FOR_ROLE[role] ?? []).map((t) => ({ ...t }));
@@ -117,7 +117,8 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
         { ...buildExtractFieldsTool({ ctx, extraction, userId }), name: 'extract_fields' },
         // present_document_review is L1: read-only 5-dim review card (业务类型/字段/关系/TAG/向量化).
         { ...buildPresentDocumentReviewTool({ ctx, userId }), name: 'present_document_review' },
-        // update_document_fields is L2: apply user field corrections (needs user consent).
+        // update_document_fields is L2: apply user field corrections + explicit
+        // tags (阶段2b 吸收 tag_document); needs user consent.
         { ...buildUpdateDocumentFieldsTool({ ctx, userId }), name: 'update_document_fields', needsApproval: true },
         // list_binding_proposals is L1 (Phase B): 查看待确认的凭证-合同绑定建议。
         { ...buildListBindingProposalsTool({ ctx, userId }), name: 'list_binding_proposals' },
@@ -126,9 +127,6 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
         // inspect_extraction is L1: on-demand evidence drill-down for a single
         // already-extracted field (citedText recomputed from persisted spans).
         { ...buildInspectExtractionTool({ ctx, userId }), name: 'inspect_extraction' },
-        // tag_document is L2: explicit user/agent labels, post-ingest, any time.
-        // needsApproval = soft gate (v6): the agent must have user consent to label.
-        { ...buildTagDocumentTool({ ctx, userId }), name: 'tag_document', needsApproval: true },
         // Graph layer (§7): create/link entities in Neo4j are L2 (mutate
         // graph state / soft gate). Builders take no deps (use getDriver() directly).
         { ...buildCreateEntityTool(), name: 'create_entity', needsApproval: true },
@@ -138,14 +136,9 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
         // graph_find_entity is L1: read-only name lookup —— graph_query 缺的
         // "按名称找实体"入口（用户说名称，不说 elementId）。
         { ...buildGraphFindEntityTool(), name: 'graph_find_entity' },
-        // link_contracts / link_projects are L2 (2026-08-25 方案A §6):
-        // 背靠背购销对应(correlates)与项目级关联(relates), 落 graph_links
-        // SSOT + best-effort 边投影, 与 bind_document 同款软门控。
-        { ...buildLinkContractsTool({ ctx, userId }), name: 'link_contracts', needsApproval: true },
-        { ...buildLinkProjectsTool({ ctx, userId }), name: 'link_projects', needsApproval: true },
-        // link_amends is L2 (2026-08-26 模板): 补充合同修订关系(amends), 落
-        // graph_links SSOT + best-effort 边投影, 与 link_contracts 同款软门控。
-        { ...buildLinkAmendsTool({ ctx, userId }), name: 'link_amends', needsApproval: true },
+        // link_documents is L2 (阶段2b 三合一: GraphLinkKind correlates/relates/
+        // amends), 落 graph_links SSOT + best-effort 边投影, 软门控。
+        { ...buildLinkDocumentsTool({ ctx, userId }), name: 'link_documents', needsApproval: true },
         // manage_template is L2 (2026-08-28 P4): 模板维护唯一写入面(新增类型/
         // 改词表/软禁用激活), 转 templateManage 与管理 REST 共享业务规则, 软门控。
         { ...buildManageTemplateTool({ ctx, userId }), name: 'manage_template', needsApproval: true },

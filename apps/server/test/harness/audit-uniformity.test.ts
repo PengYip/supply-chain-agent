@@ -73,6 +73,7 @@ async function drainToolCall(toolName: string, input: unknown) {
     auditTraceId: 'h4',
     model: fake as any,
     deps: { ctx, extraction: { model: fake as any } },
+    scenario: 'all',
   });
   for await (const _ of result.fullStream as AsyncIterable<any>) {
     /* drain to completion so execute + audit wrapper fire */

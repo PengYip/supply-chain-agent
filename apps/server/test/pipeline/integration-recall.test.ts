@@ -278,11 +278,11 @@ describe('integration: document-entry -> hybrid recall chain', () => {
     // recall_documents + inspect_extraction + tag_document +
     // create_entity + link_entities + graph_query + graph_find_entity +
     // present_document_review + update_document_fields + list_binding_proposals
-    // + link_contracts + link_projects + link_amends + manage_template +
+    // + link_documents(三合一) + manage_template +
     // manage_quota + gather_settlement_evidence/confirm_settlement
     // = 25 live trader tools; 2026-08-28 tool-inventory methodology env-gates
     // execute_code behind CUBE_SANDBOX_ENABLED (default off).
-    const expected = 25 + (isCubeSandboxEnabled() ? 1 : 0);
+    const expected = 22 + (isCubeSandboxEnabled() ? 1 : 0);
     expect(names).toHaveLength(expected);
     expect(names).toContain('recall_documents');
     expect(names).toContain('ingest_document');

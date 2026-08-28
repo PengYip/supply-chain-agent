@@ -1,4 +1,5 @@
 import { streamText, stepCountIs, type Tool, type ModelMessage, type LanguageModel } from 'ai';
+import { detectScenario, scenarioActiveTools } from './scenarios.js';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { env } from '../env.js';
 import { getToolsForRole, type Role, type HarnessDeps } from './roleToolRegistry.js';
@@ -33,7 +34,7 @@ export const SYSTEM_PROMPT = [
   '2. 如果工具未返回数据或返回 notFound=true，必须明确告知用户"数据不可得/未找到该记录"，不得编造。',
   '3. 不要猜测合同号、订单号、发票号；如用户描述模糊，先用工具按已知字段查询。',
   '4. 你可以多次调用工具综合回答；回答时简要引用工具返回的关键数字与对象。',
-  '5. 写操作（如绑定单据 bind_document、标注 tag_document）需用户确认后执行。若工具被请求确认（tool-approval-request），必须如实告知用户"该操作需要你确认后才会执行"，不得谎称已执行。',
+  '5. 写操作（如绑定单据 bind_document、标注/改字段 update_document_fields、建关系 link_documents）需用户确认后执行。若工具被请求确认（tool-approval-request），必须如实告知用户"该操作需要你确认后才会执行"，不得谎称已执行。',
   '6. 付款/退款/合同变更属于资金或不可逆操作，系统内没有对应的执行工具，禁止声称已完成或编造执行流程；如需人工决策或人工执行，必须调用 escalate_to_human 生成工单转人工，并如实告知用户。',
   '7. 不确定回退：当遇到数据冲突、置信度低、数据缺失、或业务规则边界等无法确定的情况，必须调用 escalate_to_human 工具转人工，生成工单号 ESC-xxx，不得自行编造或猜测。需明确告知用户已生成工单号。',
   '8. 单据字段核验：涉及提单/发票等单据的字段核验时调用 verify_document_fields；对返回 needsReview=true 的字段，必须如实告知用户"OCR 置信度低，建议人工复核"，不得自行决定该字段值。',
@@ -46,6 +47,23 @@ export const SYSTEM_PROMPT = [
    '- 图关系交互: 用户询问实体/单据关系("XX合同关联了哪些发票/单据"、"XX供应商有哪些合同")时, 先用 graph_find_entity 按名称定位实体拿到 elementId, 再用 graph_query 从该实体遍历(direction=both 双向命中); 用户要求建立/修正文件间关系("把这张发票挂到XX合同下"、"这两份合同背靠背")时, 用 graph_find_entity 定位两端实体后调 link_entities(L2, 需用户确认), 边类型优先复用词表 party/commodity/references/executes/back_to_back(购销方向写在 props.role)。经复核卡确认的单据已由系统自动写入图库, 不要再手动重建 party/commodity/references/executes 边。图工具返回错误(图不可用)时如实告知, 不得编造图数据。',
    '- 项目维度: 项目(Project)是统计维度实体, 合同经 part_of 边归属到项目, 项目节点的 name 是项目编号(如 PRJ-2026-001)。采购合同的对手方在该项目中角色是供应商, 销售合同的对手方角色是客户(由系统按合同类型自动派生 participates 边)。用户问"XX项目有哪些合同/对手方"时用 graph_find_entity(kind=Project)定位项目再 graph_query 遍历; 归属确认/拒绝由项目工作台或 API 完成, 不要手动 link_entities 建 part_of 边。按项目统计(该项目销售额/采购额/毛差/应收应付/发票执行进度)时优先用 query_business(entity="project", projectCode): 返回合同面/六向流水/指标/校验提示; 返回 notFound 或 error 时如实告知, 不得自行拼凑数字。',
 ].join('\n');
+
+/** Extract the trailing user message's text for scenario detection (阶段3). */
+function lastUserText(msgs: ModelMessage[]): string {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i]!;
+    if (m.role !== 'user') continue;
+    if (typeof m.content === 'string') return m.content;
+    if (Array.isArray(m.content)) {
+      return m.content
+        .map((p) => (p && typeof p === 'object' && (p as { type?: string }).type === 'text'
+          ? String((p as { text?: string }).text ?? '')
+          : ''))
+        .join(' ');
+    }
+  }
+  return '';
+}
 
 // Apply the PermissionGate to the role's toolset:
 //   L1 -> auto execute
@@ -241,6 +259,12 @@ export interface RunStreamOpts {
    * ordering.)
    */
   skipStatusMessage?: boolean;
+
+  /**
+   * 阶段3 场景挂载: 显式钉死本回合场景('all' = 不收窄)。缺省时按最后一条
+   * 用户消息自动检测。测试与上游调用方(如审批恢复)可传入以固定可见工具集。
+   */
+  scenario?: import('./scenarios.js').ScenarioOrAll;
 }
 
 // Scan a turn's response messages for v6 tool-approval-request parts (emitted
@@ -336,7 +360,7 @@ export async function buildAgentStatusSnapshot({
 // to pre-H1 behavior. When supplied (tests), no provider client is constructed and
 // no network/env is required, so the agent loop can be exercised offline against
 // a canned fake model + in-memory DbContext.
-export async function runStream({ messages, role, auditTraceId, model, deps, userId, sessionId, abortSignal, skipStatusMessage }: RunStreamOpts) {
+export async function runStream({ messages, role, auditTraceId, model, deps, userId, sessionId, abortSignal, skipStatusMessage, scenario: scenarioOverride }: RunStreamOpts) {
   // Production default: real DeepSeek model. If a model was injected, skip
   // building the provider client so tests need no API key / network.
   //
@@ -386,6 +410,11 @@ export async function runStream({ messages, role, auditTraceId, model, deps, use
   // so the status message is replaced fresh on every turn.
   const snapshot = sessionId && !skipStatusMessage ? await buildAgentStatusSnapshot({ sessionId, userId, ctx }) : null;
   const messagesForModel = appendStatusMessage(messages, snapshot);
+  // 阶段3 场景挂载(tool-inventory methodology): 按当前用户消息把本回合可见
+  // 工具收窄到 场景集 ∪ CORE; 检测保守(无命中/涉及模板维护 -> 'all' 不收窄)。
+  // prepareStep 的末步 activeTools:[] 覆盖本值, 收尾行为不变。
+  const scenario = scenarioOverride ?? detectScenario(lastUserText(messagesForModel));
+  const scenarioTools = scenarioActiveTools(scenario, Object.keys(tools));
   return streamText({
     // Chat Completions API (.chat) -- DeepSeek's Responses-API compatibility
     // corrupts tool-call id correlation.
@@ -393,6 +422,8 @@ export async function runStream({ messages, role, auditTraceId, model, deps, use
     system: SYSTEM_PROMPT,
     messages: messagesForModel,
     tools,
+    // 场景挂载: 'all'(检测不确定)时为 undefined, 不收窄。
+    ...(scenarioTools ? { activeTools: [...scenarioTools] } : {}),
     // L5 circuit breaker: stop after N consecutive tool failures (infra
     // errors, not business ok:false -- those return success:true with the
     // payload). Kept alongside the step cap so the loop still terminates on
