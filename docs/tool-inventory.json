@@ -54,15 +54,14 @@
       "removalPlan": "工具精简阶段1：确认无流程引用后移除。"
     },
     {
-      "name": "query_contract",
+      "name": "query_business",
       "layer": "感知",
       "level": "L1",
       "status": "active",
       "mount": "always",
-      "whenToUse": "查合同基本信息/枚举台账全部合同（盘点类问题必须用它，不要用 recall_documents 翻找）。",
-      "boundary": "只给台账结构化字段，不含条款原文；找原文片段用 recall_documents；未录入且无种子时如实返回。",
-      "rationale": "合同台账 SSOT 的点查/枚举入口。",
-      "mergeInto": "query_business(entity=contract)"
+      "whenToUse": "结构化业务数据统一查询入口: contract=合同台账(枚举/点查), flow=六向执行流水, quota=额度占用, project=项目汇总, template=模板词表。盘点/枚举类问题必须用它。",
+      "boundary": "只给台账/物化结构化数据, 不含单据原文; 找原文片段用 recall_documents; entity=flow 必传 contractNo, entity=project 必传 projectCode, 缺失时返回 error 不猜测。",
+      "rationale": "阶段2 合并(2026-08-28): 五个功能相似+场景重叠+参数简单的 SSOT 读工具合一, 底层委托原实现行为不变。"
     },
     {
       "name": "ingest_document",
@@ -208,28 +207,6 @@
       "rationale": "绑定闭环的读取半边。"
     },
     {
-      "name": "query_execution_flows",
-      "layer": "感知",
-      "level": "L1",
-      "status": "active",
-      "mount": "always",
-      "whenToUse": "查某合同的六向执行流水（资金/货物/发票 x 进/出）汇总与逐笔明细。",
-      "boundary": "只读物化结果；流水在绑定确认后才存在。",
-      "rationale": "执行视图 SSOT 点查。",
-      "mergeInto": "query_business(entity=flow)"
-    },
-    {
-      "name": "project_rollup",
-      "layer": "感知",
-      "level": "L1",
-      "status": "active",
-      "mount": "always",
-      "whenToUse": "按项目编号汇总合同金额、毛差、应收应付、流水与校验提示。",
-      "boundary": "项目维度聚合；单合同明细用 query_contract/query_execution_flows。",
-      "rationale": "项目报表聚合。",
-      "mergeInto": "query_business(entity=project)"
-    },
-    {
       "name": "link_contracts",
       "layer": "执行",
       "level": "L2",
@@ -263,17 +240,6 @@
       "mergeInto": "link_documents(relation=amends)"
     },
     {
-      "name": "template_overview",
-      "layer": "感知",
-      "level": "L1",
-      "status": "active",
-      "mount": "always",
-      "whenToUse": "查看单据模板类型层级、允许挂接的合同类型与字段词表。",
-      "boundary": "只读；维护走 manage_template。",
-      "rationale": "模板体系读取面。",
-      "mergeInto": "query_business(entity=template)"
-    },
-    {
       "name": "manage_template",
       "layer": "执行",
       "level": "L2",
@@ -292,17 +258,6 @@
       "whenToUse": "两层额度的创建/调整/停用。",
       "boundary": "L2 需用户同意；只改额度定义，占用查询走 query_quota_usage。",
       "rationale": "额度写入面需独立审计。"
-    },
-    {
-      "name": "query_quota_usage",
-      "layer": "感知",
-      "level": "L1",
-      "status": "active",
-      "mount": "always",
-      "whenToUse": "只读查询额度占用（读对账桥物化结果）。",
-      "boundary": "只读物化；调整额度走 manage_quota。",
-      "rationale": "额度读取面。",
-      "mergeInto": "query_business(entity=quota)"
     },
     {
       "name": "gather_settlement_evidence",
@@ -330,16 +285,41 @@
       "name": "create_payment",
       "reason": "系统内无资金类工具闭环（历史 BASE 工具，早已移除）。",
       "removedOn": "早于 2026-08-28，登记进黑名单防止回潮。"
+    },
+    {
+      "name": "query_contract",
+      "reason": "阶段2 合并: 并入 query_business(entity=contract)。",
+      "removedOn": "2026-08-28",
+      "mergedInto": "query_business"
+    },
+    {
+      "name": "query_execution_flows",
+      "reason": "阶段2 合并: 并入 query_business(entity=flow)。",
+      "removedOn": "2026-08-28",
+      "mergedInto": "query_business"
+    },
+    {
+      "name": "query_quota_usage",
+      "reason": "阶段2 合并: 并入 query_business(entity=quota)。",
+      "removedOn": "2026-08-28",
+      "mergedInto": "query_business"
+    },
+    {
+      "name": "project_rollup",
+      "reason": "阶段2 合并: 并入 query_business(entity=project)。",
+      "removedOn": "2026-08-28",
+      "mergedInto": "query_business"
+    },
+    {
+      "name": "template_overview",
+      "reason": "阶段2 合并: 并入 query_business(entity=template)。",
+      "removedOn": "2026-08-28",
+      "mergedInto": "query_business"
     }
   ],
   "merges": {
     "description": "已批准、尚未实施的合并计划（工具精简阶段2）。合并落地后：旧名从 tools 挪入 removed，新工具以完整条目登记。",
     "plans": [
-      {
-        "target": "query_business",
-        "absorbs": ["query_contract", "query_execution_flows", "project_rollup", "query_quota_usage", "template_overview"],
-        "rationale": "结构化 SSOT 的点查/枚举/汇总，功能相似+场景重叠+参数简单 -> 统一入口+entity 类型参数。"
-      },
       {
         "target": "link_documents",
         "absorbs": ["link_contracts", "link_projects", "link_amends"],

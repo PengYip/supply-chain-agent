@@ -13,7 +13,7 @@ import { statusRoute } from '../../src/routes/status.js';
  * reports the last call + pending approvals.
  *
  * Real tool names are used so getContract resolves real signals:
- *   query_contract -> counter, escalate_to_human -> todo,
+ *   query_business -> counter, escalate_to_human -> todo,
  *   bind_document -> env, (unknown name) -> none (contract throws).
  */
 
@@ -23,7 +23,7 @@ describe('getSessionStatus', () => {
 
     runSessionContext({ sessionId: 'sessA', role: 'trader' }, () => {
       rec.recordToolCall({
-        toolName: 'query_contract',
+        toolName: 'query_business',
         args: { contractNo: 'HT-2024-001' },
         result: { contractNo: 'HT-2024-001' },
         durationMs: 5,
@@ -63,7 +63,7 @@ describe('getSessionStatus', () => {
     const rec = createAuditRecorder();
     runSessionContext({ sessionId: 'sessA', role: 'trader' }, () => {
       rec.recordToolCall({
-        toolName: 'query_contract',
+        toolName: 'query_business',
         args: {},
         result: {},
         durationMs: 1,

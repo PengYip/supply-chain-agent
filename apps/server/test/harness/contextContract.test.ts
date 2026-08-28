@@ -14,7 +14,7 @@ import { listToolNames } from '../../src/harness/roleToolRegistry.js';
 // BASE_TOOLS_FOR_ROLE + the DbContext-dependent appends, including recall). Sourced
 // from the registry so a newly-added tool forces a test update here (no silent drift).
 const EXPECTED_TOOLS = [
-  'query_contract',
+  'query_business',
   'query_orders',
   'cross_check',
   'escalate_to_human',
@@ -33,15 +33,11 @@ const EXPECTED_TOOLS = [
   'present_document_review',
   'update_document_fields',
   'list_binding_proposals',
-  'query_execution_flows',
-  'project_rollup',
   'link_contracts',
   'link_projects',
   'link_amends',
-  'template_overview',
   'manage_template',
   'manage_quota',
-  'query_quota_usage',
   'gather_settlement_evidence',
   'confirm_settlement',
 ] as const;

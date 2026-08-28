@@ -105,8 +105,7 @@ Skill 回答"怎么做"——用工具数量解决流程知识问题是方向性
 | 阶段 | 动作 | 工具面 |
 |---|---|---|
 | 完成前 | 初始 30 个（含 4 个死工具） | 30 |
-| 阶段 1（本次） | execute_code 环境门控（默认不挂载）；4 个 deprecated 登记 | 29 -> 26（生产默认 25）* |
-| 阶段 2（计划） | query_business 5 合 1 + link_documents 3 合 1 + tag 并入 update | 26 -> 19 |
+| 阶段 1（2026-08-28） | execute_code 环境门控（默认不挂载）；4 个 deprecated 登记 | 29 -> 26（生产默认 25） |
+| 阶段 2a（2026-08-28） | query_business 5 合 1（query_contract/query_execution_flows/query_quota_usage/project_rollup/template_overview -> removed） | 26 -> 22（生产默认 21） |
+| 阶段 2b（计划） | link_documents 3 合 1 + tag_document 并入 update_document_fields | 22 -> 20 |
 | 阶段 3（计划） | 场景挂载，每步模型实际面对 <= 10 个 | 视口收敛 |
-
-\* 精确计数以 `docs/tool-inventory.json` 与门禁测试为准。

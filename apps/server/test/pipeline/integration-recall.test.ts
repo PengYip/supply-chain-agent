@@ -272,20 +272,22 @@ describe('integration: document-entry -> hybrid recall chain', () => {
       embedder,
     });
     const names = tools.map((t) => t.name);
-    // base 4 (create_payment removed: no in-system money tools) + 3 doc-entry +
+    // base 4 (create_payment removed: no in-system money tools) + query_business
+    // (阶段2 合并: 原 query_contract/project_rollup/query_quota_usage/
+    // template_overview/query_execution_flows 五合一) + 3 doc-entry +
     // recall_documents + inspect_extraction + tag_document +
     // create_entity + link_entities + graph_query + graph_find_entity +
     // present_document_review + update_document_fields + list_binding_proposals
-    // + project_rollup + link_contracts + link_projects + link_amends + template_overview + manage_quota +
-    // query_quota_usage = 30 live trader tools; 2026-08-28 tool-inventory
-    // methodology env-gates execute_code behind CUBE_SANDBOX_ENABLED (default
-    // off), so expected = 29 + (gated ? 1 : 0).
-    const expected = 29 + (isCubeSandboxEnabled() ? 1 : 0);
+    // + link_contracts + link_projects + link_amends + manage_template +
+    // manage_quota + gather_settlement_evidence/confirm_settlement
+    // = 25 live trader tools; 2026-08-28 tool-inventory methodology env-gates
+    // execute_code behind CUBE_SANDBOX_ENABLED (default off).
+    const expected = 25 + (isCubeSandboxEnabled() ? 1 : 0);
     expect(names).toHaveLength(expected);
     expect(names).toContain('recall_documents');
     expect(names).toContain('ingest_document');
     expect(names).toContain('extract_fields');
-    expect(names).toContain('project_rollup');
+    expect(names).toContain('query_business');
     // The buildGatedTools choke point enforces a contract for every live tool;
     // passing here means recall_documents (and friends) all have contract entries.
     expect(() => assertAllToolsContracted(names)).not.toThrow();

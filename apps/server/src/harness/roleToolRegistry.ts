@@ -1,19 +1,18 @@
 import type { Tool } from 'ai';
-import { buildQueryContractTool, buildProjectRollupTool, queryOrders, crossCheck } from '../tools/queries.js';
+import { queryOrders, crossCheck } from '../tools/queries.js';
+import { buildQueryBusinessTool } from '../pipeline/tools/queryBusiness.js';
 import { escalateToHuman, verifyDocumentFields } from '../tools/hitl.js';
 import {
   buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool, buildInspectExtractionTool,
   buildTagDocumentTool, buildPresentDocumentReviewTool, buildUpdateDocumentFieldsTool,
   buildListBindingProposalsTool,
 } from '../pipeline/tools/documentEntry.js';
-import { buildQueryExecutionFlowsTool } from '../pipeline/executionFlow.js';
 import { buildRecallDocumentsTool } from '../pipeline/tools/recall.js';
 import { buildExecuteCodeTool } from '../pipeline/tools/executeCode.js';
 import { buildCreateEntityTool, buildLinkEntitiesTool, buildGraphQueryTool, buildGraphFindEntityTool } from '../graph/tools.js';
 import { buildLinkContractsTool, buildLinkProjectsTool, buildLinkAmendsTool } from '../pipeline/tools/graphLinkTools.js';
-import { buildTemplateOverviewTool } from '../pipeline/tools/templateOverviewTool.js';
 import { buildManageTemplateTool } from '../pipeline/tools/manageTemplateTool.js';
-import { buildManageQuotaTool, buildQueryQuotaUsageTool } from '../pipeline/tools/quotaTools.js';
+import { buildManageQuotaTool } from '../pipeline/tools/quotaTools.js';
 import { buildGatherSettlementEvidenceTool, buildConfirmSettlementTool } from '../pipeline/tools/settlementTools.js';
 import type { DbContext } from '../pipeline/db/client.js';
 import type { ExtractionDeps } from '../pipeline/extraction.js';
@@ -97,16 +96,19 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
 // though constructing their instances requires a DbContext (see getToolsForRole).
 // query_contract is listed here too: after the BASE removal above its name would
 // otherwise drop out of listToolNames (it is still always registered for trader).
-const TRADER_CTX_TOOL_NAMES = ['query_contract', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'query_execution_flows', 'project_rollup', 'link_contracts', 'link_projects', 'link_amends', 'template_overview', 'manage_template', 'manage_quota', 'query_quota_usage', 'gather_settlement_evidence', 'confirm_settlement'] as const;
+const TRADER_CTX_TOOL_NAMES = ['query_business', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'tag_document', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'link_contracts', 'link_projects', 'link_amends', 'manage_template', 'manage_quota', 'gather_settlement_evidence', 'confirm_settlement'] as const;
 
 export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
   const base: GatedTool[] = (BASE_TOOLS_FOR_ROLE[role] ?? []).map((t) => ({ ...t }));
   if (role === 'trader') {
     const { userId } = deps ?? {};
-    // query_contract 无条件注册(台账优先; deps.ctx 缺省时降级纯 seed)。
-    base.push({ ...buildQueryContractTool({ ctx: deps?.ctx, userId }), name: 'query_contract' });
-    // project_rollup 同款无条件注册(L1 只读; 无 ctx 时 execute 返回 notConfigured)。
-    base.push({ ...buildProjectRollupTool({ ctx: deps?.ctx, userId }), name: 'project_rollup' });
+    // query_business 无条件注册(阶段2 工具合并: 结构化 SSOT 统一读入口, 吸收
+    // query_contract/project_rollup/query_quota_usage/template_overview/flows;
+    // 无 ctx 时内部各子工具降级为 notConfigured/seed 行为)。
+    base.push({
+      ...buildQueryBusinessTool({ ctx: deps?.ctx!, userId }),
+      name: 'query_business',
+    });
     if (deps?.ctx) {
       const { ctx, extraction, embedder, classifier, tagger, userId } = deps;
       const reranker = deps.reranker !== undefined ? deps.reranker : defaultReranker();
@@ -119,8 +121,6 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
         { ...buildUpdateDocumentFieldsTool({ ctx, userId }), name: 'update_document_fields', needsApproval: true },
         // list_binding_proposals is L1 (Phase B): 查看待确认的凭证-合同绑定建议。
         { ...buildListBindingProposalsTool({ ctx, userId }), name: 'list_binding_proposals' },
-        // query_execution_flows is L1: 只读查询某合同的执行流水六向汇总与逐笔明细。
-        { ...buildQueryExecutionFlowsTool({ ctx, userId }), name: 'query_execution_flows' },
         // bind_document is L2: caller must attach human approval (needsApproval).
         { ...buildBindDocumentTool({ ctx, userId }), name: 'bind_document', needsApproval: true },
         // inspect_extraction is L1: on-demand evidence drill-down for a single
@@ -149,13 +149,9 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
         // manage_template is L2 (2026-08-28 P4): 模板维护唯一写入面(新增类型/
         // 改词表/软禁用激活), 转 templateManage 与管理 REST 共享业务规则, 软门控。
         { ...buildManageTemplateTool({ ctx, userId }), name: 'manage_template', needsApproval: true },
-        // template_overview is L1 (2026-08-26 模板): 类型层级/允许挂接合同类型与词表。
-        { ...buildTemplateOverviewTool({ ctx, userId }), name: 'template_overview' },
         // manage_quota is L2 (2026-08-25 方案A §6): 两层额度创建/调整/停用,
         // 落 quotas SSOT + granted 投影 + 即时占用重算, 软门控。
         { ...buildManageQuotaTool({ ctx, userId }), name: 'manage_quota', needsApproval: true },
-        // query_quota_usage is L1: 只读额度占用(读对账桥物化结果)。
-        { ...buildQueryQuotaUsageTool({ ctx, userId }), name: 'query_quota_usage' },
         // gather_settlement_evidence is L1 (2026-08-27 §15): 结算取证(合同条款+
         // 数量流水+质量凭证+历史结算), 计算前的必经步骤。
         { ...buildGatherSettlementEvidenceTool({ ctx, userId }), name: 'gather_settlement_evidence' },

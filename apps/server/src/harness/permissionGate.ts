@@ -49,7 +49,7 @@ export function isSoftGate(toolName: string): boolean {
 
 // ---- default registrations (declared up-front as the system source of truth) ----
 // L1 readonly
-registerPermission('query_contract', 'L1');
+registerPermission('query_business', 'L1'); // 阶段2 工具合并: 结构化 SSOT 统一读入口(原 query_contract/query_execution_flows/project_rollup/query_quota_usage/template_overview 五合一)
 registerPermission('query_orders', 'L1');
 registerPermission('cross_check', 'L1');
 registerPermission('escalate_to_human', 'L1'); // T3: uncertainty fallback
@@ -64,8 +64,6 @@ registerPermission('present_document_review', 'L1'); // post-ingest review card 
 registerPermission('graph_find_entity', 'L1'); // 2026-08-17: 按名查图实体（只读入口）
 registerPermission('graph_query', 'L1'); // 2026-08-18: 图遍历是只读查询（READ session），与 graph_find_entity 同级
 registerPermission('list_binding_proposals', 'L1'); // Phase B: 待确认的凭证-合同绑定建议（只读）
-registerPermission('query_execution_flows', 'L1'); // 执行流水六向汇总与逐笔明细（只读）
-registerPermission('project_rollup', 'L1'); // 项目维度统计汇总（只读关系库，不依赖图）
 // L2 write confirm
 registerPermission('advance_contract_stage', 'L2');
 registerPermission('bind_document', 'L2'); // T9: bind document to contract
@@ -76,9 +74,7 @@ registerPermission('link_contracts', 'L2'); // 2026-08-25 方案A: 背靠背购�
 registerPermission('link_projects', 'L2'); // 2026-08-25 方案A: 项目级关联(relates)
 registerPermission('link_amends', 'L2'); // 2026-08-26 模板: 补充合同修订关系(amends)
 registerPermission('manage_template', 'L2'); // 2026-08-28 P4: 模板维护(新增类型/改词表/软禁用激活)
-registerPermission('template_overview', 'L1'); // 2026-08-26 模板: 类型层级/允许挂接查询(只读)
 registerPermission('manage_quota', 'L2'); // 2026-08-25 方案A §6: 额度创建/调整/停用
-registerPermission('query_quota_usage', 'L1'); // 2026-08-25 方案A §6: 额度占用只读查询
 registerPermission('update_document_fields', 'L2'); // post-ingest field correction (write)
 registerPermission('gather_settlement_evidence', 'L1'); // 2026-08-27 §15: 结算取证(只读)
 registerPermission('confirm_settlement', 'L2'); // 2026-08-27 §15: 结算结果人工确认后落台账

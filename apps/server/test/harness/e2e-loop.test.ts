@@ -128,9 +128,11 @@ describe('agent e2e loop (stub model)', () => {
     // 2026-08-28 P4 adds manage_template = 28; 2026-08-27 §15 adds
     // gather_settlement_evidence/confirm_settlement = 30; 2026-08-28
     // tool-inventory methodology env-gates execute_code behind
-    // CUBE_SANDBOX_ENABLED (default off) -> 29 + (gated ? 1 : 0).
-    expect(capturedNames).toHaveLength(29 + (isCubeSandboxEnabled() ? 1 : 0));
-    for (const n of ['ingest_document', 'extract_fields', 'bind_document', 'query_contract', 'escalate_to_human', 'recall_documents', 'project_rollup']) {
+    // CUBE_SANDBOX_ENABLED (default off); 阶段2 合并 folds
+    // query_contract/project_rollup/query_quota_usage/template_overview/
+    // query_execution_flows into query_business -> 25 + (gated ? 1 : 0).
+    expect(capturedNames).toHaveLength(25 + (isCubeSandboxEnabled() ? 1 : 0));
+    for (const n of ['ingest_document', 'extract_fields', 'bind_document', 'query_business', 'escalate_to_human', 'recall_documents']) {
       expect(capturedNames).toContain(n);
     }
 
