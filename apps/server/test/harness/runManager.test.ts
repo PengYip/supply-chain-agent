@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { startSessionRun, abortSessionRun, isRunning } from '../../src/harness/runManager.js';
-import { emit } from '../../src/harness/sessionEvents.js';
+import { emit, subscribe } from '../../src/harness/sessionEvents.js';
 import { listSessionEventsSince } from '../../src/harness/sessionStore.js';
 
 describe('runManager', () => {
@@ -109,5 +109,38 @@ describe('runManager', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('attaches provider_arrears code to run.error for DeepSeek-style 402 failures', async () => {
+    const sid = `rm-arrears-${crypto.randomUUID().slice(0, 8)}`;
+    const seen: Array<Record<string, unknown>> = [];
+    const unsub = subscribe(sid, (e) => {
+      if (e.type === 'run.error') seen.push(e as Record<string, unknown>);
+    });
+    const err = new Error('Insufficient Balance') as any;
+    err.name = 'APICallError';
+    err.statusCode = 402;
+    void startSessionRun(sid, undefined, 'trader', async () => { throw err; }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 10));
+    unsub();
+    expect(seen.length).toBe(1);
+    expect(seen[0]!.code).toBe('provider_arrears');
+    expect(String(seen[0]!.userMessage)).toContain('管理员');
+    // 原始错误文本保留（排障用）
+    expect(seen[0]!.message).toBe('Insufficient Balance');
+  });
+
+  it('generic failures keep run_failed code and no userMessage (backward compatible)', async () => {
+    const sid = `rm-runfail-${crypto.randomUUID().slice(0, 8)}`;
+    const seen: Array<Record<string, unknown>> = [];
+    const unsub = subscribe(sid, (e) => {
+      if (e.type === 'run.error') seen.push(e as Record<string, unknown>);
+    });
+    void startSessionRun(sid, undefined, 'trader', async () => { throw new Error('boom'); }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 10));
+    unsub();
+    expect(seen.length).toBe(1);
+    expect(seen[0]!.code).toBe('run_failed');
+    expect(seen[0]!.userMessage).toBeUndefined();
   });
 });

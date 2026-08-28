@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { setSessionStatus, pruneSessionEvents } from './sessionStore.js';
 import { runSessionContext } from './sessionContext.js';
 import { emit } from './sessionEvents.js';
+import { classifyProviderError } from './providerErrors.js';
 
 type RunHandle = {
   runId: string;
@@ -71,8 +72,19 @@ export async function startSessionRun(
       if (controller.signal.aborted) {
         await emit({ type: 'run.aborted', sessionId, runId });
       } else {
-        console.error('[runManager] run failed:', err instanceof Error ? err.message : err);
-        await emit({ type: 'run.error', sessionId, runId, message: err instanceof Error ? err.message : String(err) });
+        const rawMessage = err instanceof Error ? err.message : String(err);
+        console.error('[runManager] run failed:', rawMessage);
+        // Provider 级失败分类（当前仅欠费）：run.error 附带机器可读 code 与
+        // 用户文案；未命中归为 run_failed，事件形状向后兼容（多出字段而已）。
+        const cls = classifyProviderError(err);
+        await emit({
+          type: 'run.error',
+          sessionId,
+          runId,
+          message: rawMessage,
+          code: cls.code ?? 'run_failed',
+          userMessage: cls.userMessage ?? undefined,
+        });
       }
     } finally {
       try {
