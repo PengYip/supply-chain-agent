@@ -56,9 +56,9 @@ describe('link_contracts / link_projects 工具', () => {
     expect(row?.props).toEqual({ allocatedAmount: 500000, allocatedQuantity: 200.5 });
   });
 
-  it('权限注册: 两工具均为 L2 软门控', () => {
-    expect(isSoftGate('link_contracts')).toBe(true);
-    expect(isSoftGate('link_projects')).toBe(true);
-    expect(isReadonly('link_contracts')).toBe(false);
+  it('权限注册: link_documents 为 L2 软门控(阶段2b 三合一后唯一挂载面)', () => {
+    expect(isSoftGate('link_documents')).toBe(true);
+    expect(isSoftGate('link_entities')).toBe(true);
+    expect(isReadonly('link_documents')).toBe(false);
   });
 });

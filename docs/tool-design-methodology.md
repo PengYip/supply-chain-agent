@@ -105,8 +105,9 @@ Skill 回答"怎么做"——用工具数量解决流程知识问题是方向性
 | 阶段 | 动作 | 工具面 |
 |---|---|---|
 | 完成前 | 初始 30 个（含 4 个死工具） | 30 |
-| 阶段 1（本次） | execute_code 环境门控（默认不挂载）；4 个 deprecated 登记 | 29 -> 26（生产默认 25）* |
-| 阶段 2（计划） | query_business 5 合 1 + link_documents 3 合 1 + tag 并入 update | 26 -> 19 |
-| 阶段 3（计划） | 场景挂载，每步模型实际面对 <= 10 个 | 视口收敛 |
-
-\* 精确计数以 `docs/tool-inventory.json` 与门禁测试为准。
+| 阶段 1（2026-08-28） | execute_code 环境门控（默认不挂载）；4 个 deprecated 登记 | 29 -> 26（生产默认 25） |
+| 阶段 2a（2026-08-28） | query_business 5 合 1（query_contract/query_execution_flows/query_quota_usage/project_rollup/template_overview -> removed） | 26 -> 22（生产默认 21） |
+| 阶段 2b（2026-08-28） | link_documents 3 合 1（correlates/relates/amends）+ tag_document 并入 update_document_fields(tags 参数) | 22 -> 19（生产默认 18） |
+| 阶段 3（2026-08-28） | 场景挂载（harness/scenarios.ts: entry/qa/settlement ∪ CORE，检测保守，'all' 不收窄；每场景可见 <= 10） | 每步视口 7-10 |
+| 评估（2026-08-28） | 工具选择评估集 eval/datasets/tool-use.json：离线门禁 test/eval/toolUse.dataset.test.ts（npm test）+ 真实模型 runner `npm run eval:tools` | 持续回归 |
+| 运维 | 标签回填脚本 `npm run backfill:tags --workspace apps/server`（先 --dry-run） | Lane B 生效 |

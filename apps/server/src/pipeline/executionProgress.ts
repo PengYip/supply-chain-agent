@@ -6,6 +6,7 @@
 import { canonicalizeQuantity, type QuantityDimension } from '../domain/units.js';
 import { flowNodeTier } from '../domain/tradeSemantics.js';
 import type { ExecutionFlowRow } from './db/repositories.js';
+import { isEmptyValue } from './fieldValue.js';
 
 export interface ExecutionProgressNodes {
   /** 实重节点(权威)质量合计(千克)。 */
@@ -73,13 +74,14 @@ export function computeExecutionProgress(flows: FlowQty[], ledgerFields: LedgerF
 
   const rawQty = ledgerFields?.['数量']?.value;
   const rawUnit = ledgerFields?.['单位']?.value;
-  if (rawQty === undefined) {
+  // 空串保底字段等同缺失(spec 2026-08-28): 不产生 0 数量基准。
+  if (rawQty === undefined || isEmptyValue(rawQty)) {
     return { basis: null, delivered, progress: null, reason: 'no-contract-basis' };
   }
   const qtyText = String(rawQty).replace(/[,\s]/g, '');
   // 单位优先级: 独立 单位 字段 > 数量值内嵌单位("20000吨±10%"); 都没有 -> 不猜。
   let qty = Number(qtyText);
-  let unitText = rawUnit === undefined ? null : String(rawUnit);
+  let unitText = rawUnit !== undefined && !isEmptyValue(rawUnit) ? String(rawUnit) : null;
   if (!Number.isFinite(qty) || unitText === null) {
     const embedded = parseEmbeddedQuantity(qtyText);
     if (embedded) {

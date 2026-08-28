@@ -79,3 +79,26 @@ it('migrate 后 projects / project_memberships 表存在', () => {
   ).all() as Array<{ name: string }>).map((r) => r.name).sort();
   expect(tables).toEqual(['project_memberships', 'projects']);
 });
+
+describe('proposeProjectMemberships (模板保底空值语义, spec 2026-08-28)', () => {
+  const F = (name: string, value: string | number, confidence: number) => ({ name, value, confidence });
+
+  it('空串项目编号不遮蔽名称兜底 -> 仍提议(空值等同缺失)', () => {
+    const out = proposeProjectMemberships({
+      docType: '合同',
+      fields: [F('合同号', 'HT-1', 0.9), F('项目编号', '', 0), F('项目名称', '曹妃甸项目', 0.8)],
+      contractType: null,
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0]?.projectCode).toBe('曹妃甸项目');
+    expect(out[0]?.projectName).toBe('曹妃甸项目');
+  });
+
+  it('空串合同号 -> 不提议(空值等同缺失)', () => {
+    expect(proposeProjectMemberships({
+      docType: '合同',
+      fields: [F('合同号', '', 0), F('项目名称', '某项目', 0.8)],
+      contractType: null,
+    })).toEqual([]);
+  });
+});

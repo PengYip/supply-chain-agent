@@ -239,11 +239,16 @@ function safeStringify(value: unknown): string {
  *
  *   { query, strategy, matchCount, contractNo?, note?,
  *     matches: first 10 x { document_id, chunk_index, snippet(<=500), source },
- *     matches_truncated? }
+ *     matches_truncated?,
+ *     -- fullText mode additions (recall-fulltext spec 2026-08-28) --
+ *     mode?, documents? (text capped defensively), degradedDocIds? }
  *
  * The model keeps the actual retrieved content (snippets) instead of losing the
  * whole matches array to the 'summary' key-fields tier (recall output has none
  * of KEY_FIELDS, so 'summary' reduced it to {contractNo, _summarized: true}).
+ * In fullText mode the per-document texts ARE the evidence (bounded at
+ * construction to <=16K chars total), so they are preserved alongside the
+ * matches array -- dropping them would leave the model unable to answer.
  * Objects WITHOUT a matches array pass through unchanged (same reference) --
  * byte-identical to today's behavior for non-recall outputs.
  */
@@ -274,6 +279,22 @@ export function compressSnippetsOutput(output: unknown): unknown {
   if ('note' in src) out.note = src.note;
   if (matches.length > SNIPPETS_MAX_MATCHES) {
     out.matches_truncated = matches.length - SNIPPETS_MAX_MATCHES;
+  }
+  // fullText mode: preserve the per-document full texts (the actual evidence)
+  // plus the degraded list. Text is capped defensively only -- the construction
+  // side already enforces FULLTEXT_PER_DOC_CHARS/FULLTEXT_TOTAL_CHARS budgets.
+  if (src.mode === 'fullText' && Array.isArray(src.documents)) {
+    out.mode = src.mode;
+    out.documents = (src.documents as unknown[]).map((d) => {
+      const dd = (d ?? {}) as Record<string, unknown>;
+      return {
+        document_id: dd.document_id,
+        chars: dd.chars,
+        chunk_count: dd.chunk_count,
+        text: String(dd.text ?? '').slice(0, 24000),
+      };
+    });
+    if (Array.isArray(src.degradedDocIds)) out.degradedDocIds = src.degradedDocIds;
   }
   return { type: 'json', value: out };
 }

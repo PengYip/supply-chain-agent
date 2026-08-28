@@ -133,4 +133,13 @@ describe('computeExecutionProgress 节点权威聚合(spec 2026-08-27 §15)', ()
     const r = computeExecutionProgress([mass(1000), mass(500, '收货单')], wrap({ 数量: 3, 单位: '吨' }));
     expect(r.delivered!.massKg).toBe(1500);
   });
+
+  it('空串数量(模板保底空值) -> no-contract-basis(等同缺失, 不产生 0 基准)', () => {
+    const r = computeExecutionProgress([mass(1000)], wrap({ 数量: '', 单位: '吨' }));
+    expect(r.basis).toBeNull();
+    expect(r.reason).toBe('no-contract-basis');
+    const r2 = computeExecutionProgress([mass(1000)], wrap({ 数量: '', 单位: '' }));
+    expect(r2.basis).toBeNull();
+    expect(r2.reason).toBe('no-contract-basis');
+  });
 });

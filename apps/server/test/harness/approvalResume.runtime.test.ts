@@ -20,7 +20,7 @@ import { env } from '../../src/env.js';
  *  1. turn-1 gate: a needsApproval (L2) tool-call emits tool-approval-request
  *     and the stream FINISHES (I-1: the RunManager slot is released, not held).
  *  2. approve resume: history + transient tool-approval-response -> the SDK
- *     re-executes the gated tool (tag_document) and the model finishes.
+ *     re-executes the gated tool (update_document_fields) and the model finishes.
  *  3. deny resume: approved:false -> the tool does NOT execute; the model
  *     receives the denial and answers.
  *  4. runSession persists the resume reply as a NEW message id (spec §5.3).
@@ -112,14 +112,14 @@ const userUIMsg = (text: string): UIMessage =>
   ({ id: randomUUID(), role: 'user', parts: [{ type: 'text', text }] }) as UIMessage;
 
 describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
-  it('turn-1 gates tag_document, the stream finishes, pending is recorded; approve resume re-executes it', async () => {
+  it('turn-1 gates update_document_fields, the stream finishes, pending is recorded; approve resume re-executes it', async () => {
     const { ctx, docId } = await seedDoc();
     const s = await createSession('trader', 'u-rt1');
     await appendMessages(s.id, [userUIMsg('给文档打标签')]);
 
     // --- Turn 1 (production shape: via runSession, which persists + records) ---
     const gateFake = scriptedModel([
-      { toolCall: { toolCallId: 'call_tag', toolName: 'tag_document', input: { docId, tags: ['重要'] } } },
+      { toolCall: { toolCallId: 'call_tag', toolName: 'update_document_fields', input: { docId, tags: ['重要'] } } },
       { text: '已打标' },
     ]);
     await runSession({
@@ -146,7 +146,7 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
 
     // L2 pending row recorded (runSession -> recordL2PendingFromResponse).
     const pend = (await listPending(s.id)).find(
-      (p) => p.level === 'L2' && p.tool_name === 'tag_document',
+      (p) => p.level === 'L2' && p.tool_name === 'update_document_fields',
     );
     expect(pend).toBeTruthy();
     expect(pend!.approval_id).toBe(approvalId);
@@ -185,7 +185,7 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
     // The SDK paired the response with the persisted request and EXECUTED
     // the gated tool (this is the core approve-resume proof).
     const toolResult = parts.find(
-      (p) => p?.type === 'tool-result' && p.toolName === 'tag_document',
+      (p) => p?.type === 'tool-result' && p.toolName === 'update_document_fields',
     );
     expect(toolResult).toBeTruthy();
     expect(String(JSON.stringify(toolResult.output))).not.toContain('error');
@@ -197,7 +197,7 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
     await appendMessages(s.id, [userUIMsg('给文档打标签')]);
 
     const gateFake = scriptedModel([
-      { toolCall: { toolCallId: 'call_tag2', toolName: 'tag_document', input: { docId, tags: ['次要'] } } },
+      { toolCall: { toolCallId: 'call_tag2', toolName: 'update_document_fields', input: { docId, tags: ['次要'] } } },
       { text: '已打标' },
     ]);
     await runSession({
@@ -251,7 +251,7 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
 
     // Denied: NO successful tool-result for the gated tool (execute skipped).
     const toolResult = parts.find(
-      (p) => p?.type === 'tool-result' && p.toolName === 'tag_document',
+      (p) => p?.type === 'tool-result' && p.toolName === 'update_document_fields',
     );
     expect(toolResult).toBeUndefined();
     // The model produced its final text over the denial.
@@ -306,7 +306,7 @@ describe('L2 gate/resume runtime semantics (fake model, in-memory ctx)', () => {
 
     // --- Turn 1 gate: same seeding as test 1 ---
     const gateFake = scriptedModel([
-      { toolCall: { toolCallId: 'call_tag4', toolName: 'tag_document', input: { docId, tags: ['重要'] } } },
+      { toolCall: { toolCallId: 'call_tag4', toolName: 'update_document_fields', input: { docId, tags: ['重要'] } } },
       { text: '已打标' },
     ]);
     await runSession({
