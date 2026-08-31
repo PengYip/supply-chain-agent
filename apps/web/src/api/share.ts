@@ -10,11 +10,20 @@ export interface ShareLinkResponse {
   path: string
 }
 
-/** AI SDK 6 UIMessage 的宽松前端类型：分享页只消费 role 与 text parts，
- *  其余 part 类型（tool-* / file 等）静默跳过。 */
+/** AI SDK 6 UIMessage 的宽松前端类型：分享页消费 role 与 parts 中的
+ *  text / data-attachment / tool-*（解析复用 realChatUtils.buildRenderItems，
+ *  与主聊天同一套映射）；step-start / reasoning 等其余 part 类型静默跳过。
+ *  tool-* part 字段形状：state 为 output-available | output-error 等，
+ *  input/output 即工具入参/结果（output 为对象）。 */
 export interface ShareMessagePart {
   type: string
   text?: string
+  state?: string
+  toolCallId?: string
+  input?: unknown
+  output?: unknown
+  errorText?: string
+  data?: unknown
 }
 
 export interface ShareMessage {
