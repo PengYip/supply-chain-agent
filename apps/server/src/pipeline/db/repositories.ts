@@ -134,6 +134,11 @@ import {
   listTemplateTypesManagedPg,
   insertTemplateEdgeRulePg,
   migrateDocTypeAliasesPg,
+  // 对话分享快照(feature 2026-08-31): pg twins for upsert + token 读面。
+  upsertConversationSharePg,
+  getConversationShareByTokenPg,
+  type ConversationShareUpsert as ConversationShareUpsertPg,
+  type ConversationShareRow as ConversationShareRowPg,
 } from './postgres-repositories.js';
 
 // Phase 2 business-data isolation: a normalized userId is '' / undefined when the
@@ -3765,4 +3770,65 @@ export async function migrateDocTypeAliases(ctx: DbContext): Promise<number> {
     }
   }
   return total;
+}
+
+// ---- conversation_shares(对话分享快照, feature 2026-08-31) --------------------
+//
+// 会话快照分享: POST /api/sessions/:id/share 生成/刷新(每会话一个 token,
+// session_id UNIQUE 支撑 upsert); GET /api/share/:token 公开只读(无 requireAuth)。
+// 表结构见 client.ts migrate() 内 DDL 注释。payload 序列化(JSON 字符串)由路由层
+// 负责, 存储层原样存取。
+
+export type ConversationShareUpsert = ConversationShareUpsertPg;
+export type ConversationShareRow = ConversationShareRowPg;
+
+/** 生成/刷新会话分享快照(upsert): 同一会话重复分享时 token/payload 就地更新,
+ *  created_at 保留首次分享时间(ISO-8601, 应用层写入, DDL default 仅兜底)。 */
+export async function upsertConversationShare(
+  ctx: DbContext,
+  input: ConversationShareUpsert,
+): Promise<void> {
+  if (ctx.backend === 'postgres') return upsertConversationSharePg(ctx, input);
+  ctx.sqlite
+    .prepare(
+      `INSERT INTO conversation_shares (token, session_id, owner_user_id, title, payload, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (session_id) DO UPDATE SET
+         token = excluded.token,
+         owner_user_id = excluded.owner_user_id,
+         title = excluded.title,
+         payload = excluded.payload`,
+    )
+    .run(
+      input.token,
+      input.sessionId,
+      input.ownerUserId,
+      input.title,
+      input.payload,
+      new Date().toISOString(),
+    );
+}
+
+/** 按 token 读分享快照(公开读面, 无 user 过滤 -- token 即凭证)。不存在返回 null。 */
+export async function getConversationShareByToken(
+  ctx: DbContext,
+  token: string,
+): Promise<ConversationShareRow | null> {
+  if (ctx.backend === 'postgres') return getConversationShareByTokenPg(ctx, token);
+  const r = ctx.sqlite
+    .prepare(
+      'SELECT token, session_id, owner_user_id, title, payload, created_at FROM conversation_shares WHERE token = ?',
+    )
+    .get(token) as
+    | { token: string; session_id: string; owner_user_id: string; title: string | null; payload: string; created_at: string }
+    | undefined;
+  if (!r) return null;
+  return {
+    token: r.token,
+    sessionId: r.session_id,
+    ownerUserId: r.owner_user_id,
+    title: r.title ?? '',
+    payload: r.payload,
+    createdAt: r.created_at,
+  };
 }

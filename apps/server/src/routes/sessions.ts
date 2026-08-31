@@ -8,6 +8,7 @@
 
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 import { requireRole } from '../lib/auth-middleware.js';
 import {
@@ -23,6 +24,8 @@ import {
 } from '../harness/sessionStore.js';
 import { subscribe, type SessionEvent } from '../harness/sessionEvents.js';
 import { abortSessionRun } from '../harness/runManager.js';
+import { getDbContext } from '../pipeline/db/dbBackend.js';
+import { upsertConversationShare } from '../pipeline/db/repositories.js';
 import type { Role } from '../harness/roleToolRegistry.js';
 
 export const sessionsRoute = new Hono<AuthEnv>();
@@ -130,6 +133,32 @@ sessionsRoute.post('/:id/abort', requireRole('admin', 'trader'), async (c) => {
   if (!(await sessionBelongsTo(id, user.id))) return c.json({ error: 'not found' }, 404);
   const aborted = abortSessionRun(id);
   return c.json({ ok: true, aborted });
+});
+
+// 对话分享: 生成/刷新会话快照, 返回 { token, path: "/share/<token>" }。每会话
+// 固定一个 token(conversation_shares.session_id UNIQUE upsert): 重复分享时刷新
+// 为当前状态并换发新 token, 旧 token 随即失效。快照是分享时刻的 messages 副本,
+// 后续会话更新不影响已分享内容。消费侧 GET /api/share/:token 是公开端点
+// (share.ts, 不挂 requireAuth)。RBAC: viewer 只读, 不能对外发放分享链接。
+sessionsRoute.post('/:id/share', requireRole('admin', 'trader'), async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const id = c.req.param('id');
+  if (!(await sessionBelongsTo(id, user.id))) {
+    // 404 (not 403) to avoid confirming an id an untrusted user does not own.
+    return c.json({ error: 'not found' }, 404);
+  }
+  const loaded = await loadSession(id);
+  if (!loaded) return c.json({ error: 'not found' }, 404);
+  const token = randomUUID();
+  await upsertConversationShare(getDbContext(), {
+    token,
+    sessionId: id,
+    ownerUserId: user.id,
+    title: loaded.title ?? '',
+    payload: JSON.stringify({ messages: loaded.messages }),
+  });
+  return c.json({ token, path: `/share/${token}` });
 });
 
 // SSE event stream for a session. Subscribes to the in-memory event bus and

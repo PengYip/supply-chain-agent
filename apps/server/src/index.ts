@@ -27,6 +27,7 @@ import { reviewRoute } from './routes/review.js';
 import { createEvalResultsRoute } from './routes/evalResults.js';
 import { evalRunRoute } from './routes/evalRun.js';
 import { evalDatasetsRoute } from './routes/evalDatasets.js';
+import { shareRoute } from './routes/share.js';
 import { ensureBucket } from './lib/minio.js';
 import { migrateOnStartup, getDbContext } from './pipeline/db/dbBackend.js';
 import { ensureTemplateSeed } from './pipeline/templateSeed.js';
@@ -166,11 +167,29 @@ app.route('/api/eval', evalRunRoute);
 // Eval dataset CRUD: user-authored datasets (core read-only).
 app.route('/api/eval', evalDatasetsRoute);
 
+// 对话分享公开只读端点(feature 2026-08-31): token 即凭证, 绝不挂 requireAuth
+// (不在上方受保护挂载清单内)。写侧 POST /api/sessions/:id/share 在受保护的
+// /api/sessions 挂载下。
+app.route('/api/share', shareRoute);
+
 // Production: serve frontend static files from apps/web/dist on the same port.
 // Same-origin => no CORS needed; dev mode uses Vite on :5173 with /api proxy.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const webDist = path.resolve(__dirname, '../../web/dist');
 app.use('*', serveStatic({ root: webDist }));
+
+// SPA deep-link fallback for share pages: GET /share/<token> renders the app
+// shell (index.html); the client router resolves the share view. Registered
+// AFTER serveStatic, which passes through when no real file matches, so static
+// assets still win and /api/* never reaches here (those routes matched first).
+// Dev (no dist build) degrades to a 404 text instead of crashing.
+app.get('/share/*', (c) => {
+  try {
+    return c.html(readFileSync(path.join(webDist, 'index.html'), 'utf-8'));
+  } catch {
+    return c.text('frontend build not found (apps/web/dist missing)', 404);
+  }
+});
 
 const port = env.PORT;
 
