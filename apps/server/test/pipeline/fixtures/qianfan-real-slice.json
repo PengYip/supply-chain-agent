@@ -1,0 +1,134 @@
+{
+  "id": "as-fixture-real-slice",
+  "result": {
+    "layoutParsingResults": [
+      {
+        "prunedResult": {
+          "model_settings": {
+            "use_doc_preprocessor": false,
+            "use_layout_detection": true,
+            "use_chart_recognition": false,
+            "format_block_content": true
+          },
+          "parsing_res_list": [
+            {
+              "block_label": "image",
+              "block_content": "<div style=\"text-align: center;\"><img src=\"imgs/img_in_image_box_34_30_150_147.jpg\" alt=\"Image\" width=\"9%\" /></div>\n",
+              "block_bbox": [
+                34,
+                30,
+                150,
+                147
+              ],
+              "block_id": 0,
+              "block_order": null
+            },
+            {
+              "block_label": "paragraph_title",
+              "block_content": "## 用发票）",
+              "block_bbox": [
+                687,
+                42,
+                822,
+                86
+              ],
+              "block_id": 2,
+              "block_order": 1
+            },
+            {
+              "block_label": "text",
+              "block_content": "发票号码：24332000000000000001",
+              "block_bbox": [
+                874,
+                59,
+                1146,
+                84
+              ],
+              "block_id": 4,
+              "block_order": 2
+            },
+            {
+              "block_label": "table",
+              "block_content": "\n<table border=1 style='margin: auto; width: max-content;'><tr><td style='text-align: center;'>购买方信息</td><td colspan=\"3\">名称: 买方示例能源有限公司统一社会信用代码/纳税人识别号:91FAKE0000FAKE000X</td><td style='text-align: center;'>销售方信息</td><td colspan=\"3\">名称: 卖方示例能源有限公司统一社会信用代码/纳税人识别号:91FAKE0000FAKE000Y</td></tr><tr><td rowspan=\"4\">*选煤*1/2中粘煤</td><td rowspan=\"4\">项目名称</td><td rowspan=\"4\">规格型号</td><td style='text-align: center;'>单位</td><td style='text-align: center;'>数量</td><td style='text-align: center;'>单价</td><td style='text-align: center;'>金额</td><td style='text-align: center;'>税率/征收率</td></tr><tr><td rowspan=\"3\">吨</td><td rowspan=\"3\">9014.16</td><td rowspan=\"3\">1365.11714096861</td><td rowspan=\"3\">12305384.33</td><td rowspan=\"3\">13%</td></tr></table>",
+              "block_bbox": [
+                23,
+                167,
+                1167,
+                701
+              ],
+              "block_id": 6,
+              "block_order": null
+            }
+          ],
+          "layout_det_res": {
+            "boxes": [
+              {
+                "cls_id": 14,
+                "label": "image",
+                "score": 0.9785470366477966,
+                "coordinate": [
+                  34.468040466308594,
+                  30.568038940429688,
+                  150.82269287109375,
+                  147.58763122558594
+                ]
+              },
+              {
+                "cls_id": 7,
+                "label": "figure_title",
+                "score": 0.5692784190177917,
+                "coordinate": [
+                  324.80084228515625,
+                  41.174957275390625,
+                  483.59637451171875,
+                  88.23878479003906
+                ]
+              },
+              {
+                "cls_id": 17,
+                "label": "paragraph_title",
+                "score": 0.42066630721092224,
+                "coordinate": [
+                  687.079345703125,
+                  42.2525520324707,
+                  822.564697265625,
+                  86.83805847167969
+                ]
+              },
+              {
+                "cls_id": 20,
+                "label": "seal",
+                "score": 0.9742904901504517,
+                "coordinate": [
+                  507.1866455078125,
+                  41.2847900390625,
+                  680.4814453125,
+                  157.7616729736328
+                ]
+              }
+            ]
+          }
+        },
+        "markdown": {
+          "text": "<div style=\"text-align: center;\"><img src=\"imgs/img_in_image_box_34_30_150_147.jpg\" alt=\"Image\" width=\"9%\" /></div>\n\n\n<div style=\"text-align: center;\">电子发票</div>\n\n\n## 用发票）\n\n<div style=\"text-align: center;\"><img src=\"imgs/img_in_seal_box_507_41_680_157.jpg\" alt=\"Image\" width=\"14%\" /></div>\n\n\n发票号码：24332000000000000001\n\n开票日期：2023年11月02日\n\n\n<table border=1 style='margin: auto; width: max-content;'><tr><td style='text-align: center;'>购买方信息</td><td colspan=\"3\">名称: 买方示例能源有限公司统一社会信用代码/纳税人识别号:91FAKE0000FAKE000X</td><td style='text-align: center;'>销售方信息</td><td colspan=\"3\">名称: 卖方示例能源有限公司统一社会信用代码/纳税人识别号:91FAKE0000FAKE000Y</td></tr><tr><td rowspan=\"4\">*选煤*1/2中粘煤</td><td rowspan=\"4\">项目名称</td><td rowspan=\"4\">规格型号</td><td style='text-align: center;'>单位</td><td style='text-align: center;'>数量</td><td style='text-align: center;'>单价</td><td style='text-align: center;'>金额</td><td style='text-align: center;'>税率/征收率</td></tr><tr><td rowspan=\"3\">吨</td><td rowspan=\"3\">9014.16</td><td rowspan=\"3\">1365.11714096861</td><td rowspan=\"3\">12305384.33</td><td rowspan=\"3\">13%</td></tr><tr></tr><tr></tr></table>\n\n开票人：张三",
+          "images": {}
+        },
+        "outputImages": {},
+        "inputImage": "REDACTED"
+      }
+    ],
+    "dataInfo": {
+      "type": "pdf",
+      "numPages": 1,
+      "pages": [
+        {
+          "width": 1191,
+          "height": 794
+        }
+      ]
+    }
+  },
+  "usage": {
+    "numPages": 1
+  }
+}
