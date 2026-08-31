@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertCircle, Bot, Clock, FileQuestion, Loader2, MessageSquare } from 'lucide-react'
-import { fetchSessionShare, type ShareMessage, type ShareSnapshot } from '../../api/share'
+import { fetchSessionShare, type ShareSnapshot } from '../../api/share'
+import { buildRenderItems, type RenderItem, type Segment } from '../../utils/realChatUtils'
+import { MarkdownContent } from '../chat/MarkdownContent'
+import { ToolGroupCard } from '../chat/RealToolSteps'
+import { FileAttachmentCard } from '../FileAttachmentCard'
 
 /** 免登录只读分享页 /share/:token。
  *  独立于 AppShell 与登录门控（App 根组件按 pathname 在认证网关之前分流到此）。
- *  只渲染 UIMessage 的 text parts（其余 part 类型静默跳过），不提供输入框、
- *  侧边栏或任何需要登录的交互。样式沿用主站语义 token，观感一致但独立成页。 */
+ *  消息解析复用主聊天的 buildRenderItems：助手 text parts 走与主聊天同款的
+ *  Markdown 渲染，tool-* parts 渲染同款只读工具卡片（可折叠展开）；
+ *  approval-request 是登录态交互，快照中不渲染。不提供输入框、侧边栏或
+ *  任何需要登录的交互。样式沿用主站语义 token，观感一致但独立成页。 */
 
 type LoadState =
   | { phase: 'loading' }
@@ -13,11 +19,8 @@ type LoadState =
   | { phase: 'error'; message: string }
   | { phase: 'ready'; data: ShareSnapshot }
 
-interface ShareRow {
-  id: string
-  role: 'user' | 'assistant'
-  text: string
-}
+type TextSegment = Extract<Segment, { kind: 'text' }>
+type AttachmentSegment = Extract<Segment, { kind: 'attachment' }>
 
 function pad2(n: number): string {
   return String(n).padStart(2, '0')
@@ -30,45 +33,70 @@ function formatSharedAt(iso: string): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
 }
 
-/** 汇总一条消息的 text parts；全空（纯工具调用等）返回 null，该条整条跳过。 */
-function extractText(message: ShareMessage): string | null {
-  const text = message.parts
-    .filter((p) => p.type === 'text' && typeof p.text === 'string')
-    .map((p) => p.text as string)
-    .join('\n\n')
-    .trim()
-  return text || null
+/** 分享页可渲染的段：文本 / 工具调用组 / 用户附件卡。approval-request 是
+ *  登录态交互（软确认门），只读快照一律跳过；只有 reasoning / step-start
+ *  的空壳助手消息也在此滤除（避免渲染空白卡片）。 */
+function hasRenderableSegment(item: RenderItem): boolean {
+  return item.segments.some(
+    (s) => s.kind === 'text' || s.kind === 'tool-group' || s.kind === 'attachment',
+  )
 }
 
-function toRows(messages: ShareMessage[]): ShareRow[] {
-  const rows: ShareRow[] = []
-  for (const m of messages) {
-    if (m.role !== 'user' && m.role !== 'assistant') continue
-    const text = extractText(m)
-    if (text) rows.push({ id: m.id, role: m.role, text })
-  }
-  return rows
-}
+/** 单条消息：助手 = 头像 + 全宽白卡（text 段 Markdown 渲染、tool-group 段
+ *  只读工具卡片，段序保持模型产出顺序）；用户 = 右对齐 primary 气泡（主界面
+ *  惯例为纯文本），附件卡堆叠在气泡上方。进入视口时错峰上浮（只做首屏节奏，
+ *  长列表不拖沓）。 */
+function ShareMessageRow({ item, index }: { item: RenderItem; index: number }) {
+  const style = { animationDelay: `${Math.min(index, 12) * 45}ms` }
 
-/** 单条消息：助手 = 头像 + 全宽白卡（对齐主聊天的左右结构但更简化）；
- *  用户 = 右对齐 primary 气泡。进入视口时错峰上浮（只做首屏节奏，长列表不拖沓）。 */
-function ShareMessageRow({ row, index }: { row: ShareRow; index: number }) {
-  if (row.role === 'user') {
+  if (item.role === 'user') {
+    const attachments = item.segments.filter((s): s is AttachmentSegment => s.kind === 'attachment')
+    const texts = item.segments.filter((s): s is TextSegment => s.kind === 'text')
     return (
-      <div className="flex animate-slide-up justify-end" style={{ animationDelay: `${Math.min(index, 12) * 45}ms` }}>
-        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-tr-md bg-primary-500 px-4 py-2.5 text-sm leading-relaxed text-white shadow-card">
-          {row.text}
-        </div>
+      <div className="flex animate-slide-up flex-col items-end gap-2" style={style}>
+        {attachments.map((seg, i) => (
+          <FileAttachmentCard key={`att-${seg.attachment.docId}-${i}`} attachment={seg.attachment} />
+        ))}
+        {texts.length > 0 && (
+          <div className="max-w-[85%] space-y-2 rounded-2xl rounded-tr-md bg-primary-500 px-4 py-2.5 text-sm leading-relaxed text-white shadow-card">
+            {texts.map((seg, i) => (
+              <div key={`t-${i}`} className="whitespace-pre-wrap break-words">
+                {seg.text}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     )
   }
+
   return (
-    <div className="flex animate-slide-up gap-3" style={{ animationDelay: `${Math.min(index, 12) * 45}ms` }}>
+    <div className="flex animate-slide-up gap-3" style={style}>
       <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary text-white">
         <Bot className="h-3.5 w-3.5" aria-hidden />
       </div>
-      <div className="min-w-0 flex-1 rounded-xl border border-line bg-white px-4 py-3 shadow-card">
-        <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink">{row.text}</div>
+      <div className="min-w-0 flex-1 rounded-xl border border-line bg-white px-4 py-3 text-sm leading-relaxed shadow-card">
+        <div className="space-y-2">
+          {item.segments.map((seg, i) => {
+            if (seg.kind === 'text') {
+              return (
+                <div key={`t-${i}`} className="text-ink">
+                  <MarkdownContent>{seg.text}</MarkdownContent>
+                </div>
+              )
+            }
+            if (seg.kind === 'tool-group') {
+              // readOnly：跳过挂载即请求鉴权接口、且带编辑交互的复核卡，
+              // 回落通用只读结果框（见 RealToolSteps 文件头说明）。
+              return <ToolGroupCard key={`g-${i}`} steps={seg.steps} readOnly />
+            }
+            if (seg.kind === 'attachment') {
+              return <FileAttachmentCard key={`att-${seg.attachment.docId}-${i}`} attachment={seg.attachment} />
+            }
+            // approval-request：登录态交互，只读快照不渲染
+            return null
+          })}
+        </div>
       </div>
     </div>
   )
@@ -103,7 +131,7 @@ export function SharePage({ token }: { token: string }) {
     }
   }, [state])
 
-  const rows = state.phase === 'ready' ? toRows(state.data.messages) : []
+  const rows = state.phase === 'ready' ? buildRenderItems(state.data.messages).filter(hasRenderableSegment) : []
   const sharedAt = state.phase === 'ready' ? formatSharedAt(state.data.createdAt) : ''
 
   return (
@@ -179,7 +207,7 @@ export function SharePage({ token }: { token: string }) {
                   该对话暂无文本内容
                 </div>
               ) : (
-                rows.map((row, i) => <ShareMessageRow key={row.id} row={row} index={i} />)
+                rows.map((item, i) => <ShareMessageRow key={item.id} item={item} index={i} />)
               )}
             </div>
           </main>

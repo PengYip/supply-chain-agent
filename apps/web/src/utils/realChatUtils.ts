@@ -16,6 +16,19 @@ export interface ToolCallStep {
   }
 }
 
+/** 工具入参的单行摘要（k=v 以「·」连接）；工具卡片与 L2 软确认卡共用。
+ *  2026-08-31 随工具渲染族抽取自 RealMessageItem，实现逐字相同。 */
+export const formatArgs = (args: unknown): string => {
+  try {
+    if (!args || typeof args !== 'object') return ''
+    const entries = Object.entries(args as Record<string, unknown>)
+    if (entries.length === 0) return ''
+    return entries.map(([k, v]) => `${k}=${String(v)}`).join(' · ')
+  } catch {
+    return ''
+  }
+}
+
 /** Display-only attachment metadata embedded in user messages as a custom
  *  `data-attachment` UI part. convertToModelMessages (AI SDK 6) silently
  *  drops `data-*` parts, so this never reaches the model — it exists purely
