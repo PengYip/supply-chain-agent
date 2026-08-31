@@ -339,6 +339,49 @@ export function migrate(sqlite: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_quotas_owner ON quotas(scope, owner_key, user_id);
     CREATE INDEX IF NOT EXISTS idx_quotas_user ON quotas(user_id);
 
+    -- Usage audit (2026-08-31, spec docs/superpowers/specs/2026-08-31-usage-audit-design.md):
+    -- 每行一次 LLM 调用 / 一次文档解析。正文截断 2000 字符存 *_preview,
+    -- 完整长度存 *_chars; 保留策略见 harness/usageAudit.ts purgeOldUsageRecords。
+    CREATE TABLE IF NOT EXISTS llm_calls (
+      id TEXT PRIMARY KEY,
+      session_id TEXT,
+      user_id TEXT,
+      kind TEXT NOT NULL,
+      model TEXT,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      total_tokens INTEGER,
+      input_preview TEXT,
+      output_preview TEXT,
+      input_chars INTEGER,
+      output_chars INTEGER,
+      duration_ms INTEGER,
+      finish_reason TEXT,
+      status TEXT NOT NULL DEFAULT 'ok',
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_llm_calls_created ON llm_calls(created_at);
+    CREATE INDEX IF NOT EXISTS idx_llm_calls_session ON llm_calls(session_id);
+    CREATE TABLE IF NOT EXISTS ocr_calls (
+      id TEXT PRIMARY KEY,
+      session_id TEXT,
+      user_id TEXT,
+      doc_id TEXT NOT NULL,
+      doc_type TEXT,
+      file_name TEXT,
+      backend TEXT NOT NULL,
+      file_bytes INTEGER,
+      pages INTEGER,
+      blocks INTEGER,
+      duration_ms INTEGER,
+      status TEXT NOT NULL DEFAULT 'ok',
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_ocr_calls_created ON ocr_calls(created_at);
+    CREATE INDEX IF NOT EXISTS idx_ocr_calls_doc ON ocr_calls(doc_id);
+
     -- 业务图谱模板(spec 2026-08-26 §3): 模板层 SSOT, 全局本体无 user_id。
     -- target_type_id = '' 是通配(任意合同类型); allowed_vocab/anchor_weights 为 JSON。
     CREATE TABLE IF NOT EXISTS template_types (
@@ -870,6 +913,46 @@ export async function migratePostgres(pool: Pool): Promise<void> {
      )`,
     `CREATE INDEX IF NOT EXISTS idx_quotas_owner ON quotas (scope, owner_key, user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_quotas_user ON quotas (user_id)`,
+    // Usage audit (2026-08-31): pg mirror of the SQLite llm_calls/ocr_calls.
+    `CREATE TABLE IF NOT EXISTS llm_calls (
+       id TEXT PRIMARY KEY,
+       session_id TEXT,
+       user_id TEXT,
+       kind TEXT NOT NULL,
+       model TEXT,
+       input_tokens INTEGER,
+       output_tokens INTEGER,
+       total_tokens INTEGER,
+       input_preview TEXT,
+       output_preview TEXT,
+       input_chars INTEGER,
+       output_chars INTEGER,
+       duration_ms INTEGER,
+       finish_reason TEXT,
+       status TEXT NOT NULL DEFAULT 'ok',
+       error TEXT,
+       created_at timestamptz NOT NULL DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_llm_calls_created ON llm_calls(created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_llm_calls_session ON llm_calls(session_id)`,
+    `CREATE TABLE IF NOT EXISTS ocr_calls (
+       id TEXT PRIMARY KEY,
+       session_id TEXT,
+       user_id TEXT,
+       doc_id TEXT NOT NULL,
+       doc_type TEXT,
+       file_name TEXT,
+       backend TEXT NOT NULL,
+       file_bytes INTEGER,
+       pages INTEGER,
+       blocks INTEGER,
+       duration_ms INTEGER,
+       status TEXT NOT NULL DEFAULT 'ok',
+       error TEXT,
+       created_at timestamptz NOT NULL DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_ocr_calls_created ON ocr_calls(created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_ocr_calls_doc ON ocr_calls(doc_id)`,
     // 模板三表(spec 2026-08-26)。TEXT(JSON) 与 SQLite 对齐。
     `CREATE TABLE IF NOT EXISTS template_types (
        id TEXT PRIMARY KEY,

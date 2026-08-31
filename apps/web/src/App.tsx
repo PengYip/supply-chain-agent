@@ -17,6 +17,7 @@ import { GraphView } from './components/graph/GraphView';
 import { BindingsView } from './components/bindings/BindingsView';
 import { SelfPartyPanel } from './components/parties/SelfPartyPanel';
 import { FavoritesView } from './components/favorites/FavoritesView';
+import { AuditView } from './components/audit/AuditView';
 import { ProjectsView } from './components/projects/ProjectsView';
 import { ProjectLedgerView } from './components/ledger/ProjectLedgerView';
 import { SharePage } from './components/share/SharePage';
@@ -296,6 +297,8 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
         <ProjectLedgerView onOpenProjects={() => navigate('projects')} onOpenParties={openParties} />
       ) : view === 'eval' ? (
         <EvalWorkbenchView />
+      ) : view === 'audit' ? (
+        <AuditView />
       ) : null}
       {/* 全页面拖拽上传提示遮罩：fixed 定位，z-modal 高于文件抽屉 */}
       <DragDropOverlay visible={dragActive} />

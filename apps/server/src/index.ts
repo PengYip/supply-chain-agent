@@ -17,6 +17,7 @@ import { favoritesRoute } from './routes/favorites.js';
 import { filesRoute } from './routes/files.js';
 import { graphRoute } from './routes/graph.js';
 import { quotasRoute } from './routes/quotas.js';
+import { auditRoute } from './routes/audit.js';
 import { reconciliationRoute } from './routes/reconciliation.js';
 import { bindingsRoute } from './routes/bindings.js';
 import { contractsRoute } from './routes/contracts.js';
@@ -30,6 +31,7 @@ import { evalDatasetsRoute } from './routes/evalDatasets.js';
 import { shareRoute } from './routes/share.js';
 import { ensureBucket } from './lib/minio.js';
 import { migrateOnStartup, getDbContext } from './pipeline/db/dbBackend.js';
+import { purgeOldUsageRecords } from './harness/usageAudit.js';
 import { ensureTemplateSeed } from './pipeline/templateSeed.js';
 import { migrateDocTypeAliases } from './pipeline/db/repositories.js';
 import { runExtractionBackfill } from './pipeline/extractionBackfill.js';
@@ -111,6 +113,7 @@ app.use('/api/documents/*', requireAuth);
 app.use('/api/eval/*', requireAuth);
 app.use('/api/graph/*', requireAuth);
 app.use('/api/quotas/*', requireAuth);
+app.use('/api/audit/*', requireAuth);
 app.use('/api/reconcile/*', requireAuth);
 app.use('/api/bindings/*', requireAuth);
 app.use('/api/contracts/*', requireAuth);
@@ -140,6 +143,7 @@ app.route('/api/graph', graphRoute);
 
 // 额度管控(spec 2026-08-25 方案A §6): quotas SSOT + granted 投影 + 即时占用。
 app.route('/api/quotas', quotasRoute);
+app.route('/api/audit', auditRoute);
 // 对账桥(§5): R1/R2/R3 全量物化 + 报告。
 app.route('/api/reconcile', reconciliationRoute);
 
@@ -217,6 +221,13 @@ process.on('SIGINT', async () => { await closeNeo4j(); });
     await migrateDocTypeAliases(getDbContext());
   } catch (e) {
     console.warn('[templateSeed] docType 别名迁移失败(不阻塞启动):', (e as Error).message);
+  }
+  // 用量审计保留期清理(90 天, 见 harness/usageAudit.ts)。失败仅告警不阻塞启动。
+  try {
+    const purged = await purgeOldUsageRecords();
+    if (purged > 0) console.log(`[usageAudit] purged ${purged} rows older than retention`);
+  } catch (e) {
+    console.warn('[usageAudit] 保留期清理失败(不阻塞启动):', (e as Error).message);
   }
   // Background session runtime: any session left 'busy' by a previous process
   // was interrupted by a crash/restart. Flip it to 'interrupted' so the UI can

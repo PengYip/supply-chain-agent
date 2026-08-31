@@ -33,6 +33,7 @@ import {
 import { env } from '../env.js';
 import { loadSession, mergeSessionMetadata } from './sessionStore.js';
 import { getTitleModel } from './titleGen.js';
+import { recordLlmCall } from './usageAudit.js';
 
 export interface CompactionPlan {
   /** Number of leading UIMessages the summary covers (exclusive bound). */
@@ -142,15 +143,32 @@ export async function summarizeHistory(
     ? `\n\n以下是此前已有的摘要，请把新对话合并进去，保留其中仍未失效的信息：\n<previous-summary>\n${priorSummary.slice(0, 8000)}\n</previous-summary>`
     : '';
   try {
-    const { text } = await generateText({
+    const t0 = Date.now();
+    const { text, usage } = await generateText({
       model,
       system: SUMMARIZER_SYSTEM,
       prompt: `<conversation>${transcript}</conversation>${updateNote}`,
       maxOutputTokens: 2048,
     });
+    recordLlmCall({
+      kind: 'compaction',
+      model: String((model as { modelId?: string }).modelId ?? ''),
+      inputTokens: usage?.inputTokens ?? null,
+      outputTokens: usage?.outputTokens ?? null,
+      totalTokens: usage?.totalTokens ?? null,
+      inputText: transcript.slice(0, 2000),
+      outputText: text,
+      durationMs: Date.now() - t0,
+      status: 'ok',
+    });
     const t = text.trim();
     return t ? t : null;
-  } catch {
+  } catch (e) {
+    recordLlmCall({
+      kind: 'compaction',
+      model: String((model as { modelId?: string }).modelId ?? ''),
+      status: 'error', error: e instanceof Error ? e.message : String(e),
+    });
     return null;
   }
 }

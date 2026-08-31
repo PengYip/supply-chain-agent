@@ -29,6 +29,8 @@ import { appendMessages, replaceMessage, setSessionTitle } from './sessionStore.
 import { emit } from './sessionEvents.js';
 import { generateSessionTitle, getTitleModel } from './titleGen.js';
 import { maybeCompactHistory } from './historyCompaction.js';
+import { recordLlmCall } from './usageAudit.js';
+import { env } from '../env.js';
 import type { Role } from './roleToolRegistry.js';
 
 export interface RunSessionOpts {
@@ -85,6 +87,10 @@ export function extractMessageText(msg: any): string {
 
 export async function runSession(opts: RunSessionOpts): Promise<void> {
   const { sessionId, role, messages, auditTraceId, abortSignal, userId, model, isFirstTurn, firstUserText, skipStatusMessage, originalMessages } = opts;
+  const auditT0 = Date.now();
+  // Audit: this turn's user input (prompt tail) for the usage-audit page.
+  const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+  const auditInputText = extractMessageText(lastUserMsg);
 
   const result = await runStream({
     messages,
@@ -118,6 +124,32 @@ export async function runSession(opts: RunSessionOpts): Promise<void> {
   // background in Task 7b without holding the result itself.
   result.response.then(
     async (r) => {
+      // Usage audit (fire-and-forget, best-effort): record this chat turn's
+      // tokens + truncated input/output. totalUsage is resolved by the time
+      // the response promise settles (the stream has flushed).
+      try {
+        const usage = await result.totalUsage;
+        recordLlmCall({
+          sessionId,
+          userId,
+          kind: 'chat',
+          model: model ? String((model as { modelId?: string }).modelId ?? '') : env.OPENAI_MODEL,
+          inputTokens: usage.inputTokens ?? null,
+          outputTokens: usage.outputTokens ?? null,
+          totalTokens: usage.totalTokens ?? null,
+          inputText: auditInputText,
+          outputText: extractMessageText(r.messages.find((m) => m.role === 'assistant')),
+          durationMs: Date.now() - auditT0,
+          status: 'ok',
+        });
+      } catch (err) {
+        recordLlmCall({
+          sessionId, userId, kind: 'chat',
+          model: model ? String((model as { modelId?: string }).modelId ?? '') : env.OPENAI_MODEL,
+          inputText: auditInputText, durationMs: Date.now() - auditT0,
+          status: 'error', error: err instanceof Error ? err.message : String(err),
+        });
+      }
       try {
         await recordL2PendingFromResponse(sessionId, r.messages);
       } catch (err) {
