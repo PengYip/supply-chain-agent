@@ -220,27 +220,32 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
     <AppShell
       currentView={view}
       onNavigate={handleNavigate}
-      // 打开文件抽屉时重拉列表：「已挂合同」徽标在绑定工作台/对话里确认后
-      // 会过期（useFiles 仅在挂载与上传等少数事件时刷新），打开即取最新态。
+      // 顶栏「文件」按钮兼作面板开关。展开时重拉列表：「已挂合同」徽标在
+      // 绑定工作台/对话里确认后会过期（useFiles 仅在挂载与上传等少数事件时
+      // 刷新），展开即取最新态。
       onOpenFiles={() => {
+        if (fileDrawerOpen) {
+          setFileDrawerOpen(false);
+          return;
+        }
         setFileDrawerOpen(true);
         void refreshFiles();
       }}
       filesOpen={fileDrawerOpen}
       user={user}
       onSignOut={onSignOut}
+      // 文件面板常驻挂载（open 只控制宽度伸缩）：内部选中/展开状态跨开关
+      // 保留；收起时宽度归零，主对话区以 flex-1 延展占满剩余空间。
       filesPanel={
-        fileDrawerOpen ? (
-          <FileDrawer
-            open
-            onClose={() => setFileDrawerOpen(false)}
-            onAddToConversation={addToConversation}
-            contextFileKeys={contextFileKeys}
-            filesApi={filesApi}
-            uploadQueue={uploadQueue}
-            onOpenBindings={openBindingsForDoc}
-          />
-        ) : undefined
+        <FileDrawer
+          open={fileDrawerOpen}
+          onClose={() => setFileDrawerOpen(false)}
+          onAddToConversation={addToConversation}
+          contextFileKeys={contextFileKeys}
+          filesApi={filesApi}
+          uploadQueue={uploadQueue}
+          onOpenBindings={openBindingsForDoc}
+        />
       }
     >
       {view === 'chat' ? (
