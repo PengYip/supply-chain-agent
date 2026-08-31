@@ -117,6 +117,16 @@ const EnvSchema = z.object({
   VLM_API_KEY: z.string().optional(),
   VLM_MODEL: z.string().default('qwen3.8-max'),
   VLM_TIMEOUT_MS: z.coerce.number().int().positive().default(180000),
+  // Scanned-document OCR backend for parseDocument. 'mineru' (default) shells
+  // out to the local MinerU CLI (CPU); 'qianfan' calls Baidu Qianfan's hosted
+  // PaddleOCR-VL endpoint (needs QIANFAN_API_KEY, checked at call time not
+  // boot). Both honor the <file>.{mineru,paddleocr}.json hermetic sidecars.
+  PARSE_BACKEND: z.enum(['mineru', 'qianfan']).default('mineru'),
+  // Baidu Qianfan PaddleOCR-VL endpoint credentials/settings. The key is never
+  // hardcoded; it only reaches the adapter when PARSE_BACKEND=qianfan.
+  QIANFAN_API_KEY: z.string().optional(),
+  QIANFAN_OCR_URL: z.string().url().default('https://qianfan.baidubce.com/v2/ocr/paddleocr'),
+  QIANFAN_TIMEOUT_MS: z.coerce.number().int().positive().default(300000),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
