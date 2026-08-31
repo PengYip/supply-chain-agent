@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react'
 import { useSessionMessages } from '../hooks/useSessionMessages'
-import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, Paperclip, Check, Star } from 'lucide-react'
+import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, Paperclip, Check, Star, ArrowDown } from 'lucide-react'
 import { getFavorite, setFavorite, clearFavorite, type FavoriteProbe } from '../api/favorites'
 import { RealMessageItem, ErrorMessage, ArrearsNotice } from './RealMessageItem'
 import AutoGrowTextarea from './AutoGrowTextarea'
@@ -618,14 +618,76 @@ export const RealChatView: React.FC<{
   }
 
   const renderItems = useMemo(() => buildRenderItems(messages as unknown[]), [messages])
-  const bottomRef = useRef<HTMLDivElement>(null)
 
   // Poll agent status only while a real session exists (real mode only).
   const agentStatus = useHumanAgentStatus(liveSessionId, isStreaming)
 
+  // ── 滚动跟随策略 ──
+  // 流式输出不再强制锁底：用户上滚离开底部即暂停自动跟随，可自由回看历史；
+  // 手动滚回距底 80px 内自动恢复跟随；未跟随期间有新内容到达时，消息区底部
+  // 居中悬浮「回到最新」按钮（未读提示点亮），点击平滑贴底并恢复跟随。
+  // 会话切换始终强制恢复跟随并贴底。
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  // 距底多少像素以内视为「在底部」（恢复跟随的判定阈值）
+  const NEAR_BOTTOM_PX = 80
+  // 是否自动跟随底部：唯一判定源（scroll 事件持续校正）
+  const followRef = useRef(true)
+  // 程序化平滑滚动的截止时间戳：平滑滚动途中会路过「距底 > 80px」的中间
+  // 态，该窗口内不把中间态误判为用户主动上滚
+  const programmaticScrollUntilRef = useRef(0)
+  // 悬浮按钮可见性 + 未读提示（离开底部后有新内容到达则点亮）
+  const [showJump, setShowJump] = useState(false)
+  const [hasNew, setHasNew] = useState(false)
+
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (distanceFromBottom <= NEAR_BOTTOM_PX) {
+      // 滚回底部附近：恢复跟随；视为已读，熄灭未读提示
+      followRef.current = true
+      setShowJump(false)
+      setHasNew(false)
+    } else if (performance.now() >= programmaticScrollUntilRef.current) {
+      // 用户主动离开底部：停止跟随，亮出「回到最新」入口
+      followRef.current = false
+      setShowJump(true)
+    }
+  }, [])
+
+  // 平滑贴底（按钮点击 / 用户发消息时）：先置跟随再滚动，途中中间态由
+  // programmaticScrollUntilRef 屏蔽误判
+  const smoothScrollToBottom = useCallback(() => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    followRef.current = true
+    programmaticScrollUntilRef.current = performance.now() + 600
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    setShowJump(false)
+    setHasNew(false)
+  }, [])
+
+  // 内容/状态变化：跟随中直接贴底（流式高频更新用 instant，避免逐 token
+  // smooth 抖动）；未跟随时只点亮未读提示，绝不强行拉底
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const el = scrollContainerRef.current
+    if (!el) return
+    if (followRef.current) {
+      el.scrollTop = el.scrollHeight
+    } else {
+      setHasNew(true)
+    }
   }, [renderItems, status])
+
+  // 会话切换：无条件恢复跟随并直接贴底（新会话历史加载后的首帧由上面的
+  // renderItems effect 兜底再贴一次）
+  useEffect(() => {
+    followRef.current = true
+    setShowJump(false)
+    setHasNew(false)
+    const el = scrollContainerRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [sessionId])
 
   const removeFromConversation = useCallback((key: string) => {
     setContextFiles((prev) => prev.filter((f) => f.key !== key))
@@ -637,6 +699,8 @@ export const RealChatView: React.FC<{
     if (!text || isBusy) return
     setInput('')
     setSendError(null)
+    // 用户主动发消息：恢复跟随并平滑贴底，新回合立即可见
+    smoothScrollToBottom()
     // contextFiles travel as a PER-CALL argument from this submit-time
     // snapshot (useSessionMessages reads them synchronously from the closure,
     // so there is no transport-ref race). Clear after the call resolves so
@@ -735,81 +799,102 @@ export const RealChatView: React.FC<{
       {/* Agent status strip (real mode only) */}
       <HumanAgentStatusBar sessionId={liveSessionId} status={agentStatus} />
 
-      {/* Messages */}
-      <div className="flex-1 overflow-auto p-4">
-        <div className="max-w-3xl mx-auto space-y-5">
-          {renderItems.length === 0 && (
-            <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-12">
-              <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
-                <Sparkles className="w-6 h-6 text-primary" />
-              </div>
-              <h3 className="text-base font-medium text-ink mb-2">贸易业务助理</h3>
-              <p className="text-sm text-ink-soft mb-6 max-w-md">
-                上传合同、发票、提单即可自动识别字段并挂接台账；对话查询合同、订单与履约流水。
-                所有数字来自系统台账与文档，不编造。
-              </p>
-              <div className="grid gap-4 max-w-xl w-full">
-                {(
-                  [
-                    {
-                      label: '查询与核对',
-                      prompts: [
-                        '查一下合同 HT-2024-001 的执行情况',
-                        'HT-2024-001 和 HT-2024-002 的金额对得上吗',
-                        '这个项目累计发运了多少',
-                      ],
-                    },
-                    {
-                      label: '单据处理与绑定',
-                      prompts: [
-                        '核验提单 BL-2024-0920-002 的关键字段',
-                        '把提单 BL-2024-0920-002 挂到合同 HT-2024-001',
-                      ],
-                    },
-                    {
-                      label: '图谱追溯与模板管理',
-                      prompts: [
-                        'HT-2024-001 关联了哪些交易方和文档',
-                        '新建文档类型铁路运单，必填运单号、发站、到站（需审批）',
-                      ],
-                    },
-                  ] as const
-                ).map((group) => (
-                  <div key={group.label}>
-                    <div className="mb-1.5 text-xs font-medium text-ink-soft">{group.label}</div>
-                    <div className="flex flex-wrap justify-center gap-2">
-                      {group.prompts.map((prompt) => (
-                        <button
-                          key={prompt}
-                          onClick={() => setInput(prompt)}
-                          className="px-3 py-1.5 rounded-full border border-line bg-white text-sm text-ink-soft hover:border-primary hover:text-primary transition-colors"
-                        >
-                          {prompt}
-                        </button>
-                      ))}
+      {/* Messages（relative 包裹层用于承载悬浮「回到最新」按钮） */}
+      <div className="relative flex-1 min-h-0">
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
+          className="h-full overflow-auto p-4"
+        >
+          <div className="max-w-3xl mx-auto space-y-5">
+            {renderItems.length === 0 && (
+              <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-12">
+                <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
+                  <Sparkles className="w-6 h-6 text-primary" />
+                </div>
+                <h3 className="text-base font-medium text-ink mb-2">贸易业务助理</h3>
+                <p className="text-sm text-ink-soft mb-6 max-w-md">
+                  上传合同、发票、提单即可自动识别字段并挂接台账；对话查询合同、订单与履约流水。
+                  所有数字来自系统台账与文档，不编造。
+                </p>
+                <div className="grid gap-4 max-w-xl w-full">
+                  {(
+                    [
+                      {
+                        label: '查询与核对',
+                        prompts: [
+                          '查一下合同 HT-2024-001 的执行情况',
+                          'HT-2024-001 和 HT-2024-002 的金额对得上吗',
+                          '这个项目累计发运了多少',
+                        ],
+                      },
+                      {
+                        label: '单据处理与绑定',
+                        prompts: [
+                          '核验提单 BL-2024-0920-002 的关键字段',
+                          '把提单 BL-2024-0920-002 挂到合同 HT-2024-001',
+                        ],
+                      },
+                      {
+                        label: '图谱追溯与模板管理',
+                        prompts: [
+                          'HT-2024-001 关联了哪些交易方和文档',
+                          '新建文档类型铁路运单，必填运单号、发站、到站（需审批）',
+                        ],
+                      },
+                    ] as const
+                  ).map((group) => (
+                    <div key={group.label}>
+                      <div className="mb-1.5 text-xs font-medium text-ink-soft">{group.label}</div>
+                      <div className="flex flex-wrap justify-center gap-2">
+                        {group.prompts.map((prompt) => (
+                          <button
+                            key={prompt}
+                            onClick={() => setInput(prompt)}
+                            className="px-3 py-1.5 rounded-full border border-line bg-white text-sm text-ink-soft hover:border-primary hover:text-primary transition-colors"
+                          >
+                            {prompt}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
+                <p className="mt-4 text-xs text-ink-soft">标注需审批的操作会弹出审批卡片，管理员批准后才会执行</p>
               </div>
-              <p className="mt-4 text-xs text-ink-soft">标注需审批的操作会弹出审批卡片，管理员批准后才会执行</p>
-            </div>
-          )}
-          {renderItems.map((item) => (
-            <RealMessageItem
-              key={item.id}
-              item={item}
-              isStreaming={isStreaming && item.role === 'assistant' && item.id === renderItems[renderItems.length - 1]?.id}
-              approvalsPendingIds={approvalsPendingIds}
-              onApprove={handleApprove}
-              onDeny={handleDeny}
-              onOpenBindings={onOpenBindings}
-            />
-          ))}
-          {error?.code === 'provider_arrears'
-            ? <ArrearsNotice />
-            : <ErrorMessage error={error ? new Error(error.message) : null} />}
-          <div ref={bottomRef} />
+            )}
+            {renderItems.map((item) => (
+              <RealMessageItem
+                key={item.id}
+                item={item}
+                isStreaming={isStreaming && item.role === 'assistant' && item.id === renderItems[renderItems.length - 1]?.id}
+                approvalsPendingIds={approvalsPendingIds}
+                onApprove={handleApprove}
+                onDeny={handleDeny}
+                onOpenBindings={onOpenBindings}
+              />
+            ))}
+            {error?.code === 'provider_arrears'
+              ? <ArrearsNotice />
+              : <ErrorMessage error={error ? new Error(error.message) : null} />}
+          </div>
         </div>
+        {/* 回到最新：仅在用户离开底部（未跟随）时出现，悬浮于消息流之上且
+            不随内容滚动；未读提示点亮表示离开期间有新内容到达 */}
+        {showJump && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10">
+            <button
+              type="button"
+              onClick={smoothScrollToBottom}
+              title="滚动到最新消息"
+              className="animate-slide-up inline-flex items-center gap-1.5 rounded-full border border-line bg-white px-3.5 py-1.5 text-xs text-ink shadow-lg transition-colors hover:border-primary hover:text-primary"
+            >
+              {hasNew && <span className="w-1.5 h-1.5 rounded-full bg-primary-500 shrink-0" />}
+              <ArrowDown className="w-3.5 h-3.5" />
+              回到最新
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Composer */}

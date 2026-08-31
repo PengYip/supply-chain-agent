@@ -4,8 +4,11 @@ export interface ToolCallStep {
   toolCallId: string
   toolName: string
   args: unknown
-  status: 'running' | 'completed'
+  status: 'running' | 'completed' | 'failed'
   result?: unknown
+  /** 失败终态（AI SDK 6 state='output-error'）时 SDK 携带的错误文本，
+   *  供折叠摘要与展开详情展示。 */
+  errorText?: string
   blocked?: {
     reason: string
     ticketId: string
@@ -135,6 +138,7 @@ export const buildRenderItems = (messages: unknown[]): RenderItem[] => {
       toolName?: string
       input?: unknown
       output?: unknown
+      errorText?: string
       state?: string
       approval?: { id: string }
       data?: unknown
@@ -196,12 +200,16 @@ export const buildRenderItems = (messages: unknown[]): RenderItem[] => {
       if (p.toolCallId && (p.type === 'dynamic-tool' || p.type.startsWith('tool-'))) {
         flushText()
         const completed = p.state === 'output-available'
+        // AI SDK 6 失败终态：state='output-error' 携带 errorText。此前被并入
+        // running 会导致失败的工具永远转圈，现映射为 failed 终态。
+        const failed = p.state === 'output-error'
         const step: ToolCallStep = {
           toolCallId: p.toolCallId,
           toolName: p.toolName || p.type.replace(/^tool-/, ''),
           args: p.input,
           result: completed ? p.output : undefined,
-          status: completed ? 'completed' : 'running',
+          errorText: failed && typeof p.errorText === 'string' ? p.errorText : undefined,
+          status: completed ? 'completed' : failed ? 'failed' : 'running',
         }
 
         // L3 外部审批门：工具 execute 返回 { status: 'blocked', reason: 'requires_external_approval', ticketId }
