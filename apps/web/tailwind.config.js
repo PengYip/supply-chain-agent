@@ -46,6 +46,7 @@ export default {
       animation: {
         'fade-in': 'fadeIn 150ms ease-out',
         'pulse-bar': 'pulseBar 1.5s ease-in-out infinite',
+        'drop-float': 'dropFloat 2.6s ease-in-out infinite',
       },
       keyframes: {
         fadeIn: {
@@ -55,6 +56,11 @@ export default {
         pulseBar: {
           '0%, 100%': { opacity: '1' },
           '50%': { opacity: '.5' },
+        },
+        /* 拖拽遮罩插图里漂浮文件的上下浮动（各图标用 animation-delay 错开相位） */
+        dropFloat: {
+          '0%, 100%': { transform: 'translateY(-3px)' },
+          '50%': { transform: 'translateY(3px)' },
         },
       },
     },

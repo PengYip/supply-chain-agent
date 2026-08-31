@@ -8,10 +8,7 @@ import { FilePreviewModal } from '../FilePreviewModal';
 import { buildTree, normalizeMoveDirectory } from '../../lib/fileTree';
 import { FileTree, type TreeCallbacks } from './FileTree';
 import { readPayload, useFileDnd, type DropTarget } from '../../hooks/useFileDnd';
-import {
-  collectDropItems,
-  useFolderDropUpload,
-} from '../../hooks/useFolderDropUpload';
+import { collectDropItems, type UploadQueueApi } from '../../hooks/useFolderDropUpload';
 
 interface FileDrawerProps {
   open: boolean;
@@ -20,12 +17,14 @@ interface FileDrawerProps {
   contextFileKeys: Set<string>;
   /** Shared file list owned by App (upload + drawer share one useFiles). */
   filesApi: FilesApi;
+  /** 上传队列（App 层持有，全页面拖拽与抽屉共用一个实例；汇总条在本组件内消费）。 */
+  uploadQueue: UploadQueueApi;
   /** 「未挂合同」徽标跳转绑定工作台的通道（App 分配 nonce 并导航）。 */
   onOpenBindings?: (docId: string) => void;
 }
 
 export function FileDrawer(props: FileDrawerProps) {
-  const { open, onClose, onAddToConversation, contextFileKeys, filesApi, onOpenBindings } = props;
+  const { open, onClose, onAddToConversation, contextFileKeys, filesApi, uploadQueue, onOpenBindings } = props;
   const {
     files, folders, loading, downloadFile, moveFile, createFolder,
     removeFolder, renameFolderPath, reorderFolders, reorderFiles, deleteFile, refresh,
@@ -85,23 +84,8 @@ export function FileDrawer(props: FileDrawerProps) {
     };
   }, [open, panelWidth]);
 
-  /** 上传队列：先把层级里的缺失目录补齐，再逐个串行上传。 */
-  const uploadQueue = useFolderDropUpload({
-    ensureDirs: useCallback(
-      async (dirs: string[]) => {
-        const have = new Set(folders.map((f) => f.path));
-        for (const d of dirs) {
-          if (!have.has(d)) {
-            await createFolder(d);
-            have.add(d);
-          }
-        }
-      },
-      [folders, createFolder],
-    ),
-    onDone: () => void refresh(),
-  });
-
+  /** 抽屉内落点上传：收集条目（保层级）后经 App 层队列入队到目标目录。
+   *  队列实例由 prop 注入，抽屉关闭不销毁进行中的上传。 */
   const handleDropFiles = useCallback(
     (dt: DataTransfer, targetDir: DropTarget) => {
       void collectDropItems(dt).then((items) => {
