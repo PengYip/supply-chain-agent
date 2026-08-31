@@ -373,6 +373,23 @@ export function migrate(sqlite: Database.Database): void {
       change_summary TEXT NOT NULL,
       changed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );
+
+    -- 对话分享快照(feature 2026-08-31): 用户把会话生成只读快照供外部无登录访问。
+    -- 每会话一个 token: session_id UNIQUE 支撑 ON CONFLICT upsert(重复分享时
+    -- 刷新 token/title/payload, created_at 保留首次分享时间)。payload 为 JSON
+    -- ({messages: UIMessage[]}) 的分享时刻副本, 后续会话更新不影响已分享内容。
+    -- 无 FK: 会话存于 harness session store(agent.db / Postgres sessions 表),
+    -- 与 pipeline 库在 SQLite 侧是两个文件, 与 session_events 同一取舍。
+    CREATE TABLE IF NOT EXISTS conversation_shares (
+      token TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      owner_user_id TEXT NOT NULL,
+      title TEXT NOT NULL DEFAULT '',
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_shares_session ON conversation_shares(session_id);
+    CREATE INDEX IF NOT EXISTS idx_conversation_shares_owner ON conversation_shares(owner_user_id);
   `);
 
   // P4: 种子冲突策略列(managed-wins)。NULL=纯种子行(boot 可覆写);非空=DB 优先。
@@ -890,6 +907,20 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     `ALTER TABLE template_types ADD COLUMN IF NOT EXISTS managed_by TEXT`,
     `ALTER TABLE template_edge_rules ADD COLUMN IF NOT EXISTS managed_at timestamptz`,
     `ALTER TABLE template_edge_rules ADD COLUMN IF NOT EXISTS managed_by TEXT`,
+    // 对话分享快照(feature 2026-08-31): pg mirror of the SQLite conversation_shares。
+    // TEXT(JSON payload / ISO created_at)与 harness 表惯例一致; session_id UNIQUE
+    // 支撑 ON CONFLICT upsert(每会话一个 token)。无 FK(会话表属 harness store,
+    // 同 SQLite 侧取舍)。
+    `CREATE TABLE IF NOT EXISTS conversation_shares (
+       token TEXT PRIMARY KEY,
+       session_id TEXT NOT NULL,
+       owner_user_id TEXT NOT NULL,
+       title TEXT NOT NULL DEFAULT '',
+       payload TEXT NOT NULL,
+       created_at TEXT NOT NULL DEFAULT (now()::text)
+     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_shares_session ON conversation_shares(session_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_conversation_shares_owner ON conversation_shares(owner_user_id)`,
     // L4 FTS fix (2026-08-17): drizzle migration 0000 created doc_chunk.fts_vector
     // as a PLAIN tsvector column (no GENERATED), so it stays NULL forever and
     // every FTS query silently returns 0 hits. Recreate it as a GENERATED column

@@ -2873,3 +2873,70 @@ export async function listSettlementRecordsPg(
       );
   return (res.rows as Array<Record<string, unknown>>).map(settlementRowFromPg);
 }
+
+// ---- conversation_shares(对话分享快照, feature 2026-08-31) --------------------
+
+/** 对话分享 upsert 输入(payload 为 JSON 字符串, 序列化由调用方负责)。 */
+export interface ConversationShareUpsert {
+  token: string;
+  sessionId: string;
+  ownerUserId: string;
+  title: string;
+  payload: string;
+}
+
+/** conversation_shares 行(读面; payload 仍为 JSON 字符串, 解析在路由层)。 */
+export interface ConversationShareRow {
+  token: string;
+  sessionId: string;
+  ownerUserId: string;
+  title: string;
+  payload: string;
+  createdAt: string;
+}
+
+/** pg twin of upsertConversationShare。session_id 冲突即刷新(token/title/payload),
+ *  created_at 保留首次分享时间。 */
+export async function upsertConversationSharePg(
+  ctx: PostgresDbContext,
+  input: ConversationShareUpsert,
+): Promise<void> {
+  await ctx.pool.query(
+    `INSERT INTO conversation_shares (token, session_id, owner_user_id, title, payload, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (session_id) DO UPDATE SET
+       token = excluded.token,
+       owner_user_id = excluded.owner_user_id,
+       title = excluded.title,
+       payload = excluded.payload`,
+    [
+      input.token,
+      input.sessionId,
+      input.ownerUserId,
+      input.title,
+      input.payload,
+      new Date().toISOString(),
+    ],
+  );
+}
+
+/** pg twin of getConversationShareByToken。token 不存在返回 null。 */
+export async function getConversationShareByTokenPg(
+  ctx: PostgresDbContext,
+  token: string,
+): Promise<ConversationShareRow | null> {
+  const res = await ctx.pool.query(
+    'SELECT token, session_id, owner_user_id, title, payload, created_at FROM conversation_shares WHERE token = $1',
+    [token],
+  );
+  if (res.rows.length === 0) return null;
+  const r = res.rows[0] as Record<string, unknown>;
+  return {
+    token: String(r.token),
+    sessionId: String(r.session_id),
+    ownerUserId: String(r.owner_user_id),
+    title: r.title == null ? '' : String(r.title),
+    payload: String(r.payload),
+    createdAt: r.created_at == null ? '' : String(r.created_at),
+  };
+}

@@ -46,6 +46,8 @@ export function AppTopbar({
         <button
           type="button"
           onClick={onOpenFiles}
+          title={filesOpen ? '收起文件面板' : '展开文件面板'}
+          aria-pressed={filesOpen}
           className={clsx(
             'flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors',
             filesOpen

@@ -1,6 +1,9 @@
-// 全局文件管理抽屉：右侧滑入 + 遮罩，任意视图可从 AppTopbar 唤起。
+// 全局文件管理面板：布局内右侧伸缩停靠板（常驻挂载，收起时宽度归零不占空间，
+// 主对话区以 flex-1 延展占满），任意视图可从 AppTopbar 的「文件」开关唤起，
+// 左缘手柄可拖拽调宽（280–560px）。
 // 树形展示已拆至 FileTree.tsx；本文件只负责容器状态编排与预览弹窗。
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import clsx from 'clsx';
 import { Folder, X } from 'lucide-react';
 import { type FileEntry, type FilesApi } from '../../hooks/useFiles';
 import { processDocument } from '../../api/process';
@@ -8,10 +11,7 @@ import { FilePreviewModal } from '../FilePreviewModal';
 import { buildTree, normalizeMoveDirectory } from '../../lib/fileTree';
 import { FileTree, type TreeCallbacks } from './FileTree';
 import { readPayload, useFileDnd, type DropTarget } from '../../hooks/useFileDnd';
-import {
-  collectDropItems,
-  useFolderDropUpload,
-} from '../../hooks/useFolderDropUpload';
+import { collectDropItems, type UploadQueueApi } from '../../hooks/useFolderDropUpload';
 
 interface FileDrawerProps {
   open: boolean;
@@ -20,12 +20,14 @@ interface FileDrawerProps {
   contextFileKeys: Set<string>;
   /** Shared file list owned by App (upload + drawer share one useFiles). */
   filesApi: FilesApi;
+  /** 上传队列（App 层持有，全页面拖拽与抽屉共用一个实例；汇总条在本组件内消费）。 */
+  uploadQueue: UploadQueueApi;
   /** 「未挂合同」徽标跳转绑定工作台的通道（App 分配 nonce 并导航）。 */
   onOpenBindings?: (docId: string) => void;
 }
 
 export function FileDrawer(props: FileDrawerProps) {
-  const { open, onClose, onAddToConversation, contextFileKeys, filesApi, onOpenBindings } = props;
+  const { open, onClose, onAddToConversation, contextFileKeys, filesApi, uploadQueue, onOpenBindings } = props;
   const {
     files, folders, loading, downloadFile, moveFile, createFolder,
     removeFolder, renameFolderPath, reorderFolders, reorderFiles, deleteFile, refresh,
@@ -50,58 +52,53 @@ export function FileDrawer(props: FileDrawerProps) {
   const PANEL_MAX = 560;
   const [panelWidth, setPanelWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem('sca.filesPanelWidth'));
-    return Number.isFinite(saved) && saved >= PANEL_MIN && saved <= PANEL_MAX ? saved : 360;
+    return Number.isFinite(saved) && saved >= PANEL_MIN && saved <= PANEL_MAX ? saved : 320;
   });
+  // 拖拽期间不走宽度过渡（动画会追赶鼠标），并以 ref 读当前宽度：
+  // 监听只在挂载时绑一次（面板常驻），避免每次 setPanelWidth 都重挂监听
+  // 导致拖拽中 mousemove 被拆掉的旧问题。
+  const panelWidthRef = useRef(panelWidth);
+  // open 镜像到 ref 供挂载一次的监听读取；在 effect 中同步，避免渲染期写 ref。
+  const openRef = useRef(open);
   useEffect(() => {
-    if (!open) return;
-    let startW = 0;
-    let startX = 0;
-    const onMove = (e: MouseEvent) => {
-      const next = Math.min(PANEL_MAX, Math.max(PANEL_MIN, startW + (startX - e.clientX)));
-      setPanelWidth(next);
-    };
-    const onUp = (e: MouseEvent) => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      document.body.style.userSelect = '';
-      const next = Math.min(PANEL_MAX, Math.max(PANEL_MIN, startW + (startX - e.clientX)));
-      localStorage.setItem('sca.filesPanelWidth', String(next));
-    };
+    openRef.current = open;
+  }, [open]);
+  const [resizing, setResizing] = useState(false);
+  useEffect(() => {
+    const handle = document.getElementById('files-panel-resize-handle');
+    if (!handle) return;
     const onDown = (e: MouseEvent) => {
-      startW = panelWidth;
-      startX = e.clientX;
+      if (!openRef.current) return;
+      e.preventDefault();
+      setResizing(true);
+      const startW = panelWidthRef.current;
+      const startX = e.clientX;
+      const clamp = (clientX: number) =>
+        Math.min(PANEL_MAX, Math.max(PANEL_MIN, startW + (startX - clientX)));
+      const onMove = (ev: MouseEvent) => {
+        const next = clamp(ev.clientX);
+        panelWidthRef.current = next;
+        setPanelWidth(next);
+      };
+      const onUp = (ev: MouseEvent) => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.style.userSelect = '';
+        const next = clamp(ev.clientX);
+        panelWidthRef.current = next;
+        localStorage.setItem('sca.filesPanelWidth', String(next));
+        setResizing(false);
+      };
       document.body.style.userSelect = 'none';
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
-      e.preventDefault();
     };
-    const handle = document.getElementById('files-panel-resize-handle');
-    handle?.addEventListener('mousedown', onDown);
-    return () => {
-      handle?.removeEventListener('mousedown', onDown);
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      document.body.style.userSelect = '';
-    };
-  }, [open, panelWidth]);
+    handle.addEventListener('mousedown', onDown);
+    return () => handle.removeEventListener('mousedown', onDown);
+  }, []);
 
-  /** 上传队列：先把层级里的缺失目录补齐，再逐个串行上传。 */
-  const uploadQueue = useFolderDropUpload({
-    ensureDirs: useCallback(
-      async (dirs: string[]) => {
-        const have = new Set(folders.map((f) => f.path));
-        for (const d of dirs) {
-          if (!have.has(d)) {
-            await createFolder(d);
-            have.add(d);
-          }
-        }
-      },
-      [folders, createFolder],
-    ),
-    onDone: () => void refresh(),
-  });
-
+  /** 抽屉内落点上传：收集条目（保层级）后经 App 层队列入队到目标目录。
+   *  队列实例由 prop 注入，抽屉关闭不销毁进行中的上传。 */
   const handleDropFiles = useCallback(
     (dt: DataTransfer, targetDir: DropTarget) => {
       void collectDropItems(dt).then((items) => {
@@ -187,8 +184,8 @@ export function FileDrawer(props: FileDrawerProps) {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [open, onClose]);
 
-  if (!open) return null;
-
+  // 常驻挂载：收起态只是宽度归零（见下方 style），不再卸载组件，
+  // 内部选中/展开/命名中的状态跨开关保留。
   const toggle = (path: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -268,11 +265,16 @@ export function FileDrawer(props: FileDrawerProps) {
 
   return (
     <aside
-      className="relative flex h-full shrink-0 flex-col border-l border-line bg-white"
-      style={{ width: panelWidth, minWidth: 280, maxWidth: 560 }}
+      className={clsx(
+        'relative flex h-full shrink-0 flex-col overflow-hidden bg-white',
+        open ? 'border-l border-line' : 'border-l-0',
+        // 开关时做 200ms 宽度过渡；手柄拖拽期间直写宽度，关掉过渡避免追赶鼠标
+        resizing ? '' : 'transition-[width] duration-200 ease-out',
+      )}
+      style={{ width: open ? panelWidth : 0 }}
       aria-label="文件管理"
     >
-      {/* 左缘手柄：拖拽伸缩宽度 */}
+      {/* 左缘手柄：拖拽伸缩宽度（收起时随 overflow-hidden 裁掉，不可命中） */}
       <div
         id="files-panel-resize-handle"
         role="separator"
@@ -280,7 +282,9 @@ export function FileDrawer(props: FileDrawerProps) {
         aria-label="调整面板宽度"
         className="absolute inset-y-0 left-0 z-30 w-1 cursor-col-resize bg-transparent transition-colors hover:bg-primary/40"
       />
-      {/* 头部：标题 + 新建文件夹 + 关闭 */}
+      {/* 内容层锁定最小宽：收合动画期间只被裁切、不重排；inert 阻断隐藏态的焦点与读屏 */}
+      <div className="flex w-full flex-1 flex-col" style={{ minWidth: PANEL_MIN }} inert={!open}>
+      {/* 头部：标题 + 新建文件夹 + 收起 */}
         <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-3">
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold leading-tight text-ink">文件管理</div>
@@ -296,7 +300,8 @@ export function FileDrawer(props: FileDrawerProps) {
           <button
             type="button"
             onClick={onClose}
-            aria-label="关闭文件抽屉"
+            title="收起文件面板"
+            aria-label="收起文件面板"
             className="flex h-7 w-7 items-center justify-center rounded-md text-ink-soft transition-colors hover:bg-surface hover:text-ink"
           >
             <X className="h-4 w-4" aria-hidden />
@@ -405,7 +410,11 @@ export function FileDrawer(props: FileDrawerProps) {
           </div>
         )}
 
-        {previewingFile && <FilePreviewModal file={previewingFile} onClose={() => setPreviewingFile(null)} />}
+        {/* 预览弹窗仅在展开态渲染：收起后残留的 fixed 弹窗会卡在 inert 层无法交互 */}
+        {open && previewingFile && (
+          <FilePreviewModal file={previewingFile} onClose={() => setPreviewingFile(null)} />
+        )}
+      </div>
     </aside>
   );
 }

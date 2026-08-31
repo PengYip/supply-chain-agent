@@ -430,6 +430,31 @@ export const templateVersions = pgTable('template_versions', {
   changedAt: text('changed_at').notNull().default(sql`now()`),
 });
 
+/**
+ * conversation_shares(对话分享快照, feature 2026-08-31): 每会话一个 token 的
+ * 只读分享快照。Mirrors the runtime idempotent DDL in db/client.ts
+ * (migratePostgres statements + SQLite migrate()), column-for-column -- 那份
+ * boot DDL 是 live DB 的真相, 本声明只驱动 fresh drizzle-kit migrations。
+ * session_id UNIQUE 支撑 ON CONFLICT upsert; payload 为 JSON({messages})快照,
+ * created_at 为 ISO 文本(与 harness 表 TEXT 惯例一致)。无 FK(会话表属
+ * harness session store)。
+ */
+export const conversationShares = pgTable(
+  'conversation_shares',
+  {
+    token: text('token').primaryKey(),
+    sessionId: text('session_id').notNull(),
+    ownerUserId: text('owner_user_id').notNull(),
+    title: text('title').notNull().default(''),
+    payload: text('payload').notNull(),
+    createdAt: text('created_at').notNull().default(sql`now()::text`),
+  },
+  (t) => [
+    uniqueIndex('idx_conversation_shares_session').on(t.sessionId),
+    index('idx_conversation_shares_owner').on(t.ownerUserId),
+  ],
+);
+
 // ---- Harness session store (sessions/messages/approvals/events/favorites) ---
 //
 // MIRRORS the runtime idempotent DDL in src/harness/sessionStorePostgres.ts

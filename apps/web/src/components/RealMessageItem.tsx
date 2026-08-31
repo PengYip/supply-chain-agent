@@ -13,6 +13,7 @@ import {
   ShieldAlert,
   ArrowDown,
   Check,
+  ChevronDown,
   X,
 } from 'lucide-react'
 import {
@@ -50,6 +51,9 @@ async function copyMessageText(text: string): Promise<void> {
     document.body.removeChild(ta)
   }
 }
+
+/** 折叠态单行摘要：只取首行并去掉首尾空白（超宽由 CSS truncate 截断）。 */
+const firstSummaryLine = (s: string): string => (s.split('\n')[0] ?? '').trim()
 
 const formatArgs = (args: unknown): string => {
   try {
@@ -259,9 +263,10 @@ const SoftGateCard: React.FC<{
  *  (detected by measuring scrollHeight vs clientHeight while line-clamped, so
  *  short one-line results stay clean). Expanded view preserves whitespace,
  *  breaks long unbroken JSON strings, and scrolls past ~16rem instead of
- *  stretching the chat bubble. */
-const ToolResultBox: React.FC<{ result: unknown }> = ({ result }) => {
-  const [expanded, setExpanded] = useState(false)
+ *  stretching the chat bubble. When nested inside an expanded tool-step card
+ *  pass initiallyExpanded so it starts fully expanded (no double collapse). */
+const ToolResultBox: React.FC<{ result: unknown; initiallyExpanded?: boolean }> = ({ result, initiallyExpanded = false }) => {
+  const [expanded, setExpanded] = useState(initiallyExpanded)
   const [overflowing, setOverflowing] = useState(false)
   const textRef = useRef<HTMLSpanElement | null>(null)
   const text = formatResult(result)
@@ -312,7 +317,39 @@ const RealToolStep: React.FC<{
    *  DocumentReviewCard.onOpenBindings); omitted -> card renders without it. */
   onOpenBindings?: (docId: string) => void
 }> = ({ step, onOpenBindings }) => {
+  // 折叠态记忆在组件内 state（不持久化）：默认收起为单行「工具名 + 状态 +
+  // 摘要」，点击整行切换展开；展开后保留完整输入/输出的既有渲染。
+  const [open, setOpen] = useState(false)
   const isCompleted = step.status === 'completed'
+  const isFailed = step.status === 'failed'
+
+  // L3 阻断工单是面向人工的高优先级触达信息：不参与折叠，保持完整形态。
+  if (step.blocked) {
+    return (
+      <div className="flex items-start gap-3 py-2">
+        <div className="relative flex flex-col items-center">
+          <div
+            className={clsx(
+              'w-5 h-5 rounded-full flex items-center justify-center border-2 border-white',
+              isCompleted ? 'bg-success text-white' : 'bg-white text-ink-soft border-line'
+            )}
+          >
+            {isCompleted ? <CheckCircle2 className="w-3 h-3" /> : <Loader2 className="w-3 h-3 animate-spin" />}
+          </div>
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-medium text-ink">{step.toolName}</span>
+            <span className="text-[11px] font-mono text-primary-500 bg-white/50 rounded px-1.5 py-0.5 border border-line/50 truncate max-w-full">
+              {formatArgs(step.args)}
+            </span>
+          </div>
+          <BlockedCard toolName={step.toolName} args={step.args} blocked={step.blocked} />
+        </div>
+      </div>
+    )
+  }
+
   // `present_document_review` produces a rich 5-dimension review payload. When
   // present (and not an error shape), render the dedicated card instead of the
   // generic one-line result box. The error shape ({status:'error'}) and any
@@ -320,46 +357,68 @@ const RealToolStep: React.FC<{
   const reviewPayload = isReviewResult(step.toolName, step.result)
   // load_skill 成功结果走专属 SkillCard(2026-08-28 Skill 化); 失败回落通用框。
   const skillPayload = isSkillPayload(step.toolName, step.result)
+
+  // 折叠态状态图标与文案：运行中 / 完成 / 失败
+  const statusIcon = isCompleted ? (
+    <CheckCircle2 className="w-3.5 h-3.5 text-success" />
+  ) : isFailed ? (
+    <AlertCircle className="w-3.5 h-3.5 text-danger" />
+  ) : (
+    <Loader2 className="w-3.5 h-3.5 animate-spin text-ink-soft" />
+  )
+  const statusLabel = isCompleted ? '完成' : isFailed ? '失败' : '运行中'
+  const statusLabelClass = isCompleted ? 'text-success' : isFailed ? 'text-danger' : 'text-ink-soft'
+
+  // 单行摘要：完成取输出首行，失败取错误文本，运行中取输入参数
+  const summary = isCompleted
+    ? firstSummaryLine(formatResult(step.result)) || '无返回数据'
+    : isFailed
+      ? step.errorText || '执行失败'
+      : formatArgs(step.args) || '执行中'
+
   return (
-    <div className="flex items-start gap-3 py-2">
-      <div className="relative flex flex-col items-center">
-        <div
-          className={clsx(
-            'w-5 h-5 rounded-full flex items-center justify-center border-2 border-white',
-            isCompleted ? 'bg-success text-white' : 'bg-white text-ink-soft border-line'
+    <div className="py-1.5">
+      {/* 折叠头：整行可点击切换，箭头随展开态旋转 */}
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="w-full text-left flex items-center gap-2 rounded-md px-1 -mx-1 py-1 transition-colors hover:bg-white/60"
+      >
+        <span className="shrink-0 flex items-center">{statusIcon}</span>
+        <span className="text-sm font-medium text-ink shrink-0">{step.toolName}</span>
+        <span className={clsx('text-[11px] shrink-0', statusLabelClass)}>{statusLabel}</span>
+        <span className="text-[11px] text-ink-soft truncate min-w-0 flex-1">{summary}</span>
+        <ChevronDown className={clsx('w-3.5 h-3.5 text-ink-soft transition-transform shrink-0', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <div className="mt-1 pl-[22px] space-y-1.5">
+          {formatArgs(step.args) && (
+            <div className="text-[11px] font-mono text-primary-500 bg-white/50 rounded px-1.5 py-0.5 border border-line/50 break-all">
+              {formatArgs(step.args)}
+            </div>
           )}
-        >
-          {isCompleted ? <CheckCircle2 className="w-3 h-3" /> : <Loader2 className="w-3 h-3 animate-spin" />}
+          {isCompleted && step.result !== undefined && (
+            skillPayload ? (
+              <SkillCard payload={skillPayload} />
+            ) : reviewPayload ? (
+              <DocumentReviewCard payload={reviewPayload} onOpenBindings={onOpenBindings} />
+            ) : (
+              <ToolResultBox result={step.result} initiallyExpanded />
+            )
+          )}
+          {isFailed && step.errorText && (
+            <div className="text-[11px] text-danger bg-danger/5 border border-danger/20 rounded px-2 py-1.5 break-all">
+              {step.errorText}
+            </div>
+          )}
+          {!isCompleted && !isFailed && (
+            <div className="text-[11px] text-ink-soft flex items-center gap-1">
+              <Loader2 className="w-3 h-3 animate-spin" /> 等待工具返回...
+            </div>
+          )}
         </div>
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-medium text-ink">{step.toolName}</span>
-          <span className="text-[11px] font-mono text-primary-500 bg-white/50 rounded px-1.5 py-0.5 border border-line/50 truncate max-w-full">
-            {formatArgs(step.args)}
-          </span>
-        </div>
-        {step.blocked ? (
-          <BlockedCard toolName={step.toolName} args={step.args} blocked={step.blocked} />
-        ) : (
-          <>
-            {isCompleted && step.result !== undefined && (
-              skillPayload ? (
-                <SkillCard payload={skillPayload} />
-              ) : reviewPayload ? (
-                <DocumentReviewCard payload={reviewPayload} onOpenBindings={onOpenBindings} />
-              ) : (
-                <ToolResultBox result={step.result} />
-              )
-            )}
-            {!isCompleted && (
-              <div className="mt-1 text-[11px] text-ink-soft flex items-center gap-1">
-                <Loader2 className="w-3 h-3 animate-spin" /> 等待工具返回...
-              </div>
-            )}
-          </>
-        )}
-      </div>
+      )}
     </div>
   )
 }

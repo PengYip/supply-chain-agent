@@ -190,3 +190,7 @@ export function useFolderDropUpload(opts: {
 
   return { uploads, active, aggregate, enqueue };
 }
+
+/** 队列实例形状：App 层创建后经 prop 下发给 FileDrawer 消费，
+ *  全页面拖拽上传与抽屉内上传共用同一队列。 */
+export type UploadQueueApi = ReturnType<typeof useFolderDropUpload>;

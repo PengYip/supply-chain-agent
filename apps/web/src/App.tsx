@@ -3,10 +3,13 @@ import { authClient } from './lib/auth';
 import { LoginPage } from './components/LoginPage';
 import { ChatWorkspace } from './components/chat/ChatWorkspace';
 import { AppShell } from './components/shell/AppShell';
+import { DragDropOverlay } from './components/shell/DragDropOverlay';
 import { FileDrawer } from './components/shell/FileDrawer';
 import { type ViewId } from './components/shell/navigation';
 import { useHashRoute } from './hooks/useHashRoute';
 import { type FileEntry, type ContextFile, useFiles } from './hooks/useFiles';
+import { collectDropItems, useFolderDropUpload } from './hooks/useFolderDropUpload';
+import { usePageFileDrop } from './hooks/usePageFileDrop';
 import { processDocument, type DocParseState } from './api/process';
 import { useSessions } from './hooks/useSessions';
 import { EvalWorkbenchView } from './components/eval/EvalWorkbenchView';
@@ -16,7 +19,23 @@ import { SelfPartyPanel } from './components/parties/SelfPartyPanel';
 import { FavoritesView } from './components/favorites/FavoritesView';
 import { ProjectsView } from './components/projects/ProjectsView';
 import { ProjectLedgerView } from './components/ledger/ProjectLedgerView';
+import { SharePage } from './components/share/SharePage';
 import type { GraphFocus, GraphFocusTarget } from './components/graph/focus';
+
+/** 免登录分享路由：pathname 匹配 /share/<token> 时在认证网关之前分流，
+ *  直接渲染独立只读页（不进 AppShell、不查登录会话）。token 限 URL 安全字符。 */
+function matchShareToken(pathname: string): string | null {
+  const m = /^\/share\/([A-Za-z0-9_-]{1,128})\/?$/.exec(pathname);
+  return m ? m[1] : null;
+}
+
+/** 应用根组件：按 pathname 分流 —— /share/<token> 走免登录分享页，其余进
+ *  既有认证网关 App。分享页内部没有前端跳转，pathname 只需在启动时判定一次。 */
+function AppRoot() {
+  const shareToken = useMemo(() => matchShareToken(window.location.pathname), []);
+  if (shareToken) return <SharePage token={shareToken} />;
+  return <App />;
+}
 
 /** 认证网关: 只负责会话解析与账号切换的 epoch 递增。
  *  user id 变化时通过 key 强制重挂载内层 AppSession —— 所有按用户隔离的数据
@@ -142,6 +161,36 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
   const filesApi = useFiles();
   // Stable re-fetch reference (useCallback inside useFiles) for effect deps.
   const refreshFiles = filesApi.refresh;
+  // 上传队列提升到 App 层：全页面拖拽上传与文件抽屉共用一个队列，抽屉
+  // 关闭不再销毁进行中的上传（汇总条 UI 仍在 FileDrawer 内消费）。
+  // ensureDirs/onDone 写法与原 FileDrawer 内实现保持一致。
+  const { folders, createFolder } = filesApi;
+  const uploadQueue = useFolderDropUpload({
+    ensureDirs: useCallback(
+      async (dirs: string[]) => {
+        const have = new Set(folders.map((f) => f.path));
+        for (const d of dirs) {
+          if (!have.has(d)) {
+            await createFolder(d);
+            have.add(d);
+          }
+        }
+      },
+      [folders, createFolder],
+    ),
+    onDone: () => void refreshFiles(),
+  });
+  // 页面级拖拽：OS 文件拖入窗口任意位置显示提示遮罩；落在无人认领的
+  // 区域时收集条目（支持文件夹层级）入队到文件管理根目录。
+  const handlePageDrop = useCallback(
+    (dt: DataTransfer) => {
+      void collectDropItems(dt).then((items) => {
+        if (items.length > 0) void uploadQueue.enqueue(items, '');
+      });
+    },
+    [uploadQueue],
+  );
+  const { dragActive } = usePageFileDrop({ onDropFiles: handlePageDrop });
   // Per-docId parse state for files referenced in the conversation, shown on
   // the context chips in RealChatView (解析中 -> 已解析 / 需OCR / 解析失败).
   const [docParseStates, setDocParseStates] = useState<Record<string, DocParseState>>({});
@@ -187,26 +236,32 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
     <AppShell
       currentView={view}
       onNavigate={handleNavigate}
-      // 打开文件抽屉时重拉列表：「已挂合同」徽标在绑定工作台/对话里确认后
-      // 会过期（useFiles 仅在挂载与上传等少数事件时刷新），打开即取最新态。
+      // 顶栏「文件」按钮兼作面板开关。展开时重拉列表：「已挂合同」徽标在
+      // 绑定工作台/对话里确认后会过期（useFiles 仅在挂载与上传等少数事件时
+      // 刷新），展开即取最新态。
       onOpenFiles={() => {
+        if (fileDrawerOpen) {
+          setFileDrawerOpen(false);
+          return;
+        }
         setFileDrawerOpen(true);
         void refreshFiles();
       }}
       filesOpen={fileDrawerOpen}
       user={user}
       onSignOut={onSignOut}
+      // 文件面板常驻挂载（open 只控制宽度伸缩）：内部选中/展开状态跨开关
+      // 保留；收起时宽度归零，主对话区以 flex-1 延展占满剩余空间。
       filesPanel={
-        fileDrawerOpen ? (
-          <FileDrawer
-            open
-            onClose={() => setFileDrawerOpen(false)}
-            onAddToConversation={addToConversation}
-            contextFileKeys={contextFileKeys}
-            filesApi={filesApi}
-            onOpenBindings={openBindingsForDoc}
-          />
-        ) : undefined
+        <FileDrawer
+          open={fileDrawerOpen}
+          onClose={() => setFileDrawerOpen(false)}
+          onAddToConversation={addToConversation}
+          contextFileKeys={contextFileKeys}
+          filesApi={filesApi}
+          uploadQueue={uploadQueue}
+          onOpenBindings={openBindingsForDoc}
+        />
       }
     >
       {view === 'chat' ? (
@@ -242,8 +297,10 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
       ) : view === 'eval' ? (
         <EvalWorkbenchView />
       ) : null}
+      {/* 全页面拖拽上传提示遮罩：fixed 定位，z-modal 高于文件抽屉 */}
+      <DragDropOverlay visible={dragActive} />
     </AppShell>
   );
 }
 
-export default App;
+export default AppRoot;

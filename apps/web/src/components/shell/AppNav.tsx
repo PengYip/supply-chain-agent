@@ -2,7 +2,7 @@ import clsx from 'clsx';
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { NAV_GROUPS, NAV_ITEMS, type ViewId } from './navigation';
 
-/** 左侧双态导航：展开 224px（分组标签 + 图标 + 文字），折叠 56px（纯图标，hover 提示）。
+/** 左侧双态导航：展开 192px（分组标签 + 图标 + 文字，恰好容纳最长菜单项），折叠 56px（纯图标，hover 提示）。
  *  底部为折叠开关；用户身份与登出在 AppTopbar，避免双入口。 */
 export function AppNav({
   current,
@@ -19,7 +19,7 @@ export function AppNav({
     <nav
       className={clsx(
         'flex shrink-0 flex-col border-r border-line bg-white transition-[width] duration-200',
-        collapsed ? 'w-14' : 'w-56',
+        collapsed ? 'w-14' : 'w-48',
       )}
     >
       {/* 产品标识 */}
