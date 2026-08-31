@@ -299,13 +299,19 @@ export function ExportPreviewModal({ result, onClose, onToast }: ExportPreviewMo
           </span>
           <div className="flex shrink-0 items-center gap-2">
             {isLong && (
-              <button
-                type="button"
-                onClick={() => {
-                  void handleCopy()
-                }}
-                disabled={!canCopy || busy}
-                title={canCopy ? '复制图片到剪贴板' : '需 HTTPS 或 localhost 环境'}
+              <>
+                {!canCopy && (
+                  <span className="text-xs text-ink-soft">
+                    需 HTTPS 或 localhost 环境才能复制
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleCopy()
+                  }}
+                  disabled={!canCopy || busy}
+                  title={canCopy ? '复制图片到剪贴板' : '需 HTTPS 或 localhost 环境'}
                 aria-label="复制到剪贴板"
                 className={clsx(
                   'flex items-center gap-1.5 rounded-lg border border-line px-3.5 py-1.5',
@@ -320,6 +326,7 @@ export function ExportPreviewModal({ result, onClose, onToast }: ExportPreviewMo
                 )}
                 复制到剪贴板
               </button>
+                </>
             )}
             <button
               type="button"

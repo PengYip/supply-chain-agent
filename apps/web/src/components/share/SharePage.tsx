@@ -135,7 +135,9 @@ export function SharePage({ token }: { token: string }) {
   const sharedAt = state.phase === 'ready' ? formatSharedAt(state.data.createdAt) : ''
 
   return (
-    <div className="flex min-h-screen flex-col bg-surface">
+    // w-full：#root 为 row 方向 flex 容器，此处不补宽度会让根节点收缩为
+    // 内容宽并靠左，内部 mx-auto 居中随之失效
+    <div className="flex min-h-screen w-full flex-col bg-surface">
       {/* 轻量页头：产品标识 + 只读属性标记，不携带任何登录态入口 */}
       <header className="shrink-0 border-b border-line bg-white">
         <div className="mx-auto flex h-14 w-full max-w-[768px] items-center gap-3 px-6">
