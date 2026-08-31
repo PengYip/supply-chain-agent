@@ -19,7 +19,23 @@ import { SelfPartyPanel } from './components/parties/SelfPartyPanel';
 import { FavoritesView } from './components/favorites/FavoritesView';
 import { ProjectsView } from './components/projects/ProjectsView';
 import { ProjectLedgerView } from './components/ledger/ProjectLedgerView';
+import { SharePage } from './components/share/SharePage';
 import type { GraphFocus, GraphFocusTarget } from './components/graph/focus';
+
+/** 免登录分享路由：pathname 匹配 /share/<token> 时在认证网关之前分流，
+ *  直接渲染独立只读页（不进 AppShell、不查登录会话）。token 限 URL 安全字符。 */
+function matchShareToken(pathname: string): string | null {
+  const m = /^\/share\/([A-Za-z0-9_-]{1,128})\/?$/.exec(pathname);
+  return m ? m[1] : null;
+}
+
+/** 应用根组件：按 pathname 分流 —— /share/<token> 走免登录分享页，其余进
+ *  既有认证网关 App。分享页内部没有前端跳转，pathname 只需在启动时判定一次。 */
+function AppRoot() {
+  const shareToken = useMemo(() => matchShareToken(window.location.pathname), []);
+  if (shareToken) return <SharePage token={shareToken} />;
+  return <App />;
+}
 
 /** 认证网关: 只负责会话解析与账号切换的 epoch 递增。
  *  user id 变化时通过 key 强制重挂载内层 AppSession —— 所有按用户隔离的数据
@@ -287,4 +303,4 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
   );
 }
 
-export default App;
+export default AppRoot;
