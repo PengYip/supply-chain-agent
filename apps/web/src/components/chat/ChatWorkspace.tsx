@@ -15,7 +15,13 @@ import { SessionSidebar } from '../SessionSidebar';
 import { RealChatView } from '../RealChatView';
 import { PanelRail } from '../shell/PanelRail';
 import { createSessionShare } from '../../api/share';
-import { exportChatAsImages, type ExportMode } from '../../lib/chatExport';
+import {
+  disposeExportCanvas,
+  renderChatExport,
+  type ChatExportResult,
+  type ExportMode,
+} from '../../lib/chatExport';
+import { ExportPreviewModal } from './ExportPreviewModal';
 
 /** 右上角轻提示（样式与 BindingsView / SelfPartyPanel 的本地 toast 一致）。 */
 interface ToastItem {
@@ -79,6 +85,9 @@ export function ChatWorkspace({
   const [exportBusy, setExportBusy] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
+  // 导出预览：生成结果暂存于此并挂载预览模态，用户确认后才落盘/复制；
+  // 关闭时释放主画布（超长对话的画布缓冲可观，不等 GC）
+  const [exportPreview, setExportPreview] = useState<ChatExportResult | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const toastIdRef = useRef(0);
 
@@ -134,7 +143,8 @@ export function ChatWorkspace({
     }
   }, [activeSessionId, shareBusy, pushToast]);
 
-  // 导出：长图 / 分页多图（详见 lib/chatExport.ts）
+  // 导出：先渲染主画布并弹出预览模态（详见 lib/chatExport.ts 与
+  // ExportPreviewModal），用户在预览中确认后才真正落盘/复制
   const handleExport = useCallback(
     async (mode: ExportMode) => {
       if (!activeSessionId || exportBusy) return;
@@ -143,13 +153,10 @@ export function ChatWorkspace({
       const title =
         sessionsApi.sessions.find((s) => s.id === activeSessionId)?.title?.trim() || '未命名对话';
       try {
-        const pages = await exportChatAsImages(chatAreaRef.current, { title, mode });
-        pushToast(
-          'success',
-          mode === 'long' ? '长图已开始下载' : `已按页导出 ${pages} 张图片`,
-          mode === 'paged' && pages > 1 ? '若浏览器提示多文件下载，请选择允许' : undefined,
-        );
+        const result = await renderChatExport(chatAreaRef.current, { title, mode });
+        setExportPreview(result);
       } catch (err) {
+        // 含空白自检失败（「导出结果为空白」）等场景，明确提示而不是产出空白图
         pushToast('error', '导出失败，请重试', err instanceof Error ? err.message : undefined, 5000);
       } finally {
         setExportBusy(false);
@@ -157,6 +164,14 @@ export function ChatWorkspace({
     },
     [activeSessionId, exportBusy, sessionsApi.sessions, pushToast],
   );
+
+  // 关闭预览：卸载模态并立即释放主画布（width 置 0 是幂等操作）
+  const closeExportPreview = useCallback(() => {
+    setExportPreview((prev) => {
+      if (prev) disposeExportCanvas(prev);
+      return null;
+    });
+  }, []);
 
   return (
     <div className="flex h-full min-w-0">
@@ -265,7 +280,7 @@ export function ChatWorkspace({
                       <span className="min-w-0">
                         <span className="block text-[13px] font-medium text-ink">分页多图</span>
                         <span className="mt-0.5 block text-[11px] leading-relaxed text-ink-soft">
-                          按约 2000px 高度切片导出
+                          切片打包为单个 ZIP 下载
                         </span>
                       </span>
                     </button>
@@ -276,6 +291,15 @@ export function ChatWorkspace({
           </div>
         )}
       </div>
+      {/* 导出预览模态（长图核验 / 多图翻页，确认后落盘）。置于 toast 容器
+          之前：两者同为 z-60 时后写入 DOM 者居上，报错/成功提示不被遮罩盖住 */}
+      {exportPreview && (
+        <ExportPreviewModal
+          result={exportPreview}
+          onClose={closeExportPreview}
+          onToast={pushToast}
+        />
+      )}
       {/* 右上角 toast（样式与 BindingsView 一致） */}
       <div className="pointer-events-none fixed right-4 top-4 z-[60] flex w-80 flex-col gap-2">
         {toasts.map((t) => (
