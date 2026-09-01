@@ -120,6 +120,9 @@ export function buildGatherSettlementEvidenceTool(deps: SettlementToolDeps) {
         usage:
           '结算口径: 数量以 executionProgress.delivered 为准(勿逐行累加 flows, 会双计预告与实重); ' +
           '价格按 contract.fields 中定价/质量条款计算; 每个数字标注来源(流水 id/抽取 id); ' +
+          'executionProgress.contributions 为每条流水的计入/排除明细(排除带 excludeReason 原因), ' +
+          'executionProgress.transportModes 为计入流水按运输方式(火车/汽车/船舶/其他)的分组(条数/质量合计/计数池/docType 构成), ' +
+          '两者可用于向用户解释结算口径(为何这笔计入/那笔排除); ' +
           'qualityDocs 仅含 confirmed 绑定的质量凭证; pendingQualityDocs 非空时必须先提示用户确认绑定(bind_document)再纳入计算; ' +
           '结果先完整展示给用户, 用户确认后才调用 confirm_settlement。',
       };

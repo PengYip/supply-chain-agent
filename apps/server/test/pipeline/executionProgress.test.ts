@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { computeExecutionProgress } from '../../src/pipeline/executionProgress.js';
 
 const mass = (canonical: number, docType?: string) => ({
+  id: `fl-${canonical}-${docType ?? 'na'}`,
   quantityDimension: 'mass' as const,
   quantityCanonical: canonical,
   quantityValue: canonical,
@@ -9,6 +10,7 @@ const mass = (canonical: number, docType?: string) => ({
   ...(docType ? { docType } : {}),
 });
 const count = (unit: string, value: number, docType?: string) => ({
+  id: `fl-c-${unit}-${value}-${docType ?? 'na'}`,
   quantityDimension: 'count' as const,
   quantityCanonical: value,
   quantityValue: value,
@@ -141,5 +143,112 @@ describe('computeExecutionProgress 节点权威聚合(spec 2026-08-27 §15)', ()
     const r2 = computeExecutionProgress([mass(1000)], wrap({ 数量: '', 单位: '' }));
     expect(r2.basis).toBeNull();
     expect(r2.reason).toBe('no-contract-basis');
+  });
+});
+
+// ---- 口径透明化(2026-09-01, additive): contributions + transportModes -------
+
+describe('computeExecutionProgress 计入/排除明细(口径透明化)', () => {
+  it('计入流水质量合计 == delivered.massKg, 全部 counted', () => {
+    const r = computeExecutionProgress(
+      [mass(1000, '轨道衡称重单'), mass(500, '汽运磅单')],
+      wrap({ 数量: 3, 单位: '吨' }),
+    );
+    expect(r.delivered!.massKg).toBe(1500);
+    const counted = r.contributions.filter((c) => c.counted);
+    expect(counted).toHaveLength(2);
+    expect(counted.reduce((s, c) => s + (c.massKg ?? 0), 0)).toBe(1500);
+    expect(r.contributions.every((c) => c.counted || c.excludeReason)).toBe(true);
+  });
+
+  it('预告被实重覆盖: notice 流水 counted=false + excludeReason=covered-by-actual', () => {
+    const r = computeExecutionProgress(
+      [mass(1000, '发货单'), mass(1020, '汽运磅单')],
+      wrap({ 数量: 3, 单位: '吨' }),
+    );
+    const notice = r.contributions.find((c) => c.tier === 'notice')!;
+    expect(notice.counted).toBe(false);
+    expect(notice.excludeReason).toBe('covered-by-actual');
+    const counted = r.contributions.filter((c) => c.counted);
+    expect(counted.reduce((s, c) => s + (c.massKg ?? 0), 0)).toBe(1020);
+    expect(counted.reduce((s, c) => s + (c.massKg ?? 0), 0)).toBe(r.delivered!.massKg);
+  });
+
+  it('仅预告(实重缺位) -> notice counted(在途批次计入)', () => {
+    const r = computeExecutionProgress([mass(1000, '发货单')], wrap({ 数量: 3, 单位: '吨' }));
+    expect(r.contributions[0]!.counted).toBe(true);
+    expect(r.contributions[0]!.excludeReason).toBeUndefined();
+  });
+
+  it('无效数量排除: 无规范值(no-canonical)/缺单位(no-unit)/无量纲(no-valid-quantity)', () => {
+    const r = computeExecutionProgress(
+      [
+        { id: 'fl-m', quantityDimension: 'mass' as const, quantityCanonical: null, quantityValue: 12, unit: '磅' },
+        { id: 'fl-c', quantityDimension: 'count' as const, quantityCanonical: null, quantityValue: 5, unit: null },
+        { id: 'fl-x', quantityDimension: null, quantityCanonical: null, quantityValue: null, unit: null },
+      ],
+      wrap({ 数量: 3, 单位: '吨' }),
+    );
+    const byId = new Map(r.contributions.map((c) => [c.flowId, c]));
+    expect(byId.get('fl-m')!.counted).toBe(false);
+    expect(byId.get('fl-m')!.excludeReason).toBe('no-canonical');
+    expect(byId.get('fl-c')!.counted).toBe(false);
+    expect(byId.get('fl-c')!.excludeReason).toBe('no-unit');
+    expect(byId.get('fl-x')!.counted).toBe(false);
+    expect(byId.get('fl-x')!.excludeReason).toBe('no-valid-quantity');
+  });
+
+  it('count 池覆盖: 发货单箱10 被收货单箱10 覆盖 -> notice 排除, 计入池值 10', () => {
+    const r = computeExecutionProgress(
+      [count('箱', 10, '发货单'), count('箱', 10, '收货单')],
+      wrap({ 数量: 10, 单位: '箱' }),
+    );
+    const notice = r.contributions.find((c) => c.tier === 'notice')!;
+    expect(notice.counted).toBe(false);
+    expect(notice.excludeReason).toBe('covered-by-actual');
+    expect(r.contributions.filter((c) => c.counted)).toHaveLength(1);
+  });
+
+  it('空流水 -> contributions/transportModes 为空数组(非 null)', () => {
+    const r = computeExecutionProgress([], wrap({ 数量: 3, 单位: '吨' }));
+    expect(r.contributions).toEqual([]);
+    expect(r.transportModes).toEqual([]);
+  });
+});
+
+describe('computeExecutionProgress 按运输方式分组(口径透明化)', () => {
+  it('火车/汽车/船舶/其他 分组: 条数+质量合计+docType 构成', () => {
+    const r = computeExecutionProgress(
+      [
+        mass(1000, '火运大票'),
+        mass(500, '轨道衡称重单'),
+        mass(1200, '汽运磅单'),
+        mass(300, '水尺计重单'),
+        mass(200, '收货单'),
+      ],
+      wrap({ 数量: 10, 单位: '吨' }),
+    );
+    const byMode = new Map(r.transportModes.map((g) => [g.mode, g]));
+    expect(byMode.get('火车')).toMatchObject({ flowCount: 2, massKg: 1500 });
+    expect(byMode.get('火车')!.docTypes).toEqual({ 火运大票: 1, 轨道衡称重单: 1 });
+    expect(byMode.get('汽车')).toMatchObject({ flowCount: 1, massKg: 1200 });
+    expect(byMode.get('船舶')).toMatchObject({ flowCount: 1, massKg: 300 });
+    expect(byMode.get('其他')).toMatchObject({ flowCount: 1, massKg: 200 });
+    // 分组合计 == 全部计入合计。
+    const groupMass = r.transportModes.reduce((s, g) => s + g.massKg, 0);
+    expect(groupMass).toBe(r.delivered!.massKg);
+    const groupCount = r.transportModes.reduce((s, g) => s + g.flowCount, 0);
+    expect(groupCount).toBe(r.contributions.filter((c) => c.counted).length);
+  });
+
+  it('count 池计入按单位入组池; 被覆盖的 notice 不入组', () => {
+    const r = computeExecutionProgress(
+      [count('箱', 10, '发货单'), count('箱', 10, '收货单')],
+      wrap({ 数量: 10, 单位: '箱' }),
+    );
+    expect(r.transportModes).toHaveLength(1);
+    expect(r.transportModes[0]!.mode).toBe('其他'); // 收货单无运输方式映射
+    expect(r.transportModes[0]!.countPools).toEqual({ 箱: 10 });
+    expect(r.transportModes[0]!.flowCount).toBe(1);
   });
 });
