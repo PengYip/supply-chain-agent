@@ -15,8 +15,12 @@ import {
   FlaskConical,
   History,
   Info,
+  Layers,
   Scale,
+  Ship,
+  Train,
   TrendingUp,
+  Truck,
 } from 'lucide-react'
 import {
   flowDirectionLabel,
@@ -61,6 +65,34 @@ export interface SettlementProgressInfo {
   noticeMassKg: number | null
   progressRatio: number | null
   reason: string | null
+  /** 口径明细(additive, 后端 1a0fe85 起): 每条流水的计入/排除归类;
+   *  旧聊天历史无此字段 -> 空数组, 对应区块整体不渲染。 */
+  contributions: SettlementContribution[]
+  /** 计入流水按运输方式分组(additive); 旧结果/无计入流水 -> 空数组。 */
+  transportModes: SettlementTransportModeGroup[]
+}
+
+/** executionProgress.contributions 的单行(计入/排除归类, delivered 构成溯源)。 */
+export interface SettlementContribution {
+  flowId: string
+  docType: string
+  tier: 'actual' | 'notice'
+  counted: boolean
+  excludeReason: string | null
+  /** counted 且 mass: 规范值(千克)。 */
+  massKg: number | null
+  /** counted 且 count: 池单位 + 原值。 */
+  countUnit: string | null
+  countValue: number | null
+}
+
+/** executionProgress.transportModes 的单组(仅计入口径)。 */
+export interface SettlementTransportModeGroup {
+  mode: string
+  flowCount: number
+  massKg: number | null
+  countPools: Array<{ unit: string; count: number }>
+  docTypes: Array<{ docType: string; count: number }>
 }
 
 export interface SettlementQualityDoc {
@@ -143,6 +175,18 @@ function safeJson(v: unknown): string {
   }
 }
 
+/** Record<string, number> 形态(计数池/docType 构成) → 键值对; 值非数值的条目跳过。 */
+function numberRecordEntries(raw: unknown): Array<{ key: string; value: number }> {
+  const rec = asRecord(raw)
+  if (!rec) return []
+  const out: Array<{ key: string; value: number }> = []
+  for (const [key, v] of Object.entries(rec)) {
+    const n = num(v)
+    if (n !== null) out.push({ key, value: n })
+  }
+  return out
+}
+
 /** narrowing gather_settlement_evidence 的成功返回; 非 ok/error 形状或其他
  *  工具一律返回 null(调用方回落通用结果框)。 */
 export function parseSettlementEvidence(
@@ -202,6 +246,49 @@ export function parseSettlementEvidence(
       if (count !== null) countPools.push({ unit, count })
     }
   }
+  const contributions: SettlementContribution[] = (
+    Array.isArray(p?.contributions) ? p.contributions : []
+  )
+    .map((raw): SettlementContribution | null => {
+      const c = asRecord(raw)
+      if (!c) return null
+      return {
+        flowId: str(c.flowId) ?? '',
+        docType: str(c.docType) ?? '',
+        tier: c.tier === 'notice' ? 'notice' : 'actual',
+        counted: c.counted === true,
+        excludeReason: str(c.excludeReason),
+        massKg: num(c.massKg),
+        countUnit: str(c.countUnit),
+        countValue: num(c.countValue),
+      }
+    })
+    .filter((c): c is SettlementContribution => c !== null)
+
+  const transportModes: SettlementTransportModeGroup[] = (
+    Array.isArray(p?.transportModes) ? p.transportModes : []
+  )
+    .map((raw): SettlementTransportModeGroup | null => {
+      const g = asRecord(raw)
+      if (!g) return null
+      const mode = str(g.mode)
+      if (!mode) return null
+      return {
+        mode,
+        flowCount: num(g.flowCount) ?? 0,
+        massKg: num(g.massKg),
+        countPools: numberRecordEntries(g.countPools).map(({ key, value }) => ({
+          unit: key,
+          count: value,
+        })),
+        docTypes: numberRecordEntries(g.docTypes).map(({ key, value }) => ({
+          docType: key,
+          count: value,
+        })),
+      }
+    })
+    .filter((g): g is SettlementTransportModeGroup => g !== null)
+
   const progress: SettlementProgressInfo = {
     basis,
     deliveredMassKg: delivered ? num(delivered.massKg) : null,
@@ -210,6 +297,8 @@ export function parseSettlementEvidence(
     noticeMassKg: nodes ? num(nodes.noticeMassKg) : null,
     progressRatio: p ? num(p.progress) : null,
     reason: p ? str(p.reason) : null,
+    contributions,
+    transportModes,
   }
 
   const qualityDocs: SettlementQualityDoc[] = (Array.isArray(r.qualityDocs) ? r.qualityDocs : [])
@@ -293,6 +382,44 @@ const PROGRESS_REASON_LABEL: Record<string, string> = {
   'unit-pool-missing': '流水缺少与基准同单位的计数，进度暂缺',
 }
 
+/** contributions.excludeReason 的已知值文案(措辞对齐后端 executionProgress.ts 注释);
+ *  warn=true 为数据问题(数量/单位缺失), false 为防双计的正常口径排除。
+ *  未知 reason 原样展示。 */
+const EXCLUDE_REASON_META: Record<string, { label: string; title: string; warn: boolean }> = {
+  'no-valid-quantity': {
+    label: '无有效数量',
+    title: '数量量纲缺失或未知，未计入',
+    warn: true,
+  },
+  'no-canonical': {
+    label: '无法归一化量纲',
+    title: '质量量纲但单位未注册，规范值缺失，未计入（物化层不猜）',
+    warn: true,
+  },
+  'no-unit': {
+    label: '缺单位',
+    title: '计数量纲但缺单位，不能成池，未计入',
+    warn: true,
+  },
+  'covered-by-actual': {
+    label: '已被实重覆盖',
+    title: '预告凭证被同批实重凭证覆盖，该批次按实重计入（不双计）',
+    warn: false,
+  },
+  'covered-by-notice': {
+    label: '已被预告覆盖',
+    title: '实重层未成为合计基准，该批次按预告计入',
+    warn: false,
+  },
+}
+
+/** 运输方式图标(mode 为后端固定词表 火车/汽车/船舶/其他, 未映射的不渲染图标)。 */
+const TRANSPORT_MODE_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
+  火车: Train,
+  汽车: Truck,
+  船舶: Ship,
+}
+
 const SectionLabel: React.FC<{ icon: React.ReactNode; children: React.ReactNode }> = ({
   icon,
   children,
@@ -309,6 +436,79 @@ const SectionLabel: React.FC<{ icon: React.ReactNode; children: React.ReactNode 
  *  (数百行时避免一次性撑爆聊天气泡; 行本身不可聚合——聚合口径只有
  *  节点权威聚合一种, 见摘要区提示)。 */
 const FLOW_COLLAPSE_THRESHOLD = 8
+
+/** 口径明细默认折叠行数(与执行流水行为一致)。 */
+const CONTRIBUTION_COLLAPSE_THRESHOLD = 8
+
+/** 运输方式分组行: 模式(图标+名) / 条数 / 质量(或计数池) / docType 构成。 */
+const TransportModeRow: React.FC<{ group: SettlementTransportModeGroup }> = ({ group }) => {
+  const ModeIcon = TRANSPORT_MODE_ICON[group.mode]
+  const massText =
+    group.massKg !== null && group.massKg > 0 ? `${fmtTon(group.massKg)} 吨` : null
+  const poolsText = group.countPools.length > 0
+    ? group.countPools.map((p) => `${fmtNum(p.count)} ${p.unit}`).join(' · ')
+    : null
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5 text-xs">
+      <span className="inline-flex shrink-0 items-center gap-1 font-medium text-ink">
+        {ModeIcon && <ModeIcon className="h-3 w-3 text-ink-soft" />}
+        {group.mode}
+      </span>
+      <span className="shrink-0 text-ink-soft">{group.flowCount} 笔</span>
+      {massText && <span className="shrink-0 font-mono text-primary-500">{massText}</span>}
+      {poolsText && <span className="shrink-0 font-mono text-primary-500">{poolsText}</span>}
+      <span className="ml-auto flex flex-wrap justify-end gap-1">
+        {group.docTypes.map((d) => (
+          <span
+            key={d.docType}
+            className="shrink-0 rounded border border-line/50 bg-surface/50 px-1.5 py-px text-[10px] text-ink"
+          >
+            {d.docType} x{d.count}
+          </span>
+        ))}
+      </span>
+    </div>
+  )
+}
+
+/** 口径明细行: 节点层(实重/预告) + 单据类型 + 数量 + 计入/未计入(排除原因)。 */
+const ContributionRow: React.FC<{ c: SettlementContribution }> = ({ c }) => {
+  const reasonMeta = c.excludeReason ? EXCLUDE_REASON_META[c.excludeReason] : undefined
+  const qtyText =
+    c.counted && c.massKg !== null
+      ? `${fmtTon(c.massKg)} 吨`
+      : c.counted && c.countValue !== null
+        ? `${fmtNum(c.countValue)}${c.countUnit ? ` ${c.countUnit}` : ''}`
+        : null
+  return (
+    <div className="flex items-center gap-2 px-2 py-1.5 text-xs">
+      <span
+        className={clsx(
+          'shrink-0 whitespace-nowrap rounded px-1.5 py-px text-[10px]',
+          c.tier === 'actual' ? 'bg-primary-500/10 text-primary-500' : 'bg-surface text-ink-soft',
+        )}
+        title={c.tier === 'actual' ? '实重节点（权威）' : '预告节点'}
+      >
+        {c.tier === 'actual' ? '实重' : '预告'}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-ink">{c.docType || '--'}</span>
+      {qtyText && <span className="shrink-0 font-mono text-[11px] text-ink">{qtyText}</span>}
+      <span
+        title={c.counted ? '已计入已交付量' : (reasonMeta?.title ?? c.excludeReason ?? undefined)}
+        className={clsx(
+          'ml-auto shrink-0 whitespace-nowrap rounded px-1.5 py-px text-[10px]',
+          c.counted
+            ? 'bg-success/10 text-success'
+            : reasonMeta?.warn
+              ? 'bg-warning/10 text-warning'
+              : 'bg-surface text-ink-soft',
+        )}
+      >
+        {c.counted ? '计入' : `未计入 · ${reasonMeta?.label ?? c.excludeReason ?? '未知原因'}`}
+      </span>
+    </div>
+  )
+}
 
 const FlowListRow: React.FC<{ flow: SettlementFlowRow }> = ({ flow }) => {
   // 六向词汇映射复用 api/flows 的 SSOT(未知组合回落 原样拼接)
@@ -357,6 +557,7 @@ export const SettlementEvidenceCard: React.FC<{ payload: SettlementEvidencePaylo
   const { contractNo, contract, flows, progress, qualityDocs, pendingQualityDocs, settlements, usage } =
     payload
   const [flowsExpanded, setFlowsExpanded] = useState(false)
+  const [detailExpanded, setDetailExpanded] = useState(false)
   const [fieldsOpen, setFieldsOpen] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
 
@@ -478,6 +679,58 @@ export const SettlementEvidenceCard: React.FC<{ payload: SettlementEvidencePaylo
           )}
         </div>
       </div>
+
+      {/* 1.5 运输方式分组(口径透明化, additive): 仅计入口径的流水; 旧结果无
+          transportModes 字段 -> 空数组, 区块整体不渲染(回归零差异)。 */}
+      {progress.transportModes.length > 0 && (
+        <div>
+          <SectionLabel icon={<Truck className="w-3 h-3" />}>运输方式分组</SectionLabel>
+          <div className="text-[11px] text-ink-soft mb-1.5">仅统计计入口径的流水</div>
+          <div className="rounded-md border border-line/60 divide-y divide-line/60">
+            {progress.transportModes.map((g) => (
+              <TransportModeRow key={g.mode} group={g} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 1.6 口径明细(口径透明化, additive): 每条流水对已交付量的计入/排除
+          归类——「已被覆盖」是防双计的正常口径, 不是数据错误。旧结果无
+          contributions 字段 -> 空数组, 区块整体不渲染。 */}
+      {progress.contributions.length > 0 && (
+        <div>
+          <SectionLabel icon={<Layers className="w-3 h-3" />}>
+            口径明细 (计入 {progress.contributions.filter((c) => c.counted).length} / 共{' '}
+            {progress.contributions.length})
+          </SectionLabel>
+          <div
+            className={clsx(
+              'rounded-md border border-line/60 divide-y divide-line/60',
+              detailExpanded &&
+                progress.contributions.length > CONTRIBUTION_COLLAPSE_THRESHOLD &&
+                'max-h-72 overflow-y-auto',
+            )}
+          >
+            {(detailExpanded
+              ? progress.contributions
+              : progress.contributions.slice(0, CONTRIBUTION_COLLAPSE_THRESHOLD)
+            ).map((c, i) => (
+              <ContributionRow key={c.flowId || `c-${i}`} c={c} />
+            ))}
+          </div>
+          {progress.contributions.length > CONTRIBUTION_COLLAPSE_THRESHOLD && (
+            <button
+              type="button"
+              onClick={() => setDetailExpanded((v) => !v)}
+              className="mt-1 text-[11px] text-primary-500 hover:text-primary transition-colors"
+            >
+              {detailExpanded
+                ? '收起明细'
+                : `展开全部 ${progress.contributions.length} 行`}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* 2. 执行流水: 逐行可溯源(点击打开该单据的复核弹窗); 长列表折叠+滚动 */}
       <div>
