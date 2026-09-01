@@ -117,7 +117,7 @@
       "status": "active",
       "mount": "always",
       "whenToUse": "按内容召回已录入单据片段（fts/vector/hybrid + reranker + wantTags/contractNo 过滤）。",
-      "boundary": "只能召回已录入且通过权限过滤的 chunk；未命中返回空数组，不得编造；台账结构化信息用 query_contract。",
+      "boundary": "只能召回已录入且通过权限过滤的 chunk；未命中返回空数组，不得编造；台账结构化信息用 query_business。",
       "rationale": "唯一的通用文本召回入口；fullText 模式见 docs/superpowers/specs 设计。"
     },
     {
@@ -178,7 +178,7 @@
       "status": "active",
       "mount": "always",
       "whenToUse": "按名称查找图谱实体，拿到 elementId 后再交给 graph_query。",
-      "boundary": "只做名称解析，不做遍历；查台账字段用 query_contract。",
+      "boundary": "只做名称解析，不做遍历；查台账字段用 query_business。",
       "rationale": "graph_query 缺的'用户说名称'入口。"
     },
     {

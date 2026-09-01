@@ -346,6 +346,9 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
       'wantTags 标签过滤无命中时已自动放宽(响应带 tagFilterFallback=true, 如实说明即可)。' +
       '命中短文档时返回整篇全文: mode=fullText, documents[] 按命中序给出 document_id+完整文本(引用以 document_id 为准); ' +
       '超出全文预算(单份>8000字或合计>16000字)的文档仍只返回 matches 片段, 并列在 degradedDocIds; fullText:false 可强制只返回片段。' +
+      '同一文档已返回全文后不要再对它发起第二次召回, 直接通读全文作答(包括确认"合同未约定某指标"这类结论), 引用以 document_id 为准。' +
+      '标签体系: 每个片段入库时已按文档类型打语义标签, 合同类: 当事人信息/标的物/数量与计量/价格与金额/付款条款/交付与运输/检验与验收/权利义务/违约责任/不可抗力/争议解决/期限与生效/签署信息; 发票/提单/装箱单各有体系。用户问某类条款时建议用语义 query 配 wantTags 组合(如"付款金额和币种"配 wantTags:["价格与金额","付款条款"])提升精度。' +
+      'contractNo 过滤下返回空时不要重复堆相似关键词, 换专有名词(对手方/煤矿/品名)或减少到 1-2 个关键词再试。未命中返回空数组, 不得编造。' +
       '调用示例: 1) 按单据号精确找原文 {query: "BL-2024-0920-002", strategy: "fts"}; ' +
       '2) 语义召回并按合同过滤 {query: "烧碱采购付款条款", strategy: "hybrid", contractNo: "HT-2024-001", limit: 5}。',
     inputSchema: z.object({
