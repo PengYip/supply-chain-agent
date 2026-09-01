@@ -27,7 +27,9 @@ export function buildCreateEntityTool() {
 export function buildLinkEntitiesTool() {
   return tool({
     description:
-      '在两个已存在的实体之间建立一条有向关系 (如 buyer_of / plays_role / references). src/dst 必须是 create_entity 返回的 elementId. 不会隐式创建节点. 幂等: 同一 (src, 关系类型, dst) 只保留一条边, 重复调用仅更新属性.',
+      '在两个已存在的实体之间建立一条有向关系。调用前先用 graph_find_entity 按名称定位两端实体拿到 elementId。不会隐式创建节点。幂等: 同一 (src, 关系类型, dst) 只保留一条边, 重复调用仅更新属性。' +
+      '边类型优先复用既有词表: party/commodity/references/executes/back_to_back(购销方向写在 props.role), 不要自创同义类型。' +
+      '注意: 经复核卡确认的单据已由系统自动写入 party/commodity/references/executes 边, 不要手动重建; part_of(合同归属项目)边由项目工作台确认后生成, 也不要手动建。图不可用时返回错误, 如实告知, 不得编造图数据。',
     inputSchema: z.object({
       srcId: z.string().min(1).describe('源实体 elementId'),
       dstId: z.string().min(1).describe('目标实体 elementId'),
@@ -74,7 +76,8 @@ export function buildGraphQueryTool() {
 export function buildGraphFindEntityTool() {
   return tool({
     description:
-      '按名称查找图实体 (Party/Commodity/Contract/Document/Project), 返回 elementId 列表, 供 graph_query 起步或 link_entities 引用. 默认包含匹配 (CONTAINS), exact=true 精确匹配. 项目（Project）节点由合同归属项目产生, name 为项目编号. 图不可用时返回错误.',
+      '按名称查找图实体 (Party/Commodity/Contract/Document/Project), 返回 elementId 列表, 供 graph_query 起步或 link_entities 引用. 默认包含匹配 (CONTAINS), exact=true 精确匹配. 项目（Project）节点由合同归属项目产生, name 为项目编号. 图不可用时返回错误.' +
+      '问"XX项目有哪些合同/对手方"时用 kind=Project 定位项目再 graph_query 遍历; 采购合同的对手方在该项目中角色是供应商, 销售合同的对手方是客户(系统按合同类型自动派生 participates 边)。',
     inputSchema: z.object({
       kind: z.enum(['Party', 'Commodity', 'Contract', 'Document', 'Project']).optional().describe('实体类型, 省略则查所有类型'),
       name: z.string().min(1).describe('实体名称或名称片段, 如 "中石化" / 合同号'),

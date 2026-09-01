@@ -38,6 +38,7 @@ export function buildQueryBusinessTool(deps: QueryBusinessDeps) {
       'project=按项目编号汇总合同金额/毛差/应收应付/流水/校验提示(必传 projectCode); ' +
       'template=单据模板类型层级与允许挂接的合同类型词表(可选 docType, 缺省返回全层级)。' +
       '这些都是结构化台账/物化数据, 不要用 recall_documents 检索替代; 找单据原文片段才用 recall_documents。' +
+      '查具体合同条款时两步走: 先用 entity="contract" 命中合同, 再用 recall_documents 传 contractNo 加条款关键词(如交货/违约/质量)检索原文片段作答, 以返回的 document_id 说明出处。' +
       '调用示例: 1) 盘点合同 {entity: "contract"}; ' +
       '2) 查合同执行流水 {entity: "flow", contractNo: "CJXC-2025-001"}; ' +
       '3) 项目概况 {entity: "project", projectCode: "PRJ-2026-001"}。',

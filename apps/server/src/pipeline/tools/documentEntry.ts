@@ -1466,6 +1466,7 @@ export function buildIngestDocumentTool(deps: ToolDeps) {
       '返回 docId、分类结果(classifiedDocType / confidence / source)、标签与向量化状态。' +
       '抽取模型可用时, 录入后自动做字段抽取(含合同台账回写), 无需再调 extract_fields; ' +
       '仅在需要重抽或抽取失败时才用 extract_fields。' +
+      '用户经上传按钮上传的文件已由系统自动解析与抽取(字段/关系/标签/向量均已就绪), 禁止对它们调用本工具(其路径不在 INGEST_ROOT, 必然失败); 上下文出现其 docId 时直接用 present_document_review 呈现复核卡。仅当用户给出 INGEST_ROOT 内的本地文件路径、且该文件尚未录入时才调用本工具。' +
       '调用示例: 1) 最小调用 {sourceUri: "<INGEST_ROOT>/合同.txt", modality: "digital"}; ' +
       '2) 带类型提示 {sourceUri: "<INGEST_ROOT>/提单.txt", modality: "scanned", docType: "提单"} ' +
       '(scanned 需在同目录有 <文件名>.mineru.json)。仅接受位于服务端 INGEST_ROOT 目录内的路径, 目录外路径会被拒绝。',
@@ -1499,7 +1500,8 @@ export function buildIngestDocumentTool(deps: ToolDeps) {
 export function buildExtractFieldsTool(deps: ToolDeps) {
   return tool({
     description:
-      '从已录入单据(docId)中抽取业务字段。强制原文 span 接地: 每个值必须可在 BlockModel 原文中定位, 否则不自动接受。返回带置信度的字段集 + 是否需人工复核(needsReview)。',
+      '从已录入单据(docId)中抽取业务字段。强制原文 span 接地: 每个值必须可在 BlockModel 原文中定位, 否则不自动接受。返回带置信度的字段集 + 是否需人工复核(needsReview)。' +
+      'strength=none 或置信度低于复核阈值的字段必须如实告知用户, 不得编造; 关键字段(合同号/金额/发票号/价税合计)未达自动接受阈值时, 主动建议人工复核或调 escalate_to_human。',
     inputSchema: z.object({
       docId: z.string().min(1),
       docType: z.enum(['合同', '发票', '提单', '装箱单', '其他']),
@@ -1830,6 +1832,7 @@ export function buildPresentDocumentReviewTool(deps: ToolDeps) {
     description:
       '录入+抽取完成后向用户呈现「五维复核卡」: 业务类型、结构化字段(含置信度/需复核)、' +
       '待确认关系、文本TAG、向量化入库状态。一次单据录入成功后必须调用, 供用户逐项确认或纠正。' +
+      '用户经上传按钮上传的文件(初始为仅存储状态)的 docId 出现在上下文时, 说明系统已自动完成解析与抽取, 无需再录入或重抽, 直接调用本工具; 文件状态为 needs_ocr 时如实告知用户需 OCR 处理。' +
       '本工具仅用于展示与触发复核, 不改变已落库数据。',
     inputSchema: z.object({
       docId: z.string().min(1).describe('已录入单据的 docId'),

@@ -99,7 +99,7 @@ interface VerifiedField {
 
 export const verifyDocumentFields = tool({
   description:
-    '单据字段 OCR 核验：对提单/发票等单据做字段级 OCR 置信度核验，高置信度字段自动接受，低置信度字段标记 needsReview 建议人工复核。',
+    '单据字段 OCR 核验：对提单/发票等单据做字段级 OCR 置信度核验，高置信度字段自动接受，低置信度字段标记 needsReview 建议人工复核。对返回 needsReview=true 的字段，必须如实告知用户"OCR 置信度低，建议人工复核"，不得自行决定该字段值。',
   inputSchema: verifySchema,
   execute: async ({ documentId, expectedFields }) => {
     const doc = findDocument(documentId);
