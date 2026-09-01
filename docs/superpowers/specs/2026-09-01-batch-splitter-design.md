@@ -245,3 +245,71 @@ formType 词表: 汽运磅单 / 轨道衡称重单 / 水尺计重单 / 质检报
   warning(既有问题, 只抬高复核率不影响正确性)。
 - 单图双候选使旋转 unit 的 VLM 调用翻倍(设计接受的可靠性成本; 宣威
   9 个磅单 unit 约 690s)。
+
+## 9. Phase 3 落地记录(2026-09-01, 谱系层)
+
+- **快照谱系**: ReviewSnapshot += `warnings`(补齐 Phase 2 已知缺口——
+  `field_meta._warnings` 此前被 getReviewSnapshot 静默丢弃, 只解析
+  {strength,confidence}) + `batch` 块: container 侧携带子单据清单
+  (unitIndex/类型/状态/needsReview 聚合计数), unit 侧携带来源回链
+  (parentDocumentId/parentFileName/页区间/旋回/区域数, 读自 manifest)。
+  新增 repo fns: getDocumentUnitByChild / listContainerUnitSummaries /
+  getBatchRolesForDocuments / updateDocumentUnitManifest(后扩展
+  pageStart/pageEnd) / clearDocumentUnits / deleteDocumentUnitsByIds,
+  SQLite+PG 双实现; `batch_role IS NULL` 的 legacy 文档严格零额外查询。
+- **列表与端点**: GET /api/files 条目 += batchRole/unitCount;
+  GET /api/documents/:docId/units 仅 container 可用(一次
+  getBatchRolesForDocuments 同时判缺失/他人/非容器 -> 404, 修正了计划中
+  "snapshot 已做所有权过滤"的错误前提); findDocIdsByMinioKeys 的 LIKE
+  回退加 `(batch_role IS NULL OR batch_role <> 'unit')` 守卫, 修复 unit
+  与 container 共享 source_uri 时文件条目 docId 被任意一行劫持的隐患。
+- **container 固定类型**: `CONTAINER_DOC_TYPE='单据组'`, processDocument
+  新增 fixedDocType 内部选项走分类 hint 路径(source='hint',
+  confidence=1), 分类器不再对混合容器输出语义类型; 前端词表不含 单据组,
+  文件树徽标用独立虚线容器样式。
+- **recall 谱系**: 命中(match 与 fullText documents[])统一附加
+  batchRole/parentDocumentId/unitIndex(未拆分全 null), 工具描述追加
+  归并指引(同批次命中应视为同一物理文件的切分视图)。
+- **Neo4j 谱系边**: writeBatchLineageEdges 建 container/unit Document
+  节点(batchRole prop; container 节点刻意无 docType——容器不是业务类型)
+  + CONTAINS 边(props: unitIndex/pages `pN`/`pN-M`); commitDocumentGraph
+  对 container 真门控跳过实体/边派生(有字段也不派生); 拆分完成与
+  /api/batch 修正后经 batchLineageGraphSync 故障隔离同步(NEO4J_PASSWORD
+  未配置 = skipped); TREE_FULFILLMENT_TYPES 未动, 图谱树仍归一在合同层。
+- **修正端点** /api/batch(requireAuth): resplit(forceResplit 删旧子单据
+  级联再重检; 路由固定 modality='scanned'——批容器按构造必为图像型 PDF,
+  绕过对 pdf-lib 测试件不可靠的文本层探测) / units/:unitId/reextract
+  (docType/rotation 覆盖; 旋回人工覆盖写回 manifest.chosenRotation 且不
+  记 candidateScores——人工覆盖非择优; 旧子单据在 unit 行改指向后才删,
+  避免级联误杀存活行) / units/merge(保序最低 unitIndex 行, manifest
+  merged/mergedFrom/regions 按序串接)。错误契约
+  `{ok:false, error:中文消息, code, detail}`(409 unit_bound 的 detail
+  为已绑定 unit 清单, 前端渲染强制二次确认)。
+- **前端**: 文件树 container 行「单据组 · N 份单据」徽标 + 懒加载 unit
+  子行(会话内记忆展开); 全局 ReviewModal 经 pub/sub 总线解循环依赖
+  (卡片/文件树/弹窗任一宿主皆可发起复核); container 复核卡切「拆分清单」
+  导航形态(隐藏全部抽取区块——容器无抽取语义, 业务类型也不可改);
+  unit 卡第 8 编号区块「来源与拆分」; 结构化字段 warnings 横幅; Task 10
+  修正入口(重拆 409 强制流程 / 重抽覆盖项 / 合并多选, 确认面板内联于卡片
+  页脚而非嵌套 modal——规避 Esc 与滚动锁的嵌套冲突)。
+- **灰度不变**: BATCH_SPLIT_ENABLED=false 零行为变化(测试锁定); 谱系读
+  路径对 legacy 文档空开销; 普通文档(无 batch 无 warnings)前后端渲染
+  bit-identical。
+- **实查工具**: processBatch.ts 末尾增 `[lineage]` 谱系摘要打印
+  (container units×类型×needsReviewCount + 首个 unit 的来源/页区间/旋回/
+  共识), 供内存链路端到端自验。
+- **验证**: 单测 server 1400+/web 70 全绿(build/lint/test), 新增测试覆盖
+  快照谱系/units 端点/防劫持/单据组跳分类/recall 谱系/CONTAINS 边同步/
+  /api/batch 三端点(含 409 强制与级联语义)。
+
+### 9.1 已知边界(后续项)
+
+- mergeContainsEdge 的真实 Cypher 路径未在 10.10.0.2 冒烟(单测走注入 io;
+  部署后建议跑一次图谱页目视)。
+- PG 侧新 repo fns 仅由 DB_BACKEND=postgres 的 11 个集成测试覆盖
+  (须指向独立 sca_test 库)。
+- 择优标记(旋回双候选择优)在快照 batch 块只暴露最终 rotationDeg,
+  chosenRotation/candidateScores 留在 manifest 里未上 UI——如需展示
+  「自动择优 vs 人工覆盖」再补字段。
+- resplit 的 modality 固定 scanned 依赖"批容器必为图像型"这一拆分闸门
+  不变量; 若未来放开数字类 PDF 拆分, 需改为跟随首次解析的 modality。

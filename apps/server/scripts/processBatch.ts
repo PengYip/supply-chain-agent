@@ -19,6 +19,7 @@ import { createDb, migrate } from '../src/pipeline/db/client.js';
 import { ensureTemplateSeed } from '../src/pipeline/templateSeed.js';
 import {
   createDocumentStub,
+  getReviewSnapshot,
   listDocumentUnitsByParent,
   loadLatestExtractionByDocId,
 } from '../src/pipeline/db/repositories.js';
@@ -118,6 +119,36 @@ async function main(): Promise<void> {
         ` overall=${ext.overallConfidence.toFixed(2)} chunks=${chunks} ${readings}`,
       );
       for (const w of warnings) console.log(`  warning: ${w}`);
+    }
+
+    // Phase 3 谱系自验: container 拆分清单 + 首个 unit 的来源回链(读路径端到端)。
+    const containerSnap = await getReviewSnapshot(ctx, docId, 'batch-check');
+    if (containerSnap?.batch?.role === 'container') {
+      const b = containerSnap.batch;
+      const types = (b.units ?? [])
+        .map((u) => `${u.unitIndex}:${u.childDocType ?? u.detectedFormType}`)
+        .join(' ');
+      console.log(
+        `[lineage] container units=${b.unitCount ?? (b.units ?? []).length}` +
+        ` needsReview=${b.needsReviewCount ?? 0} types=[${types}]` +
+        ` warnings=${containerSnap.warnings.length}`,
+      );
+      const firstUnitDocId = (b.units ?? []).find((u) => u.docId)?.docId;
+      if (firstUnitDocId) {
+        const unitSnap = await getReviewSnapshot(ctx, firstUnitDocId, 'batch-check');
+        if (unitSnap?.batch?.role === 'unit') {
+          const ub = unitSnap.batch;
+          console.log(
+            `[lineage] unit#${ub.unitIndex} 来源=${ub.parentFileName ?? '-'}` +
+            ` pages=${ub.pageStart ?? '?'}-${ub.pageEnd ?? '?'}` +
+            ` rotation=${ub.rotationDeg ?? '-'} regions=${ub.regionCount ?? '-'}` +
+            ` form=${ub.detectedFormType ?? '-'}` +
+            ` 共识=${unitSnap.warnings.length ? `${unitSnap.warnings.length} 条分歧` : '两遍一致'}`,
+          );
+        }
+      }
+    } else {
+      console.log('[lineage] container snapshot 无 batch 块(未拆分或谱系读路径异常)');
     }
   } finally {
     if (!process.argv.includes('--keep')) {

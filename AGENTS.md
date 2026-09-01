@@ -128,6 +128,12 @@ Access cheat-sheet (verify before trusting local files):
   `attachSession` runs on every request; `requireAuth` guards `/api/chat`,
   `/api/sessions`, `/api/approval`. `/api/health` stays public. Add new
   protected routes under those mounts or wire `requireAuth` explicitly.
+- **Batch splitter lineage (Phase 3).** `/api/batch` (resplit / unit
+  reextract / merge) is auth-guarded like `/api/documents`. `documents.batch_role`
+  + `document_units` are the lineage SSOT; containers carry docType「单据组」and
+  write fault-isolated `CONTAINS` edges to Neo4j via `batchLineageGraphSync`
+  (container nodes deliberately have no docType prop). See
+  `docs/superpowers/specs/2026-09-01-batch-splitter-design.md` §9.
 - **Dual DB, intentionally different tooling.** SQLite is the default runtime
   and uses **raw idempotent DDL** in `src/pipeline/db/client.ts` (no
   drizzle-kit). The Postgres path uses **drizzle-kit** against
