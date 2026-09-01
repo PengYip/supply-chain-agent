@@ -118,6 +118,17 @@ Access cheat-sheet (verify before trusting local files):
   beforeEach 会 TRUNCATE `documents` 等业务表；在 10.10.0.2 上跑测试必须用
   独立的 `sca_test` 库，绝不可将 `DATABASE_URL` 指向共享开发库 `sca`
   （2026-08-17 曾因此清空开发数据）。
+- **GitHub 出入站走 mihomo 代理**（2026-09-01 起）：runner 服务的 env 强制
+  `http(s)_proxy=http://127.0.0.1:7890`（mihomo，PM2 托管，`pm2 restart mihomo`，
+  随 pm2 开机自启）；控制 API 在 `127.0.0.1:9091`（9090 被 langfuse-minio 的
+  docker 端口映射占用，别用）。节点列表由 `proxy-providers` 每日自动从订阅刷新
+  （本地缓存 `~/mihomo/providers/airport.yaml`，断网也能冷启动）；AUTO 组
+  每 300s 按 `https://api.github.com` 测速自动选最快节点，provider health-check
+  用 HTTPS（HTTP 探活会被 443 黑洞的僵尸节点骗过 —— 2026-08-31 CI 连环超时的根因）。
+  CI 超时/失败先查选中节点：`curl -s http://127.0.0.1:9091/proxies/AUTO`；
+  强制重测：`curl -X GET 'http://127.0.0.1:9091/group/AUTO/delay?url=https%3A%2F%2Fapi.github.com&timeout=5000'`。
+  git 无自带代理配置（曾指向 PC 的 172.18.15.20:7897，已删 —— PC 关机会导致
+  CI git 步骤全挂），统一走 env → mihomo。
 
 ## Backend notes that bite if missed
 
