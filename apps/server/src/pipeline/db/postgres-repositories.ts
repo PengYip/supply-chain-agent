@@ -232,6 +232,77 @@ export async function listRecallVisibleDocIdsPg(
   return out;
 }
 
+/** 悬空凭证清单的 Postgres 实现(语义同 repositories.listUnboundVoucherDocs)。 */
+export async function listUnboundVoucherDocsPg(
+  ctx: PostgresDbContext,
+  userId?: string,
+): Promise<Array<{ docId: string; docType: string; sourceUri: string; createdAt: string; hasExtraction: boolean }>> {
+  const uid = effectiveUserId(userId);
+  const types = await listTemplateTypes(ctx);
+  const { rows: docTypes } = await ctx.pool.query('SELECT DISTINCT doc_type AS t FROM documents');
+  const anchorNames = (docTypes as Array<{ t: string }>)
+    .map((r) => r.t)
+    .filter((t) => isVectorizableDocType(t, types));
+  const params: unknown[] = [];
+  const conds: string[] = [`d.parse_status = 'parsed'`];
+  if (uid) {
+    params.push(uid);
+    conds.push(`d.user_id = $${params.length}`);
+  }
+  const notExistsParams = params.length;
+  conds.push(
+    `NOT EXISTS (SELECT 1 FROM bindings b WHERE b.document_id = d.id` +
+    ` AND b.status IN ('proposed','confirmed')` +
+    (uid ? ` AND b.user_id = $${notExistsParams}` : '') + `)`,
+  );
+  if (anchorNames.length > 0) {
+    params.push(anchorNames);
+    conds.push(`d.doc_type != ALL($${params.length})`);
+  }
+  const { rows } = await ctx.pool.query(
+    `SELECT d.id, d.doc_type, d.source_uri, d.created_at,
+       EXISTS(SELECT 1 FROM extractions e WHERE e.document_id = d.id) AS has_ext
+     FROM documents d WHERE ${conds.join(' AND ')} ORDER BY d.created_at DESC`,
+    params,
+  );
+  return (rows as Array<{
+    id: string; doc_type: string; source_uri: string; created_at: string; has_ext: boolean;
+  }>).map((r) => ({
+    docId: r.id,
+    docType: r.doc_type,
+    sourceUri: r.source_uri,
+    createdAt: String(r.created_at),
+    hasExtraction: r.has_ext === true,
+  }));
+}
+
+/** 绑定单据摘要的 Postgres 实现(语义同 repositories.listBoundDocSummaries)。 */
+export async function listBoundDocSummariesPg(
+  ctx: PostgresDbContext,
+  contractNos: string[],
+  userId?: string,
+): Promise<Array<{ docId: string; contractNo: string; docType: string | null; relation: string; status: string; confidence: number }>> {
+  const uid = effectiveUserId(userId);
+  const { rows } = await ctx.pool.query(
+    `SELECT b.document_id, b.contract_no, b.relation, b.status, b.confidence, d.doc_type
+     FROM bindings b LEFT JOIN documents d ON d.id = b.document_id
+     WHERE b.contract_no = ANY($1)${uid ? ' AND b.user_id = $2' : ''}
+     ORDER BY CASE b.status WHEN 'confirmed' THEN 0 WHEN 'proposed' THEN 1 ELSE 2 END, b.created_at DESC`,
+    uid ? [contractNos, uid] : [contractNos],
+  );
+  return (rows as Array<{
+    document_id: string; contract_no: string; doc_type: string | null;
+    relation: string; status: string; confidence: number;
+  }>).map((r) => ({
+    docId: r.document_id,
+    contractNo: r.contract_no,
+    docType: r.doc_type,
+    relation: r.relation,
+    status: r.status,
+    confidence: Number(r.confidence),
+  }));
+}
+
 // ---- Phase B: bindings 状态机 (pg twins) -------------------------------------
 
 export async function findBindingByDocAndContractPg(

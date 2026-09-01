@@ -75,7 +75,7 @@
       "level": "L1",
       "status": "active",
       "mount": "always",
-      "whenToUse": "结构化业务数据统一查询入口: contract=合同台账(枚举/点查), flow=六向执行流水, quota=额度占用, project=项目汇总, template=模板词表。盘点/枚举类问题必须用它。",
+      "whenToUse": "结构化业务数据统一查询入口: contract=合同台账(枚举/点查, 点查含 boundDocuments 在案单据摘要), flow=六向执行流水, quota=额度占用, unbound_docs=悬空凭证清单, project=项目汇总, template=模板词表。盘点/枚举类问题必须用它。",
       "boundary": "只给台账/物化结构化数据, 不含单据原文; 找原文片段用 recall_documents; entity=flow 必传 contractNo, entity=project 必传 projectCode, 缺失时返回 error 不猜测。",
       "rationale": "阶段2 合并(2026-08-28): 五个功能相似+场景重叠+参数简单的 SSOT 读工具合一, 底层委托原实现行为不变。"
     },
@@ -248,7 +248,7 @@
       "status": "active",
       "mount": "always",
       "whenToUse": "结算取证：一次打包合同条款+数量流水+质量凭证+历史结算，作为结算计算前的必经步骤。",
-      "boundary": "只取证不计算、不落库；确认结算走 confirm_settlement。",
+      "boundary": "只取证不计算、不落库；确认结算走 confirm_settlement。质量凭证仅取 confirmed 绑定(proposed 单列 pendingQualityDocs)。",
       "rationale": "高频复合取证包，合并进 query_business 会破坏其'一次给齐'语义。"
     },
     {

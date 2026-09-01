@@ -97,6 +97,28 @@ describe('gather_settlement_evidence', () => {
     expect(r.contract).toBeNull();
     expect(r.executionProgress.delivered.massKg).toBe(1000000);
   });
+
+  it('结算端硬门槛: proposed 绑定的质量凭证只进 pendingQualityDocs, 不进 qualityDocs', async () => {
+    await upsertContractLedgerEntry(ctx, ledger('HT-2'));
+    const labDoc = await createDocumentStub(ctx, { sourceUri: 'file:///lab2.pdf', docType: '质检报告' });
+    await saveExtraction(ctx, {
+      documentId: labDoc.docId, docType: '化验报告',
+      fields: { 灰分: { value: 11.5, sourceSpans: [span] } },
+      fieldMeta: {}, overallConfidence: 0.9, needsReview: false,
+    });
+    await saveBinding(ctx, {
+      documentId: labDoc.docId, contractNo: 'HT-2', relation: '质检',
+      sourceRefs: [], confidence: 0.8, createdBy: 'system', status: 'proposed',
+      proposedBy: 'system',
+    }, '');
+
+    const t = buildGatherSettlementEvidenceTool({ ctx, userId: '' });
+    const r = (await t.execute!({ contractNo: 'HT-2' }, execOpts)) as any;
+    expect(r.qualityDocs).toHaveLength(0);
+    expect(r.pendingQualityDocs).toHaveLength(1);
+    expect(r.pendingQualityDocs[0]).toMatchObject({ documentId: labDoc.docId, docType: '化验报告' });
+    expect(r.usage).toContain('pendingQualityDocs');
+  });
 });
 
 describe('confirm_settlement(L2, 落 settlement_records)', () => {

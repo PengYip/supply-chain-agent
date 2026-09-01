@@ -31,6 +31,9 @@ import {
   addSelfParty,
   listSelfParties,
   removeSelfParty,
+  listRecallVisibleDocIds,
+  listUnboundVoucherDocs,
+  listBoundDocSummaries,
 } from '../../src/pipeline/db/repositories.js';
 import { saveChunkVectors, vectorKnn, isVecReady } from '../../src/pipeline/db/vecStore.js';
 import { buildIngestDocumentTool } from '../../src/pipeline/tools/documentEntry.js';
@@ -163,6 +166,34 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
   it('loadDocument returns null for a missing id', async () => {
     const loaded = await loadDocument(ctx, 'DOES-NOT-EXIST');
     expect(loaded).toBeNull();
+  });
+
+  it('recall 可见性/悬空清单/绑定摘要 PG 路径(2026-09-01)', async () => {
+    await saveDocument(ctx, mkModel('DOC-PG-CONTRACT'));
+    // 悬空质检报告(parsed) + 已绑定化验报告(proposed)。
+    for (const [id, dtype] of [['DOC-PG-DANGLE', '质检报告'], ['DOC-PG-BOUND', '化验报告']] as const) {
+      await ctx.pool.query(
+        `INSERT INTO documents (id, doc_type, modality, source_uri, block_model, user_id, parse_status)
+         VALUES ($1, $2, 'digital', $3, '{}', '', 'parsed')`,
+        [id, dtype, `file:///${id}.pdf`],
+      );
+    }
+    await saveBinding(ctx, {
+      documentId: 'DOC-PG-BOUND', contractNo: 'HT-PG-001', relation: '质检',
+      sourceRefs: [], confidence: 0.8, createdBy: 'system', status: 'proposed', proposedBy: 'system',
+    }, '');
+
+    const visible = await listRecallVisibleDocIds(ctx);
+    expect(visible.has('DOC-PG-CONTRACT')).toBe(true); // 锚点类型
+    expect(visible.has('DOC-PG-BOUND')).toBe(true); // proposed 绑定
+    expect(visible.has('DOC-PG-DANGLE')).toBe(false); // 悬空
+
+    const unbound = await listUnboundVoucherDocs(ctx);
+    expect(unbound.map((d) => d.docId)).toEqual(['DOC-PG-DANGLE']);
+
+    const summaries = await listBoundDocSummaries(ctx, ['HT-PG-001']);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({ docId: 'DOC-PG-BOUND', status: 'proposed', docType: '化验报告' });
   });
 
   it('saveExtraction persists JSONB fields + numeric confidence', async () => {

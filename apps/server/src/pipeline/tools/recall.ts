@@ -345,7 +345,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
       'vector/hybrid 在 sqlite-vec 不可用时自动降级为 fts。' +
       'contractNo 过滤是"按合同找单据"的唯一入口: 只返回与该合同绑定的单据(含待确认建议)的片段。' +
       '凭证类单据(质检报告/化验报告/磅单等)原文不含合同号, 未绑定合同的悬空凭证不参与检索(命中也不返回); ' +
-      '按合同找它们必须先有绑定(确认绑定建议或 bind_document), 未绑定时如实告知用户, 不要拿合同号当检索词搜全文。' +
+      '按合同找它们必须先有绑定(确认绑定建议或 bind_document; 悬空清单用 query_business entity="unbound_docs"), 不要拿合同号当检索词搜全文。' +
       '合同/立项书类文档及其子类型始终可搜。' +
       'wantTags 标签过滤无命中时已自动放宽(响应带 tagFilterFallback=true, 如实说明即可)。' +
       '命中短文档时返回整篇全文: mode=fullText, documents[] 按命中序给出 document_id+完整文本(引用以 document_id 为准); ' +
@@ -422,7 +422,8 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
         : await listRecallVisibleDocIds(deps.ctx, deps.userId);
       const scopeSet = docIdSet ?? visibilitySet;
       const DANGLING_NOTE =
-        '命中的单据均未与任何合同绑定(悬空凭证不参与检索): 需先确认绑定建议或用 bind_document 建立归属, 或在会话中直接引用该单据。';
+        '命中的单据均未与任何合同绑定(悬空凭证不参与检索): 需先确认绑定建议或用 bind_document 建立归属; ' +
+        '可用 query_business(entity="unbound_docs") 查看悬空单据清单, 或在会话中直接引用该单据。';
 
       // Tag filter (chunk-level): when wantTags is set, over-fetch candidates so a
       // selective tag filter still leaves enough survivors to fill `limit`, then

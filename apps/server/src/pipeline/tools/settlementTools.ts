@@ -35,7 +35,7 @@ export function buildGatherSettlementEvidenceTool(deps: SettlementToolDeps) {
     description:
       '取齐某合同的结算依据(只读, 计算前的取证步骤)。返回: 合同台账字段(定价/付款条款原文)、' +
       '执行流水(含数量/单据类型/凭证日期)、executionProgress(节点权威聚合后的已交付量, 预告凭证' +
-      '与实重凭证不双计)、质量凭证(质检报告/化验报告的化验指标字段)、已确认结算记录。' +
+      '与实重凭证不双计)、质量凭证(仅 confirmed 绑定的质检报告/化验报告化验指标; 待确认绑定的单列 pendingQualityDocs)、已确认结算记录。' +
       '什么时候用: 用户要求"算结算/结这个合同的账/出结算单"时, 必须先调用本工具取证, ' +
       '再依据合同条款原文计算, 把结果完整展示给用户确认。' +
       '边界: 本工具不做任何计算, 只给证据; 计算数值必须能在返回的凭证字段中溯源。' +
@@ -54,13 +54,18 @@ export function buildGatherSettlementEvidenceTool(deps: SettlementToolDeps) {
       const flows = await listExecutionFlows(ctx, contractNo, userId);
       const settlements = await listSettlementRecords(ctx, contractNo, userId);
       const bindings = await listBindingsForContract(ctx, contractNo);
+      // 结算端硬门槛(2026-09-01): 参与结算计算的质量凭证必须来自 confirmed 绑定
+      // (金额锚点不容推断归属); proposed 绑定的质量凭证单列 pendingQualityDocs,
+      // 提示先确认绑定再纳入计算。rejected 不参与。
+      const confirmedBindings = bindings.filter((b) => b.status === 'confirmed');
+      const pendingBindings = bindings.filter((b) => b.status === 'proposed');
       const qualityDocs: Array<{
         documentId: string;
         extractionId: string;
         docType: string;
         fields: Record<string, unknown>;
       }> = [];
-      for (const b of bindings) {
+      for (const b of confirmedBindings) {
         const ext = await loadLatestExtractionByDocId(ctx, b.documentId, userId);
         if (ext && QUALITY_DOC_TYPES.has(ext.docType)) {
           qualityDocs.push({
@@ -68,6 +73,17 @@ export function buildGatherSettlementEvidenceTool(deps: SettlementToolDeps) {
             extractionId: ext.id,
             docType: ext.docType,
             fields: ext.fields as Record<string, unknown>,
+          });
+        }
+      }
+      const pendingQualityDocs: Array<{ documentId: string; docType: string; confidence: number }> = [];
+      for (const b of pendingBindings) {
+        const ext = await loadLatestExtractionByDocId(ctx, b.documentId, userId);
+        if (ext && QUALITY_DOC_TYPES.has(ext.docType)) {
+          pendingQualityDocs.push({
+            documentId: b.documentId,
+            docType: ext.docType,
+            confidence: b.confidence,
           });
         }
       }
@@ -99,10 +115,12 @@ export function buildGatherSettlementEvidenceTool(deps: SettlementToolDeps) {
         })),
         executionProgress: computeExecutionProgress(flows, ledger?.fields ?? null),
         qualityDocs,
+        pendingQualityDocs,
         settlements,
         usage:
           '结算口径: 数量以 executionProgress.delivered 为准(勿逐行累加 flows, 会双计预告与实重); ' +
           '价格按 contract.fields 中定价/质量条款计算; 每个数字标注来源(流水 id/抽取 id); ' +
+          'qualityDocs 仅含 confirmed 绑定的质量凭证; pendingQualityDocs 非空时必须先提示用户确认绑定(bind_document)再纳入计算; ' +
           '结果先完整展示给用户, 用户确认后才调用 confirm_settlement。',
       };
     },
