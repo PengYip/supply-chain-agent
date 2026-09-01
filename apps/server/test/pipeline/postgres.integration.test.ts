@@ -287,6 +287,8 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
     // unigram in ONE chunk under AND -> structurally 0 hits despite relevant
     // chunks existing. With OR, chunks matching ANY term surface and ts_rank
     // floats multi-term matches up.
+    // 2026-09-01 fixture fix: doc_chunk 有 FK -> documents, 先落文档行。
+    await saveDocument(ctx, mkModel('DOC-PG-OR'));
     await saveChunks(ctx, 'DOC-PG-OR', [
       { text: '第四条 煤炭价格与结算方式：基准到站含税包干价，发热量调整扣款。', index: 0 },
       { text: '货物到达甲方指定地点交付，轨道衡验收数量为结算依据。', index: 1 },

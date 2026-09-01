@@ -1108,10 +1108,14 @@ export async function listChunksByDocumentPg(
   // is given, filter INSIDE the KNN query -- a global top-k followed by a
   // caller-side doc filter starves scoped recalls (bound docs' chunks never
   // crack the global top-k in a large library).
-  const docFilter =
-    docIds && docIds.length > 0 ? 'AND document_id = ANY($2::text[])' : '';
-  const params: unknown[] = [vecLiteral(queryVec), safeK];
-  if (docFilter) params.push(docIds);
+  // Bug fix 2026-09-01: 参数错位(ANY($2) 引用了 k 而非 docIds, scoped 查询必然
+  // 报错进 catch 返回空) -- PG 后端的 contractNo 语义召回因此静默丢失。对齐为
+  // $1=vec, $2=limit, $3=docIds。
+  const scoped = docIds && docIds.length > 0;
+  const docFilter = scoped ? 'AND document_id = ANY($3::text[])' : '';
+  const params: unknown[] = scoped
+    ? [vecLiteral(queryVec), safeK, [...docIds!]]
+    : [vecLiteral(queryVec), safeK];
   let res;
   try {
     res = await ctx.pool.query(
@@ -1119,7 +1123,7 @@ export async function listChunksByDocumentPg(
        FROM doc_chunk
        WHERE embedding IS NOT NULL ${docFilter}
        ORDER BY embedding <=> $1::vector
-       LIMIT $${docFilter ? 3 : 2}`,
+       LIMIT $2`,
       params,
     );
   } catch {
