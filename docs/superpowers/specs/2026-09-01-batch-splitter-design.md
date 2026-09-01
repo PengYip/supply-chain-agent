@@ -1,6 +1,7 @@
 # 批量拆分器设计：一个物理文件 ≠ 一份业务单据
 
-日期: 2026-09-01 · 状态: 设计 + 原型验证完成, 待排期实现
+日期: 2026-09-01 · 状态: Phase 1(后端)已实现(BATCH_SPLIT_ENABLED 默认关闭);
+Phase 2(抽取切片)/Phase 3(前端层级)待做
 
 ## 0. 背景与问题
 
@@ -138,3 +139,29 @@ formType 词表: 汽运磅单 / 轨道衡称重单 / 水尺计重单 / 质检报
 
 原型脚本与产物(临时): 10.10.0.2 `/tmp/xuanwei-*`, `/tmp/split-result.json`,
 本地裁剪图 `D:\Users\yepeng\.tmp-orca\xuanwei\`。
+
+## 7. Phase 1 落地记录(2026-09-01)
+
+- 数据模型: `document_units` + `documents.batch_role`(SQLite raw DDL +
+  Postgres migratePostgres + postgres-schema.ts 声明, 双库同步, 老数据
+  batch_role IS NULL 零影响; deleteDocument 级联清理 unit 行)。
+- 灰度: `BATCH_SPLIT_ENABLED`(env.ts zod 契约, 默认 false = 零行为变化,
+  有测试锁定) + `BATCH_SPLIT_CONCURRENCY`(默认 4) + `BATCH_SPLIT_MAX_PAGES`
+  (默认 50, 超限走旧路径)。未配置 VLM 时拆分自动不生效。
+- 检测器: `src/pipeline/batchSplit.ts` —— 内置最小 PNG 解码器做空白页
+  非白占比预判(<5% 跳过 VLM), 逐页 150 DPI VLM 版面清点(严格 JSON +
+  失败回灌重试 1 次), 跨页续表合并(相邻页 + 同 formType + 同非空单号),
+  bbox 四边加 2.5% padding 并截断 [0,1]。实查工具:
+  `npx tsx apps/server/scripts/detectUnits.ts <pdf>`。
+- 灰度入口: `processDocumentWithBatch` 挂在 `ensureDocumentParsed`(覆盖
+  /process 与 chat 兜底)。仅图像型 PDF 参与(显式 scanned 或无文字层);
+  文字层 PDF 的 digital 解析不带页号(blockModelFromText 全部 page=1), 页
+  区间切片无意义。N>1 时: parent 标 container + unit 行落库, container 走
+  旧链路解析(跳过 Voucher 路由, 多单据整文件硬喂单据级 schema 正是本 bug),
+  子单据(container BlockModel 按 unit 页区间切片 + formType 派生分类 hint)
+  各自独立走现有 分类→抽取→审核→绑定 全链路。已拆分文件重跑幂等(只重解析
+  container)。container 解析失败(needs_ocr/failed)不生成子单据, unit 行留
+  pending 待审计。
+- Phase 1 切片粒度 = 页区间: 同页并排多 unit 的子单据暂共享该页块,
+  bbox 像素级切片 + 旋回双候选 + 两遍读数共识属 Phase 2(逐页 region 明细
+  已存 manifest_json, 供 Phase 2 直接消费)。

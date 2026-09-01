@@ -15,10 +15,14 @@ import {
   getExtractionStatus, loadLatestExtractionByDocId,
   // 6b 重跑覆盖守卫: 重解析前清空本文档旧 chunk 行(见 processDocument step 7)。
   deleteChunksForDocument,
+  // 批量拆分器(spec 2026-09-01): document_units 读写 + batch_role + 子单据存根。
+  saveDocumentUnits, listDocumentUnitsByParent, updateDocumentUnitChild, setDocumentBatchRole,
+  createDocumentStub,
   // Phase B bindings state machine.
   listContractLedgerEntries, findBindingByDocAndContract, listBindingProposals,
   updateBindingStatus, listTemplateTypes,
 } from '../db/repositories.js';
+import { detectDocumentUnits, type DetectedUnit } from '../batchSplit.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
 import { runAutoExtraction, buildAutoExtractionDeps, type AutoExtractionDeps } from '../autoExtraction.js';
@@ -74,6 +78,11 @@ export interface VlmDeps {
     image: { mime: string; buffer: Buffer },
     docType: string,
   ) => Promise<{ fields: Record<string, unknown> }>;
+  /** 批量拆分器: 逐页版面清点调用注入(缺省真实 vlmCall, 需 VLM 配置)。 */
+  detectUnits?: (
+    prompt: string,
+    page: { page: number; mime: string; buffer: Buffer },
+  ) => Promise<string>;
 }
 
 export interface ToolDeps {
@@ -873,6 +882,12 @@ export interface ProcessDocumentOptions {
    *  仅 'parsed' 可被放行——'needs_ocr' 是需要用户显式选择模态重试的用户可见
    *  状态, 不受 force 影响。 */
   force?: boolean;
+  /** 批量拆分器内部选项(外部调用方永不传): 已按 unit 页区间切好的块模型。
+   *  存在时跳过解析/Voucher 路由, 直接进分类→落库→chunk→索引→抽取链。 */
+  parsedBlockModel?: BlockModel;
+  /** 批量拆分器内部选项: 多单据 container 跳过 VLM 凭证路由(整文件硬喂
+   *  单据级 schema 正是批量拆分要修的 bug), 落 OCR 旧路径。 */
+  skipVoucherRoute?: boolean;
 }
 
 export interface ProcessDocumentResult {
@@ -885,6 +900,11 @@ export interface ProcessDocumentResult {
   tags?: string[];
   vectorization?: VectorizationStatus;
   reason?: string;
+  /** 批量拆分器(仅 BATCH_SPLIT_ENABLED 且检测 N>1 时出现): 拆分摘要。 */
+  batchSplit?: {
+    unitCount: number;
+    childDocIds: string[];
+  };
 }
 
 /**
@@ -1069,6 +1089,9 @@ export async function processDocument(
   //    scanned)先过 VLM 凭证路由门控, 未命中再进 MinerU OCR; 文字层 PDF 走
   //    digital(parseDocument 内部保留 0 块 OCR 兜底)。OCR/parse 失败 -> 'needs_ocr'
   //    STATE(no throw), upload/parse 解耦保持。
+  //    批量拆分器内部选项(对外路径永不传): parsedBlockModel = 已切好的子单据
+  //    块模型, 跳过解析/Voucher 路由直接进分类链; skipVoucherRoute = 多单据
+  //    container 守卫(整文件硬喂单据级 schema 是本次要修的 bug)。
   let blockModel: BlockModel | null = null;
   const parseErrors: unknown[] = [];
   const firstModality: Modality = opts.modality ?? 'digital';
@@ -1085,7 +1108,7 @@ export async function processDocument(
 
   // 图像型预判: 显式 scanned 直接算; digital 用文字层探测(null=非PDF/探测失败 -> 原路径)。
   let imageLike = firstModality === 'scanned';
-  if (!imageLike && isPdf) {
+  if (!imageLike && isPdf && !opts.parsedBlockModel) {
     try {
       const hasText = await pdfHasTextLayer(readFileSync(sourceUri));
       imageLike = hasText === false;
@@ -1094,8 +1117,12 @@ export async function processDocument(
     }
   }
 
-  if (imageLike) {
-    const routed = await tryVoucherRouteForPdf(ctx, docId, sourceUri, opts);
+  if (opts.parsedBlockModel) {
+    blockModel =
+      opts.parsedBlockModel.blocks.length > 0 ? opts.parsedBlockModel : null;
+    perf.mark('parse', `batch-unit sliced, ${blockModel?.blocks.length ?? 0} blocks`);
+  } else if (imageLike) {
+    const routed = opts.skipVoucherRoute ? null : await tryVoucherRouteForPdf(ctx, docId, sourceUri, opts);
     if (routed) {
       perf.finish('voucher-routed');
       return routed;
@@ -1267,6 +1294,168 @@ export async function processDocument(
   }
 }
 
+// ---- 批量拆分器灰度入口(spec 2026-09-01 §2 Phase 1) -----------------------
+//
+// 包在 processDocument 之前(由 ensureDocumentParsed 调用, 覆盖 /process 与
+// chat 兜底两条入口):
+//   BATCH_SPLIT_ENABLED=false        -> processDocument 旧路径, 零行为变化;
+//   非 PDF / 有文字层 / VLM 未配置 / 已拆分过 -> 旧路径;
+//   检测失败 / 超页数上限 / 0 或 1 份 -> 旧路径(batch_role 保持 NULL);
+//   检测 N>1 份                      -> parent 标 container + document_units
+//     落库, container 仍走旧链路解析(仅跳过 Voucher 路由: 把多单据整文件硬喂
+//     单据级 schema 正是本功能要修的 bug), 再按 unit 页区间切 container 的
+//     BlockModel 生成 N 个子单据(batch_role='unit'), 各自独立走现有
+//     分类→抽取→审核→绑定 全链路, 不新增下游分支。
+//
+// Phase 1 切片粒度 = 页区间(同页并排多 unit 暂共享该页块); bbox 像素级切片与
+// 旋回双候选属 Phase 2(抽取层), 检测产出的逐页 region 明细已存 manifest_json。
+
+/** 按 unit 页区间切 container 的 BlockModel(浅拷贝 + blocks 过滤)。 */
+function sliceBlockModelForUnit(
+  parent: BlockModel,
+  childDocId: string,
+  unit: DetectedUnit,
+): BlockModel {
+  return {
+    ...parent,
+    docId: childDocId,
+    blocks: parent.blocks.filter((b) => b.page >= unit.pageStart && b.page <= unit.pageEnd),
+  };
+}
+
+/** unit 处理状态映射: 子单据解析终态 -> document_units.status。 */
+function unitStatusFor(parseStatus: ParseStatus): string {
+  return parseStatus === 'parsed' ? 'processed' : parseStatus;
+}
+
+export async function processDocumentWithBatch(
+  ctx: DbContext,
+  docId: string,
+  opts: ProcessDocumentOptions = {},
+): Promise<ProcessDocumentResult> {
+  // 灰度总开关: 关闭 = 完全旧路径(必须与现状逐字节一致, 有测试锁定)。
+  if (!env.BATCH_SPLIT_ENABLED) return processDocument(ctx, docId, opts);
+
+  // 门控: 文档不存在 / 非 PDF / VLM 未配置 -> 旧路径(不存在时由
+  // processDocument 抛 document_not_found, 保持旧契约)。
+  const sourceUri = await getDocumentSourceUri(ctx, docId, opts.userId);
+  if (!sourceUri || !/\.pdf$/i.test(sourceUri) || !env.VLM_BASE_URL || !env.VLM_API_KEY) {
+    return processDocument(ctx, docId, opts);
+  }
+
+  // 门控二: 仅图像型 PDF 参与拆分。这是设计文档的问题域(多份扫描/拍照单据
+  // 合订); 且 digital 解析不带页号(blockModelFromText 全部 page=1), 页区间
+  // 切片对文字层 PDF 无意义, OCR(MinerU)才产出真实页号。显式 scanned 直接
+  // 算, 其余用文字层探测(false = 图像型); 探测失败保持旧路径。
+  let imageLike = opts.modality === 'scanned';
+  if (!imageLike) {
+    try {
+      imageLike = (await pdfHasTextLayer(readFileSync(sourceUri))) === false;
+    } catch {
+      imageLike = false;
+    }
+  }
+  if (!imageLike) return processDocument(ctx, docId, opts);
+
+  // 幂等: 已拆分过的文件重跑(6b force / 重试)只重解析 container, 不重复生成
+  // 子单据。子单据的逐单元重抽/合并修正入口属 Phase 3。
+  const existingUnits = await listDocumentUnitsByParent(ctx, docId);
+  if (existingUnits.length > 0) {
+    return processDocument(ctx, docId, { ...opts, skipVoucherRoute: true });
+  }
+
+  // 版面清点。任何失败(渲染 / 超页数上限 / VLM 异常)都回落旧路径——拆分器
+  // 永不劣于现状。
+  let units: DetectedUnit[];
+  try {
+    const detection = await detectDocumentUnits(
+      { sourcePath: sourceUri, maxPages: env.BATCH_SPLIT_MAX_PAGES },
+      { concurrency: env.BATCH_SPLIT_CONCURRENCY, call: opts.vlm?.detectUnits },
+    );
+    units = detection.units;
+  } catch (e) {
+    console.warn('[batch-split] 检测失败, 回落旧路径:', e instanceof Error ? e.message : e);
+    return processDocument(ctx, docId, opts);
+  }
+
+  // 0/1 份: 单据级文件, 老语义(batch_role 保持 NULL), 完全旧路径。
+  if (units.length <= 1) {
+    return processDocument(ctx, docId, opts);
+  }
+
+  console.log(`[batch-split] ${docId} 检测到 ${units.length} 份逻辑单据, 进入拆分`);
+  await setDocumentBatchRole(ctx, docId, 'container', opts.userId);
+  const unitIds = await saveDocumentUnits(
+    ctx,
+    units.map((u) => ({
+      parentDocumentId: docId,
+      unitIndex: u.unitIndex,
+      docType: u.formType,
+      pageStart: u.pageStart,
+      pageEnd: u.pageEnd,
+      bboxJson: u.bbox ? JSON.stringify(u.bbox) : undefined,
+      rotationDeg: u.rotationDeg,
+      detectorConfidence: u.confidence,
+      manifest: {
+        formType: u.formType,
+        identifier: u.identifier,
+        evidence: u.evidence,
+        regions: u.regions,
+        merged: u.pageEnd > u.pageStart,
+      },
+    })),
+  );
+
+  // container 旧链路解析(OCR/分类/chunk/索引照旧), 仅跳过 Voucher 路由。
+  // 解析失败(needs_ocr/failed)时不生成子单据——没有可切的块模型, unit 行
+  // 保留检测审计(status='pending')。
+  const containerRes = await processDocument(ctx, docId, { ...opts, skipVoucherRoute: true });
+  const childDocIds: string[] = [];
+  if (containerRes.parseStatus !== 'parsed') {
+    return { ...containerRes, batchSplit: { unitCount: units.length, childDocIds } };
+  }
+
+  const parentModel = await loadDocument(ctx, docId, opts.userId);
+  if (!parentModel) {
+    console.warn('[batch-split] container 解析成功但块模型读取失败, 跳过子单据生成');
+    return { ...containerRes, batchSplit: { unitCount: units.length, childDocIds } };
+  }
+
+  // 子单据分类 hint: 检测 formType -> 业务粗类(映射缺失回落调用方 hint)。
+  const types = await listTemplateTypes(ctx);
+  const formIdx = buildFormTypeIndex(types);
+
+  for (let i = 0; i < units.length; i++) {
+    const unit = units[i]!;
+    const hint = formIdx.docTypeOf(unit.formType) ?? opts.docType;
+    let childId: string;
+    try {
+      const stub = await createDocumentStub(ctx, { sourceUri, userId: opts.userId, docType: hint });
+      childId = stub.docId;
+    } catch (e) {
+      console.warn('[batch-split] 子单据存根创建失败:', e instanceof Error ? e.message : e);
+      continue;
+    }
+    childDocIds.push(childId);
+    await setDocumentBatchRole(ctx, childId, 'unit', opts.userId);
+    await updateDocumentUnitChild(ctx, unitIds[i]!, childId, 'processing');
+    try {
+      const res = await processDocument(ctx, childId, {
+        ...opts,
+        docType: hint,
+        parsedBlockModel: sliceBlockModelForUnit(parentModel, childId, unit),
+      });
+      await updateDocumentUnitChild(ctx, unitIds[i]!, childId, unitStatusFor(res.parseStatus));
+    } catch (e) {
+      // 单个子单据失败不阻断其余拆分(状态可追溯, unit 行留 failed)。
+      console.warn('[batch-split] 子单据处理失败:', childId, e instanceof Error ? e.message : e);
+      await updateDocumentUnitChild(ctx, unitIds[i]!, childId, 'failed').catch(() => {});
+    }
+  }
+
+  return { ...containerRes, batchSplit: { unitCount: units.length, childDocIds } };
+}
+
 /**
  * Single-flighted parse trigger (Model B). Safe to call from anywhere a docId is
  * referenced (the /process endpoint, the chat backstop):
@@ -1308,7 +1497,9 @@ export async function ensureDocumentParsed(
   if (started) return started;
 
   // 4. 'uploaded' / 'failed' / 'parsing'-without-flight / missing -> start a run.
-  const run = processDocument(ctx, docId, fullOpts).finally(() => {
+  //    批量拆分器灰度入口包在 processDocument 之前: 开关关闭时它是纯透传
+  //    (零行为变化); 开启且检测到 N>1 份逻辑单据时先拆分再逐 unit 走全链路。
+  const run = processDocumentWithBatch(ctx, docId, fullOpts).finally(() => {
     parseFlights.delete(docId);
   });
   parseFlights.set(docId, run);

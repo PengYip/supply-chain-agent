@@ -98,6 +98,9 @@ export const documents = pgTable(
     // Model B parse lifecycle: 'uploaded' stub -> 'parsing' -> 'parsed' |
     // 'needs_ocr' | 'failed'. Decouples upload (storage-only) from parsing.
     parseStatus: text('parse_status').notNull().default('uploaded'),
+    // 批量拆分器(spec 2026-09-01): NULL=老数据/未参与拆分; 'container'=多单据
+    // 物理文件; 'unit'=拆出的子单据。
+    batchRole: text('batch_role'),
   },
   (t) => ({
     userIdx: index('idx_documents_user').on(t.userId),
@@ -452,6 +455,39 @@ export const conversationShares = pgTable(
   (t) => [
     uniqueIndex('idx_conversation_shares_session').on(t.sessionId),
     index('idx_conversation_shares_owner').on(t.ownerUserId),
+  ],
+);
+
+/**
+ * document_units(批量拆分器, spec 2026-09-01 §2): 一个物理文件(container)拆出
+ * N 个逻辑单据(unit)。unit 是"逻辑单据"不是"页"——磅单续页合并, 一页并排多份
+ * 拆开。bbox_json/manifest_json 为 TEXT(JSON 字符串), 与 graph_links 等表惯例
+ * 一致; runtime DDL 见 db/client.ts migratePostgres。
+ */
+export const documentUnits = pgTable(
+  'document_units',
+  {
+    id: text('id').primaryKey(),
+    parentDocumentId: text('parent_document_id').notNull(),
+    childDocumentId: text('child_document_id'),
+    unitIndex: integer('unit_index').notNull(),
+    /** 检测器 formType(汽运磅单/质检报告/...), 非业务粗类 docType。 */
+    docType: text('doc_type').notNull(),
+    pageStart: integer('page_start'),
+    pageEnd: integer('page_end'),
+    /** 归一化 {x,y,w,h}(已含 padding)的 JSON 文本; 多页合并 unit 为 NULL。 */
+    bboxJson: text('bbox_json'),
+    /** 0/90/180/270。 */
+    rotationDeg: integer('rotation_deg'),
+    detectorConfidence: doublePrecision('detector_confidence').notNull().default(0),
+    /** JSON 文本: 检测证据/编号/逐页区域明细。 */
+    manifestJson: text('manifest_json').notNull().default('{}'),
+    status: text('status').notNull().default('pending'),
+    createdAt: text('created_at').notNull().default(sql`now()::text`),
+  },
+  (t) => [
+    index('idx_document_units_parent').on(t.parentDocumentId),
+    index('idx_document_units_child').on(t.childDocumentId),
   ],
 );
 

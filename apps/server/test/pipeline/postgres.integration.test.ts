@@ -31,6 +31,10 @@ import {
   addSelfParty,
   listSelfParties,
   removeSelfParty,
+  saveDocumentUnits,
+  listDocumentUnitsByParent,
+  updateDocumentUnitChild,
+  setDocumentBatchRole,
 } from '../../src/pipeline/db/repositories.js';
 import { saveChunkVectors, vectorKnn, isVecReady } from '../../src/pipeline/db/vecStore.js';
 import { buildIngestDocumentTool } from '../../src/pipeline/tools/documentEntry.js';
@@ -139,7 +143,7 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
   // Isolation: wipe pipeline tables between tests (dev container only).
   beforeEach(async () => {
     await ctx.pool.query(
-      'TRUNCATE doc_chunk, extractions, bindings, documents, execution_flows, self_parties RESTART IDENTITY CASCADE',
+      'TRUNCATE doc_chunk, extractions, bindings, documents, document_units, execution_flows, self_parties RESTART IDENTITY CASCADE',
     );
   });
 
@@ -194,6 +198,62 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
     expect(list[0]!.documentId).toBe('DOC-PG-1');
     expect(list[0]!.confidence).toBeCloseTo(0.98, 4);
     expect(list[0]!.sourceRefs[0]!.blockId).toBe('b1');
+  });
+
+  // ---- 批量拆分器(spec 2026-09-01): document_units + documents.batch_role ----
+
+  it('saveDocumentUnits round-trips unit rows + batch_role + child backfill', async () => {
+    await saveDocument(ctx, mkModel('DOC-PG-BATCH'));
+    await setDocumentBatchRole(ctx, 'DOC-PG-BATCH', 'container');
+    const ids = await saveDocumentUnits(ctx, [
+      {
+        parentDocumentId: 'DOC-PG-BATCH',
+        unitIndex: 1,
+        docType: '质检报告',
+        pageStart: 1,
+        pageEnd: 1,
+        bboxJson: JSON.stringify({ x: 0, y: 0.025, w: 0.52, h: 0.95 }),
+        rotationDeg: 90,
+        detectorConfidence: 0.95,
+        manifest: { identifier: 'HX-001', evidence: '检测报告', regions: [{ page: 1 }] },
+      },
+      {
+        parentDocumentId: 'DOC-PG-BATCH',
+        unitIndex: 2,
+        docType: '汽运磅单',
+        pageStart: 1,
+        pageEnd: 2,
+        rotationDeg: 0,
+        detectorConfidence: 0.8,
+        manifest: { identifier: null, merged: true },
+      },
+    ]);
+    expect(ids).toHaveLength(2);
+
+    await saveDocument(ctx, mkModel('DOC-PG-UNIT-1'));
+    await updateDocumentUnitChild(ctx, ids[0]!, 'DOC-PG-UNIT-1', 'processed');
+    await setDocumentBatchRole(ctx, 'DOC-PG-UNIT-1', 'unit');
+
+    const units = await listDocumentUnitsByParent(ctx, 'DOC-PG-BATCH');
+    expect(units).toHaveLength(2);
+    expect(units.map((u) => u.unitIndex)).toEqual([1, 2]);
+    expect(units[0]!.childDocumentId).toBe('DOC-PG-UNIT-1');
+    expect(units[0]!.status).toBe('processed');
+    expect(units[0]!.detectorConfidence).toBeCloseTo(0.95, 5);
+    expect(JSON.parse(units[0]!.bboxJson!)).toMatchObject({ w: 0.52 });
+    expect(units[0]!.manifest.identifier).toBe('HX-001');
+    expect(units[1]!.pageStart).toBe(1);
+    expect(units[1]!.pageEnd).toBe(2);
+    expect(units[1]!.bboxJson).toBeNull();
+
+    const roles = await ctx.pool.query(
+      "SELECT id, batch_role FROM documents WHERE id = ANY($1) ORDER BY id",
+      [['DOC-PG-BATCH', 'DOC-PG-UNIT-1']],
+    );
+    expect(roles.rows.map((r: { id: string; batch_role: string }) => r.batch_role).sort()).toEqual([
+      'container',
+      'unit',
+    ]);
   });
 
   // ---- chunk + FTS (GENERATED tsvector + ts_rank + GIN) ---------------------

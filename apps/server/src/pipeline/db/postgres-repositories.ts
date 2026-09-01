@@ -24,7 +24,7 @@ import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.
 import { normalizeCompanyName } from '../../domain/flowDirection.js';
 import { deriveContractType } from '../../domain/contractType.js';
 import type { ContractType } from '../../domain/tradeSemantics.js';
-import { parseGraphStatus, effectiveSelfPartyNamesForDerivation, normalizeProjectCode, ledgerRowFieldsToProjection } from './repositories.js';
+import { parseGraphStatus, effectiveSelfPartyNamesForDerivation, normalizeProjectCode, ledgerRowFieldsToProjection, safeParseJson } from './repositories.js';
 import type {
   ExtractionInput,
   BindingInput,
@@ -74,6 +74,9 @@ import type {
   TemplateTypeManageMeta,
   TemplateAnchorWeights,
   TemplateEdgeRuleRow,
+  DocumentUnitInput,
+  DocumentUnitRow,
+  BatchRole,
 } from './repositories.js';
 
 // Phase 2 business-data isolation: same convention as repositories.ts -- a
@@ -917,6 +920,11 @@ export async function deleteDocumentPg(
     // 执行流水随绑定与抽取一起清理(无 FK, 显式删; 防孤儿行)。
     await client.query('DELETE FROM execution_flows WHERE document_id = $1', [docId]);
     await client.query('DELETE FROM document_tags WHERE document_id = $1', [docId]);
+    // 批量拆分器: 该文档作为 parent 或 child 参与的 unit 行一并清理(防孤儿)。
+    await client.query(
+      'DELETE FROM document_units WHERE parent_document_id = $1 OR child_document_id = $1',
+      [docId],
+    );
     await client.query('DELETE FROM documents WHERE id = $1', [docId]);
     await client.query('COMMIT');
   } catch (e) {
@@ -2939,4 +2947,98 @@ export async function getConversationShareByTokenPg(
     payload: String(r.payload),
     createdAt: r.created_at == null ? '' : String(r.created_at),
   };
+}
+
+// ---- 批量拆分器(spec 2026-09-01): document_units + documents.batch_role ----
+// bbox_json/manifest_json 为 TEXT(JSON 字符串, 与 graph_links 惯例一致);
+// detector_confidence REAL -> node-postgres 读回 number。
+
+const DOCUMENT_UNIT_COLS_PG = `id, parent_document_id, child_document_id, unit_index,
+  doc_type, page_start, page_end, bbox_json, rotation_deg, detector_confidence,
+  manifest_json, status, created_at`;
+
+function documentUnitFromPg(r: Record<string, unknown>): DocumentUnitRow {
+  return {
+    id: String(r.id),
+    parentDocumentId: String(r.parent_document_id),
+    childDocumentId: r.child_document_id == null ? null : String(r.child_document_id),
+    unitIndex: Number(r.unit_index),
+    docType: String(r.doc_type),
+    pageStart: r.page_start == null ? null : Number(r.page_start),
+    pageEnd: r.page_end == null ? null : Number(r.page_end),
+    bboxJson: r.bbox_json == null ? null : String(r.bbox_json),
+    rotationDeg: r.rotation_deg == null ? null : Number(r.rotation_deg),
+    detectorConfidence: Number(r.detector_confidence ?? 0),
+    manifest: safeParseJson(r.manifest_json),
+    status: String(r.status ?? 'pending'),
+    createdAt: r.created_at == null ? '' : String(r.created_at),
+  };
+}
+
+/** pg twin of saveDocumentUnits: 批量插入检测出的 unit 行, 返回生成的 id。 */
+export async function saveDocumentUnitsPg(
+  ctx: PostgresDbContext,
+  rows: DocumentUnitInput[],
+): Promise<string[]> {
+  const ids = rows.map((r) => rid('DU'));
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]!;
+    await ctx.pool.query(
+      `INSERT INTO document_units
+         (id, parent_document_id, child_document_id, unit_index, doc_type,
+          page_start, page_end, bbox_json, rotation_deg, detector_confidence,
+          manifest_json, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      [
+        ids[i],
+        r.parentDocumentId,
+        r.childDocumentId ?? null,
+        r.unitIndex,
+        r.docType,
+        r.pageStart ?? null,
+        r.pageEnd ?? null,
+        r.bboxJson ?? null,
+        r.rotationDeg ?? null,
+        r.detectorConfidence ?? 0,
+        JSON.stringify(r.manifest ?? {}),
+        r.status ?? 'pending',
+      ],
+    );
+  }
+  return ids;
+}
+
+/** pg twin of listDocumentUnitsByParent: 按 unit_index 升序。 */
+export async function listDocumentUnitsByParentPg(
+  ctx: PostgresDbContext,
+  parentDocumentId: string,
+): Promise<DocumentUnitRow[]> {
+  const res = await ctx.pool.query(
+    `SELECT ${DOCUMENT_UNIT_COLS_PG} FROM document_units
+     WHERE parent_document_id = $1 ORDER BY unit_index ASC`,
+    [parentDocumentId],
+  );
+  return res.rows.map((r) => documentUnitFromPg(r as Record<string, unknown>));
+}
+
+/** pg twin of updateDocumentUnitChild: 回填子单据 docId 与处理状态。 */
+export async function updateDocumentUnitChildPg(
+  ctx: PostgresDbContext,
+  id: string,
+  childDocumentId: string,
+  status: string,
+): Promise<void> {
+  await ctx.pool.query(
+    'UPDATE document_units SET child_document_id = $1, status = $2 WHERE id = $3',
+    [childDocumentId, status, id],
+  );
+}
+
+/** pg twin of setDocumentBatchRole。userId 仅签名对齐(void)。 */
+export async function setDocumentBatchRolePg(
+  ctx: PostgresDbContext,
+  docId: string,
+  role: BatchRole,
+): Promise<void> {
+  await ctx.pool.query('UPDATE documents SET batch_role = $1 WHERE id = $2', [role, docId]);
 }

@@ -127,6 +127,18 @@ const EnvSchema = z.object({
   QIANFAN_API_KEY: z.string().optional(),
   QIANFAN_OCR_URL: z.string().url().default('https://qianfan.baidubce.com/v2/ocr/paddleocr'),
   QIANFAN_TIMEOUT_MS: z.coerce.number().int().positive().default(300000),
+  // 批量拆分器(spec 2026-09-01, Phase 1): 一个物理文件 ≠ 一份业务单据。
+  // BATCH_SPLIT_ENABLED 是灰度总开关(默认关闭 = 完全走旧路径, 零行为变化)。
+  // 注意不能用 z.coerce.boolean(): 它会把字符串 "false" 强转为 true。
+  BATCH_SPLIT_ENABLED: z
+    .preprocess((v) => v === 'true' || v === '1' || v === true, z.boolean())
+    .default(false),
+  // 逐页 VLM 版面清点的并发数(原型实测: 串行 8 页约 9 分钟, 并发 4 时墙钟
+  // 约等于最慢一页)。
+  BATCH_SPLIT_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
+  // 参与拆分检测的最大 PDF 页数上限: 超过则跳过拆分走旧路径(保护延迟与
+  // VLM 用量; 现实多单据拼版远小于该值)。
+  BATCH_SPLIT_MAX_PAGES: z.coerce.number().int().min(1).default(50),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

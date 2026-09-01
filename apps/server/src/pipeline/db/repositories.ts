@@ -114,6 +114,11 @@ import {
   findGraphLinkByTriplePg,
   listGraphLinkProposalsPg,
   listGraphLinksPg,
+  // 批量拆分器(spec 2026-09-01): pg twins for document_units + batch_role。
+  saveDocumentUnitsPg,
+  listDocumentUnitsByParentPg,
+  updateDocumentUnitChildPg,
+  setDocumentBatchRolePg,
   updateGraphLinkStatusPg,
   updateGraphLinkPropsPg,
   setGraphLinkGraphStatusPg,
@@ -1161,6 +1166,10 @@ export async function deleteDocument(ctx: DbContext, docId: string, userId?: str
     // 执行流水随绑定与抽取一起清理(无 FK, 显式删; 防孤儿行)。
     sqlite.prepare('DELETE FROM execution_flows WHERE document_id = ?').run(docId);
     sqlite.prepare('DELETE FROM document_tags WHERE document_id = ?').run(docId);
+    // 批量拆分器: 该文档作为 parent 或 child 参与的 unit 行一并清理(防孤儿)。
+    sqlite
+      .prepare('DELETE FROM document_units WHERE parent_document_id = ? OR child_document_id = ?')
+      .run(docId, docId);
     // 8. parent last (after all referencers gone).
     sqlite.prepare('DELETE FROM documents WHERE id = ?').run(docId);
   });
@@ -1195,6 +1204,152 @@ export async function deleteChunksForDocument(ctx: DbContext, docId: string): Pr
     sqlite.prepare('DELETE FROM doc_chunk WHERE document_id = ?').run(docId);
   });
   tx();
+}
+
+// ---- 批量拆分器(spec 2026-09-01): document_units + documents.batch_role -----
+//
+// 一个物理文件(container)拆出 N 个逻辑单据(unit)。unit 是"逻辑单据"不是"页":
+// 磅单续页合并为 page_start<page_end 的一行, 一页并排 2 份报告是两行(同页不同
+// bbox)。DDL 在 client.ts(raw SQL)/postgres-schema.ts; 本节只做读写。所有权沿
+// parent 文档链(parentDocumentId 必须属于当前用户才可见 unit, 由调用方
+// processDocumentWithBatch 在解析前已校验)。
+
+/** documents.batch_role: NULL=老数据/未参与拆分; 'container'|'unit'。 */
+export type BatchRole = 'container' | 'unit';
+
+/** document_units 写入形状(bboxJson/manifestJson 为 JSON 文本)。 */
+export interface DocumentUnitInput {
+  parentDocumentId: string;
+  childDocumentId?: string;
+  unitIndex: number;
+  docType: string;
+  pageStart?: number;
+  pageEnd?: number;
+  bboxJson?: string;
+  rotationDeg?: number;
+  detectorConfidence?: number;
+  manifest?: Record<string, unknown>;
+  status?: string;
+}
+
+/** document_units 读取形状(列名转 camelCase, JSON 文本原样)。 */
+export interface DocumentUnitRow {
+  id: string;
+  parentDocumentId: string;
+  childDocumentId: string | null;
+  unitIndex: number;
+  docType: string;
+  pageStart: number | null;
+  pageEnd: number | null;
+  bboxJson: string | null;
+  rotationDeg: number | null;
+  detectorConfidence: number;
+  manifest: Record<string, unknown>;
+  status: string;
+  createdAt: string;
+}
+
+/**
+ * 批量插入一次检测得到的全部 unit 行(单一事务), 返回生成的 id 列表(与输入
+ * 数组同序)。unit_index 由调用方(detectDocumentUnits 的全局排序)保证有序。
+ */
+export async function saveDocumentUnits(
+  ctx: DbContext,
+  rows: DocumentUnitInput[],
+): Promise<string[]> {
+  if (ctx.backend === 'postgres') return saveDocumentUnitsPg(ctx, rows);
+  const ids = rows.map(() => rid('DU'));
+  const stmt = ctx.sqlite.prepare(
+    `INSERT INTO document_units
+       (id, parent_document_id, child_document_id, unit_index, doc_type,
+        page_start, page_end, bbox_json, rotation_deg, detector_confidence,
+        manifest_json, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const tx = ctx.sqlite.transaction(() => {
+    rows.forEach((r, i) => {
+      stmt.run(
+        ids[i],
+        r.parentDocumentId,
+        r.childDocumentId ?? null,
+        r.unitIndex,
+        r.docType,
+        r.pageStart ?? null,
+        r.pageEnd ?? null,
+        r.bboxJson ?? null,
+        r.rotationDeg ?? null,
+        r.detectorConfidence ?? 0,
+        JSON.stringify(r.manifest ?? {}),
+        r.status ?? 'pending',
+      );
+    });
+  });
+  tx();
+  return ids;
+}
+
+/** 读取一个物理文件(container)的全部 unit 行, 按 unit_index 升序。 */
+export async function listDocumentUnitsByParent(
+  ctx: DbContext,
+  parentDocumentId: string,
+): Promise<DocumentUnitRow[]> {
+  if (ctx.backend === 'postgres') return listDocumentUnitsByParentPg(ctx, parentDocumentId);
+  const rows = ctx.sqlite
+    .prepare('SELECT * FROM document_units WHERE parent_document_id = ? ORDER BY unit_index ASC')
+    .all(parentDocumentId) as Array<Record<string, unknown>>;
+  return rows.map((r) => ({
+    id: String(r.id),
+    parentDocumentId: String(r.parent_document_id),
+    childDocumentId: r.child_document_id == null ? null : String(r.child_document_id),
+    unitIndex: Number(r.unit_index),
+    docType: String(r.doc_type),
+    pageStart: r.page_start == null ? null : Number(r.page_start),
+    pageEnd: r.page_end == null ? null : Number(r.page_end),
+    bboxJson: r.bbox_json == null ? null : String(r.bbox_json),
+    rotationDeg: r.rotation_deg == null ? null : Number(r.rotation_deg),
+    detectorConfidence: Number(r.detector_confidence ?? 0),
+    manifest: safeParseJson(r.manifest_json),
+    status: String(r.status ?? 'pending'),
+    createdAt: r.created_at == null ? '' : String(r.created_at),
+  }));
+}
+
+/** 回填 unit 行的子单据 docId 与处理状态(processed/failed/needs_ocr)。 */
+export async function updateDocumentUnitChild(
+  ctx: DbContext,
+  id: string,
+  childDocumentId: string,
+  status: string,
+): Promise<void> {
+  if (ctx.backend === 'postgres') return updateDocumentUnitChildPg(ctx, id, childDocumentId, status);
+  ctx.sqlite
+    .prepare('UPDATE document_units SET child_document_id = ?, status = ? WHERE id = ?')
+    .run(childDocumentId, status, id);
+}
+
+/** 设置 documents.batch_role(NULL 保持 = 老数据)。userId 仅签名对齐(void)。 */
+export async function setDocumentBatchRole(
+  ctx: DbContext,
+  docId: string,
+  role: BatchRole,
+  userId?: string,
+): Promise<void> {
+  if (ctx.backend === 'postgres') return setDocumentBatchRolePg(ctx, docId, role);
+  void userId;
+  ctx.sqlite.prepare('UPDATE documents SET batch_role = ? WHERE id = ?').run(role, docId);
+}
+
+/** 宽松 JSON 解析(损坏行按空对象, 与 graphLinkFromPg 同取舍)。导出供 pg twin 复用。 */
+export function safeParseJson(v: unknown): Record<string, unknown> {
+  if (typeof v !== 'string' || v.length === 0) return {};
+  try {
+    const parsed = JSON.parse(v) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 // ---- File manager: document minio_key link-back + virtual folders ----------

@@ -433,6 +433,29 @@ export function migrate(sqlite: Database.Database): void {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_shares_session ON conversation_shares(session_id);
     CREATE INDEX IF NOT EXISTS idx_conversation_shares_owner ON conversation_shares(owner_user_id);
+
+    -- 批量拆分器(spec 2026-09-01 §2): 一个物理文件(container)拆出 N 个逻辑
+    -- 单据(unit)。unit 是"逻辑单据"不是"页"(磅单续页合并/一页并排多份拆开);
+    -- bbox 为归一化 {x,y,w,h}(已含 padding), manifest_json 存检测证据与逐页
+    -- 区域明细。DDL 只在此处(raw SQL), 不进 drizzle schema.ts(与 projects 同例);
+    -- Postgres 侧见 postgres-schema.ts + migratePostgres。
+    CREATE TABLE IF NOT EXISTS document_units (
+      id TEXT PRIMARY KEY,
+      parent_document_id TEXT NOT NULL,
+      child_document_id TEXT,
+      unit_index INTEGER NOT NULL,
+      doc_type TEXT NOT NULL,
+      page_start INTEGER,
+      page_end INTEGER,
+      bbox_json TEXT,
+      rotation_deg INTEGER,
+      detector_confidence REAL NOT NULL DEFAULT 0,
+      manifest_json TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_document_units_parent ON document_units(parent_document_id);
+    CREATE INDEX IF NOT EXISTS idx_document_units_child ON document_units(child_document_id);
   `);
 
   // P4: 种子冲突策略列(managed-wins)。NULL=纯种子行(boot 可覆写);非空=DB 优先。
@@ -537,6 +560,11 @@ export function migrate(sqlite: Database.Database): void {
     // review_status / vectorization_meta above (duplicate column -> SQLITE_ERROR).
     if (!have.has('parse_status')) {
       try { sqlite.exec("ALTER TABLE documents ADD COLUMN parse_status TEXT NOT NULL DEFAULT 'uploaded'"); } catch { /* concurrent */ }
+    }
+    // 批量拆分器(spec 2026-09-01): NULL=老数据/未参与拆分(默认, 完全旧行为);
+    // 'container'=多单据物理文件; 'unit'=拆出的子单据。同一 guarded ALTER 模式。
+    if (!have.has('batch_role')) {
+      try { sqlite.exec('ALTER TABLE documents ADD COLUMN batch_role TEXT'); } catch { /* concurrent */ }
     }
   }
   // Lane B: per-chunk semantic tags. Pre-existing dev DBs created doc_chunk
@@ -1004,6 +1032,26 @@ export async function migratePostgres(pool: Pool): Promise<void> {
      )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_shares_session ON conversation_shares(session_id)`,
     `CREATE INDEX IF NOT EXISTS idx_conversation_shares_owner ON conversation_shares(owner_user_id)`,
+    // 批量拆分器(spec 2026-09-01 §2): documents.batch_role + document_units。
+    // 老数据 batch_role IS NULL 天然兼容; 声明镜像见 postgres-schema.ts。
+    `ALTER TABLE documents ADD COLUMN IF NOT EXISTS batch_role TEXT`,
+    `CREATE TABLE IF NOT EXISTS document_units (
+       id TEXT PRIMARY KEY,
+       parent_document_id TEXT NOT NULL,
+       child_document_id TEXT,
+       unit_index INTEGER NOT NULL,
+       doc_type TEXT NOT NULL,
+       page_start INTEGER,
+       page_end INTEGER,
+       bbox_json TEXT,
+       rotation_deg INTEGER,
+       detector_confidence REAL NOT NULL DEFAULT 0,
+       manifest_json TEXT NOT NULL DEFAULT '{}',
+       status TEXT NOT NULL DEFAULT 'pending',
+       created_at TEXT NOT NULL DEFAULT (now()::text)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_document_units_parent ON document_units(parent_document_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_document_units_child ON document_units(child_document_id)`,
     // L4 FTS fix (2026-08-17): drizzle migration 0000 created doc_chunk.fts_vector
     // as a PLAIN tsvector column (no GENERATED), so it stays NULL forever and
     // every FTS query silently returns 0 hits. Recreate it as a GENERATED column
