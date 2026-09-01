@@ -348,6 +348,46 @@ describe('processDocumentWithBatch (灰度入口)', () => {
     expect((await listDocumentUnitsByParent(ctx, docId)).length).toBe(2);
   });
 
+  it('forceResplit: 删旧子单据与 unit 行后重新检测拆分(Task 9 resplit 底座)', async () => {
+    const pdfPath = join(dir, 'resplit.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A CONTRACT HT-001', 'REPORT-B CONTRACT HT-002']);
+    const docId = await stubFor(pdfPath);
+    const plan = [
+      { regions: [region({ identifierOrNull: 'HX-A' })] },
+      { regions: [region({ identifierOrNull: 'HX-B' })] },
+    ];
+    const first = await ensureDocumentParsed(ctx, docId, {
+      modality: 'scanned',
+      userId: 'u1',
+      vlm: fakeDetect(plan),
+    });
+    const firstChildren = first.batchSplit!.childDocIds;
+    expect(firstChildren).toHaveLength(2);
+
+    const second = await ensureDocumentParsed(ctx, docId, {
+      modality: 'scanned',
+      userId: 'u1',
+      // force: ensureDocumentParsed 对终态 'parsed' 短路(6b 语义), forceResplit
+      // 只是 processDocumentWithBatch 的内部选项, 不放开终态门 —— 与既有幂等
+      // 重跑用例同款显式 force。
+      force: true,
+      forceResplit: true,
+      vlm: fakeDetect(plan),
+    });
+    expect(second.batchSplit!.unitCount).toBe(2);
+    const secondChildren = second.batchSplit!.childDocIds;
+    expect(secondChildren).toHaveLength(2);
+    // 旧子单据与旧行全部消失, 新子单据挂在新 unit 行下。
+    for (const old of firstChildren) {
+      expect(await loadDocument(ctx, old, 'u1')).toBeNull();
+    }
+    expect(secondChildren.every((id) => !firstChildren.includes(id!))).toBe(true);
+    const units = await listDocumentUnitsByParent(ctx, docId);
+    expect(units).toHaveLength(2);
+    expect(units.map((u) => u.childDocumentId).sort()).toEqual([...secondChildren].sort());
+  });
+
   it('开启 + container 解析失败: unit 行保留 pending, 不生成子单据', async () => {
     const pdfPath = join(dir, 'ocr-fail.pdf');
     await makeTwoPagePdf(pdfPath);

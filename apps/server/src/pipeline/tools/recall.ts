@@ -8,8 +8,10 @@ import {
   listRecallVisibleDocIds,
   findContractLedgerByNo,
   listChunksByDocument,
+  getBatchLineageForDocuments,
   type ChunkMeta,
   type ChunkMatch,
+  type DocBatchLineage,
 } from '../db/repositories.js';
 import { vectorKnn, isVecReady, type VecKnnHit } from '../db/vecStore.js';
 import { tagExternal } from '../../harness/injectionDefense.js';
@@ -305,6 +307,31 @@ async function buildFullTextDocs(
 }
 
 /**
+ * P3 谱系(批量拆分器 Phase 3): 批量查 batchRole/parentDocumentId/unitIndex 并
+ * 附加到 matches / fullText documents 条目。一次 distinct 批量查询, 无逐条读;
+ * 未参与拆分的文档(batch_role NULL)三字段全 null。
+ */
+async function withBatchLineage<T extends { document_id: string }>(
+  ctx: DbContext,
+  items: T[],
+): Promise<Array<T & DocBatchLineage>> {
+  if (items.length === 0) return [];
+  const lineage = await getBatchLineageForDocuments(
+    ctx,
+    [...new Set(items.map((i) => i.document_id))],
+  );
+  return items.map((item) => {
+    const l = lineage.get(item.document_id);
+    return {
+      ...item,
+      batchRole: l?.batchRole ?? null,
+      parentDocumentId: l?.parentDocumentId ?? null,
+      unitIndex: l?.unitIndex ?? null,
+    };
+  });
+}
+
+/**
  * Post-process a recall output into fullText mode when applicable (spec
  * 2026-08-28). `fullText === false` opts out entirely; otherwise the ranked
  * hit documents are checked against the budgets and -- when at least one
@@ -326,7 +353,7 @@ async function withFullText(
   return {
     ...output,
     mode: 'fullText' as const,
-    documents: docs,
+    documents: await withBatchLineage(deps.ctx, docs),
     ...(degraded.length > 0 ? { degradedDocIds: degraded } : {}),
     note: '短文档已返回整篇全文(documents); 超出全文预算的文档仅以 matches 片段返回'
       + (degraded.length > 0 ? `, 共 ${degraded.length} 份(见 degradedDocIds)` : ''),
@@ -353,6 +380,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
       '同一文档已返回全文后不要再对它发起第二次召回, 直接通读全文作答(包括确认"合同未约定某指标"这类结论), 引用以 document_id 为准。' +
       '标签体系: 每个片段入库时已按文档类型打语义标签, 合同类: 当事人信息/标的物/数量与计量/价格与金额/付款条款/交付与运输/检验与验收/权利义务/违约责任/不可抗力/争议解决/期限与生效/签署信息; 发票/提单/装箱单各有体系。用户问某类条款时建议用语义 query 配 wantTags 组合(如"付款金额和币种"配 wantTags:["价格与金额","付款条款"])提升精度。' +
       'contractNo 过滤下返回空时不要重复堆相似关键词, 换专有名词(对手方/煤矿/品名)或减少到 1-2 个关键词再试。未命中返回空数组, 不得编造。' +
+      '命中结果带谱系字段 batchRole/parentDocumentId/unitIndex: 同一物理文件的 container 与 unit 同时命中时, 优先引用 unit(unit 有业务类型/字段/绑定), container 命中仅用于说明物理来源; 向用户列举时按物理文件归并展示。' +
       '调用示例: 1) 按单据号精确找原文 {query: "BL-2024-0920-002", strategy: "fts"}; ' +
       '2) 语义召回并按合同过滤 {query: "烧碱采购付款条款", strategy: "hybrid", contractNo: "HT-2024-001", limit: 5}。',
     inputSchema: z.object({
@@ -474,7 +502,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
           query,
           strategy: 'fts' as const,
           matchCount: matches.length,
-          matches: matches.map((h) => ({
+          matches: await withBatchLineage(deps.ctx, matches.map((h) => ({
             document_id: h.documentId,
             chunk_index: h.chunkIndex,
             snippet: tagExternal(h.snippet),
@@ -482,7 +510,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
             source: 'fts' as const,
             bm25_score: h.bm25Score,
             vector_distance: null,
-          })),
+          }))),
           ...contractNoField,
           ...(tagFilterFallback ? { tagFilterFallback: true as const } : {}),
         }, candidates, fullText);
@@ -548,7 +576,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
             query,
             strategy: 'vector' as const,
             matchCount: matches.length,
-            matches: matches.map((k) => {
+            matches: await withBatchLineage(deps.ctx, matches.map((k) => {
               const m = meta.get(k.chunkRowId);
               return {
                 document_id: m?.documentId ?? '',
@@ -559,7 +587,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
                 bm25_score: null,
                 vector_distance: k.distance,
               };
-            }),
+            })),
             ...(rerankedApplied ? { reranked: true as const } : {}),
             ...contractNoField,
             ...(tagFilterFallback ? { tagFilterFallback: true as const } : {}),
@@ -628,7 +656,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
           query,
           strategy: 'hybrid' as const,
           matchCount: matches.length,
-          matches: matches.map((f) => ({
+          matches: await withBatchLineage(deps.ctx, matches.map((f) => ({
             document_id: f.documentId,
             chunk_index: f.chunkIndex,
             snippet: tagExternal(f.snippet),
@@ -636,7 +664,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
             source: 'hybrid' as const,
             bm25_score: f.bm25,
             vector_distance: f.vectorDistance,
-          })),
+          }))),
           ...(rerankedApplied ? { reranked: true as const } : {}),
           ...contractNoField,
           ...(tagFilterFallback ? { tagFilterFallback: true as const } : {}),
@@ -670,7 +698,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
         query,
         strategy: 'fts' as const,
         matchCount: matches.length,
-        matches: matches.map((h) => ({
+        matches: await withBatchLineage(deps.ctx, matches.map((h) => ({
           document_id: h.documentId,
           chunk_index: h.chunkIndex,
           snippet: tagExternal(h.snippet),
@@ -678,7 +706,7 @@ export function buildRecallDocumentsTool(deps: RecallToolDeps) {
           source: 'fts' as const,
           bm25_score: h.bm25Score,
           vector_distance: null,
-        })),
+        }))),
         ...contractNoField,
         ...(tagFilterFallback ? { tagFilterFallback: true as const } : {}),
       }, candidates, fullText);

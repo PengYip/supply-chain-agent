@@ -25,6 +25,7 @@ import { partiesRoute } from './routes/parties.js';
 import { projectsRoute } from './routes/projects.js';
 import { templatesRoute } from './routes/templates.js';
 import { reviewRoute } from './routes/review.js';
+import { batchRoute } from './routes/batch.js';
 import { createEvalResultsRoute } from './routes/evalResults.js';
 import { evalRunRoute } from './routes/evalRun.js';
 import { evalDatasetsRoute } from './routes/evalDatasets.js';
@@ -110,6 +111,7 @@ app.use('/api/sessions/*', requireAuth);
 app.use('/api/favorites/*', requireAuth);
 app.use('/api/approval/*', requireAuth);
 app.use('/api/documents/*', requireAuth);
+app.use('/api/batch/*', requireAuth);
 app.use('/api/eval/*', requireAuth);
 app.use('/api/graph/*', requireAuth);
 app.use('/api/quotas/*', requireAuth);
@@ -137,6 +139,9 @@ app.route('/api/files', filesRoute);
 // Feature: in-card correction HITL. Mounted at /api/documents so the route's
 // POST /:docId/review resolves to the final path /api/documents/:docId/review.
 app.route('/api/documents', reviewRoute);
+
+// 批量拆分器修正端点(Task 9): 重拆 / 单 unit 重抽 / 合并, 挂 /api/batch。
+app.route('/api/batch', batchRoute);
 
 // Graph REST surface (read-only): user documents, bounded traversal, entity search.
 app.route('/api/graph', graphRoute);

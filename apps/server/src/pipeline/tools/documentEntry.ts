@@ -19,6 +19,9 @@ import {
   saveDocumentUnits, listDocumentUnitsByParent, updateDocumentUnitChild, setDocumentBatchRole,
   updateDocumentUnitManifest,
   createDocumentStub,
+  deleteDocument,
+  clearDocumentUnits,
+  type TemplateTypeRow,
   // Phase B bindings state machine.
   listContractLedgerEntries, findBindingByDocAndContract, listBindingProposals,
   updateBindingStatus, listTemplateTypes,
@@ -38,6 +41,7 @@ import {
 } from '../batchConsensus.js';
 import { renderUnitImages, unitRotationPlans } from '../unitImages.js';
 import { mapLimit } from '../pageRecords.js';
+import { syncBatchLineageGraph } from '../batchLineageGraphSync.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
 import { runAutoExtraction, buildAutoExtractionDeps, type AutoExtractionDeps } from '../autoExtraction.js';
@@ -1077,6 +1081,10 @@ export interface ProcessDocumentOptions {
   /** 批量拆分器内部选项: 固定业务类型跳过分类器(container 无业务语义,
    *  词表分类只会产噪声)。落 classifications source='hint'、confidence=1。 */
   fixedDocType?: DocType | typeof CONTAINER_DOC_TYPE;
+  /** Task 9 /api/batch/:docId/resplit: 绕过幂等探针 —— 删旧子单据(级联
+   *  chunks/extractions/bindings/向量)与 unit 行后重新检测拆分。仅 resplit
+   *  路由传; 常规 force 重跑语义不变。 */
+  forceResplit?: boolean;
 }
 
 export interface ProcessDocumentResult {
@@ -1524,6 +1532,139 @@ function unitStatusFor(parseStatus: ParseStatus): string {
   return parseStatus === 'parsed' ? 'processed' : parseStatus;
 }
 
+/** Task 9 修正入口覆盖项(初始拆分不传)。 */
+export interface ProcessUnitChildOverrides {
+  /** 重抽指定业务类型: 有注册 schema 才走凭证路由, 否则回落 OCR 块路径。 */
+  docTypeOverride?: string;
+  /** 重抽指定旋回方向(0/90/180/270): 候选退化为该方向单候选。 */
+  rotationOverride?: number;
+}
+
+/** processUnitChild 输入(初始拆分与 /api/batch 重抽/合并重建共用)。 */
+export interface ProcessUnitChildArgs {
+  ctx: DbContext;
+  /** container 的 sourceUri(子单据存根共享, 裁剪图渲染源)。 */
+  sourceUri: string;
+  parentModel: BlockModel;
+  unit: DetectedUnit;
+  /** document_units 行 id(回填 child 与状态、择优旋回落库)。 */
+  unitRowId: string;
+  opts: ProcessDocumentOptions;
+  /** 预渲染整本页图(150 DPI); null = 渲染失败/未渲染 -> OCR 块路径。 */
+  unitPages: RenderedPage[] | null;
+  /** 凭证路由命中的业务类型; null = 未路由(overrides.docTypeOverride 优先)。 */
+  routedDocType: VoucherType | null;
+  /** 子单据分类 hint。 */
+  hint?: DocType;
+  /** unit 行当前 manifest(择优旋回写回的合并基底)。 */
+  unitManifest?: Record<string, unknown>;
+  /** Task 9 修正入口覆盖项。 */
+  overrides?: ProcessUnitChildOverrides;
+}
+
+/**
+ * 处理一个 unit -> 子单据。由 processDocumentWithBatch 的 mapLimit 循环体提取
+ * (初始拆分与 Task 9 重抽/合并重建共用): 存根 -> unit 行回填 -> 凭证路由命中
+ * 则裁图旋回候选走 VLM 凭证管线, 否则页区间 OCR 块路径。单个 unit 失败不抛出
+ * (状态可追溯, unit 行留 failed), 返回 childId 或 null(存根创建失败)。
+ * overrides 仅修正入口使用: docTypeOverride 命中注册 schema 时改走该类型,
+ * rotationOverride 把旋回候选退化为单候选(人工指定即最终方向)。
+ */
+export async function processUnitChild(args: ProcessUnitChildArgs): Promise<string | null> {
+  const { ctx, sourceUri, parentModel, unit, unitRowId, opts, unitPages, overrides } = args;
+  const overrideRoute =
+    overrides?.docTypeOverride && overrides.docTypeOverride in VOUCHER_SCHEMAS
+      ? (overrides.docTypeOverride as VoucherType)
+      : null;
+  const routedDocType = overrideRoute ?? args.routedDocType;
+  const hint = (overrides?.docTypeOverride as DocType | undefined) ?? args.hint ?? opts.docType;
+  let childId: string;
+  try {
+    const stub = await createDocumentStub(ctx, { sourceUri, userId: opts.userId, docType: hint });
+    childId = stub.docId;
+  } catch (e) {
+    console.warn('[batch-split] 子单据存根创建失败:', e instanceof Error ? e.message : e);
+    return null;
+  }
+  await setDocumentBatchRole(ctx, childId, 'unit', opts.userId);
+  await updateDocumentUnitChild(ctx, unitRowId, childId, 'processing');
+  try {
+    // 裁剪图生成(本地 CPU): 失败回落 OCR 块路径, 不让 unit 失败。
+    let candidates: Array<{ rotations: number[]; images: RenderedPage[] }> | null = null;
+    if (routedDocType && unitPages) {
+      try {
+        candidates = [];
+        const plans =
+          overrides?.rotationOverride != null
+            ? [unit.regions.map(() => overrides.rotationOverride!)]
+            : unitRotationPlans(unit);
+        for (const rotations of plans) {
+          candidates.push({ rotations, images: await renderUnitImages(unitPages, unit, rotations) });
+        }
+      } catch (e) {
+        console.warn('[batch-split] unit 裁剪图生成失败, 回落 OCR 块路径:', childId, e instanceof Error ? e.message : e);
+        candidates = null;
+      }
+    }
+    if (routedDocType && candidates) {
+      // 图像型 unit + voucher 路由: padded bbox 裁图 + 旋回候选(90/270 双
+      // 候选, 0/180 单候选) -> 现有 VLM 凭证抽取管线; OCR 块(页区间切片)
+      // 仍保留给 chunk/recall。
+      const ocrBlockModel = sliceBlockModelForUnit(parentModel, childId, unit);
+      await setDocumentParseStatus(ctx, childId, 'parsing', opts.userId);
+      await runVoucherPipeline({
+        ctx, sourcePath: sourceUri, docId: childId,
+        embedder: opts.embedder, userId: opts.userId, vlm: opts.vlm,
+        unitVoucher: {
+          docType: routedDocType as DocType,
+          candidates,
+          detection: { identifier: unit.identifier, evidence: unit.evidence },
+          ocrBlockModel,
+          // P3 择优旋回落库: 双候选择优胜出后写回 unit 行(fire-and-forget)。
+          unitId: unitRowId,
+          unitManifest: args.unitManifest,
+        },
+      });
+      await updateDocumentUnitChild(ctx, unitRowId, childId, 'processed');
+      return childId;
+    }
+    const res = await processDocument(ctx, childId, {
+      ...opts,
+      docType: hint,
+      parsedBlockModel: sliceBlockModelForUnit(parentModel, childId, unit),
+    });
+    await updateDocumentUnitChild(ctx, unitRowId, childId, unitStatusFor(res.parseStatus));
+    return childId;
+  } catch (e) {
+    // 单个子单据失败不阻断其余拆分(状态可追溯, unit 行留 failed)。
+    console.warn('[batch-split] 子单据处理失败:', childId, e instanceof Error ? e.message : e);
+    await updateDocumentUnitChild(ctx, unitRowId, childId, 'failed').catch(() => {});
+    return childId;
+  }
+}
+
+/**
+ * 检测 formType -> 凭证路由信息(注册表映射 + UNIT_FORM_TYPE_ALIASES 桥)。
+ * Task 9 修正入口按 unit 行的检测词表标签重算路由: route 命中 voucher 且
+ * 业务类型有注册 schema 才非空; hint 为映射出的业务类型(可 undefined)。
+ */
+export function resolveUnitRouteInfo(
+  formType: string,
+  types: TemplateTypeRow[],
+): { route: VoucherType | null; hint: DocType | undefined } {
+  const formIdx = buildFormTypeIndex(types);
+  const canonical =
+    formIdx.docTypeOf(formType) !== undefined
+      ? formType
+      : UNIT_FORM_TYPE_ALIASES[formType] ?? formType;
+  const mapped = formIdx.docTypeOf(canonical);
+  const route =
+    formIdx.routeOf(canonical) === 'voucher' && mapped !== undefined && mapped in VOUCHER_SCHEMAS
+      ? (mapped as VoucherType)
+      : null;
+  return { route, hint: mapped };
+}
+
 export async function processDocumentWithBatch(
   ctx: DbContext,
   docId: string,
@@ -1554,10 +1695,20 @@ export async function processDocumentWithBatch(
   if (!imageLike) return processDocument(ctx, docId, opts);
 
   // 幂等: 已拆分过的文件重跑(6b force / 重试)只重解析 container, 不重复生成
-  // 子单据。子单据的逐单元重抽/合并修正入口属 Phase 3。
+  // 子单据。Task 9 forceResplit(/api/batch/:docId/resplit)例外: 删旧子单据
+  // (级联 chunks/extractions/bindings/向量, unit 行随 child 级联)与残留 unit
+  // 行(pending 无 child)后, 走全新检测分支。
   const existingUnits = await listDocumentUnitsByParent(ctx, docId);
-  if (existingUnits.length > 0) {
+  if (existingUnits.length > 0 && !opts.forceResplit) {
     return processDocument(ctx, docId, { ...opts, skipVoucherRoute: true, fixedDocType: CONTAINER_DOC_TYPE });
+  }
+  if (existingUnits.length > 0 && opts.forceResplit) {
+    for (const u of existingUnits) {
+      if (u.childDocumentId) {
+        await deleteDocument(ctx, u.childDocumentId, opts.userId);
+      }
+    }
+    await clearDocumentUnits(ctx, docId);
   }
 
   // 版面清点。任何失败(渲染 / 超页数上限 / VLM 异常)都回落旧路径——拆分器
@@ -1654,71 +1805,27 @@ export async function processDocumentWithBatch(
 
   // unit 级并发(BATCH_SPLIT_CONCURRENCY, 与检测同参; 宣威 8 页串行原型约
   // 9 分钟)。结果按 unit 序回填; 单个 unit 失败不阻断其余(状态可追溯)。
+  // 循环体已提取为 processUnitChild(Task 9 重抽/合并重建共用, 行为等价)。
   const processed = await mapLimit(units, env.BATCH_SPLIT_CONCURRENCY, async (unit, i) => {
-    const routedDocType = unitPages ? unitRoutes[i] : null;
+    const routedDocType = (unitPages ? unitRoutes[i] : null) ?? null;
     const hint = routedDocType ?? formIdx.docTypeOf(registryFormType(unit.formType)) ?? opts.docType;
-    let childId: string;
-    try {
-      const stub = await createDocumentStub(ctx, { sourceUri, userId: opts.userId, docType: hint });
-      childId = stub.docId;
-    } catch (e) {
-      console.warn('[batch-split] 子单据存根创建失败:', e instanceof Error ? e.message : e);
-      return null;
-    }
-    await setDocumentBatchRole(ctx, childId, 'unit', opts.userId);
-    await updateDocumentUnitChild(ctx, unitIds[i]!, childId, 'processing');
-    try {
-      // 裁剪图生成(本地 CPU): 失败回落 OCR 块路径, 不让 unit 失败。
-      let candidates: Array<{ rotations: number[]; images: RenderedPage[] }> | null = null;
-      if (routedDocType) {
-        try {
-          candidates = [];
-          for (const rotations of unitRotationPlans(unit)) {
-            candidates.push({ rotations, images: await renderUnitImages(unitPages!, unit, rotations) });
-          }
-        } catch (e) {
-          console.warn('[batch-split] unit 裁剪图生成失败, 回落 OCR 块路径:', childId, e instanceof Error ? e.message : e);
-        }
-      }
-      if (routedDocType && candidates) {
-        // 图像型 unit + voucher 路由: padded bbox 裁图 + 旋回候选(90/270 双
-        // 候选, 0/180 单候选) -> 现有 VLM 凭证抽取管线; OCR 块(页区间切片)
-        // 仍保留给 chunk/recall。
-        const ocrBlockModel = sliceBlockModelForUnit(parentModel, childId, unit);
-        await setDocumentParseStatus(ctx, childId, 'parsing', opts.userId);
-        await runVoucherPipeline({
-          ctx, sourcePath: sourceUri, docId: childId,
-          embedder: opts.embedder, userId: opts.userId, vlm: opts.vlm,
-          unitVoucher: {
-            docType: routedDocType as DocType,
-            candidates,
-            detection: { identifier: unit.identifier, evidence: unit.evidence },
-            ocrBlockModel,
-            // P3 择优旋回落库: 双候选择优胜出后写回 unit 行(fire-and-forget)。
-            unitId: unitIds[i],
-            unitManifest: unitManifests[i],
-          },
-        });
-        await updateDocumentUnitChild(ctx, unitIds[i]!, childId, 'processed');
-        return childId;
-      }
-      const res = await processDocument(ctx, childId, {
-        ...opts,
-        docType: hint,
-        parsedBlockModel: sliceBlockModelForUnit(parentModel, childId, unit),
-      });
-      await updateDocumentUnitChild(ctx, unitIds[i]!, childId, unitStatusFor(res.parseStatus));
-      return childId;
-    } catch (e) {
-      // 单个子单据失败不阻断其余拆分(状态可追溯, unit 行留 failed)。
-      console.warn('[batch-split] 子单据处理失败:', childId, e instanceof Error ? e.message : e);
-      await updateDocumentUnitChild(ctx, unitIds[i]!, childId, 'failed').catch(() => {});
-      return childId;
-    }
+    return processUnitChild({
+      ctx, sourceUri, parentModel, unit,
+      unitRowId: unitIds[i]!,
+      opts,
+      unitPages,
+      routedDocType,
+      hint,
+      unitManifest: unitManifests[i],
+    });
   });
   for (const childId of processed) {
     if (childId !== null) childDocIds.push(childId);
   }
+
+  // P3 谱系图: 刷新 container 的 CONTAINS 边(内部已捕获异常折算 'failed',
+  // 只 warn 不阻断返回)。
+  await syncBatchLineageGraph(ctx, docId).catch(() => {});
 
   return { ...containerRes, batchSplit: { unitCount: units.length, childDocIds } };
 }

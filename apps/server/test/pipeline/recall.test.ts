@@ -5,7 +5,12 @@ import { createDb, migrate, type SqliteDbContext } from '../../src/pipeline/db/c
 import { env } from '../../src/env.js';
 import { buildIngestDocumentTool } from '../../src/pipeline/tools/documentEntry.js';
 import { buildRecallDocumentsTool } from '../../src/pipeline/tools/recall.js';
-import { saveBinding } from '../../src/pipeline/db/repositories.js';
+import {
+  saveBinding,
+  createDocumentStub,
+  saveDocumentUnits,
+  setDocumentBatchRole,
+} from '../../src/pipeline/db/repositories.js';
 import type { ChunkTagger } from '../../src/pipeline/chunkTagging.js';
 
 let ctx: SqliteDbContext;
@@ -234,5 +239,91 @@ describe('recall_documents contractNo filter (接线闭环)', () => {
     expect(res.matches).toEqual([]);
     expect(res.note).toBe('未找到与该合同号绑定的文档');
     expect(res.contractNo).toBe('HT-2024-777');
+  });
+});
+
+// ---- P3 谱系(批量拆分器 Phase 3): matches/documents 带谱系字段 --------------
+
+describe('recall_documents batch lineage (P3)', () => {
+  interface LineageMatch {
+    document_id: string;
+    batchRole: string | null;
+    parentDocumentId: string | null;
+    unitIndex: number | null;
+  }
+
+  it('unit 文档命中: match 带 batchRole=unit + parentDocumentId + unitIndex', async () => {
+    const docId = await ingest();
+    // 把已入链的文档标记为 unit, 挂到一个 container 下。
+    const { docId: containerId } = await createDocumentStub(ctx, { sourceUri: 'file:///c.pdf' });
+    await setDocumentBatchRole(ctx, containerId, 'container');
+    await setDocumentBatchRole(ctx, docId, 'unit');
+    await saveDocumentUnits(ctx, [
+      { parentDocumentId: containerId, childDocumentId: docId, unitIndex: 2, docType: '汽运磅单' },
+    ]);
+
+    const recall = buildRecallDocumentsTool({ ctx });
+    const res = (await recall.execute(
+      { query: 'diesel', strategy: 'fts' },
+      execOpts,
+    )) as { matches: LineageMatch[] };
+    const hit = res.matches.find((m) => m.document_id === docId)!;
+    expect(hit.batchRole).toBe('unit');
+    expect(hit.parentDocumentId).toBe(containerId);
+    expect(hit.unitIndex).toBe(2);
+  });
+
+  it('container 命中: batchRole=container, parent/unitIndex 为 null', async () => {
+    const docId = await ingest();
+    await setDocumentBatchRole(ctx, docId, 'container');
+
+    const recall = buildRecallDocumentsTool({ ctx });
+    const res = (await recall.execute(
+      { query: 'diesel', strategy: 'fts' },
+      execOpts,
+    )) as { matches: LineageMatch[] };
+    const hit = res.matches.find((m) => m.document_id === docId)!;
+    expect(hit.batchRole).toBe('container');
+    expect(hit.parentDocumentId).toBeNull();
+    expect(hit.unitIndex).toBeNull();
+  });
+
+  it('普通文档命中: 谱系字段全 null(零行为变化面)', async () => {
+    const docId = await ingest();
+    const recall = buildRecallDocumentsTool({ ctx });
+    const res = (await recall.execute(
+      { query: 'diesel', strategy: 'fts' },
+      execOpts,
+    )) as { matches: LineageMatch[] };
+    const hit = res.matches.find((m) => m.document_id === docId)!;
+    expect(hit.batchRole).toBeNull();
+    expect(hit.parentDocumentId).toBeNull();
+    expect(hit.unitIndex).toBeNull();
+  });
+
+  it('fullText 模式 documents[] 同样带谱系字段', async () => {
+    const docId = await ingest();
+    const { docId: containerId } = await createDocumentStub(ctx, { sourceUri: 'file:///c.pdf' });
+    await setDocumentBatchRole(ctx, containerId, 'container');
+    await setDocumentBatchRole(ctx, docId, 'unit');
+    await saveDocumentUnits(ctx, [
+      { parentDocumentId: containerId, childDocumentId: docId, unitIndex: 3, docType: '质检报告' },
+    ]);
+
+    const recall = buildRecallDocumentsTool({ ctx });
+    // 夹具文本很短 -> 自动进入 fullText 模式。
+    const res = (await recall.execute(
+      { query: 'diesel', strategy: 'fts' },
+      execOpts,
+    )) as {
+      mode?: string;
+      documents?: Array<{ document_id: string; batchRole: string | null; parentDocumentId: string | null; unitIndex: number | null }>;
+    };
+    expect(res.mode).toBe('fullText');
+    const doc = res.documents?.find((d) => d.document_id === docId);
+    expect(doc).toBeDefined();
+    expect(doc!.batchRole).toBe('unit');
+    expect(doc!.parentDocumentId).toBe(containerId);
+    expect(doc!.unitIndex).toBe(3);
   });
 });

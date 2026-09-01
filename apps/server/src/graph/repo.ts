@@ -181,6 +181,29 @@ export async function mergeEdge(input: MergeEdgeInput): Promise<GraphEdge> {
   }
 }
 
+export interface ContainsEdgeProps {
+  unitIndex: number;
+  /** 形如 'p3-p5' / 'p5'(来源与拆分区展示用)。 */
+  pages: string;
+}
+/**
+ * P3 谱系: container -> unit 的 CONTAINS 边幂等 MERGE(批量拆分器 Phase 3)。
+ * 与 mergeEdge 同一 (src, kind, dst) 最终结果语义; 独立入口以示边类型受控
+ * (业务代码不得用任意 kind 直连 container/unit)。
+ */
+export async function mergeContainsEdge(
+  srcElementId: string,
+  dstElementId: string,
+  props: ContainsEdgeProps,
+): Promise<void> {
+  await mergeEdge({
+    srcId: srcElementId,
+    dstId: dstElementId,
+    kind: 'CONTAINS',
+    props: { unitIndex: props.unitIndex, pages: props.pages },
+  });
+}
+
 export interface FindEntitiesInput {
   kind?: string;
   name: string;

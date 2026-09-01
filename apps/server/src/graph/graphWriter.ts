@@ -1,4 +1,4 @@
-import { createEntity, mergeEdge, type GraphEntity } from './repo.js';
+import { createEntity, mergeEdge, mergeContainsEdge, type ContainsEdgeProps, type GraphEntity } from './repo.js';
 import { normalizeName } from './normalize.js';
 
 /**
@@ -35,11 +35,15 @@ export interface GraphWriteResult {
 export interface GraphWriterIo {
   createEntity(input: { kind: string; name: string; props?: Record<string, unknown> }): Promise<GraphEntity & { created: boolean }>;
   mergeEdge(input: { srcId: string; dstId: string; kind: string; props?: Record<string, unknown>; confidence?: number }): Promise<unknown>;
+  /** P3 谱系: CONTAINS 边幂等 MERGE。可选槽位: 既有测试 fake 只实现前两者,
+   *  writeBatchLineageEdges 的测试自带实现本槽位的 fake。 */
+  mergeContainsEdge?(input: { srcId: string; dstId: string; props: ContainsEdgeProps }): Promise<void>;
 }
 
 export const defaultGraphWriterIo: GraphWriterIo = {
   createEntity: (i) => createEntity(i),
   mergeEdge: (i) => mergeEdge(i) as Promise<unknown>,
+  mergeContainsEdge: (i) => mergeContainsEdge(i.srcId, i.dstId, i.props),
 };
 
 export interface WriteDocumentGraphInput {
@@ -48,6 +52,8 @@ export interface WriteDocumentGraphInput {
   sourceUri: string | null;
   /** 合同类型(spec 2026-08-20): 非空时写入 Document 与 Contract 实体 props。 */
   contractType?: string | null;
+  /** P3 谱系: 批量拆分角色; 非空时写入 Document 节点 batchRole prop。 */
+  batchRole?: 'container' | 'unit';
   entities: GraphEntityInput[];
   edges: GraphEdgeInput[];
 }
@@ -82,6 +88,7 @@ export async function writeDocumentGraph(
         docType: input.docType,
         ...(input.sourceUri ? { sourceUri: input.sourceUri } : {}),
         ...(input.contractType ? { contractType: input.contractType } : {}),
+        ...(input.batchRole ? { batchRole: input.batchRole } : {}),
       },
     });
     docNodeId = docNode.elementId;
@@ -153,4 +160,56 @@ export async function writeDocumentGraph(
     writtenEntities,
     failures,
   };
+}
+
+// ---- P3 谱系(批量拆分器 Phase 3): container -> unit CONTAINS 边 -------------
+
+/** 一个 unit 的图写入输入(pages 形如 'p3-p5' / 'p5')。 */
+export interface BatchLineageUnitInput {
+  unitDocId: string;
+  unitIndex: number;
+  pages: string;
+}
+
+export interface WriteBatchLineageInput {
+  containerDocId: string;
+  sourceUri?: string | null;
+  units: BatchLineageUnitInput[];
+}
+
+/**
+ * 写入(刷新)一个 container 的谱系子图: container Document 节点(props 仅
+ * docId/batchRole/sourceUri, 刻意不带业务 docType —— 2026-09-01 拍板决策 3)
+ * + 逐 unit Document 节点(docId/batchRole='unit') + (container)-[:CONTAINS]->
+ * (unit) 边(props unitIndex/pages)。全部 MERGE 幂等, 重复调用不增殖。
+ * 图未配置直接返回; 驱动异常向上抛 —— 由 batchLineageGraphSync 捕获折算
+ * 'failed', 不阻断业务流。
+ */
+export async function writeBatchLineageEdges(
+  input: WriteBatchLineageInput,
+  io: GraphWriterIo = defaultGraphWriterIo,
+): Promise<void> {
+  // 图未配置(NEO4J_PASSWORD 未设)-> 静默跳过, 非 error。
+  if (!process.env.NEO4J_PASSWORD) return;
+  const container = await io.createEntity({
+    kind: 'Document',
+    name: input.containerDocId,
+    props: {
+      docId: input.containerDocId,
+      batchRole: 'container',
+      ...(input.sourceUri ? { sourceUri: input.sourceUri } : {}),
+    },
+  });
+  for (const unit of input.units) {
+    const unitNode = await io.createEntity({
+      kind: 'Document',
+      name: unit.unitDocId,
+      props: { docId: unit.unitDocId, batchRole: 'unit' },
+    });
+    await io.mergeContainsEdge?.({
+      srcId: container.elementId,
+      dstId: unitNode.elementId,
+      props: { unitIndex: unit.unitIndex, pages: unit.pages },
+    });
+  }
 }

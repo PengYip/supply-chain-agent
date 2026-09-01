@@ -63,20 +63,28 @@ export async function commitDocumentGraph(
     const snapshot = await getReviewSnapshot(ctx, docId, userId);
     if (!snapshot) return failed('document_or_extraction_not_found');
     const sourceUri = await getDocumentSourceUri(ctx, docId, userId);
+    // P3 谱系门控: container 是物理拼版文件, 无业务实体语义 —— 只写 Document
+    // 节点(带 batchRole prop), 跳过实体/业务边派生(字段再脏也不产实体)。
+    const isContainer = snapshot.batch?.role === 'container';
     const result: GraphWriteResult = await writeDocumentGraph(
       {
         docId,
         docType: snapshot.docType,
         sourceUri,
         contractType: snapshot.contractType?.contractType ?? null,
-        entities: deriveProposedRelationships(snapshot.fields).map((r) => ({
-          kind: r.kind, name: r.name, role: r.role, confidence: r.confidence,
-        })),
-        edges: dedupeEdges(
-          snapshot.proposedEdges.map((e) => ({
-            type: e.type, dstKind: e.dstKind, dstName: e.dstName, role: e.role, confidence: e.confidence,
-          })),
-        ),
+        batchRole: snapshot.batch?.role,
+        entities: isContainer
+          ? []
+          : deriveProposedRelationships(snapshot.fields).map((r) => ({
+              kind: r.kind, name: r.name, role: r.role, confidence: r.confidence,
+            })),
+        edges: isContainer
+          ? []
+          : dedupeEdges(
+              snapshot.proposedEdges.map((e) => ({
+                type: e.type, dstKind: e.dstKind, dstName: e.dstName, role: e.role, confidence: e.confidence,
+              })),
+            ),
       },
       io,
     );

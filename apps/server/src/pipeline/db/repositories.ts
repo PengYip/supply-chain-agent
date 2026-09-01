@@ -129,6 +129,9 @@ import {
   listContainerUnitSummariesPg,
   getBatchRolesForDocumentsPg,
   updateDocumentUnitManifestPg,
+  getBatchLineageForDocumentsPg,
+  clearDocumentUnitsPg,
+  deleteDocumentUnitsByIdsPg,
   updateGraphLinkStatusPg,
   updateGraphLinkPropsPg,
   setGraphLinkGraphStatusPg,
@@ -1655,14 +1658,63 @@ export async function getBatchRolesForDocuments(
   return out;
 }
 
+/** recall 命中的谱系字段(Task 4): batchRole + unit 的 parent 联结。 */
+export interface DocBatchLineage {
+  batchRole: string | null;
+  parentDocumentId: string | null;
+  unitIndex: number | null;
+}
+
+/**
+ * 批量读文档谱系(Task 4, recall_documents 用): documents 左联 document_units
+ * (child 侧)。调用方(recall)的 docId 已经过 user 域界定(候选来自 scoped 检索),
+ * 与 getReviewSnapshot 同口径不再过滤。缺失 id 自然不在 map 中。
+ */
+export async function getBatchLineageForDocuments(
+  ctx: DbContext,
+  docIds: string[],
+): Promise<Map<string, DocBatchLineage>> {
+  if (ctx.backend === 'postgres') return getBatchLineageForDocumentsPg(ctx, docIds);
+  const ids = [...new Set(docIds.filter(Boolean))];
+  const out = new Map<string, DocBatchLineage>();
+  if (ids.length === 0) return out;
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = ctx.sqlite
+    .prepare(
+      `SELECT d.id, d.batch_role, u.parent_document_id, u.unit_index
+       FROM documents d LEFT JOIN document_units u ON u.child_document_id = d.id
+       WHERE d.id IN (${placeholders})`,
+    )
+    .all(...ids) as Array<{
+    id: string;
+    batch_role: string | null;
+    parent_document_id: string | null;
+    unit_index: number | null;
+  }>;
+  for (const r of rows) {
+    out.set(r.id, {
+      batchRole: r.batch_role ?? null,
+      parentDocumentId: r.parent_document_id ?? null,
+      unitIndex: r.unit_index == null ? null : Number(r.unit_index),
+    });
+  }
+  return out;
+}
+
 /**
  * 回填 unit 行的择优旋回结果(P3): rotation_deg 与 manifest(合并 chosenRotation/
- * candidateScores)。动态 UPDATE, 只写传入的字段; 全空 patch 为无害 no-op。
+ * candidateScores)。Task 9 扩展: 页码包络(page_start/page_end, 合并修正用)。
+ * 动态 UPDATE, 只写传入的字段; 全空 patch 为无害 no-op。
  */
 export async function updateDocumentUnitManifest(
   ctx: DbContext,
   unitId: string,
-  patch: { rotationDeg?: number; manifest?: Record<string, unknown> },
+  patch: {
+    rotationDeg?: number;
+    manifest?: Record<string, unknown>;
+    pageStart?: number;
+    pageEnd?: number;
+  },
 ): Promise<void> {
   if (ctx.backend === 'postgres') return updateDocumentUnitManifestPg(ctx, unitId, patch);
   const sets: string[] = [];
@@ -1675,11 +1727,37 @@ export async function updateDocumentUnitManifest(
     sets.push('manifest_json = ?');
     params.push(JSON.stringify(patch.manifest));
   }
+  if (patch.pageStart !== undefined) {
+    sets.push('page_start = ?');
+    params.push(patch.pageStart);
+  }
+  if (patch.pageEnd !== undefined) {
+    sets.push('page_end = ?');
+    params.push(patch.pageEnd);
+  }
   if (sets.length === 0) return;
   params.push(unitId);
   ctx.sqlite
     .prepare(`UPDATE document_units SET ${sets.join(', ')} WHERE id = ?`)
     .run(...params);
+}
+
+/** 清空 container 的全部 unit 行(Task 9 resplit 清场; 保留 container 自身)。 */
+export async function clearDocumentUnits(ctx: DbContext, parentDocId: string): Promise<void> {
+  if (ctx.backend === 'postgres') return clearDocumentUnitsPg(ctx, parentDocId);
+  ctx.sqlite
+    .prepare('DELETE FROM document_units WHERE parent_document_id = ?')
+    .run(parentDocId);
+}
+
+/** 按 id 删 unit 行(Task 9 merge: 被合并方无子单据的残留行)。 */
+export async function deleteDocumentUnitsByIds(ctx: DbContext, ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  if (ctx.backend === 'postgres') return deleteDocumentUnitsByIdsPg(ctx, ids);
+  const placeholders = ids.map(() => '?').join(', ');
+  ctx.sqlite
+    .prepare(`DELETE FROM document_units WHERE id IN (${placeholders})`)
+    .run(...ids);
 }
 
 /** 宽松 JSON 解析(损坏行按空对象, 与 graphLinkFromPg 同取舍)。导出供 pg twin 复用。 */

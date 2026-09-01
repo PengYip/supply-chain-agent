@@ -80,6 +80,7 @@ import type {
   BatchRole,
   BatchUnitSummary,
   BatchLineage,
+  DocBatchLineage,
 } from './repositories.js';
 
 // Phase 2 business-data isolation: same convention as repositories.ts -- a
@@ -3298,11 +3299,16 @@ export async function getBatchRolesForDocumentsPg(
   return out;
 }
 
-/** pg twin of updateDocumentUnitManifest: 动态 UPDATE, 只写传入字段。 */
+/** pg twin of updateDocumentUnitManifest: 动态 UPDATE, 只写传入字段(含页码包络)。 */
 export async function updateDocumentUnitManifestPg(
   ctx: PostgresDbContext,
   unitId: string,
-  patch: { rotationDeg?: number; manifest?: Record<string, unknown> },
+  patch: {
+    rotationDeg?: number;
+    manifest?: Record<string, unknown>;
+    pageStart?: number;
+    pageEnd?: number;
+  },
 ): Promise<void> {
   const sets: string[] = [];
   const params: Array<string | number> = [];
@@ -3315,9 +3321,65 @@ export async function updateDocumentUnitManifestPg(
     sets.push(`manifest_json = $${n++}`);
     params.push(JSON.stringify(patch.manifest));
   }
+  if (patch.pageStart !== undefined) {
+    sets.push(`page_start = $${n++}`);
+    params.push(patch.pageStart);
+  }
+  if (patch.pageEnd !== undefined) {
+    sets.push(`page_end = $${n++}`);
+    params.push(patch.pageEnd);
+  }
   if (sets.length === 0) return;
   await ctx.pool.query(
     `UPDATE document_units SET ${sets.join(', ')} WHERE id = $${n}`,
     [...params, unitId],
   );
+}
+
+/** pg twin of getBatchLineageForDocuments: 批量读谱系(recall 用)。 */
+export async function getBatchLineageForDocumentsPg(
+  ctx: PostgresDbContext,
+  docIds: string[],
+): Promise<Map<string, DocBatchLineage>> {
+  const ids = [...new Set(docIds.filter(Boolean))];
+  const out = new Map<string, DocBatchLineage>();
+  if (ids.length === 0) return out;
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
+  const res = await ctx.pool.query(
+    `SELECT d.id, d.batch_role, u.parent_document_id, u.unit_index
+     FROM documents d LEFT JOIN document_units u ON u.child_document_id = d.id
+     WHERE d.id IN (${placeholders})`,
+    ids,
+  );
+  for (const r of res.rows as Array<{
+    id: string;
+    batch_role: string | null;
+    parent_document_id: string | null;
+    unit_index: number | null;
+  }>) {
+    out.set(r.id, {
+      batchRole: r.batch_role ?? null,
+      parentDocumentId: r.parent_document_id ?? null,
+      unitIndex: r.unit_index == null ? null : Number(r.unit_index),
+    });
+  }
+  return out;
+}
+
+/** pg twin of clearDocumentUnits: 清空 container 的全部 unit 行。 */
+export async function clearDocumentUnitsPg(
+  ctx: PostgresDbContext,
+  parentDocId: string,
+): Promise<void> {
+  await ctx.pool.query('DELETE FROM document_units WHERE parent_document_id = $1', [parentDocId]);
+}
+
+/** pg twin of deleteDocumentUnitsByIds。 */
+export async function deleteDocumentUnitsByIdsPg(
+  ctx: PostgresDbContext,
+  ids: string[],
+): Promise<void> {
+  if (ids.length === 0) return;
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
+  await ctx.pool.query(`DELETE FROM document_units WHERE id IN (${placeholders})`, ids);
 }

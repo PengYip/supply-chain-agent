@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from 'vites
 import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.js';
 import {
   createDocumentStub, saveExtraction, setReviewStatus, getReviewSnapshot, updateExtractionFields,
-  addSelfParty,
+  addSelfParty, setDocumentBatchRole, saveDocumentUnits,
 } from '../../src/pipeline/db/repositories.js';
 import { commitDocumentGraph, syncDocumentTypeToGraph } from '../../src/pipeline/graphCommit.js';
 import type { GraphWriterIo } from '../../src/graph/graphWriter.js';
@@ -246,5 +246,95 @@ describe('syncDocumentTypeToGraph (F3)', () => {
     } finally {
       if (prev !== undefined) process.env.NEO4J_PASSWORD = prev;
     }
+  });
+});
+
+// ---- P3 谱系(批量拆分器 Phase 3): container 提交门控 + batchRole prop -------
+
+describe('commitDocumentGraph batch lineage (P3)', () => {
+  let prevPassword: string | undefined;
+  beforeAll(() => {
+    prevPassword = process.env.NEO4J_PASSWORD;
+    process.env.NEO4J_PASSWORD = 'graphwriter-test-dummy';
+  });
+  afterAll(() => {
+    if (prevPassword !== undefined) process.env.NEO4J_PASSWORD = prevPassword;
+    else delete process.env.NEO4J_PASSWORD;
+  });
+
+  function trackingIo() {
+    const created: Array<{ kind: string; name: string; props: Record<string, unknown> }> = [];
+    const edgeCalls: Array<Record<string, unknown>> = [];
+    const io: GraphWriterIo = {
+      createEntity: async ({ kind, name, props }) => {
+        created.push({ kind, name, props: props ?? {} });
+        return { elementId: `el-${kind}-${name}`, kind, name, props: props ?? {}, created: true };
+      },
+      mergeEdge: async (input) => { edgeCalls.push(input); return {}; },
+    };
+    return { io, created, edgeCalls };
+  }
+
+  it('container snapshot 确认: 只写 Document 节点, 不派生实体/业务边(门控)', async () => {
+    // container 刻意带 extraction 字段: 证明是门控跳过了派生, 而非字段为空。
+    const { docId } = await createDocumentStub(ctx, { sourceUri: 'file:///batch.pdf', docType: '合同' });
+    await setDocumentBatchRole(ctx, docId, 'container');
+    await saveExtraction(ctx, {
+      documentId: docId, docType: '合同',
+      fields: { 合同号: { value: 'HT-B1', sourceSpans: [] } },
+      fieldMeta: { 合同号: { strength: 'exact', confidence: 0.95 } },
+      overallConfidence: 0.95, needsReview: false,
+    });
+    await setReviewStatus(ctx, docId, 'confirmed');
+    const { io, created, edgeCalls } = trackingIo();
+    const status = await commitDocumentGraph(ctx, docId, 'user-1', io);
+    expect(status.status).toBe('ok');
+    expect(status.nodeCount).toBe(1);
+    expect(status.edgeCount).toBe(0);
+    expect(created).toHaveLength(1);
+    expect(created[0]!.kind).toBe('Document');
+    expect(edgeCalls).toHaveLength(0);
+    expect(status.entities).toBeUndefined();
+  });
+
+  it('container Document 节点带 batchRole=container prop(无 docType 决策对 unit 不适用, container 不携带业务 docType)', async () => {
+    const { docId } = await createDocumentStub(ctx, { sourceUri: 'file:///batch.pdf' });
+    await setDocumentBatchRole(ctx, docId, 'container');
+    await setReviewStatus(ctx, docId, 'confirmed');
+    const { io, created } = trackingIo();
+    await commitDocumentGraph(ctx, docId, 'user-1', io);
+    const docNode = created.find((c) => c.kind === 'Document')!;
+    expect(docNode.props.batchRole).toBe('container');
+  });
+
+  it('unit snapshot 确认: Document 节点带 batchRole=unit prop', async () => {
+    const { docId: containerId } = await createDocumentStub(ctx, { sourceUri: 'file:///b.pdf' });
+    await setDocumentBatchRole(ctx, containerId, 'container');
+    const { docId: childId } = await createDocumentStub(ctx, { sourceUri: 'file:///b.pdf' });
+    await setDocumentBatchRole(ctx, childId, 'unit');
+    await saveDocumentUnits(ctx, [
+      { parentDocumentId: containerId, childDocumentId: childId, unitIndex: 1, docType: '汽运磅单' },
+    ]);
+    await saveExtraction(ctx, {
+      documentId: childId, docType: '汽运磅单',
+      fields: { 编号: { value: '10384417', sourceSpans: [] } },
+      fieldMeta: { 编号: { strength: 'none', confidence: 0.9 } },
+      overallConfidence: 0.9, needsReview: false,
+    });
+    await setReviewStatus(ctx, childId, 'confirmed');
+    const { io, created } = trackingIo();
+    const status = await commitDocumentGraph(ctx, childId, 'user-1', io);
+    expect(status.status).toBe('ok');
+    const docNode = created.find((c) => c.kind === 'Document')!;
+    expect(docNode.props.batchRole).toBe('unit');
+  });
+
+  it('普通文档 Document 节点不带 batchRole prop(零行为变化)', async () => {
+    const id = await seedInvoice();
+    await setReviewStatus(ctx, id, 'confirmed');
+    const { io, created } = trackingIo();
+    await commitDocumentGraph(ctx, id, 'user-1', io);
+    const docNode = created.find((c) => c.kind === 'Document')!;
+    expect(docNode.props.batchRole).toBeUndefined();
   });
 });
