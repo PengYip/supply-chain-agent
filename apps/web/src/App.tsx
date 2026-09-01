@@ -102,7 +102,8 @@ function App() {
 interface SessionUser { name: string; email: string; id: string }
 
 function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }) {
-  const [fileDrawerOpen, setFileDrawerOpen] = useState(false);
+  // 文件面板常驻右栏，登录后默认展开；顶栏只负责折叠/展开切换。
+  const [fileDrawerOpen, setFileDrawerOpen] = useState(true);
   // hash 路由是视图与活动会话的 SSOT：`#/chat?session=<id>`。手动 setState
   // activeSessionId 的旧双源已消除，popstate 时自动从 hash 恢复。
   const { route, navigate } = useHashRoute();

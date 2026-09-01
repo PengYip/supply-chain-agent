@@ -1,6 +1,6 @@
 import { eq, and, or, isNull, desc } from 'drizzle-orm';
 import { documents, extractions, bindings, classifications } from './schema.js';
-import type { DbContext } from './client.js';
+import type { DbContext, SqliteDbContext } from './client.js';
 import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
 import type { SpanMatchStrength } from '../spanValidator.js';
 import { normalizeContractNo } from '../contractLedger.js';
@@ -10,6 +10,7 @@ import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.
 import { normalizeCompanyName, parseSelfPartyNames } from '../../domain/flowDirection.js';
 import { deriveContractType, type ContractTypeDerivation } from '../../domain/contractType.js';
 import type { ContractType } from '../../domain/tradeSemantics.js';
+import { isVectorizableDocType } from '../vectorPolicy.js';
 import { env } from '../../env.js';
 // Postgres impls. Static import: pg is a declared dep on both backends now; the
 // functions are only CALLED on the postgres branch (lazy Pool connect), so the
@@ -20,9 +21,12 @@ import {
   saveExtractionPg,
   saveBindingPg,
   listBindingsForContractPg,
+  listRecallVisibleDocIdsPg,
   saveChunksPg,
   listChunksByDocumentPg,
   searchChunksPg,
+  listUnboundVoucherDocsPg,
+  listBoundDocSummariesPg,
   getChunkMetaByRowidsPg,
   setDocumentMinioKeyPg,
   findDocIdsByMinioKeysPg,
@@ -63,6 +67,7 @@ import {
   updateDocumentMetaPg,
   setDocumentParseStatusPg,
   getDocumentParseStatusPg,
+  getDocumentTypesPg,
   getDocumentSourceUriPg,
   getDocumentMetaPg,
   // docType 修正端点: pg twin for updateDocumentType.
@@ -728,6 +733,146 @@ export async function listBindingsForContract(
 ): Promise<BindingRow[]> {
   if (ctx.backend === 'postgres') return listBindingsForContractPg(ctx, contractNo);
   return ctx.db.select().from(bindings).where(eq(bindings.contractNo, contractNo)).all().map(rowToBinding);
+}
+
+/**
+ * recall 可见性过滤(2026-09-01 悬空单据不可见): 无 contractNo 检索的可见文档集合 =
+ *   锚点类型文档(模板树根为 合同/立项书, 与向量化策略同源) ∪ 存在有效绑定的文档
+ *   (status != 'rejected', 含 proposed 待确认) ∪ 合同台账条目文档。
+ * 悬空凭证(无任何绑定)不参与检索——按合同找单据的归属关系必须先建立。
+ */
+export async function listRecallVisibleDocIds(
+  ctx: DbContext,
+  userId?: string,
+): Promise<Set<string>> {
+  if (ctx.backend === 'postgres') return listRecallVisibleDocIdsPg(ctx, userId);
+  const uid = effectiveUserId(userId);
+  const out = new Set<string>();
+  const anchorNames = await anchorDocTypeNames(ctx);
+  if (anchorNames.length > 0) {
+    const placeholders = anchorNames.map(() => '?').join(',');
+    const anchorSql =
+      `SELECT id FROM documents WHERE doc_type IN (${placeholders})` +
+      (uid ? ' AND user_id = ?' : '');
+    const anchorArgs = uid ? [...anchorNames, uid] : anchorNames;
+    for (const r of ctx.sqlite.prepare(anchorSql).all(...anchorArgs) as Array<{ id: string }>) {
+      out.add(r.id);
+    }
+  }
+  const bindSql =
+    'SELECT DISTINCT document_id AS d FROM bindings WHERE status != \'rejected\'' +
+    (uid ? ' AND user_id = ?' : '');
+  for (const r of ctx.sqlite.prepare(bindSql).all(...(uid ? [uid] : [])) as Array<{ d: string }>) {
+    out.add(r.d);
+  }
+  const ledgerSql = 'SELECT document_id AS d FROM contract_ledger' + (uid ? ' WHERE user_id = ?' : '');
+  for (const r of ctx.sqlite.prepare(ledgerSql).all(...(uid ? [uid] : [])) as Array<{ d: string }>) {
+    out.add(r.d);
+  }
+  return out;
+}
+
+/** 库内实际存在的锚点类型名(模板树根为 合同/立项书, 与向量化策略同源)。SQLite 路径; PG 侧在 postgres-repositories 自行查询。 */
+async function anchorDocTypeNames(ctx: SqliteDbContext): Promise<string[]> {
+  const types = await listTemplateTypes(ctx);
+  const docTypes = ctx.sqlite
+    .prepare('SELECT DISTINCT doc_type AS t FROM documents')
+    .all() as Array<{ t: string }>;
+  return docTypes.map((r) => r.t).filter((t) => isVectorizableDocType(t, types));
+}
+
+export interface BoundDocSummary {
+  docId: string;
+  contractNo: string;
+  docType: string | null;
+  relation: string;
+  status: string;
+  confidence: number;
+}
+
+/**
+ * 某合同号(可传原文+归一化多个变体)下的绑定单据摘要(2026-09-01 缺口3:
+ * "合同->单据清单"一等入口)。含全部状态(confirmed/proposed/rejected)，
+ * 供模型呈现在案单据与确认进度; 不含 chunk 文本。
+ */
+export async function listBoundDocSummaries(
+  ctx: DbContext,
+  contractNos: string[],
+  userId?: string,
+): Promise<BoundDocSummary[]> {
+  const nos = [...new Set(contractNos.map((n) => n.trim()).filter((n) => n.length > 0))];
+  if (nos.length === 0) return [];
+  if (ctx.backend === 'postgres') return listBoundDocSummariesPg(ctx, nos, userId);
+  const uid = effectiveUserId(userId);
+  const placeholders = nos.map(() => '?').join(',');
+  const sql =
+    `SELECT b.id, b.document_id, b.contract_no, b.relation, b.status, b.confidence, d.doc_type` +
+    ` FROM bindings b LEFT JOIN documents d ON d.id = b.document_id` +
+    ` WHERE b.contract_no IN (${placeholders})` +
+    (uid ? ' AND b.user_id = ?' : '') +
+    ` ORDER BY CASE b.status WHEN 'confirmed' THEN 0 WHEN 'proposed' THEN 1 ELSE 2 END, b.created_at DESC`;
+  const rows = ctx.sqlite.prepare(sql).all(...(uid ? [...nos, uid] : nos)) as Array<{
+    document_id: string; contract_no: string; doc_type: string | null;
+    relation: string; status: string; confidence: number;
+  }>;
+  return rows.map((r) => ({
+    docId: r.document_id,
+    contractNo: r.contract_no,
+    docType: r.doc_type,
+    relation: r.relation,
+    status: r.status,
+    confidence: r.confidence,
+  }));
+}
+
+export interface UnboundVoucherDoc {
+  docId: string;
+  docType: string;
+  sourceUri: string;
+  createdAt: string;
+  hasExtraction: boolean;
+}
+
+/**
+ * 悬空凭证清单(2026-09-01 缺口1): 已完成解析(parse_status='parsed')的凭证类
+ * 单据(非锚点类型)中, 没有任何有效绑定(status IN proposed/confirmed)的文档。
+ * 这些文档对 recall 检索不可见, 本清单是它们唯一的批量发现入口, 供人工补绑
+ * (bind_document)或复核归属。锚点类型(合同/立项书)不在此列(始终可检索)。
+ */
+export async function listUnboundVoucherDocs(
+  ctx: DbContext,
+  userId?: string,
+): Promise<UnboundVoucherDoc[]> {
+  if (ctx.backend === 'postgres') return listUnboundVoucherDocsPg(ctx, userId);
+  const uid = effectiveUserId(userId);
+  const anchorNames = await anchorDocTypeNames(ctx);
+  const notAnchor = anchorNames.length > 0
+    ? ` AND d.doc_type NOT IN (${anchorNames.map(() => '?').join(',')})`
+    : '';
+  const sql =
+    `SELECT d.id, d.doc_type, d.source_uri, d.created_at,` +
+    ` EXISTS(SELECT 1 FROM extractions e WHERE e.document_id = d.id) AS has_ext` +
+    ` FROM documents d` +
+    ` WHERE d.parse_status = 'parsed'` +
+    (uid ? ' AND d.user_id = ?' : '') +
+    ` AND NOT EXISTS (SELECT 1 FROM bindings b WHERE b.document_id = d.id` +
+    ` AND b.status IN ('proposed','confirmed')` +
+    (uid ? ' AND b.user_id = ?' : '') + `)` +
+    notAnchor +
+    ` ORDER BY d.created_at DESC`;
+  const args = uid
+    ? [...(anchorNames.length > 0 ? [uid, ...anchorNames] : [uid])]
+    : [...anchorNames];
+  const rows = ctx.sqlite.prepare(sql).all(...args) as Array<{
+    id: string; doc_type: string; source_uri: string; created_at: string; has_ext: number;
+  }>;
+  return rows.map((r) => ({
+    docId: r.id,
+    docType: r.doc_type,
+    sourceUri: r.source_uri,
+    createdAt: r.created_at,
+    hasExtraction: r.has_ext === 1,
+  }));
 }
 
 // ---- Phase B: bindings 状态机 -------------------------------------------------
@@ -2117,6 +2262,34 @@ export async function getDocumentParseStatus(
     .prepare('SELECT parse_status FROM documents WHERE id = ?')
     .get(docId) as { parse_status: string } | undefined;
   return row ? (row.parse_status as ParseStatus) : null;
+}
+
+/**
+ * Batch-read the current business type for the listed documents. Returns only
+ * rows visible to the caller; missing IDs are simply absent from the map.
+ * The file-manager list uses this after MinIO keys have already been resolved
+ * to docIds, avoiding one query per file.
+ */
+export async function getDocumentTypes(
+  ctx: DbContext,
+  docIds: string[],
+  userId?: string,
+): Promise<Map<string, string>> {
+  if (ctx.backend === 'postgres') return getDocumentTypesPg(ctx, docIds, userId);
+  const ids = [...new Set(docIds.filter(Boolean))];
+  const out = new Map<string, string>();
+  if (ids.length === 0) return out;
+  const uid = effectiveUserId(userId);
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = ctx.sqlite
+    .prepare(
+      `SELECT id, doc_type FROM documents
+       WHERE id IN (${placeholders})
+         AND (user_id = ? OR user_id = '' OR user_id IS NULL)`,
+    )
+    .all(...ids, uid) as Array<{ id: string; doc_type: string }>;
+  for (const row of rows) out.set(row.id, row.doc_type);
+  return out;
 }
 
 /**

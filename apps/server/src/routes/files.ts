@@ -44,6 +44,7 @@ import {
   deleteDocument,
   createDocumentStub,
   getDocumentParseStatus,
+  getDocumentTypes,
   listDocumentIdsWithConfirmedBindings,
 } from '../pipeline/db/repositories.js';
 import type { DocType } from '../pipeline/types.js';
@@ -339,6 +340,19 @@ filesRoute.get('/', requireRole('admin', 'trader', 'viewer'), async (c) => {
     parseStatus: f.docId ? (parseStatusByDoc.get(f.docId) ?? null) : null,
     bound: f.docId ? boundDocIds.has(f.docId) : false,
   }));
+  // Type tags only make sense once parsing has selected a concrete business
+  // type. '其他' is the upload fallback and is omitted client-side so the tag
+  // never implies recognition where none happened.
+  const docTypes = await getDocumentTypes(
+    ctx(),
+    filesWithStatus.flatMap((f) => (f.docId && f.parseStatus === 'parsed' ? [f.docId] : [])),
+    user.id,
+  );
+  const filesWithMeta = filesWithStatus.map((f) => ({
+    ...f,
+    businessType:
+      f.docId && f.parseStatus === 'parsed' ? (docTypes.get(f.docId) ?? null) : null,
+  }));
 
   // Virtual folders (presentational only; file objects live in MinIO regardless).
   // Already sorted by the repo (rank ASC, path ASC; unranked last).
@@ -348,8 +362,8 @@ filesRoute.get('/', requireRole('admin', 'trader', 'viewer'), async (c) => {
   // never-ranked rows by name. A user's rank table is tiny -- load it whole.
   const ranks = await listFileRanks(ctx(), user.id);
   const rankedKeys = [...ranks.keys()];
-  const keyedFiles = new Map(filesWithStatus.map((f) => [f.key, f]));
-  const orderedFiles: typeof filesWithStatus = [];
+  const keyedFiles = new Map(filesWithMeta.map((f) => [f.key, f]));
+  const orderedFiles: typeof filesWithMeta = [];
   for (const k of rankedKeys) {
     const f = keyedFiles.get(k);
     if (f) {

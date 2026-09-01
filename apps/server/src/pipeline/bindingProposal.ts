@@ -152,6 +152,17 @@ export function matchEntity(a: string, b: string): number {
   if (na.length === 0 || nb.length === 0) return 0;
   if (na === nb) return 1.0;
   if (na.includes(nb) || nb.includes(na)) return 0.9;
+  // 主体名变体容错(2026-09-01 悬空单据治理): 再剥一层常见组织尾缀(集团/分公司/
+  // 公司等), 剥后相等或包含 -> 0.85; 短名(>=3字)是长名的有序子序列(如 中石化
+  // ⊂ 中国石化化工销售) -> 0.8。仅用于绑定建议评分, 不写任何数据。
+  const ca = stripCorpTail(na);
+  const cb = stripCorpTail(nb);
+  if (ca.length > 0 && cb.length > 0) {
+    if (ca === cb || ca.includes(cb) || cb.includes(ca)) return 0.85;
+    const shorter = ca.length <= cb.length ? ca : cb;
+    const longer = ca.length <= cb.length ? cb : ca;
+    if (shorter.length >= 3 && isSubsequence(shorter, longer)) return 0.8;
+  }
   if (Math.abs(na.length - nb.length) <= 2) {
     const shorter = na.length <= nb.length ? na : nb;
     const longer = na.length <= nb.length ? nb : na;
@@ -160,6 +171,22 @@ export function matchEntity(a: string, b: string): number {
     if (hits / longer.length >= 0.7) return 0.75;
   }
   return 0;
+}
+
+/** 剥一层常见组织尾缀; 剥后为空则返回原串(防"集团公司"剥成空串)。 */
+function stripCorpTail(s: string): string {
+  const stripped = s.replace(/(集团公司|分公司|责任公司|有限公司|股份公司|集团|公司|事业部|经营部)$/u, '');
+  return stripped.length > 0 ? stripped : s;
+}
+
+/** a 的字符按序出现于 b(子序列), 如 中石化 ⊂ 中国石化化工销售。 */
+function isSubsequence(a: string, b: string): boolean {
+  let i = 0;
+  for (const ch of b) {
+    if (ch === a[i]) i++;
+    if (i >= a.length) return true;
+  }
+  return i >= a.length;
 }
 
 // ---- (c) 评分维度 ------------------------------------------------------------

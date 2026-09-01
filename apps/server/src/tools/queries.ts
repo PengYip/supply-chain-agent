@@ -10,7 +10,9 @@ import type { DbContext } from '../pipeline/db/client.js';
 import {
   findContractLedgerByNo,
   listContractLedgerEntries,
+  listBoundDocSummaries,
 } from '../pipeline/db/repositories.js';
+import { normalizeContractNo } from '../pipeline/contractLedger.js';
 import { rollupProject } from '../pipeline/projectRollup.js';
 
 // NOTE: AI SDK 6 renamed the tool schema field `parameters` -> `inputSchema`
@@ -85,6 +87,13 @@ export function buildQueryContractTool(deps?: { ctx?: DbContext; userId?: string
           for (const [name, f] of Object.entries(entry.fields)) {
             fields[name] = f.value;
           }
+          // 在案单据摘要(2026-09-01 缺口3): "这份合同下有哪些单据"的一等入口,
+          // 来自 bindings(原文+归一化双查), 含确认进度; rejected 也列出供审计。
+          const boundDocs = await listBoundDocSummaries(
+            deps.ctx,
+            [contractNo, normalizeContractNo(contractNo)],
+            deps.userId,
+          );
           return {
             source: 'ledger' as const,
             contractNo: entry.displayContractNo,
@@ -94,6 +103,12 @@ export function buildQueryContractTool(deps?: { ctx?: DbContext; userId?: string
             fields,
             overallConfidence: entry.overallConfidence,
             needsReview: entry.needsReview,
+            boundDocuments: {
+              count: boundDocs.length,
+              confirmed: boundDocs.filter((b) => b.status === 'confirmed').length,
+              proposed: boundDocs.filter((b) => b.status === 'proposed').length,
+              docs: boundDocs,
+            },
           };
         }
       }

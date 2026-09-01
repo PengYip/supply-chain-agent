@@ -24,7 +24,8 @@ import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.
 import { normalizeCompanyName } from '../../domain/flowDirection.js';
 import { deriveContractType } from '../../domain/contractType.js';
 import type { ContractType } from '../../domain/tradeSemantics.js';
-import { parseGraphStatus, effectiveSelfPartyNamesForDerivation, normalizeProjectCode, ledgerRowFieldsToProjection, safeParseJson } from './repositories.js';
+import { isVectorizableDocType } from '../vectorPolicy.js';
+import { parseGraphStatus, effectiveSelfPartyNamesForDerivation, normalizeProjectCode, ledgerRowFieldsToProjection, listTemplateTypes, safeParseJson } from './repositories.js';
 import type {
   ExtractionInput,
   BindingInput,
@@ -200,6 +201,109 @@ export async function listBindingsForContractPg(
     [contractNo],
   );
   return res.rows.map(bindingRowFromPg);
+}
+
+/** recall 可见性过滤的 Postgres 实现(语义同 repositories.listRecallVisibleDocIds)。 */
+export async function listRecallVisibleDocIdsPg(
+  ctx: PostgresDbContext,
+  userId?: string,
+): Promise<Set<string>> {
+  const uid = effectiveUserId(userId);
+  const out = new Set<string>();
+  const types = await listTemplateTypes(ctx);
+  const { rows: docTypes } = await ctx.pool.query('SELECT DISTINCT doc_type AS t FROM documents');
+  const anchorNames = (docTypes as Array<{ t: string }>)
+    .map((r) => r.t)
+    .filter((t) => isVectorizableDocType(t, types));
+  if (anchorNames.length > 0) {
+    const { rows } = await ctx.pool.query(
+      `SELECT id FROM documents WHERE doc_type = ANY($1)${uid ? ' AND user_id = $2' : ''}`,
+      uid ? [anchorNames, uid] : [anchorNames],
+    );
+    for (const r of rows as Array<{ id: string }>) out.add(r.id);
+  }
+  const { rows: bound } = await ctx.pool.query(
+    `SELECT DISTINCT document_id AS d FROM bindings WHERE status != 'rejected'${uid ? ' AND user_id = $1' : ''}`,
+    uid ? [uid] : [],
+  );
+  for (const r of bound as Array<{ d: string }>) out.add(r.d);
+  const { rows: ledger } = await ctx.pool.query(
+    `SELECT document_id AS d FROM contract_ledger${uid ? ' WHERE user_id = $1' : ''}`,
+    uid ? [uid] : [],
+  );
+  for (const r of ledger as Array<{ d: string }>) out.add(r.d);
+  return out;
+}
+
+/** 悬空凭证清单的 Postgres 实现(语义同 repositories.listUnboundVoucherDocs)。 */
+export async function listUnboundVoucherDocsPg(
+  ctx: PostgresDbContext,
+  userId?: string,
+): Promise<Array<{ docId: string; docType: string; sourceUri: string; createdAt: string; hasExtraction: boolean }>> {
+  const uid = effectiveUserId(userId);
+  const types = await listTemplateTypes(ctx);
+  const { rows: docTypes } = await ctx.pool.query('SELECT DISTINCT doc_type AS t FROM documents');
+  const anchorNames = (docTypes as Array<{ t: string }>)
+    .map((r) => r.t)
+    .filter((t) => isVectorizableDocType(t, types));
+  const params: unknown[] = [];
+  const conds: string[] = [`d.parse_status = 'parsed'`];
+  if (uid) {
+    params.push(uid);
+    conds.push(`d.user_id = $${params.length}`);
+  }
+  const notExistsParams = params.length;
+  conds.push(
+    `NOT EXISTS (SELECT 1 FROM bindings b WHERE b.document_id = d.id` +
+    ` AND b.status IN ('proposed','confirmed')` +
+    (uid ? ` AND b.user_id = $${notExistsParams}` : '') + `)`,
+  );
+  if (anchorNames.length > 0) {
+    params.push(anchorNames);
+    conds.push(`d.doc_type != ALL($${params.length})`);
+  }
+  const { rows } = await ctx.pool.query(
+    `SELECT d.id, d.doc_type, d.source_uri, d.created_at,
+       EXISTS(SELECT 1 FROM extractions e WHERE e.document_id = d.id) AS has_ext
+     FROM documents d WHERE ${conds.join(' AND ')} ORDER BY d.created_at DESC`,
+    params,
+  );
+  return (rows as Array<{
+    id: string; doc_type: string; source_uri: string; created_at: string; has_ext: boolean;
+  }>).map((r) => ({
+    docId: r.id,
+    docType: r.doc_type,
+    sourceUri: r.source_uri,
+    createdAt: String(r.created_at),
+    hasExtraction: r.has_ext === true,
+  }));
+}
+
+/** 绑定单据摘要的 Postgres 实现(语义同 repositories.listBoundDocSummaries)。 */
+export async function listBoundDocSummariesPg(
+  ctx: PostgresDbContext,
+  contractNos: string[],
+  userId?: string,
+): Promise<Array<{ docId: string; contractNo: string; docType: string | null; relation: string; status: string; confidence: number }>> {
+  const uid = effectiveUserId(userId);
+  const { rows } = await ctx.pool.query(
+    `SELECT b.document_id, b.contract_no, b.relation, b.status, b.confidence, d.doc_type
+     FROM bindings b LEFT JOIN documents d ON d.id = b.document_id
+     WHERE b.contract_no = ANY($1)${uid ? ' AND b.user_id = $2' : ''}
+     ORDER BY CASE b.status WHEN 'confirmed' THEN 0 WHEN 'proposed' THEN 1 ELSE 2 END, b.created_at DESC`,
+    uid ? [contractNos, uid] : [contractNos],
+  );
+  return (rows as Array<{
+    document_id: string; contract_no: string; doc_type: string | null;
+    relation: string; status: string; confidence: number;
+  }>).map((r) => ({
+    docId: r.document_id,
+    contractNo: r.contract_no,
+    docType: r.doc_type,
+    relation: r.relation,
+    status: r.status,
+    confidence: Number(r.confidence),
+  }));
 }
 
 // ---- Phase B: bindings 状态机 (pg twins) -------------------------------------
@@ -1012,10 +1116,14 @@ export async function listChunksByDocumentPg(
   // is given, filter INSIDE the KNN query -- a global top-k followed by a
   // caller-side doc filter starves scoped recalls (bound docs' chunks never
   // crack the global top-k in a large library).
-  const docFilter =
-    docIds && docIds.length > 0 ? 'AND document_id = ANY($2::text[])' : '';
-  const params: unknown[] = [vecLiteral(queryVec), safeK];
-  if (docFilter) params.push(docIds);
+  // Bug fix 2026-09-01: 参数错位(ANY($2) 引用了 k 而非 docIds, scoped 查询必然
+  // 报错进 catch 返回空) -- PG 后端的 contractNo 语义召回因此静默丢失。对齐为
+  // $1=vec, $2=limit, $3=docIds。
+  const scoped = docIds && docIds.length > 0;
+  const docFilter = scoped ? 'AND document_id = ANY($3::text[])' : '';
+  const params: unknown[] = scoped
+    ? [vecLiteral(queryVec), safeK, [...docIds!]]
+    : [vecLiteral(queryVec), safeK];
   let res;
   try {
     res = await ctx.pool.query(
@@ -1023,7 +1131,7 @@ export async function listChunksByDocumentPg(
        FROM doc_chunk
        WHERE embedding IS NOT NULL ${docFilter}
        ORDER BY embedding <=> $1::vector
-       LIMIT $${docFilter ? 3 : 2}`,
+       LIMIT $2`,
       params,
     );
   } catch {
@@ -1675,6 +1783,30 @@ export async function getDocumentParseStatusPg(
   );
   if (!res.rows[0]) return null;
   return res.rows[0].parse_status as ParseStatus;
+}
+
+/** Batch-read doc_type for listed documents (pg twin of getDocumentTypes). */
+export async function getDocumentTypesPg(
+  ctx: PostgresDbContext,
+  docIds: string[],
+  userId?: string,
+): Promise<Map<string, string>> {
+  const ids = [...new Set(docIds.filter(Boolean))];
+  const out = new Map<string, string>();
+  if (ids.length === 0) return out;
+  const uid = userId && userId.length > 0 ? userId : '';
+  const placeholders = ids.map((_, i) => `$${i + 2}`).join(', ');
+  const params: string[] = [uid, ...ids];
+  const res = await ctx.pool.query(
+    `SELECT id, doc_type FROM documents
+     WHERE id IN (${placeholders})
+       AND (user_id = $1 OR user_id = '' OR user_id IS NULL)`,
+    params,
+  );
+  for (const row of res.rows as Array<{ id: string; doc_type: string }>) {
+    out.set(row.id, row.doc_type);
+  }
+  return out;
 }
 
 /** Read the source_uri for a document, or null if the row does not exist (pg). */

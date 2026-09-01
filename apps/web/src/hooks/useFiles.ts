@@ -17,6 +17,8 @@ export interface FileEntry {
   docId?: string;      // document ID from backend
   directory: string;   // directory path (e.g. "/" or "/合同文件")
   parseStatus: FileParseStatus | null;
+  /** 已解析出的具体业务类型；解析未完成、失败或兜底其他时为 null。 */
+  businessType?: string | null;
   /* Optional because synthetic FileEntry literals elsewhere (e.g. the preview
    * trace in ContractExecutionSection) don't carry it; undefined reads as not bound. */
   bound?: boolean;     // true once the file is bound to a contract ledger row
@@ -41,6 +43,7 @@ type RawFile = {
   docId?: unknown;
   directory?: unknown;
   parseStatus?: unknown;
+  businessType?: unknown;
   bound?: unknown;
 };
 
@@ -85,6 +88,10 @@ function normalizeFile(raw: RawFile): FileEntry {
     parseStatus:
       typeof raw.parseStatus === 'string' && FILE_PARSE_STATUSES.includes(raw.parseStatus)
         ? (raw.parseStatus as FileParseStatus)
+        : null,
+    businessType:
+      typeof raw.businessType === 'string' && raw.businessType.trim().length > 0
+        ? raw.businessType.trim()
         : null,
     bound: raw.bound === true,
   };
