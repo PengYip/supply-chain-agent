@@ -72,6 +72,20 @@ export class BatchApiError extends Error {
   }
 }
 
+/** 解析 409 unit_bound 的 detail(被绑定 unit 清单)为升序 unitIndex 数组;
+ *  形状非法时返回空数组(调用方退化为只显示错误消息)。 */
+export function parseBoundUnitIndexes(detail: unknown): number[] {
+  if (!Array.isArray(detail)) return [];
+  const out: number[] = [];
+  for (const d of detail) {
+    if (d && typeof d === 'object') {
+      const r = d as { unitIndex?: unknown };
+      if (typeof r.unitIndex === 'number') out.push(r.unitIndex);
+    }
+  }
+  return out.sort((a, b) => a - b);
+}
+
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   let res: Response;
   try {

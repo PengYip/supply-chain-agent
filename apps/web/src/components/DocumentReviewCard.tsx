@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react'
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import clsx from 'clsx'
 import {
   FileText,
@@ -13,10 +13,12 @@ import {
   Bookmark,
   Boxes,
   CheckCircle2,
+  Combine,
   FileStack,
   MinusCircle,
   Loader2,
   Check,
+  RefreshCw,
   Save,
   Share2,
   PenLine,
@@ -24,15 +26,22 @@ import {
   Split,
 } from 'lucide-react'
 import { submitReview, fetchReviewSnapshot, type ReviewCorrection } from '../api/review'
-import { correctDocumentType, fetchActiveDocTypes } from '../api/documentType'
+import { correctDocumentType, DOC_TYPE_FALLBACK, fetchActiveDocTypes } from '../api/documentType'
 import {
+  BatchApiError,
+  listDocumentUnits,
+  mergeUnits,
+  parseBoundUnitIndexes,
+  reextractUnit,
+  resplitDocument,
   unitReviewStatusBadge,
   unitStatusBadge,
   type BatchLineage,
   type BatchUnitSummary,
+  type ReextractUnitBody,
 } from '../api/documents'
 import { businessTypeTag } from '../lib/businessTypeTag'
-import { requestOpenReview } from '../lib/reviewModal'
+import { requestOpenReview, requestRefreshContainers } from '../lib/reviewModal'
 
 /** One chunk classified under a semantic tag. `text` is server-capped (800
  *  chars + '...'); the card renders it verbatim, never truncated client-side. */
@@ -119,6 +128,9 @@ const LOW_CONFIDENCE = 0.7
 
 /** 合同类文档判定(轻量引导条按此分叉; 与模板 doc_type 种子名对齐)。 */
 const CONTRACT_DOC_TYPES = new Set(['合同', '补充合同'])
+
+/** 单 unit 重抽可覆盖的旋回方向(契约: 0|90|180|270)。 */
+const REEXTRACT_ROTATIONS = [0, 90, 180, 270] as const
 
 const pct = (n: unknown): string => {
   if (typeof n !== 'number' || !isFinite(n)) return '--'
@@ -388,14 +400,40 @@ const ChunkTagSection: React.FC<{ details: DocumentReviewPayload['chunkTagDetail
 }
 
 /** 拆分清单的单行子单据： 序号 / 类型徽标 / 解析状态 / 复核状态 / 待复核
- *  标记 / 「复核」入口。与文件树 UnitRow 共用 api/documents 的徽标语言。 */
-const ContainerUnitRow: React.FC<{ unit: BatchUnitSummary }> = ({ unit }) => {
+ *  标记 / 「复核」入口。与文件树 UnitRow 共用 api/documents 的徽标语言。
+ *  合并修正模式下整行变为可勾选（隐藏「复核」）。 */
+const ContainerUnitRow: React.FC<{
+  unit: BatchUnitSummary
+  mergeMode?: boolean
+  selected?: boolean
+  onToggleMerge?: () => void
+}> = ({ unit, mergeMode = false, selected = false, onToggleMerge }) => {
   const typeTag = businessTypeTag(unit.childDocType ?? unit.detectedFormType)
   const status = unitStatusBadge(unit.unitStatus)
   const review = unitReviewStatusBadge(unit.reviewStatus)
   const docId = unit.docId
+  const clickable = mergeMode && typeof onToggleMerge === 'function'
   return (
-    <div className="flex items-center gap-2 px-2 py-1.5 text-xs">
+    <div
+      onClick={clickable ? onToggleMerge : undefined}
+      title={clickable ? (selected ? '取消选择该子单据' : '选择该子单据参与合并') : undefined}
+      className={clsx(
+        'flex items-center gap-2 px-2 py-1.5 text-xs transition-colors',
+        clickable && 'cursor-pointer',
+        selected ? 'bg-primary/5' : clickable && 'hover:bg-surface',
+      )}
+    >
+      {mergeMode && (
+        <span
+          aria-hidden
+          className={clsx(
+            'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border transition-colors',
+            selected ? 'border-primary bg-primary text-white' : 'border-line bg-white',
+          )}
+        >
+          {selected && <Check className="h-2.5 w-2.5" />}
+        </span>
+      )}
       <span className="shrink-0 font-mono text-[11px] text-ink-soft">
         #{unit.unitIndex}
       </span>
@@ -422,40 +460,167 @@ const ContainerUnitRow: React.FC<{ unit: BatchUnitSummary }> = ({ unit }) => {
       </span>
       {unit.needsReview && <FlagBadge />}
       <span className="ml-auto shrink-0">
-        {docId ? (
-          <button
-            type="button"
-            onClick={() => requestOpenReview(docId)}
-            title="打开该子单据的复核卡"
-            className="cursor-pointer whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
-          >
-            复核
-          </button>
-        ) : (
-          <span className="whitespace-nowrap text-[11px] text-ink-soft/70" title="子单据尚未生成">
-            --
-          </span>
-        )}
+        {!mergeMode &&
+          (docId ? (
+            <button
+              type="button"
+              onClick={() => requestOpenReview(docId)}
+              title="打开该子单据的复核卡"
+              className="cursor-pointer whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+            >
+              复核
+            </button>
+          ) : (
+            <span className="whitespace-nowrap text-[11px] text-ink-soft/70" title="子单据尚未生成">
+              --
+            </span>
+          ))}
       </span>
     </div>
   )
 }
 
+/** 409 unit_bound 的被绑定清单行（重拆/重抽/合并共用）。 */
+const BoundUnitList: React.FC<{ indexes: number[] }> = ({ indexes }) => (
+  <ul className="space-y-0.5 text-[11px] text-danger">
+    {indexes.map((idx) => (
+      <li key={idx} className="font-mono">
+        第 {idx} 份已挂合同绑定
+      </li>
+    ))}
+  </ul>
+)
+
 /** 单据组（container）复核卡的「拆分清单」形态： 头部「单据组 · N 份单据」
  *  + 待复核计数 chip，列表行为每份子单据提供「复核」入口（打开全局复核
  *  弹窗）。container 无抽取（字段/关系/图/向量都在 unit 子单据上），标准
- *  抽取区块与操作条全部不渲染。底部「重新拆分」为 Task 10 预留入口，
- *  当前禁用置灰。 */
-const ContainerSplitCard: React.FC<{ batch: BatchLineage }> = ({ batch }) => {
-  const units = useMemo(
-    () => (Array.isArray(batch.units) ? batch.units : []),
-    [batch.units],
+ *  抽取区块与复核操作条全部不渲染。底部为修正入口： 重新拆分（存在已绑定
+ *  unit 时 409，红色警示 + 强制勾选后带 force 重试）与合并修正（多选
+ *  >=2 行确认合并）。units 清单自管： 初始来自快照，修正成功后就地重拉
+ *  （弹窗/聊天两种宿主都能看到最新清单），并经 requestRefreshContainers
+ *  通知文件树刷新。 */
+const ContainerSplitCard: React.FC<{ docId: string; batch: BatchLineage }> = ({ docId, batch }) => {
+  const [units, setUnits] = useState<BatchUnitSummary[]>(() =>
+    Array.isArray(batch.units) ? batch.units : [],
   )
-  const unitCount = typeof batch.unitCount === 'number' ? batch.unitCount : units.length
-  const needsReviewCount =
+  const [unitCount, setUnitCount] = useState(() =>
+    typeof batch.unitCount === 'number'
+      ? batch.unitCount
+      : Array.isArray(batch.units)
+        ? batch.units.length
+        : 0,
+  )
+  const [needsReviewCount, setNeedsReviewCount] = useState(() =>
     typeof batch.needsReviewCount === 'number'
       ? batch.needsReviewCount
-      : units.filter((u) => u.needsReview).length
+      : Array.isArray(batch.units)
+        ? batch.units.filter((u) => u.needsReview).length
+        : 0,
+  )
+
+  /** 修正操作成功后就地重拉清单; 失败静默保留旧清单(下次操作会再拉)。 */
+  const reloadUnits = useCallback(async () => {
+    try {
+      const fresh = await listDocumentUnits(docId)
+      setUnits(fresh)
+      setUnitCount(fresh.length)
+      setNeedsReviewCount(fresh.filter((u) => u.needsReview).length)
+    } catch {
+      /* 保留旧清单 */
+    }
+  }, [docId])
+
+  // -- 重新拆分 --
+  const [resplitOpen, setResplitOpen] = useState(false)
+  const [resplitBusy, setResplitBusy] = useState(false)
+  const [resplitError, setResplitError] = useState<string | null>(null)
+  /** 409 unit_bound 时被绑定的 unitIndex 清单(null = 尚未遇到绑定冲突)。 */
+  const [resplitBound, setResplitBound] = useState<number[] | null>(null)
+  const [resplitForce, setResplitForce] = useState(false)
+  const [resplitDone, setResplitDone] = useState<string | null>(null)
+
+  const runResplit = async () => {
+    if (resplitBusy) return
+    setResplitBusy(true)
+    setResplitError(null)
+    try {
+      const res = await resplitDocument(docId, resplitBound !== null && resplitForce)
+      setResplitDone(`已重新拆分为 ${res.unitCount} 份子单据`)
+      setResplitOpen(false)
+      setResplitBound(null)
+      setResplitForce(false)
+      requestRefreshContainers()
+      void reloadUnits()
+    } catch (e) {
+      if (e instanceof BatchApiError && e.code === 'unit_bound') {
+        setResplitBound(parseBoundUnitIndexes(e.detail))
+        setResplitError(e.message || '存在已挂合同绑定的子单据')
+      } else {
+        setResplitError(e instanceof Error && e.message ? e.message : '重新拆分失败，请重试')
+      }
+    } finally {
+      setResplitBusy(false)
+    }
+  }
+
+  // -- 合并修正 --
+  const [mergeMode, setMergeMode] = useState(false)
+  const [selectedUnitIds, setSelectedUnitIds] = useState<Set<string>>(() => new Set())
+  const [mergeConfirmOpen, setMergeConfirmOpen] = useState(false)
+  const [mergeBusy, setMergeBusy] = useState(false)
+  const [mergeError, setMergeError] = useState<string | null>(null)
+  const [mergeBound, setMergeBound] = useState<number[] | null>(null)
+  const [mergeDone, setMergeDone] = useState<string | null>(null)
+
+  const toggleMergeSelect = useCallback((unitId: string) => {
+    setSelectedUnitIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(unitId)) next.delete(unitId)
+      else next.add(unitId)
+      return next
+    })
+  }, [])
+
+  const selectedUnits = units.filter((u) => selectedUnitIds.has(u.unitId))
+
+  const enterMergeMode = () => {
+    setSelectedUnitIds(new Set())
+    setMergeConfirmOpen(false)
+    setMergeError(null)
+    setMergeBound(null)
+    setMergeDone(null)
+    setMergeMode(true)
+  }
+
+  const exitMergeMode = () => {
+    setMergeMode(false)
+    setSelectedUnitIds(new Set())
+    setMergeConfirmOpen(false)
+    setMergeError(null)
+    setMergeBound(null)
+  }
+
+  const runMerge = async () => {
+    if (mergeBusy || selectedUnitIds.size < 2) return
+    setMergeBusy(true)
+    setMergeError(null)
+    try {
+      await mergeUnits(docId, [...selectedUnitIds])
+      setMergeDone('已合并为一份子单据')
+      exitMergeMode()
+      requestRefreshContainers()
+      void reloadUnits()
+    } catch (e) {
+      if (e instanceof BatchApiError && e.code === 'unit_bound') {
+        setMergeBound(parseBoundUnitIndexes(e.detail))
+        setMergeError(e.message || '所选子单据中存在已挂合同绑定的单据')
+      } else {
+        setMergeError(e instanceof Error && e.message ? e.message : '合并失败，请重试')
+      }
+    } finally {
+      setMergeBusy(false)
+    }
+  }
 
   return (
     <div className="rounded-lg border border-line bg-white p-3 mt-2">
@@ -482,29 +647,224 @@ const ContainerSplitCard: React.FC<{ batch: BatchLineage }> = ({ batch }) => {
         </div>
       </div>
 
-      {/* 子单据清单 */}
+      {/* 子单据清单（合并修正模式下每行变为可勾选） */}
       {units.length === 0 ? (
         <div className="text-xs text-ink-soft italic">暂无子单据</div>
       ) : (
-        <div className="rounded-md border border-line/60 divide-y divide-line/60">
+        <div
+          className={clsx(
+            'rounded-md border divide-y',
+            mergeMode ? 'border-primary/30 divide-line/60' : 'border-line/60 divide-line/60',
+          )}
+        >
           {units.map((u) => (
-            <ContainerUnitRow key={u.unitId} unit={u} />
+            <ContainerUnitRow
+              key={u.unitId}
+              unit={u}
+              mergeMode={mergeMode}
+              selected={selectedUnitIds.has(u.unitId)}
+              onToggleMerge={() => toggleMergeSelect(u.unitId)}
+            />
           ))}
         </div>
       )}
 
-      {/* 底部： 重新拆分修正入口（Task 10 接线，当前禁用） */}
-      <div className="mt-3 pt-3 border-t border-line flex items-center gap-2">
-        <button
-          type="button"
-          disabled
-          title="重新拆分入口将在后续版本开放"
-          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-line bg-surface text-ink-soft text-xs font-medium cursor-not-allowed"
-        >
-          <Split className="w-3.5 h-3.5" />
-          重新拆分
-        </button>
-        <span className="text-[11px] text-ink-soft">拆分修正（重拆/合并）入口待上线</span>
+      {/* 底部： 拆分修正入口（重新拆分 / 合并修正） */}
+      <div className="mt-3 pt-3 border-t border-line">
+        {mergeMode ? (
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-ink font-medium">合并修正</span>
+              <span className="text-ink-soft">
+                已选 {selectedUnitIds.size} 份（建议选择相邻的单据，至少 2 份）
+              </span>
+              <span className="ml-auto flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setMergeConfirmOpen(true)}
+                  disabled={selectedUnitIds.size < 2}
+                  title={selectedUnitIds.size < 2 ? '至少选择 2 份子单据' : ''}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-primary-500 text-white text-xs font-medium hover:bg-primary-500/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  <Combine className="w-3.5 h-3.5" />
+                  合并所选{selectedUnitIds.size > 0 ? ` (${selectedUnitIds.size})` : ''}
+                </button>
+                <button
+                  type="button"
+                  onClick={exitMergeMode}
+                  disabled={mergeBusy}
+                  className="px-2 py-1.5 text-xs text-ink-soft hover:text-ink disabled:opacity-50 transition-colors"
+                >
+                  退出
+                </button>
+              </span>
+            </div>
+            {mergeConfirmOpen && (
+              <div className="rounded border border-line bg-surface/50 px-2.5 py-2 space-y-1.5 text-xs">
+                <div className="text-ink font-medium">
+                  确认合并以下 {selectedUnits.length} 份子单据？
+                </div>
+                <ul className="space-y-0.5">
+                  {selectedUnits.map((u) => (
+                    <li key={u.unitId} className="flex items-center gap-1.5">
+                      <span className="shrink-0 font-mono text-[11px] text-ink-soft">
+                        #{u.unitIndex}
+                      </span>
+                      <span className="truncate">
+                        {u.childDocType ?? u.detectedFormType ?? '未识别'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="text-ink-soft leading-relaxed">
+                  将把所选子单据合并为一份：原有抽取与复核结果会被删除，合并后重新抽取。建议仅合并相邻且属于同一类单据的行。
+                </div>
+                {mergeBound !== null ? (
+                  <div className="rounded border border-danger/30 bg-danger/5 px-2 py-1.5 space-y-1">
+                    <div className="flex items-start gap-1.5 text-danger">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      <span className="leading-relaxed">
+                        所选子单据中存在已挂合同绑定的单据，需先在绑定工作台解除绑定后才能合并：
+                      </span>
+                    </div>
+                    <BoundUnitList indexes={mergeBound} />
+                  </div>
+                ) : (
+                  mergeError && (
+                    <div className="flex items-start gap-1.5 text-danger bg-danger/5 border border-danger/30 rounded px-2 py-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      <span className="leading-relaxed">{mergeError}</span>
+                    </div>
+                  )
+                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void runMerge()}
+                    disabled={mergeBusy}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-primary-500 text-white text-xs font-medium hover:bg-primary-500/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {mergeBusy ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Check className="w-3.5 h-3.5" />
+                    )}
+                    {mergeBusy ? '合并中...' : '确认合并'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMergeConfirmOpen(false)}
+                    disabled={mergeBusy}
+                    className="px-2 py-1.5 text-xs text-ink-soft hover:text-ink disabled:opacity-50"
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setResplitOpen((v) => !v)
+                  setResplitError(null)
+                  setResplitBound(null)
+                  setResplitForce(false)
+                }}
+                disabled={resplitBusy}
+                title="删除现有子单据及其抽取、复核、绑定与向量，重新检测拆分"
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-line bg-surface text-ink text-xs font-medium transition-colors hover:border-danger/50 hover:text-danger disabled:opacity-50"
+              >
+                <Split className="w-3.5 h-3.5" />
+                重新拆分
+              </button>
+              <button
+                type="button"
+                onClick={enterMergeMode}
+                title="将多份子单据合并为一份（建议相邻单据）"
+                className="inline-flex items-center gap-1 px-2 py-1.5 text-xs text-ink-soft transition-colors hover:text-ink"
+              >
+                <Combine className="w-3.5 h-3.5" />
+                合并修正
+              </button>
+              {resplitDone && (
+                <span className="text-[11px] text-success">{resplitDone}</span>
+              )}
+              {mergeDone && (
+                <span className="text-[11px] text-success">{mergeDone}</span>
+              )}
+            </div>
+            {resplitOpen && (
+              <div className="mt-2 rounded border border-warning/40 bg-warning/5 px-2.5 py-2 space-y-1.5 text-xs">
+                <div className="text-ink font-medium">确认重新拆分？</div>
+                <div className="text-ink-soft leading-relaxed">
+                  将删除现有 {unitCount} 份子单据及其抽取、复核、绑定与向量入库结果，并按检测器重新拆分该文件。
+                </div>
+                {resplitBound !== null && (
+                  <div className="rounded border border-danger/30 bg-danger/5 px-2 py-1.5 space-y-1">
+                    <div className="flex items-start gap-1.5 text-danger">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      <span className="leading-relaxed">
+                        以下子单据已挂合同绑定，重新拆分会解除其绑定：
+                      </span>
+                    </div>
+                    {resplitBound.length > 0 && <BoundUnitList indexes={resplitBound} />}
+                  </div>
+                )}
+                {resplitBound !== null && (
+                  <label className="flex items-start gap-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={resplitForce}
+                      onChange={(e) => setResplitForce(e.target.checked)}
+                      disabled={resplitBusy}
+                      className="mt-0.5 accent-primary"
+                    />
+                    <span className="leading-relaxed">强制重拆：解除上述绑定并继续</span>
+                  </label>
+                )}
+                {resplitError && resplitBound === null && (
+                  <div className="flex items-start gap-1.5 text-danger bg-danger/5 border border-danger/30 rounded px-2 py-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    <span className="leading-relaxed">{resplitError}</span>
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void runResplit()}
+                    disabled={resplitBusy || (resplitBound !== null && !resplitForce)}
+                    title={resplitBound !== null && !resplitForce ? '需勾选「强制重拆」后才能继续' : ''}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-danger text-white text-xs font-medium hover:bg-danger/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {resplitBusy ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Split className="w-3.5 h-3.5" />
+                    )}
+                    {resplitBusy ? '重新拆分中...' : '确认重新拆分'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResplitOpen(false)
+                      setResplitError(null)
+                      setResplitBound(null)
+                      setResplitForce(false)
+                    }}
+                    disabled={resplitBusy}
+                    className="px-2 py-1.5 text-xs text-ink-soft hover:text-ink disabled:opacity-50"
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   )
@@ -698,10 +1058,9 @@ export const DocumentReviewCard: React.FC<{
     }
   }
 
-  /** 打开改类型下拉: 首次懒加载激活词表(失败静默用兜底词表, 入口不因此关闭)。 */
-  const handleOpenTypeEdit = async () => {
-    setTypeResult(null)
-    setTypeEditing(true)
+  /** 懒加载激活词表(共用): 改类型下拉与单 unit 重抽的业务类型覆盖项共用
+   *  同一份词表; 首次拉取, 失败静默置 null(调用方各自兜底)。 */
+  const ensureTypeOptions = useCallback(async () => {
     if (typeOptions || typeOptionsLoading) return
     setTypeOptionsLoading(true)
     try {
@@ -711,6 +1070,13 @@ export const DocumentReviewCard: React.FC<{
     } finally {
       setTypeOptionsLoading(false)
     }
+  }, [typeOptions, typeOptionsLoading])
+
+  /** 打开改类型下拉: 首次懒加载激活词表(失败静默用兜底词表, 入口不因此关闭)。 */
+  const handleOpenTypeEdit = async () => {
+    setTypeResult(null)
+    setTypeEditing(true)
+    void ensureTypeOptions()
   }
 
   /** 下拉选中即提交(与绑定工作台一致, 不做二次确认); 值由 snapshot.docType 驱动,
@@ -759,13 +1125,71 @@ export const DocumentReviewCard: React.FC<{
     }
   }
 
+  // -- 拆分修正(单 unit 重抽): 仅 unit 子单据渲染, 与复核操作条并列 --
+  // 覆盖项: 业务类型(激活词表)/旋回方向(0/90/180/270,默认不覆盖); 已绑定
+  // unit 首次提交会 409, 红色警示 + 强制勾选后带 force 重试。快照谱系不带
+  // unitId, 提交时经容器清单按 unitIndex 反查(GET /api/documents/:docId/units)。
+  // 注意: 这些 hooks 必须在下方 container 变体的条件 return 之前声明
+  // (rules-of-hooks), container 载荷下状态闲置不用。
+  const [reextractOpen, setReextractOpen] = useState(false)
+  const [reextractDocType, setReextractDocType] = useState('')
+  const [reextractRotation, setReextractRotation] = useState('')
+  const [reextractForce, setReextractForce] = useState(false)
+  const [reextractBusy, setReextractBusy] = useState(false)
+  const [reextractError, setReextractError] = useState<string | null>(null)
+  /** 409 unit_bound 时被绑定的 unitIndex 清单(null = 尚未遇到绑定冲突)。 */
+  const [reextractBound, setReextractBound] = useState<number[] | null>(null)
+
+  const unitFlagged =
+    (warnings?.length ?? 0) > 0 || fields.some((f) => f.needsReview)
+
+  const runReextract = async () => {
+    if (reextractBusy || !batch || batch.role !== 'unit') return
+    const parentDocId = batch.parentDocumentId
+    if (!parentDocId) {
+      setReextractError('缺少拆分谱系信息（来源单据组），无法重抽')
+      return
+    }
+    setReextractBusy(true)
+    setReextractError(null)
+    try {
+      const containerUnits = await listDocumentUnits(parentDocId)
+      const row = containerUnits.find((u) => u.unitIndex === batch.unitIndex)
+      if (!row) throw new Error('未在单据组中找到该子单据（可能已被合并或重新拆分）')
+      const rot = REEXTRACT_ROTATIONS.find((r) => String(r) === reextractRotation)
+      const body: ReextractUnitBody = {
+        ...(reextractDocType ? { docType: reextractDocType } : {}),
+        ...(rot !== undefined ? { rotationDeg: rot } : {}),
+        ...(reextractForce ? { force: true } : {}),
+      }
+      const res = await reextractUnit(parentDocId, row.unitId, body)
+      requestRefreshContainers()
+      if (res.docId) {
+        // 弹窗宿主: 切到新子单据快照(key 化重挂载自动重拉); 聊天宿主:
+        // 打开弹窗查看重抽结果。
+        requestOpenReview(res.docId)
+      } else {
+        setReextractError('重抽已完成，但未返回新单据编号，请从文件树重新打开')
+      }
+    } catch (e) {
+      if (e instanceof BatchApiError && e.code === 'unit_bound') {
+        setReextractBound(parseBoundUnitIndexes(e.detail))
+        setReextractError(e.message || '该子单据已挂合同绑定')
+      } else {
+        setReextractError(e instanceof Error && e.message ? e.message : '重新抽取失败，请重试')
+      }
+    } finally {
+      setReextractBusy(false)
+    }
+  }
+
   // -- 单据组(container)变体： 整卡切「拆分清单」导航形态 --
   // container 无抽取（字段/关系/图/向量都在 unit 子单据上），业务类型固定
-  // 「单据组」（跳过分类器，词表也不允许改向），标准区块与操作条全部不
-  // 渲染。谱系角色对同一 docId 不可变，条件分支挂在所有 hooks 之后，不
+  // 「单据组」（跳过分类器，词表也不允许改向），标准区块与复核操作条全部
+  // 不渲染。谱系角色对同一 docId 不可变，条件分支挂在所有 hooks 之后，不
   // 违反 hooks 规则。
   if (batch?.role === 'container') {
-    return <ContainerSplitCard batch={batch} />
+    return <ContainerSplitCard docId={snapshot.docId} batch={batch} />
   }
 
   const warningCount = warnings?.length ?? 0
@@ -1143,6 +1567,142 @@ export const DocumentReviewCard: React.FC<{
               <span className="text-[11px] text-ink-soft">处理中...</span>
             )}
           </div>
+        </div>
+      )}
+
+      {/* 拆分修正（单 unit 重抽）— 仅 unit 子单据渲染，与复核操作条并列；
+          已确认/已更正的子单据同样可重抽（覆盖现读数走强制勾选）。普通
+          文档（batch 缺失或非 unit）不渲染，与现状零差异。 */}
+      {batch?.role === 'unit' && (
+        <div className="mt-3 pt-3 border-t border-line">
+          {reextractOpen ? (
+            <div className="space-y-1.5 text-xs">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-ink font-medium">重新抽取这份单据</span>
+                <span className="text-ink-soft truncate">
+                  （来源 {batch.parentFileName || '--'} 第 {batch.unitIndex ?? '--'} 份）
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setReextractOpen(false)}
+                  disabled={reextractBusy}
+                  className="ml-auto shrink-0 text-[11px] text-ink-soft hover:text-ink disabled:opacity-50"
+                >
+                  收起
+                </button>
+              </div>
+              <div className="flex items-start gap-1.5 text-ink-soft bg-surface/50 border border-line/50 rounded px-2 py-1.5">
+                <Info className="w-3.5 h-3.5 shrink-0 mt-0.5 text-primary" />
+                <span className="leading-relaxed">
+                  重新抽取将删除该子单据现有的抽取与复核结果，并按下列覆盖项重新处理。
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="flex items-center gap-1.5">
+                  <span className="text-ink-soft">业务类型</span>
+                  <select
+                    value={reextractDocType}
+                    onChange={(e) => setReextractDocType(e.target.value)}
+                    disabled={reextractBusy || typeOptionsLoading}
+                    aria-label="重抽时覆盖业务类型"
+                    className="h-7 rounded-md border border-line bg-white px-2 text-xs text-ink focus:border-primary focus:outline-none disabled:opacity-50"
+                  >
+                    <option value="">不覆盖</option>
+                    {(typeOptions ?? DOC_TYPE_FALLBACK).map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex items-center gap-1.5">
+                  <span className="text-ink-soft">旋回方向</span>
+                  <select
+                    value={reextractRotation}
+                    onChange={(e) => setReextractRotation(e.target.value)}
+                    disabled={reextractBusy}
+                    aria-label="重抽时覆盖旋回方向"
+                    className="h-7 rounded-md border border-line bg-white px-2 text-xs text-ink focus:border-primary focus:outline-none disabled:opacity-50"
+                  >
+                    <option value="">不覆盖</option>
+                    <option value="0">0°</option>
+                    <option value="90">90°</option>
+                    <option value="180">180°</option>
+                    <option value="270">270°</option>
+                  </select>
+                </label>
+                {typeOptionsLoading && (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-ink-soft shrink-0" />
+                )}
+              </div>
+              {unitFlagged && (
+                <div className="text-[11px] text-warning leading-relaxed">
+                  该单据带有读数分歧或低置信标记，重抽将覆盖现有读数。
+                </div>
+              )}
+              {reextractBound !== null && (
+                <div className="rounded border border-danger/30 bg-danger/5 px-2 py-1.5 space-y-1">
+                  <div className="flex items-start gap-1.5 text-danger">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    <span className="leading-relaxed">
+                      该子单据已挂合同绑定，重抽会解除其绑定：
+                    </span>
+                  </div>
+                  {reextractBound.length > 0 && <BoundUnitList indexes={reextractBound} />}
+                </div>
+              )}
+              {reextractBound !== null && (
+                <label className="flex items-start gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={reextractForce}
+                    onChange={(e) => setReextractForce(e.target.checked)}
+                    disabled={reextractBusy}
+                    className="mt-0.5 accent-primary"
+                  />
+                  <span className="leading-relaxed">强制重抽：解除该子单据的合同绑定并继续</span>
+                </label>
+              )}
+              {reextractError && reextractBound === null && (
+                <div className="flex items-start gap-1.5 text-danger bg-danger/5 border border-danger/30 rounded px-2 py-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span className="leading-relaxed">{reextractError}</span>
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void runReextract()}
+                  disabled={reextractBusy || (reextractBound !== null && !reextractForce)}
+                  title={reextractBound !== null && !reextractForce ? '需勾选「强制重抽」后才能继续' : ''}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-primary-500 text-white text-xs font-medium hover:bg-primary-500/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {reextractBusy ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  )}
+                  {reextractBusy ? '重新抽取中...' : '重新抽取'}
+                </button>
+                {reextractBusy && (
+                  <span className="text-[11px] text-ink-soft">处理中...</span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setReextractOpen(true)
+                setReextractError(null)
+                setReextractBound(null)
+                void ensureTypeOptions()
+              }}
+              title="删除该子单据现有抽取与复核结果，按覆盖项重新抽取"
+              className="inline-flex items-center gap-1 rounded border border-line bg-surface px-1.5 py-0.5 text-[11px] text-ink-soft transition-colors hover:border-primary hover:text-primary"
+            >
+              <RefreshCw className="w-3 h-3" />
+              拆分修正（重新抽取）
+            </button>
+          )}
         </div>
       )}
     </div>

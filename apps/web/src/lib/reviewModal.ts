@@ -22,3 +22,25 @@ export function requestOpenReview(docId: string): void {
   if (!docId) return;
   listener?.(docId);
 }
+
+// -- 批量拆分修正成功后的容器刷新通道 --
+// 重拆/单 unit 重抽/合并会改变单据组的子单据清单: 修正入口调用
+// requestRefreshContainers(), App 层订阅后递增文件抽屉的刷新令牌,
+// 重拉已展开单据组的子单据(复核卡自身会就地重拉,不依赖本通道)。
+
+type ContainerRefreshListener = () => void;
+
+let refreshListener: ContainerRefreshListener | null = null;
+
+/** App 层订阅容器刷新请求;返回退订函数(组件卸载时清理)。 */
+export function subscribeContainerRefreshes(l: ContainerRefreshListener): () => void {
+  refreshListener = l;
+  return () => {
+    if (refreshListener === l) refreshListener = null;
+  };
+}
+
+/** 通知「单据组子单据清单可能已变化」(重拆/重抽/合并成功后调用)。 */
+export function requestRefreshContainers(): void {
+  refreshListener?.();
+}

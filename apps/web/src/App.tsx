@@ -22,7 +22,7 @@ import { ProjectsView } from './components/projects/ProjectsView';
 import { ProjectLedgerView } from './components/ledger/ProjectLedgerView';
 import { SharePage } from './components/share/SharePage';
 import { ReviewModal } from './components/ReviewModal';
-import { subscribeReviewRequests } from './lib/reviewModal';
+import { subscribeContainerRefreshes, subscribeReviewRequests } from './lib/reviewModal';
 import type { GraphFocus, GraphFocusTarget } from './components/graph/focus';
 
 /** 免登录分享路由：pathname 匹配 /share/<token> 时在认证网关之前分流，
@@ -147,6 +147,9 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
   // 复核弹窗关闭后递增，驱动文件抽屉重拉已展开单据组的子单据清单。
   const [batchRefreshToken, setBatchRefreshToken] = useState(0);
   useEffect(() => subscribeReviewRequests((docId) => setReviewDocId(docId)), []);
+  // 批量拆分修正(重拆/单 unit 重抽/合并)成功后: 递增令牌让文件抽屉重拉
+  // 已展开单据组的子单据清单(复核卡自身会就地刷新,不依赖本通道)。
+  useEffect(() => subscribeContainerRefreshes(() => setBatchRefreshToken((t) => t + 1)), []);
   const closeReview = useCallback(() => {
     setReviewDocId(null);
     setBatchRefreshToken((t) => t + 1);
