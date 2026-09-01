@@ -1773,6 +1773,30 @@ export async function getDocumentParseStatusPg(
   return res.rows[0].parse_status as ParseStatus;
 }
 
+/** Batch-read doc_type for listed documents (pg twin of getDocumentTypes). */
+export async function getDocumentTypesPg(
+  ctx: PostgresDbContext,
+  docIds: string[],
+  userId?: string,
+): Promise<Map<string, string>> {
+  const ids = [...new Set(docIds.filter(Boolean))];
+  const out = new Map<string, string>();
+  if (ids.length === 0) return out;
+  const uid = userId && userId.length > 0 ? userId : '';
+  const placeholders = ids.map((_, i) => `$${i + 2}`).join(', ');
+  const params: string[] = [uid, ...ids];
+  const res = await ctx.pool.query(
+    `SELECT id, doc_type FROM documents
+     WHERE id IN (${placeholders})
+       AND (user_id = $1 OR user_id = '' OR user_id IS NULL)`,
+    params,
+  );
+  for (const row of res.rows as Array<{ id: string; doc_type: string }>) {
+    out.set(row.id, row.doc_type);
+  }
+  return out;
+}
+
 /** Read the source_uri for a document, or null if the row does not exist (pg). */
 export async function getDocumentSourceUriPg(
   ctx: PostgresDbContext,

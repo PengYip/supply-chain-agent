@@ -67,6 +67,7 @@ import {
   updateDocumentMetaPg,
   setDocumentParseStatusPg,
   getDocumentParseStatusPg,
+  getDocumentTypesPg,
   getDocumentSourceUriPg,
   getDocumentMetaPg,
   // docType 修正端点: pg twin for updateDocumentType.
@@ -2106,6 +2107,34 @@ export async function getDocumentParseStatus(
     .prepare('SELECT parse_status FROM documents WHERE id = ?')
     .get(docId) as { parse_status: string } | undefined;
   return row ? (row.parse_status as ParseStatus) : null;
+}
+
+/**
+ * Batch-read the current business type for the listed documents. Returns only
+ * rows visible to the caller; missing IDs are simply absent from the map.
+ * The file-manager list uses this after MinIO keys have already been resolved
+ * to docIds, avoiding one query per file.
+ */
+export async function getDocumentTypes(
+  ctx: DbContext,
+  docIds: string[],
+  userId?: string,
+): Promise<Map<string, string>> {
+  if (ctx.backend === 'postgres') return getDocumentTypesPg(ctx, docIds, userId);
+  const ids = [...new Set(docIds.filter(Boolean))];
+  const out = new Map<string, string>();
+  if (ids.length === 0) return out;
+  const uid = effectiveUserId(userId);
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = ctx.sqlite
+    .prepare(
+      `SELECT id, doc_type FROM documents
+       WHERE id IN (${placeholders})
+         AND (user_id = ? OR user_id = '' OR user_id IS NULL)`,
+    )
+    .all(...ids, uid) as Array<{ id: string; doc_type: string }>;
+  for (const row of rows) out.set(row.id, row.doc_type);
+  return out;
 }
 
 /**

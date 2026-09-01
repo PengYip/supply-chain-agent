@@ -54,6 +54,52 @@ function parseBadge(
   }
 }
 
+/** 已解析业务类型的标签配色：按业务族群区分色系，但文本始终展示服务端
+ *  识别出的完整类型，避免把「轨道衡称重单」这类精确结果弱化成泛化标签。 */
+const BUSINESS_TYPE_TAG_STYLES: Array<{ types: string[]; className: string }> = [
+  {
+    types: ['合同', '补充合同', '立项书', '履约凭证'],
+    className: 'border-[#F0D9B0] bg-[#FFFBF3] text-[#B45309]',
+  },
+  {
+    types: ['发票', '发票凭证', '进项票', '销项票'],
+    className: 'border-[#C7D6E3] bg-[#F5F8FF] text-[#1D4ED8]',
+  },
+  {
+    types: [
+      '提单', '装箱单', '货转单', '运输凭证', '收货单', '发货单',
+      '汽运磅单', '火运大票', '轨道衡称重单', '水尺计重单', '派船通知单',
+    ],
+    className: 'border-[#B8DCE4] bg-[#F2FAFC] text-[#0E7490]',
+  },
+  {
+    types: ['重量凭证'],
+    className: 'border-[#CBD5E1] bg-[#F8FAFC] text-[#475569]',
+  },
+  {
+    types: ['质检报告', '化验报告'],
+    className: 'border-[#F2CEE0] bg-[#FEF5FA] text-[#BE185D]',
+  },
+  {
+    types: ['结算单'],
+    className: 'border-[#DDD0F0] bg-[#FAF7FF] text-[#7C3AED]',
+  },
+  {
+    types: ['资金凭证', '付款单', '付款凭证'],
+    className: 'border-[#CBE5D3] bg-[#F4FAF5] text-[#15803D]',
+  },
+];
+
+/** 其他 = 上传兜底类型，不代表识别成功，因此不渲染业务类型标签。 */
+function businessTypeTag(businessType?: string | null) {
+  const text = businessType?.trim();
+  if (!text || text === '其他') return null;
+  const className = BUSINESS_TYPE_TAG_STYLES.find((entry) =>
+    entry.types.includes(text),
+  )?.className ?? 'border-line bg-surface text-ink-soft';
+  return { text, className };
+}
+
 /** 行内图标按钮：以可见的图形按钮替代悬浮文字条，避免遮住文件名。
  *  所有按钮都带 aria-label / title；破坏性动作使用 danger 色但保持相同热区。 */
 function actionIconButtonClass(tone: 'primary' | 'danger' | 'success' = 'primary') {
@@ -98,7 +144,7 @@ function RowIconButton({ label, onClick, tone = 'primary', disabled = false, chi
  *  title 兜底。气泡为主交互，无 hover 延迟，带 100ms 淡入缩放过渡。 */
 function FileNameText({ name, className }: { name: string; className?: string }) {
   return (
-    <div className="group/name relative min-w-0">
+    <div className="group/name relative min-w-0 flex-1">
       <span title={name} className={clsx('line-clamp-2 [overflow-wrap:anywhere]', className)}>
         {name}
       </span>
@@ -293,6 +339,7 @@ function FileRow(props: {
   const { file, depth, isSelected, cb } = props;
   const [edgeZone, setEdgeZone] = useState<'above' | 'below' | null>(null);
   const badge = parseBadge(file.parseStatus);
+  const typeTag = businessTypeTag(file.businessType);
   // 动作区在 hover / focus / 选中 / 移动中 / 删除确认中保持可见
   const showActions =
     isSelected || cb.movingFileKey === file.key || cb.deletingFilePath === file.key;
@@ -448,6 +495,17 @@ function FileRow(props: {
           <FileText className="h-4 w-4" aria-hidden />
         </span>
         <FileNameText name={file.name} className="text-[13px] leading-5" />
+        {typeTag && (
+          <span
+            title={`业务类型：${typeTag.text}`}
+            className={clsx(
+              'mt-px max-w-[92px] shrink-0 truncate rounded border px-1.5 py-px text-[10px] leading-4',
+              typeTag.className,
+            )}
+          >
+            {typeTag.text}
+          </span>
+        )}
       </div>
       <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 pl-[26px]">
         <div className="flex min-w-0 flex-wrap items-center gap-1">
