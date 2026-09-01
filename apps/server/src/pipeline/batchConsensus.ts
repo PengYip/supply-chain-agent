@@ -27,10 +27,16 @@ export const CONSENSUS_MISMATCH_CONFIDENCE_CAP = 0.5;
 
 /** 单号/编号类字段名(车号/卡号/账号等非单据标识字段刻意不匹配)。 */
 const IDENT_FIELD_RE = /(单号|编号|号码|票号|报告号|凭证号)/;
-/** 重量类字段名。 */
-const WEIGHT_FIELD_RE = /(总净重|净重|毛重|皮重|重量)/;
-/** evidence 中"标签 + 数字"读数(净重34250 / 毛重: 45,600 等)。 */
-const WEIGHT_EVIDENCE_RE = /(总净重|净重|毛重|皮重|重量)\s*[:：]?\s*([0-9]+(?:[.,][0-9]+)?)/g;
+/** 重量标签的精确集合(2026-09-01 下游收货证明实测: 子串匹配会把 毛重时间/
+ *  皮重时间 这类时间字段误拉进重量共识, 把 evidence "毛重63.16" 与字段
+ *  "2026-06-08 19:23:12" 强行比对产生假分歧)。 */
+const WEIGHT_LABELS = new Set(['总净重', '净重', '毛重', '皮重', '重量']);
+/** 证据标签别名: 磅单实物常用"实重", schema 字段为 净重_吨。 */
+const WEIGHT_LABEL_ALIAS: Record<string, string> = { 实重: '净重' };
+/** evidence 中"标签 + 数字"读数(净重34250 / 毛重: 45,600 等); 标签后紧跟
+ *  时间/日期字样不算(毛重时间 2026-06-08 不是重量读数)。 */
+const WEIGHT_EVIDENCE_RE =
+  /(总净重|净重|毛重|皮重|实重|重量)(?![时间日期])\s*[:：]?\s*([0-9]+(?:[.,][0-9]+)?)/g;
 
 /** 读数归一: 去掉全部非字母数字字符(空格/连字符/点号等 OCR 噪声)。 */
 export function normalizeReadingId(v: string): string {
@@ -41,6 +47,8 @@ export interface ReadingLeaf {
   key: string;
   /** 数组行叶子的容器字段名(如 明细行), 标量叶子与 key 相同。 */
   container: string;
+  /** 裸字段名(数组行叶子为行内字段, 如 净重_吨; 标量叶子与 key 相同)。 */
+  field: string;
   value: unknown;
 }
 
@@ -55,11 +63,11 @@ export function readingLeaves(fields: Record<string, unknown>): ReadingLeaf[] {
       v.forEach((row, i) => {
         if (row === null || typeof row !== 'object') return;
         for (const [rk, rv] of Object.entries(row as Record<string, unknown>)) {
-          out.push({ key: `${k}${i + 1}.${rk}`, container: k, value: rv });
+          out.push({ key: `${k}${i + 1}.${rk}`, container: k, field: rk, value: rv });
         }
       });
     } else {
-      out.push({ key: k, container: k, value: v });
+      out.push({ key: k, container: k, field: k, value: v });
     }
   }
   return out;
@@ -85,6 +93,11 @@ function sameWeightReading(a: number, b: number): boolean {
 /** 去掉字段名的单位后缀(净重_吨 -> 净重), 与 evidence 标签对齐。 */
 function weightLabelOf(key: string): string {
   return key.replace(/_[^_]*$/, '');
+}
+
+/** 重量标签归一(实重 -> 净重), 供证据/字段两侧对齐。 */
+function canonWeightLabel(label: string): string {
+  return WEIGHT_LABEL_ALIAS[label] ?? label;
 }
 
 /**
@@ -126,16 +139,21 @@ export function compareReadings(
     if (Number.isFinite(value)) evidenceWeights.push({ label: m[1]!, value });
   }
   if (evidenceWeights.length > 0) {
-    const weightLeaves = leaves.filter((l) => WEIGHT_FIELD_RE.test(l.key));
+    // 只有标签精确命中(去掉单位后缀后)的叶子才参与重量共识;
+    // 毛重时间/皮重时间等时间字段被刻意排除。
+    const weightLeaves = leaves.filter((l) => WEIGHT_LABELS.has(canonWeightLabel(weightLabelOf(l.field))));
     for (const leaf of weightLeaves) {
       const got = parseReadingNumber(leaf.value);
       if (got === null) continue;
-      const label = weightLabelOf(leaf.key);
+      const label = canonWeightLabel(weightLabelOf(leaf.field));
       // 先精确对齐标签(总净重↔总净重_吨), 无精确命中再退化为包含(净重↔总净重)。
-      const exact = evidenceWeights.filter((e) => e.label === label);
+      const exact = evidenceWeights.filter((e) => canonWeightLabel(e.label) === label);
       const related = exact.length > 0
         ? exact
-        : evidenceWeights.filter((e) => label.includes(e.label) || e.label.includes(label));
+        : evidenceWeights.filter((e) => {
+            const el = canonWeightLabel(e.label);
+            return label.includes(el) || el.includes(label);
+          });
       if (related.length === 0) continue;
       if (!related.some((e) => sameWeightReading(e.value, got))) {
         mismatches.push({

@@ -26,9 +26,9 @@ describe('readingLeaves', () => {
         { 编号: '10384418', 净重_吨: 35.1 },
       ],
     });
-    expect(leaves).toContainEqual({ key: '编号', container: '编号', value: 'A-1' });
-    expect(leaves).toContainEqual({ key: '明细行1.编号', container: '明细行', value: '10384417' });
-    expect(leaves).toContainEqual({ key: '明细行2.净重_吨', container: '明细行', value: 35.1 });
+    expect(leaves).toContainEqual({ key: '编号', container: '编号', field: '编号', value: 'A-1' });
+    expect(leaves).toContainEqual({ key: '明细行1.编号', container: '明细行', field: '编号', value: '10384417' });
+    expect(leaves).toContainEqual({ key: '明细行2.净重_吨', container: '明细行', field: '净重_吨', value: 35.1 });
   });
 });
 
@@ -118,6 +118,36 @@ describe('compareReadings: 重量共识', () => {
       { 总净重_吨: '1664.92' },
     );
     expect(r.mismatches).toHaveLength(0);
+  });
+
+  it('毛重时间/皮重时间(时间字段)不参与重量共识(下游收货证明实测回归)', () => {
+    const r = compareReadings(
+      { identifier: 'Q012606080025', evidence: '过磅单 计量编号 Q012606080025 毛重63.160 皮重16.830 实重46.330' },
+      {
+        明细行: [{
+          编号: 'Q012606080025',
+          毛重_吨: 63.16,
+          皮重_吨: 16.83,
+          净重_吨: 46.33,
+          毛重时间: '2026-06-08 19:23:12',
+          皮重时间: '2026-06-08 19:48:58',
+        }],
+      },
+    );
+    expect(r.mismatches).toHaveLength(0);
+  });
+
+  it('实重(evidence)与净重_吨(字段)视为同一标签', () => {
+    const r = compareReadings(
+      { identifier: null, evidence: '过磅单 实重49.870' },
+      { 明细行: [{ 净重_吨: 49.87 }] },
+    );
+    expect(r.mismatches).toHaveLength(0);
+    const bad = compareReadings(
+      { identifier: null, evidence: '过磅单 实重49.870' },
+      { 明细行: [{ 净重_吨: 51.2 }] },
+    );
+    expect(bad.mismatches).toHaveLength(1);
   });
 });
 
