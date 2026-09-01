@@ -283,7 +283,13 @@ export function FileDrawer(props: FileDrawerProps) {
         className="absolute inset-y-0 left-0 z-30 w-1 cursor-col-resize bg-transparent transition-colors hover:bg-primary/40"
       />
       {/* 内容层锁定最小宽：收合动画期间只被裁切、不重排；inert 阻断隐藏态的焦点与读屏 */}
-      <div className="flex w-full flex-1 flex-col" style={{ minWidth: PANEL_MIN }} inert={!open}>
+      {/* min-h-0 是嵌套 flex 滚动的关键：flex 子项默认 min-height:auto，
+          否则文件树会被内容撑高并绕过 overflow-y-auto 的滚动约束。 */}
+      <div
+        className="flex min-h-0 w-full flex-1 flex-col"
+        style={{ minWidth: PANEL_MIN }}
+        inert={!open}
+      >
       {/* 头部：标题 + 新建文件夹 + 收起 */}
         <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-3">
           <div className="min-w-0 flex-1">
@@ -341,7 +347,7 @@ export function FileDrawer(props: FileDrawerProps) {
 
         {/* 文件树（根区同时是拖拽回根的落点） */}
         <div
-          className={`flex-1 overflow-y-auto overflow-x-hidden${dnd.dragging ? ' ring-1 ring-inset ring-primary/30' : ''}`}
+          className={`min-h-0 flex-1 overflow-y-auto overflow-x-hidden${dnd.dragging ? ' ring-1 ring-inset ring-primary/30' : ''}`}
           onClick={() => setSelectedKey(null)}
           onDragOver={dnd.onDragOver('')}
           onDragLeave={dnd.onDragLeave('')}
