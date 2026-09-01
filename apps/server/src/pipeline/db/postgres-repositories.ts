@@ -25,7 +25,7 @@ import { normalizeCompanyName } from '../../domain/flowDirection.js';
 import { deriveContractType } from '../../domain/contractType.js';
 import type { ContractType } from '../../domain/tradeSemantics.js';
 import { isVectorizableDocType } from '../vectorPolicy.js';
-import { parseGraphStatus, effectiveSelfPartyNamesForDerivation, normalizeProjectCode, ledgerRowFieldsToProjection, listTemplateTypes, safeParseJson } from './repositories.js';
+import { parseGraphStatus, effectiveSelfPartyNamesForDerivation, normalizeProjectCode, ledgerRowFieldsToProjection, listTemplateTypes, safeParseJson, displayNameFromDocRow, batchUnitSummaryFromRow } from './repositories.js';
 import type {
   ExtractionInput,
   BindingInput,
@@ -78,6 +78,8 @@ import type {
   DocumentUnitInput,
   DocumentUnitRow,
   BatchRole,
+  BatchUnitSummary,
+  BatchLineage,
 } from './repositories.js';
 
 // Phase 2 business-data isolation: same convention as repositories.ts -- a
@@ -1196,13 +1198,15 @@ export async function findDocIdsByMinioKeysPg(
   for (const key of missing) {
     const lastSeg = key.split('/').pop() ?? key;
     const flat = `%${lastSeg}`;
+    // P3 加固: 排除 batch_role='unit' 行(unit 与 container 共享 source_uri,
+    // 不排除会让 unit 劫持文件条目的 docId)。与 SQLite 分支同语义。
     const r = uid
       ? await ctx.pool.query(
-          'SELECT id FROM documents WHERE source_uri LIKE $1 AND (user_id = $2 OR user_id = \'\' OR user_id IS NULL) LIMIT 1',
+          "SELECT id FROM documents WHERE source_uri LIKE $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL) AND (batch_role IS NULL OR batch_role <> 'unit') LIMIT 1",
           [flat, uid],
         )
       : await ctx.pool.query(
-          'SELECT id FROM documents WHERE source_uri LIKE $1 LIMIT 1',
+          "SELECT id FROM documents WHERE source_uri LIKE $1 AND (batch_role IS NULL OR batch_role <> 'unit') LIMIT 1",
           [flat],
         );
     if (r.rows[0]) out.set(key, r.rows[0].id);
@@ -1414,7 +1418,7 @@ export async function getReviewSnapshotPg(
   userId?: string,
 ): Promise<ReviewSnapshot | null> {
   const docRes = await ctx.pool.query(
-    'SELECT doc_type, review_status, vectorization_meta, graph_status FROM documents WHERE id = $1',
+    'SELECT doc_type, review_status, vectorization_meta, graph_status, batch_role FROM documents WHERE id = $1',
     [docId],
   );
   if (!docRes.rows[0]) return null;
@@ -1423,6 +1427,7 @@ export async function getReviewSnapshotPg(
     review_status: string | null;
     vectorization_meta: DocumentVectorization | null;
     graph_status: DocumentGraphStatus | null;
+    batch_role: string | null;
   };
 
   // jsonb auto-parses to an object on read; a NULL/legacy row falls back to the
@@ -1490,6 +1495,52 @@ export async function getReviewSnapshotPg(
     }
   }
 
+  // P3(批量拆分器): field_meta 顶层 _warnings(P2 两遍读数共识分歧) -> warnings;
+  // jsonb 自动解析为对象, 无该键(老数据/未走共识)恒 [](与 SQLite 分支同规则)。
+  const w = ex
+    ? (ex.field_meta as Record<string, unknown>)['_warnings'] as { warnings?: unknown } | undefined
+    : undefined;
+  const warnings = Array.isArray(w?.warnings) ? w!.warnings!.map(String) : [];
+
+  // P3 谱系块: batch_role IS NULL(老数据/未拆分)恒 null, 不发任何额外查询。
+  let batch: BatchLineage | null = null;
+  if (doc.batch_role === 'container' || doc.batch_role === 'unit') {
+    if (doc.batch_role === 'container') {
+      const units = await listContainerUnitSummariesPg(ctx, docId);
+      batch = {
+        role: 'container',
+        unitCount: units.length,
+        units,
+        needsReviewCount: units.filter((u) => u.needsReview).length,
+      };
+    } else {
+      const unit = await getDocumentUnitByChildPg(ctx, docId);
+      if (unit) {
+        const parentRes = await ctx.pool.query(
+          'SELECT minio_key, source_uri FROM documents WHERE id = $1',
+          [unit.parentDocumentId],
+        );
+        const parent = parentRes.rows[0] as
+          | { minio_key: string | null; source_uri: string }
+          | undefined;
+        const regions = (unit.manifest as { regions?: unknown }).regions;
+        batch = {
+          role: 'unit',
+          parentDocumentId: unit.parentDocumentId,
+          parentFileName: parent
+            ? displayNameFromDocRow(parent.minio_key, parent.source_uri)
+            : null,
+          unitIndex: unit.unitIndex,
+          detectedFormType: unit.docType,
+          pageStart: unit.pageStart,
+          pageEnd: unit.pageEnd,
+          rotationDeg: unit.rotationDeg,
+          regionCount: Array.isArray(regions) ? regions.length : null,
+        };
+      }
+    }
+  }
+
   // 合同类型派生: 与 SQLite 分支同规则(共用 effectiveSelfPartyNamesForDerivation,
   // 按后端分发读 self_parties); 无识别结果时挂 null。
   const contractDerivation = deriveContractType({
@@ -1518,6 +1569,8 @@ export async function getReviewSnapshotPg(
     proposedEdges: deriveProposedEdges(doc.doc_type, fields),
     contractType,
     graphStatus,
+    warnings,
+    batch,
   };
 }
 
@@ -3173,4 +3226,98 @@ export async function setDocumentBatchRolePg(
   role: BatchRole,
 ): Promise<void> {
   await ctx.pool.query('UPDATE documents SET batch_role = $1 WHERE id = $2', [role, docId]);
+}
+
+/** pg twin of getDocumentUnitByChild: 按子单据 docId 反查 unit 行(取第一行)。 */
+export async function getDocumentUnitByChildPg(
+  ctx: PostgresDbContext,
+  childDocId: string,
+): Promise<DocumentUnitRow | null> {
+  const res = await ctx.pool.query(
+    `SELECT ${DOCUMENT_UNIT_COLS_PG} FROM document_units
+     WHERE child_document_id = $1 LIMIT 1`,
+    [childDocId],
+  );
+  if (!res.rows[0]) return null;
+  return documentUnitFromPg(res.rows[0] as Record<string, unknown>);
+}
+
+/**
+ * pg twin of listContainerUnitSummaries: container 的 unit 清单摘要, 左联子单据
+ * 与最新 extraction。PG 无 rowid: 最新行用 LATERAL 按 created_at DESC, ctid DESC
+ * 取 1(getReviewSnapshotPg 的 created_at DESC 惯例 + ctid 决稳同刻); needs_review
+ * 为 boolean, COALESCE false, batchUnitSummaryFromRow 的 Number() 归一兼容。
+ */
+export async function listContainerUnitSummariesPg(
+  ctx: PostgresDbContext,
+  parentDocId: string,
+): Promise<BatchUnitSummary[]> {
+  const res = await ctx.pool.query(
+    `SELECT u.id AS unit_id, u.child_document_id, u.unit_index,
+            u.doc_type AS detected_form_type, u.status AS unit_status,
+            d.doc_type AS child_doc_type, d.review_status,
+            COALESCE(e.needs_review, false) AS needs_review
+     FROM document_units u
+     LEFT JOIN documents d ON d.id = u.child_document_id
+     LEFT JOIN LATERAL (
+       SELECT needs_review FROM extractions e2
+       WHERE e2.document_id = u.child_document_id
+       ORDER BY created_at DESC, ctid DESC
+       LIMIT 1
+     ) e ON true
+     WHERE u.parent_document_id = $1
+     ORDER BY u.unit_index ASC`,
+    [parentDocId],
+  );
+  return (res.rows as Array<Record<string, unknown>>).map(batchUnitSummaryFromRow);
+}
+
+/** pg twin of getBatchRolesForDocuments: 批量读 batch_role + container unit 计数。 */
+export async function getBatchRolesForDocumentsPg(
+  ctx: PostgresDbContext,
+  docIds: string[],
+  userId?: string,
+): Promise<Map<string, { batchRole: string | null; unitCount: number }>> {
+  const ids = [...new Set(docIds.filter(Boolean))];
+  const out = new Map<string, { batchRole: string | null; unitCount: number }>();
+  if (ids.length === 0) return out;
+  const uid = effectiveUserId(userId);
+  const placeholders = ids.map((_, i) => `$${i + 2}`).join(', ');
+  const unitCount = `(SELECT COUNT(*)::int FROM document_units u WHERE u.parent_document_id = d.id)`;
+  const sql = uid
+    ? `SELECT d.id, d.batch_role, ${unitCount} AS unit_count FROM documents d
+       WHERE d.id IN (${placeholders})
+         AND (d.user_id = $1 OR d.user_id = '' OR d.user_id IS NULL)`
+    : `SELECT d.id, d.batch_role, ${unitCount} AS unit_count FROM documents d
+       WHERE d.id IN (${placeholders})`;
+  const params: string[] = uid ? [uid, ...ids] : ids;
+  const res = await ctx.pool.query(sql, params);
+  for (const r of res.rows as Array<{ id: string; batch_role: string | null; unit_count: number }>) {
+    out.set(r.id, { batchRole: r.batch_role ?? null, unitCount: Number(r.unit_count) });
+  }
+  return out;
+}
+
+/** pg twin of updateDocumentUnitManifest: 动态 UPDATE, 只写传入字段。 */
+export async function updateDocumentUnitManifestPg(
+  ctx: PostgresDbContext,
+  unitId: string,
+  patch: { rotationDeg?: number; manifest?: Record<string, unknown> },
+): Promise<void> {
+  const sets: string[] = [];
+  const params: Array<string | number> = [];
+  let n = 1;
+  if (patch.rotationDeg !== undefined) {
+    sets.push(`rotation_deg = $${n++}`);
+    params.push(patch.rotationDeg);
+  }
+  if (patch.manifest !== undefined) {
+    sets.push(`manifest_json = $${n++}`);
+    params.push(JSON.stringify(patch.manifest));
+  }
+  if (sets.length === 0) return;
+  await ctx.pool.query(
+    `UPDATE document_units SET ${sets.join(', ')} WHERE id = $${n}`,
+    [...params, unitId],
+  );
 }

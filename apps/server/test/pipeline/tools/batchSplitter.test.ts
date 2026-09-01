@@ -283,6 +283,46 @@ describe('processDocumentWithBatch (灰度入口)', () => {
     expect(clsRows.n).toBe(3);
   });
 
+  it('container 固定「单据组」跳过分类器: classifications source=hint confidence=1', async () => {
+    const pdfPath = join(dir, 'p3-doctype.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A CONTRACT HT-001', 'REPORT-B CONTRACT HT-002']);
+    const docId = await stubFor(pdfPath);
+
+    const res = await ensureDocumentParsed(ctx, docId, {
+      modality: 'scanned',
+      userId: 'u1',
+      vlm: fakeDetect([
+        { regions: [region({ identifierOrNull: 'HX-A' })] },
+        { regions: [region({ identifierOrNull: 'HX-B' })] },
+      ]),
+    });
+
+    expect(res.parseStatus).toBe('parsed');
+    // container doc_type 固定「单据组」(2026-09-01 拍板决策 1): 不再吃词表分类噪声。
+    const containerRow = ctx.sqlite
+      .prepare('SELECT doc_type FROM documents WHERE id = ?')
+      .get(docId) as { doc_type: string };
+    expect(containerRow.doc_type).toBe('单据组');
+    const clsRow = ctx.sqlite
+      .prepare(
+        'SELECT doc_type, confidence, source FROM classifications WHERE document_id = ? ORDER BY rowid DESC LIMIT 1',
+      )
+      .get(docId) as { doc_type: string; confidence: number; source: string };
+    expect(clsRow.doc_type).toBe('单据组');
+    expect(clsRow.source).toBe('hint');
+    expect(clsRow.confidence).toBe(1);
+    // unit 子单据分类不受影响(既有无分类器 hint 行为: confidence 0, 类型来自 hint)。
+    const [c1] = res.batchSplit!.childDocIds;
+    const childCls = ctx.sqlite
+      .prepare(
+        'SELECT doc_type, confidence, source FROM classifications WHERE document_id = ? ORDER BY rowid DESC LIMIT 1',
+      )
+      .get(c1!) as { doc_type: string; confidence: number; source: string };
+    expect(childCls.source).toBe('hint');
+    expect(childCls.confidence).toBe(0);
+  });
+
   it('开启 + 已拆分文件重跑(force): 幂等, 不重复生成子单据', async () => {
     const pdfPath = join(dir, 'rerun.pdf');
     await makeTwoPagePdf(pdfPath);

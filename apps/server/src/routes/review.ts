@@ -22,6 +22,8 @@ import {
   setReviewStatus,
   updateDocumentType,
   listTemplateTypes,
+  getBatchRolesForDocuments,
+  listContainerUnitSummaries,
 } from '../pipeline/db/repositories.js';
 import { ensureDocumentExtracted } from '../pipeline/tools/documentEntry.js';
 import { refreshExecutionFlowsForDocument } from '../pipeline/executionFlow.js';
@@ -180,6 +182,41 @@ reviewRoute.get('/:docId/review', async (c) => {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[review] snapshot fetch failed:', msg);
+    return c.json({ ok: false, error: msg }, 500);
+  }
+});
+
+/**
+ * GET /api/documents/:docId/units
+ *
+ * P3 谱系(批量拆分器 Phase 3): container 文档的 unit 清单摘要(检测类型/子单据
+ * 类型/解析与复核状态/待复核标记), 文件树展开层级与 container 导航卡消费。
+ *
+ * 守卫(一次批量查询覆盖三态): 文档不存在 / 非本人(batch_role 查询按 user 过滤,
+ * 他人文档不在结果里) / batch_role != 'container' -> 一律 404(照 GET /review
+ * 的错误形态; 不用 getReviewSnapshot 做守卫——它的 documents SELECT 不带
+ * user 过滤, 对他人文档并不返回 null)。
+ *
+ * Responses:
+ *   200 { ok: true, docId, units: BatchUnitSummary[] }
+ *   401 { error: 'unauthorized' }            (requireAuth, applied in index.ts)
+ *   404 { ok: false, error: 'document_or_extraction_not_found' }
+ *   500 { ok: false, error: <message> }
+ */
+reviewRoute.get('/:docId/units', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const docId = c.req.param('docId');
+  try {
+    const roles = await getBatchRolesForDocuments(ctx(), [docId], user.id);
+    if (roles.get(docId)?.batchRole !== 'container') {
+      return c.json({ ok: false, error: 'document_or_extraction_not_found' }, 404);
+    }
+    const units = await listContainerUnitSummaries(ctx(), docId);
+    return c.json({ ok: true, docId, units });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[review] units fetch failed:', msg);
     return c.json({ ok: false, error: msg }, 500);
   }
 });

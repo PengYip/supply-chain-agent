@@ -124,6 +124,11 @@ import {
   listDocumentUnitsByParentPg,
   updateDocumentUnitChildPg,
   setDocumentBatchRolePg,
+  // 批量拆分器 P3 谱系: pg twins for unit 反查/container 清单/批量角色/manifest 回填。
+  getDocumentUnitByChildPg,
+  listContainerUnitSummariesPg,
+  getBatchRolesForDocumentsPg,
+  updateDocumentUnitManifestPg,
   updateGraphLinkStatusPg,
   updateGraphLinkPropsPg,
   setGraphLinkGraphStatusPg,
@@ -404,6 +409,44 @@ export interface ReviewSnapshot {
   contractType: ContractTypeDerivation | null;
   /** 确认时 Neo4j 写入结果；未确认或从未写入时为 null。 */
   graphStatus: DocumentGraphStatus | null;
+  /** 两遍读数共识分歧(P2): field_meta 顶层 _warnings.warnings; 无则 [](老数据/
+   *  无抽取恒空, 零行为变化)。 */
+  warnings: string[];
+  /** 批量拆分谱系(P3, spec 2026-09-01): container 带 units 清单, unit 带
+   *  parent 联结; batch_role IS NULL(老数据/未拆分)恒 null。 */
+  batch: BatchLineage | null;
+}
+
+/** 批量拆分谱系块(P3): getReviewSnapshot 组装, 前端复核卡/文件树消费。 */
+export interface BatchUnitSummary {
+  unitId: string;                 // document_units.id ('DU-*')
+  docId: string | null;           // 子单据 documents.id
+  unitIndex: number;
+  detectedFormType: string;       // 检测词表标签(汽运磅单/质检报告...)
+  childDocType: string | null;    // 子单据落库业务类型(可与 detectedFormType 不同)
+  unitStatus: string;             // pending|processing|processed|needs_ocr|failed
+  reviewStatus: 'pending' | 'confirmed' | 'corrected' | null;
+  needsReview: boolean;           // 最新 extraction needs_review=1
+}
+
+export interface BatchLineage {
+  role: 'container' | 'unit';
+  // container 侧
+  unitCount?: number;
+  units?: BatchUnitSummary[];
+  needsReviewCount?: number;
+  // unit 侧
+  parentDocumentId?: string;
+  /** container 的显示名(minio_key 最后段去 UUID 前缀, fallback source_uri basename)。 */
+  parentFileName?: string | null;
+  unitIndex?: number;
+  detectedFormType?: string;
+  pageStart?: number | null;
+  pageEnd?: number | null;
+  /** 择优后的旋回方向(双候选择优写回后即最终值)。 */
+  rotationDeg?: number | null;
+  /** manifest.regions.length; 无 regions 挂 null。 */
+  regionCount?: number | null;
 }
 
 const rid = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -1484,6 +1527,161 @@ export async function setDocumentBatchRole(
   ctx.sqlite.prepare('UPDATE documents SET batch_role = ? WHERE id = ?').run(role, docId);
 }
 
+/**
+ * container 显示名(P3): minio_key 非空取最后段, 长度>37 去掉前 37 字符
+ * (UUID- 前缀, 与 routes/files.ts parseFileKey 同规则); 否则 source_uri
+ * basename。本地小助手, 勿 import routes/(会成环)。无可用名返回 null。
+ */
+export function displayNameFromDocRow(
+  minioKey: string | null | undefined,
+  sourceUri: string,
+): string | null {
+  if (minioKey && minioKey.length > 0) {
+    const lastSeg = minioKey.split('/').pop() ?? minioKey;
+    return lastSeg.length > 0 ? (lastSeg.length > 37 ? lastSeg.slice(37) : lastSeg) : null;
+  }
+  const base = sourceUri.split(/[\\/]/).pop() ?? sourceUri;
+  return base.length > 0 ? base : null;
+}
+
+/** document_units 查询行 -> BatchUnitSummary(双后端共用装配, needs_review 兼容
+ *  SQLite 0/1 与 pg boolean)。导出供 pg twin 复用。 */
+export function batchUnitSummaryFromRow(r: Record<string, unknown>): BatchUnitSummary {
+  const review = r.review_status == null ? null : String(r.review_status);
+  return {
+    unitId: String(r.unit_id),
+    docId: r.child_document_id == null ? null : String(r.child_document_id),
+    unitIndex: Number(r.unit_index),
+    detectedFormType: String(r.detected_form_type),
+    childDocType: r.child_doc_type == null ? null : String(r.child_doc_type),
+    unitStatus: String(r.unit_status ?? 'pending'),
+    reviewStatus:
+      review === 'pending' || review === 'confirmed' || review === 'corrected' ? review : null,
+    needsReview: Number(r.needs_review ?? 0) === 1,
+  };
+}
+
+/**
+ * 按子单据 docId 反查 unit 行(P3): unit 快照的 parent 联结 + 择优旋回写回定位。
+ * child_document_id 在业务上唯一(一子单据只属一个 unit), 取第一行。
+ */
+export async function getDocumentUnitByChild(
+  ctx: DbContext,
+  childDocId: string,
+): Promise<DocumentUnitRow | null> {
+  if (ctx.backend === 'postgres') return getDocumentUnitByChildPg(ctx, childDocId);
+  const row = ctx.sqlite
+    .prepare('SELECT * FROM document_units WHERE child_document_id = ? LIMIT 1')
+    .get(childDocId) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return {
+    id: String(row.id),
+    parentDocumentId: String(row.parent_document_id),
+    childDocumentId: row.child_document_id == null ? null : String(row.child_document_id),
+    unitIndex: Number(row.unit_index),
+    docType: String(row.doc_type),
+    pageStart: row.page_start == null ? null : Number(row.page_start),
+    pageEnd: row.page_end == null ? null : Number(row.page_end),
+    bboxJson: row.bbox_json == null ? null : String(row.bbox_json),
+    rotationDeg: row.rotation_deg == null ? null : Number(row.rotation_deg),
+    detectorConfidence: Number(row.detector_confidence ?? 0),
+    manifest: safeParseJson(row.manifest_json),
+    status: String(row.status ?? 'pending'),
+    createdAt: row.created_at == null ? '' : String(row.created_at),
+  };
+}
+
+/**
+ * container 的 unit 清单摘要(P3): document_units 左联子单据(doc_type/review_status)
+ * 与最新 extraction(needs_review), 按 unit_index 升序。供快照 container 分支与
+ * GET /api/documents/:docId/units 共用。
+ */
+export async function listContainerUnitSummaries(
+  ctx: DbContext,
+  parentDocId: string,
+): Promise<BatchUnitSummary[]> {
+  if (ctx.backend === 'postgres') return listContainerUnitSummariesPg(ctx, parentDocId);
+  const rows = ctx.sqlite
+    .prepare(
+      `SELECT u.id AS unit_id, u.child_document_id, u.unit_index,
+              u.doc_type AS detected_form_type, u.status AS unit_status,
+              d.doc_type AS child_doc_type, d.review_status,
+              COALESCE(e.needs_review, 0) AS needs_review
+       FROM document_units u
+       LEFT JOIN documents d ON d.id = u.child_document_id
+       LEFT JOIN extractions e ON e.document_id = u.child_document_id
+         AND e.rowid = (SELECT MAX(e2.rowid) FROM extractions e2 WHERE e2.document_id = u.child_document_id)
+       WHERE u.parent_document_id = ?
+       ORDER BY u.unit_index ASC`,
+    )
+    .all(parentDocId) as Array<Record<string, unknown>>;
+  return rows.map(batchUnitSummaryFromRow);
+}
+
+/**
+ * 批量读 documents.batch_role + container 的 unit 计数(P3)。/api/files 条目
+ * 装谱系字段用: 一次 IN 查询替代逐文件读。user 过滤与 getDocumentTypes 同惯例
+ * (uid 归一后非空才过滤, 老数据 user_id=''/NULL 对任何调用方可见)。
+ */
+export async function getBatchRolesForDocuments(
+  ctx: DbContext,
+  docIds: string[],
+  userId?: string,
+): Promise<Map<string, { batchRole: string | null; unitCount: number }>> {
+  if (ctx.backend === 'postgres') return getBatchRolesForDocumentsPg(ctx, docIds, userId);
+  const ids = [...new Set(docIds.filter(Boolean))];
+  const out = new Map<string, { batchRole: string | null; unitCount: number }>();
+  if (ids.length === 0) return out;
+  const uid = effectiveUserId(userId);
+  const placeholders = ids.map(() => '?').join(', ');
+  const unitCount = `(SELECT COUNT(*) FROM document_units u WHERE u.parent_document_id = d.id)`;
+  const rows = (uid
+    ? ctx.sqlite
+        .prepare(
+          `SELECT d.id, d.batch_role, ${unitCount} AS unit_count FROM documents d
+           WHERE d.id IN (${placeholders})
+             AND (d.user_id = ? OR d.user_id = '' OR d.user_id IS NULL)`,
+        )
+        .all(...ids, uid)
+    : ctx.sqlite
+        .prepare(
+          `SELECT d.id, d.batch_role, ${unitCount} AS unit_count FROM documents d
+           WHERE d.id IN (${placeholders})`,
+        )
+        .all(...ids)) as Array<{ id: string; batch_role: string | null; unit_count: number }>;
+  for (const r of rows) {
+    out.set(r.id, { batchRole: r.batch_role ?? null, unitCount: Number(r.unit_count) });
+  }
+  return out;
+}
+
+/**
+ * 回填 unit 行的择优旋回结果(P3): rotation_deg 与 manifest(合并 chosenRotation/
+ * candidateScores)。动态 UPDATE, 只写传入的字段; 全空 patch 为无害 no-op。
+ */
+export async function updateDocumentUnitManifest(
+  ctx: DbContext,
+  unitId: string,
+  patch: { rotationDeg?: number; manifest?: Record<string, unknown> },
+): Promise<void> {
+  if (ctx.backend === 'postgres') return updateDocumentUnitManifestPg(ctx, unitId, patch);
+  const sets: string[] = [];
+  const params: Array<string | number> = [];
+  if (patch.rotationDeg !== undefined) {
+    sets.push('rotation_deg = ?');
+    params.push(patch.rotationDeg);
+  }
+  if (patch.manifest !== undefined) {
+    sets.push('manifest_json = ?');
+    params.push(JSON.stringify(patch.manifest));
+  }
+  if (sets.length === 0) return;
+  params.push(unitId);
+  ctx.sqlite
+    .prepare(`UPDATE document_units SET ${sets.join(', ')} WHERE id = ?`)
+    .run(...params);
+}
+
 /** 宽松 JSON 解析(损坏行按空对象, 与 graphLinkFromPg 同取舍)。导出供 pg twin 复用。 */
 export function safeParseJson(v: unknown): Record<string, unknown> {
   if (typeof v !== 'string' || v.length === 0) return {};
@@ -1565,9 +1763,11 @@ export async function findDocIdsByMinioKeys(
   for (const key of missing) {
     const lastSeg = key.split('/').pop() ?? key;
     const flat = `%${lastSeg}`;
+    // P3 加固: 排除 batch_role='unit' 行——unit 子单据与 container 共享
+    // source_uri(同一物理文件), 不排除会让 unit 劫持文件条目的 docId。
     const sql2 = uid
-      ? 'SELECT id FROM documents WHERE source_uri LIKE ? AND (user_id = ? OR user_id = \'\' OR user_id IS NULL) LIMIT 1'
-      : 'SELECT id FROM documents WHERE source_uri LIKE ? LIMIT 1';
+      ? 'SELECT id FROM documents WHERE source_uri LIKE ? AND (user_id = ? OR user_id = \'\' OR user_id IS NULL) AND (batch_role IS NULL OR batch_role <> \'unit\') LIMIT 1'
+      : 'SELECT id FROM documents WHERE source_uri LIKE ? AND (batch_role IS NULL OR batch_role <> \'unit\') LIMIT 1';
     const params2: string[] = uid ? [flat, uid] : [flat];
     const row = ctx.sqlite.prepare(sql2).get(...params2) as { id: string } | undefined;
     if (row) out.set(key, row.id);
@@ -1823,8 +2023,8 @@ export async function getReviewSnapshot(
   if (ctx.backend === 'postgres') return getReviewSnapshotPg(ctx, docId, userId);
   const sqlite = ctx.sqlite;
   const doc = sqlite
-    .prepare('SELECT doc_type, review_status, vectorization_meta, graph_status FROM documents WHERE id = ?')
-    .get(docId) as { doc_type: string; review_status: string | null; vectorization_meta: string | null; graph_status: string | null } | undefined;
+    .prepare('SELECT doc_type, review_status, vectorization_meta, graph_status, batch_role FROM documents WHERE id = ?')
+    .get(docId) as { doc_type: string; review_status: string | null; vectorization_meta: string | null; graph_status: string | null; batch_role: string | null } | undefined;
   if (!doc) return null;
 
   // Parse the persisted vectorization outcome. Null/invalid (legacy rows, or a
@@ -1914,6 +2114,52 @@ export async function getReviewSnapshot(
     }
   }
 
+  // P3(批量拆分器): field_meta 顶层 _warnings(P2 两遍读数共识分歧) -> warnings;
+  // 无该键(老数据/未走共识)恒 [](零行为变化)。
+  const w = ex
+    ? (JSON.parse(ex.field_meta) as Record<string, unknown>)['_warnings'] as
+        | { warnings?: unknown }
+        | undefined
+    : undefined;
+  const warnings = Array.isArray(w?.warnings) ? w!.warnings!.map(String) : [];
+
+  // P3 谱系块: batch_role IS NULL(老数据/未拆分)恒 null, 不发任何额外查询。
+  let batch: BatchLineage | null = null;
+  if (doc.batch_role === 'container' || doc.batch_role === 'unit') {
+    if (doc.batch_role === 'container') {
+      const units = await listContainerUnitSummaries(ctx, docId);
+      batch = {
+        role: 'container',
+        unitCount: units.length,
+        units,
+        needsReviewCount: units.filter((u) => u.needsReview).length,
+      };
+    } else {
+      const unit = await getDocumentUnitByChild(ctx, docId);
+      if (unit) {
+        const parent = sqlite
+          .prepare('SELECT minio_key, source_uri FROM documents WHERE id = ?')
+          .get(unit.parentDocumentId) as
+          | { minio_key: string | null; source_uri: string }
+          | undefined;
+        const regions = (unit.manifest as { regions?: unknown }).regions;
+        batch = {
+          role: 'unit',
+          parentDocumentId: unit.parentDocumentId,
+          parentFileName: parent
+            ? displayNameFromDocRow(parent.minio_key, parent.source_uri)
+            : null,
+          unitIndex: unit.unitIndex,
+          detectedFormType: unit.docType,
+          pageStart: unit.pageStart,
+          pageEnd: unit.pageEnd,
+          rotationDeg: unit.rotationDeg,
+          regionCount: Array.isArray(regions) ? regions.length : null,
+        };
+      }
+    }
+  }
+
   // Followup P0 (2026-08-17): proposedRelationships is DERIVED from the current
   // fields (same rule as the graph writer + proposedEdges), NOT the persisted
   // proposed_relationships column — the column goes stale after a correction
@@ -1947,6 +2193,8 @@ export async function getReviewSnapshot(
     proposedEdges: deriveProposedEdges(doc.doc_type, fields),
     contractType,
     graphStatus,
+    warnings,
+    batch,
   };
 }
 

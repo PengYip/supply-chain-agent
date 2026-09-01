@@ -4,8 +4,10 @@ import {
   saveDocument, saveExtraction, saveDocumentTags, listDocumentTags,
   getReviewSnapshot, setReviewStatus, updateExtractionFields,
   setDocumentVectorization, applyDocumentCorrections, saveChunks, addSelfParty,
+  createDocumentStub, saveDocumentUnits, setDocumentBatchRole,
 } from '../../../src/pipeline/db/repositories.js';
 import type { BlockModel } from '../../../src/pipeline/types.js';
+import type { SpanMatchStrength } from '../../../src/pipeline/spanValidator.js';
 
 function mkModel(docId: string): BlockModel {
   return {
@@ -250,6 +252,111 @@ describe('getReviewSnapshot chunkTags (Lane B)', () => {
     await saveChunks(ctx, 'DOC-ct3', [{ text: 'x', index: 0 }]); // no tags param
     const snap = await getReviewSnapshot(ctx, 'DOC-ct3');
     expect(snap?.chunkTags).toEqual([]);
+  });
+});
+
+// ---- P3 谱系(批量拆分器 Phase 3): snapshot.batch + snapshot.warnings --------
+//
+// batch_role IS NULL 的老数据零行为变化: batch=null / warnings=[]。container
+// 快照带 units 清单(needsReview 聚合), unit 快照带 parent 谱系与 manifest
+// 派生字段; _warnings 是 Phase 2 写进 field_meta 顶层的共识分歧键。
+
+describe('getReviewSnapshot batch lineage + warnings (P3)', () => {
+  async function stubDoc(sourceUri: string, minioKey?: string): Promise<string> {
+    const { docId } = await createDocumentStub(ctx, { sourceUri, minioKey, userId: 'u1' });
+    return docId;
+  }
+
+  it('container snapshot lists units with needsReview aggregation', async () => {
+    const containerId = await stubDoc('file:///container.pdf');
+    const c1 = await stubDoc('file:///container.pdf');
+    const c2 = await stubDoc('file:///container.pdf');
+    await setDocumentBatchRole(ctx, containerId, 'container');
+    await setDocumentBatchRole(ctx, c1, 'unit');
+    await setDocumentBatchRole(ctx, c2, 'unit');
+    // 故意乱序落库(unitIndex 2 先插): 快照必须按 unitIndex 升序。
+    await saveDocumentUnits(ctx, [
+      { parentDocumentId: containerId, childDocumentId: c2, unitIndex: 2, docType: '质检报告', pageStart: 2, pageEnd: 2 },
+      { parentDocumentId: containerId, childDocumentId: c1, unitIndex: 1, docType: '汽运磅单', pageStart: 1, pageEnd: 1 },
+    ]);
+    // unit1 无 extraction -> needsReview false; unit2 最新 extraction needs_review=1。
+    await saveExtraction(ctx, {
+      documentId: c2, docType: '质检报告',
+      fields: { 结论: { value: '待定', sourceSpans: [] } },
+      fieldMeta: { 结论: { strength: 'none', confidence: 0.3 } },
+      overallConfidence: 0.3, needsReview: true,
+    });
+    const snap = await getReviewSnapshot(ctx, containerId);
+    expect(snap?.batch?.role).toBe('container');
+    expect(snap?.batch?.unitCount).toBe(2);
+    expect(snap?.batch?.needsReviewCount).toBe(1);
+    expect(snap?.batch?.units?.map((u) => u.unitIndex)).toEqual([1, 2]);
+    expect(snap?.batch?.units?.[0]).toMatchObject({
+      docId: c1,
+      detectedFormType: '汽运磅单',
+      childDocType: '其他',
+      unitStatus: 'pending',
+      reviewStatus: 'pending',
+      needsReview: false,
+    });
+    expect(snap?.batch?.units?.[1]?.needsReview).toBe(true);
+  });
+
+  it('unit snapshot carries parent lineage', async () => {
+    // parentFileName: container 行 minio_key 最后段去 UUID 前缀(parseFileKey 同规则)。
+    const parentId = await stubDoc(
+      'file:///scans/batch.pdf',
+      'users/u1/8f0e2c10-9d3f-4f5a-8b6c-7d1e2f3a4b5c-批次件.pdf',
+    );
+    const childId = await stubDoc('file:///scans/batch.pdf');
+    await setDocumentBatchRole(ctx, parentId, 'container');
+    await setDocumentBatchRole(ctx, childId, 'unit');
+    await saveDocumentUnits(ctx, [
+      {
+        parentDocumentId: parentId, childDocumentId: childId, unitIndex: 1,
+        docType: '汽运磅单', pageStart: 3, pageEnd: 5, rotationDeg: 270,
+        manifest: { regions: [{ page: 3 }, { page: 4 }, { page: 5 }] },
+      },
+    ]);
+    const snap = await getReviewSnapshot(ctx, childId);
+    expect(snap?.batch).toMatchObject({
+      role: 'unit',
+      parentDocumentId: parentId,
+      parentFileName: '批次件.pdf',
+      unitIndex: 1,
+      detectedFormType: '汽运磅单',
+      pageStart: 3,
+      pageEnd: 5,
+      rotationDeg: 270,
+      regionCount: 3,
+    });
+  });
+
+  it('field_meta _warnings surfaced as snapshot.warnings (absent -> [])', async () => {
+    await saveDocument(ctx, mkModel('DOC-w1'));
+    const meta: Record<string, { strength: SpanMatchStrength; confidence: number }> = {
+      编号: { strength: 'none', confidence: 0.4 },
+    };
+    (meta as Record<string, unknown>)['_warnings'] = {
+      strength: 'none',
+      confidence: 1,
+      warnings: ['编号两遍分歧: 10384417 vs 10394417'],
+    };
+    await saveExtraction(ctx, {
+      documentId: 'DOC-w1', docType: '汽运磅单',
+      fields: { 编号: { value: '10394417', sourceSpans: [] } },
+      fieldMeta: meta,
+      overallConfidence: 0.4, needsReview: true,
+    });
+    const snap = await getReviewSnapshot(ctx, 'DOC-w1');
+    expect(snap?.warnings).toEqual(['编号两遍分歧: 10384417 vs 10394417']);
+  });
+
+  it('legacy doc (batch_role null) has batch null and empty warnings', async () => {
+    await saveDocument(ctx, mkModel('DOC-w2'));
+    const snap = await getReviewSnapshot(ctx, 'DOC-w2');
+    expect(snap?.batch).toBeNull();
+    expect(snap?.warnings).toEqual([]);
   });
 });
 

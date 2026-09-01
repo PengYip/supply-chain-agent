@@ -33,6 +33,7 @@ import type { DbContext } from '../pipeline/db/client.js';
 import {
   setDocumentMinioKey,
   findDocIdsByMinioKeys,
+  getBatchRolesForDocuments,
   listFileFolders,
   createFileFolder,
   deleteFileFolder,
@@ -348,11 +349,23 @@ filesRoute.get('/', requireRole('admin', 'trader', 'viewer'), async (c) => {
     filesWithStatus.flatMap((f) => (f.docId && f.parseStatus === 'parsed' ? [f.docId] : [])),
     user.id,
   );
-  const filesWithMeta = filesWithStatus.map((f) => ({
-    ...f,
-    businessType:
-      f.docId && f.parseStatus === 'parsed' ? (docTypes.get(f.docId) ?? null) : null,
-  }));
+  // P3 谱系: container 文件条目带 unitCount(文件树展开 unit 层级用); 非 container
+  // 恒 null, 前端以 batchRole === 'container' 判定。一次批量查询, 无逐文件读。
+  const batchRoles = await getBatchRolesForDocuments(
+    ctx(),
+    filesWithStatus.filter((f) => f.docId).map((f) => f.docId!),
+    user.id,
+  );
+  const filesWithMeta = filesWithStatus.map((f) => {
+    const b = f.docId ? batchRoles.get(f.docId) : undefined;
+    return {
+      ...f,
+      businessType:
+        f.docId && f.parseStatus === 'parsed' ? (docTypes.get(f.docId) ?? null) : null,
+      batchRole: b?.batchRole ?? null,
+      unitCount: b?.batchRole === 'container' ? b.unitCount : null,
+    };
+  });
 
   // Virtual folders (presentational only; file objects live in MinIO regardless).
   // Already sorted by the repo (rank ASC, path ASC; unranked last).

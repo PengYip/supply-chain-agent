@@ -17,6 +17,7 @@ import {
   deleteChunksForDocument,
   // 批量拆分器(spec 2026-09-01): document_units 读写 + batch_role + 子单据存根。
   saveDocumentUnits, listDocumentUnitsByParent, updateDocumentUnitChild, setDocumentBatchRole,
+  updateDocumentUnitManifest,
   createDocumentStub,
   // Phase B bindings state machine.
   listContractLedgerEntries, findBindingByDocAndContract, listBindingProposals,
@@ -24,6 +25,7 @@ import {
 } from '../db/repositories.js';
 import {
   detectDocumentUnits,
+  CONTAINER_DOC_TYPE,
   UNIT_FORM_TYPE_ALIASES,
   type DetectedUnit,
 } from '../batchSplit.js';
@@ -337,6 +339,11 @@ export interface UnitVoucherInput {
   detection: DetectionReading;
   /** unit 页区间的 OCR 块模型(保留给 chunk/recall, 与 Phase 1 一致)。 */
   ocrBlockModel: BlockModel;
+  /** P3 择优旋回落库: 双候选择优胜出后把最终方向与择优证据写回 unit 行
+   *  (fire-and-forget, 失败不阻断)。单候选(0/180)无择优不写。 */
+  unitId?: string;
+  /** unit 行当前 manifest(写回时合并 chosenRotation/candidateScores)。 */
+  unitManifest?: Record<string, unknown>;
 }
 
 /** runVoucherPipeline / ingestVoucherImage 的返回形状(与 ingestFile 一致)。 */
@@ -466,6 +473,23 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
             .join(' vs ') +
           ` -> 取 rot=[${best.rotations.join('/')}]`,
         );
+        // P3 择优旋回落库(双候选才有择优): 最终方向 + 择优证据写回 unit 行,
+        // 「来源与拆分」区块据此展示。fire-and-forget, 失败不阻断抽取主流程。
+        if (unitVoucher.unitId) {
+          const chosenRotation = best.rotations[0] ?? 0;
+          void updateDocumentUnitManifest(ctx, unitVoucher.unitId, {
+            rotationDeg: chosenRotation,
+            manifest: {
+              ...unitVoucher.unitManifest,
+              chosenRotation,
+              candidateScores: scored.map((s) => ({
+                rot: s.a.rotations[0] ?? 0,
+                score: s.score,
+                mismatch: s.a.consensus.mismatches.length,
+              })),
+            },
+          }).catch(() => {});
+        }
       }
       perf.mark(
         'vlm_extract_unit',
@@ -1050,6 +1074,9 @@ export interface ProcessDocumentOptions {
   /** 批量拆分器内部选项: 多单据 container 跳过 VLM 凭证路由(整文件硬喂
    *  单据级 schema 正是批量拆分要修的 bug), 落 OCR 旧路径。 */
   skipVoucherRoute?: boolean;
+  /** 批量拆分器内部选项: 固定业务类型跳过分类器(container 无业务语义,
+   *  词表分类只会产噪声)。落 classifications source='hint'、confidence=1。 */
+  fixedDocType?: DocType | typeof CONTAINER_DOC_TYPE;
 }
 
 export interface ProcessDocumentResult {
@@ -1317,11 +1344,15 @@ export async function processDocument(
   // (no throw — process-layer failures are states, not exceptions).
   try {
     // 4. Classify (Phase 2 routing-classify): parsed blocks -> effective docType.
+    //    P3: fixedDocType(批量拆分器 container 内部选项)直接定类型跳过分类器,
+    //    落 source='hint'、confidence=1(2026-09-01 拍板决策 1)。
     const types = await listTemplateTypes(ctx);
     const vocab = buildClassifierVocab(types);
-    const cls = opts.classifier
-      ? await classifyDocument(opts.classifier, { blocks: blockModel.blocks, hint: opts.docType, vocab })
-      : classifyDocumentWithoutModel({ blocks: blockModel.blocks, hint: opts.docType });
+    const cls = opts.fixedDocType
+      ? { docType: opts.fixedDocType as DocType, confidence: 1, source: 'hint' as const }
+      : opts.classifier
+        ? await classifyDocument(opts.classifier, { blocks: blockModel.blocks, hint: opts.docType, vocab })
+        : classifyDocumentWithoutModel({ blocks: blockModel.blocks, hint: opts.docType });
     perf.mark('classify', `${cls.docType} src=${cls.source} conf=${cls.confidence.toFixed(2)}`);
     blockModel.docType = cls.docType;
 
@@ -1526,7 +1557,7 @@ export async function processDocumentWithBatch(
   // 子单据。子单据的逐单元重抽/合并修正入口属 Phase 3。
   const existingUnits = await listDocumentUnitsByParent(ctx, docId);
   if (existingUnits.length > 0) {
-    return processDocument(ctx, docId, { ...opts, skipVoucherRoute: true });
+    return processDocument(ctx, docId, { ...opts, skipVoucherRoute: true, fixedDocType: CONTAINER_DOC_TYPE });
   }
 
   // 版面清点。任何失败(渲染 / 超页数上限 / VLM 异常)都回落旧路径——拆分器
@@ -1550,9 +1581,17 @@ export async function processDocumentWithBatch(
 
   console.log(`[batch-split] ${docId} 检测到 ${units.length} 份逻辑单据, 进入拆分`);
   await setDocumentBatchRole(ctx, docId, 'container', opts.userId);
+  // manifest 与 saveDocumentUnits 同源取一份, 供 unitVoucher 择优写回时合并。
+  const unitManifests: Array<Record<string, unknown>> = units.map((u) => ({
+    formType: u.formType,
+    identifier: u.identifier,
+    evidence: u.evidence,
+    regions: u.regions,
+    merged: u.pageEnd > u.pageStart,
+  }));
   const unitIds = await saveDocumentUnits(
     ctx,
-    units.map((u) => ({
+    units.map((u, i) => ({
       parentDocumentId: docId,
       unitIndex: u.unitIndex,
       docType: u.formType,
@@ -1561,20 +1600,18 @@ export async function processDocumentWithBatch(
       bboxJson: u.bbox ? JSON.stringify(u.bbox) : undefined,
       rotationDeg: u.rotationDeg,
       detectorConfidence: u.confidence,
-      manifest: {
-        formType: u.formType,
-        identifier: u.identifier,
-        evidence: u.evidence,
-        regions: u.regions,
-        merged: u.pageEnd > u.pageStart,
-      },
+      manifest: unitManifests[i],
     })),
   );
 
-  // container 旧链路解析(OCR/分类/chunk/索引照旧), 仅跳过 Voucher 路由。
-  // 解析失败(needs_ocr/failed)时不生成子单据——没有可切的块模型, unit 行
-  // 保留检测审计(status='pending')。
-  const containerRes = await processDocument(ctx, docId, { ...opts, skipVoucherRoute: true });
+  // container 旧链路解析(OCR/chunk/索引照旧), 跳过 Voucher 路由且固定「单据组」
+  // (P3: 跳过分类器, container 无业务语义)。解析失败(needs_ocr/failed)时不生成
+  // 子单据——没有可切的块模型, unit 行保留检测审计(status='pending')。
+  const containerRes = await processDocument(ctx, docId, {
+    ...opts,
+    skipVoucherRoute: true,
+    fixedDocType: CONTAINER_DOC_TYPE,
+  });
   const childDocIds: string[] = [];
   if (containerRes.parseStatus !== 'parsed') {
     return { ...containerRes, batchSplit: { unitCount: units.length, childDocIds } };
@@ -1657,6 +1694,9 @@ export async function processDocumentWithBatch(
             candidates,
             detection: { identifier: unit.identifier, evidence: unit.evidence },
             ocrBlockModel,
+            // P3 择优旋回落库: 双候选择优胜出后写回 unit 行(fire-and-forget)。
+            unitId: unitIds[i],
+            unitManifest: unitManifests[i],
           },
         });
         await updateDocumentUnitChild(ctx, unitIds[i]!, childId, 'processed');
@@ -2273,6 +2313,9 @@ export function buildPresentDocumentReviewTool(deps: ToolDeps) {
         chunkTagDetails: snap.chunkTagDetails,
         vectorization: snap.vectorization,
         reviewStatus: snap.reviewStatus,
+        // P3(批量拆分器): 两遍读数共识分歧 + 谱系块(老数据恒 []/null)。
+        warnings: snap.warnings,
+        batch: snap.batch,
       };
     },
   });

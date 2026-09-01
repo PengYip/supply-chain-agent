@@ -21,6 +21,13 @@ export const UNIT_FORM_TYPES = [
 ] as const;
 
 /**
+ * container 文档的固定业务类型(2026-09-01 拍板决策 1)。container 是"物理拼版
+ * 文件"不是业务单据, 词表分类只会产噪声, 故跳过分类器直接定类型。刻意不进
+ * 模板词表/PATCH 校验/齐套率五维(dimension 未映射 -> 天然排除)。
+ */
+export const CONTAINER_DOC_TYPE = '单据组' as const;
+
+/**
  * 检测词表 -> 模板注册表 formTypes 的别名桥(Phase 2 抽取路由用)。
  * P1 检测词表按清点质量选定, 与 v2.1 分类词表(templateSeed formTypes)
  * 不同源(如检测输出"汽运磅单", 注册表登记"汽车过磅单票据")。路由仍以
