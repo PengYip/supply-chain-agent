@@ -3,7 +3,20 @@
 // 交互回调经单一 callbacks 对象由容器（FileDrawer）下发。
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
-import { ChevronRight, FileText, Folder, FolderOpen } from 'lucide-react';
+import {
+  Check,
+  ChevronRight,
+  Download,
+  Eye,
+  FileText,
+  Folder,
+  FolderInput,
+  FolderOpen,
+  FolderPlus,
+  MessageSquarePlus,
+  Pencil,
+  Trash2,
+} from 'lucide-react';
 import { type FileEntry, type FileFolder } from '../../hooks/useFiles';
 import { normalizeMoveDirectory, nodeAt, type TreeNode } from '../../lib/fileTree';
 import {
@@ -41,21 +54,51 @@ function parseBadge(
   }
 }
 
-/** 行内动作链接的统一样式（下载/预览/添加到对话/移动/删除共用）。 */
-function actionLinkClass(tone: 'primary' | 'danger' = 'primary') {
+/** 行内图标按钮：以可见的图形按钮替代悬浮文字条，避免遮住文件名。
+ *  所有按钮都带 aria-label / title；破坏性动作使用 danger 色但保持相同热区。 */
+function actionIconButtonClass(tone: 'primary' | 'danger' | 'success' = 'primary') {
   return clsx(
-    'cursor-pointer rounded px-1 py-0.5 text-[11px] whitespace-nowrap transition-colors',
-    tone === 'danger' ? 'text-danger hover:bg-danger/5' : 'text-primary hover:bg-primary/10',
+    'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors',
+    'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary',
+    tone === 'danger'
+      ? 'text-danger hover:bg-danger/10'
+      : tone === 'success'
+        ? 'cursor-not-allowed bg-success/10 text-success'
+        : 'text-ink-soft hover:bg-primary/10 hover:text-primary',
   );
 }
 
-/** 文件/文件夹名列：两行截断显示，hover 即时浮出完整名称气泡。
- *  气泡锚定在名称列自身的相对定位容器内（left-0 + top-full），宽度上限
- *  240px，横向不会超出抽屉；滚动容器底缘的极端裁剪场景由保留的原生
+/** 无 secondary 文案的图标按钮属性。图形含义由 aria-label 补齐。 */
+type IconButtonProps = {
+  label: string;
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  tone?: 'primary' | 'danger' | 'success';
+  disabled?: boolean;
+  children: ReactNode;
+};
+
+function RowIconButton({ label, onClick, tone = 'primary', disabled = false, children }: IconButtonProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      disabled={disabled}
+      className={actionIconButtonClass(tone)}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** 文件/文件夹名列：文件名独占整行，最多折两行展示；hover 浮出完整名称
+ *  气泡。气泡锚定在名称列自身的相对定位容器内（left-0 + top-full），宽度
+ *  上限 240px，横向不会超出抽屉；滚动容器底缘的极端裁剪场景由保留的原生
  *  title 兜底。气泡为主交互，无 hover 延迟，带 100ms 淡入缩放过渡。 */
 function FileNameText({ name, className }: { name: string; className?: string }) {
   return (
-    <div className="group/name relative ml-2 min-w-0 flex-1">
+    <div className="group/name relative min-w-0">
       <span title={name} className={clsx('line-clamp-2 [overflow-wrap:anywhere]', className)}>
         {name}
       </span>
@@ -250,8 +293,9 @@ function FileRow(props: {
   const { file, depth, isSelected, cb } = props;
   const [edgeZone, setEdgeZone] = useState<'above' | 'below' | null>(null);
   const badge = parseBadge(file.parseStatus);
-  // 动作区在 hover / 移动中 / 删除确认中保持可见
-  const showActions = cb.movingFileKey === file.key || cb.deletingFilePath === file.key;
+  // 动作区在 hover / focus / 选中 / 移动中 / 删除确认中保持可见
+  const showActions =
+    isSelected || cb.movingFileKey === file.key || cb.deletingFilePath === file.key;
 
   const handleDragOver = (e: React.DragEvent) => {
     if (!cb.dnd.dragging) return;
@@ -383,7 +427,7 @@ function FileRow(props: {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={clsx(
-        'group relative flex cursor-pointer items-center border-b border-line/60 pr-3 text-sm text-ink transition-colors',
+        'group relative cursor-pointer border-b border-line/60 py-2 pr-2 text-sm text-ink transition-colors',
         isSelected ? 'bg-primary/5' : 'hover:bg-surface',
       )}
       style={{ paddingLeft: 12 + depth * 14, paddingTop: 7, paddingBottom: 7 }}
@@ -397,50 +441,77 @@ function FileRow(props: {
           )}
         />
       )}
-      <div className="flex w-[18px] shrink-0 items-center justify-center text-ink-soft">
-        <FileText className="h-4 w-4" aria-hidden />
-      </div>
-      {/* 徽标容器锚定在行首（图标后、文件名前）：hover 时大小/操作区入场只
-          压窄文件名（唯一 flex-1 可收缩项），徽标不再左移导致点击落空。 */}
-      <div className="ml-2 flex shrink-0 items-center gap-1">
-        {boundBadgeNode}
-        {parseBadgeNode}
-      </div>
-      <FileNameText name={file.name} />
-      <span className="mr-2 hidden shrink-0 whitespace-nowrap text-[11px] text-ink-soft group-hover:inline">
-        {formatSize(file.size)}
-      </span>
-      {/* 动作条采用悬浮覆盖（absolute 右缘定位）而非行内排布：不占行宽，
-          窄面板/深层级下不会被徽标与尺寸挤出可视区。 */}
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className={clsx(
-          'absolute right-2 top-1/2 z-20 flex -translate-y-1/2 items-center gap-1 whitespace-nowrap rounded-md border border-line bg-white px-1 py-0.5 shadow-pop',
-          showActions ? 'flex' : 'hidden group-hover:flex',
-        )}
-      >
-        <span onClick={() => cb.downloadFile(file.key)} className={actionLinkClass()}>
-          下载
+      {/* 文件卡片式两行布局：第一行给完整可折行文件名，第二行承载徽标、
+          尺寸与动作。动作不再 absolute 覆盖文件名，窄面板下也不会被挤出。 */}
+      <div className="flex items-start gap-2">
+        <span className="flex w-[18px] shrink-0 items-center justify-center text-ink-soft">
+          <FileText className="h-4 w-4" aria-hidden />
         </span>
-        <span onClick={(e) => { e.stopPropagation(); cb.onPreview(file); }} className={actionLinkClass()}>
-          预览
-        </span>
-        {cb.contextFileKeys.has(file.key) ? (
-          <span className="px-1 py-0.5 text-[11px] text-success">已添加</span>
-        ) : (
-          <span onClick={() => cb.onAddToConversation(file)} className={actionLinkClass()}>
-            添加到对话
+        <FileNameText name={file.name} className="text-[13px] leading-5" />
+      </div>
+      <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 pl-[26px]">
+        <div className="flex min-w-0 flex-wrap items-center gap-1">
+          {boundBadgeNode}
+          {parseBadgeNode}
+          <span
+            title={formatSize(file.size)}
+            className="shrink-0 whitespace-nowrap text-[11px] text-ink-soft"
+          >
+            {formatSize(file.size)}
           </span>
-        )}
-        <span onClick={() => cb.onStartMove(file.key)} className={actionLinkClass()}>
-          移动
-        </span>
-        <span
-          onClick={(e) => { e.stopPropagation(); cb.setDeletingFilePath(file.key); }}
-          className={actionLinkClass('danger')}
+        </div>
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className={clsx(
+            'ml-auto flex items-center gap-0.5',
+            !showActions &&
+              'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100',
+          )}
         >
-          删除
-        </span>
+          <RowIconButton
+            label="下载"
+            onClick={() => cb.downloadFile(file.key)}
+          >
+            <Download className="h-4 w-4" aria-hidden />
+          </RowIconButton>
+          <RowIconButton
+            label="预览"
+            onClick={(e) => {
+              e.stopPropagation();
+              cb.onPreview(file);
+            }}
+          >
+            <Eye className="h-4 w-4" aria-hidden />
+          </RowIconButton>
+          {cb.contextFileKeys.has(file.key) ? (
+            <RowIconButton label="已添加到对话" tone="success" disabled onClick={(e) => e.stopPropagation()}>
+              <Check className="h-4 w-4" aria-hidden />
+            </RowIconButton>
+          ) : (
+            <RowIconButton label="添加到对话" onClick={() => cb.onAddToConversation(file)}>
+              <MessageSquarePlus className="h-4 w-4" aria-hidden />
+            </RowIconButton>
+          )}
+          <RowIconButton
+            label="移动"
+            onClick={(e) => {
+              e.stopPropagation();
+              cb.onStartMove(file.key);
+            }}
+          >
+            <FolderInput className="h-4 w-4" aria-hidden />
+          </RowIconButton>
+          <RowIconButton
+            label="删除"
+            tone="danger"
+            onClick={(e) => {
+              e.stopPropagation();
+              cb.setDeletingFilePath(file.key);
+            }}
+          >
+            <Trash2 className="h-4 w-4" aria-hidden />
+          </RowIconButton>
+        </div>
       </div>
       {cb.movingFileKey === file.key && (
         <MoveDropdown file={file} folders={cb.folders} onMove={cb.onMove} onClose={cb.onCancelMove} />
@@ -622,32 +693,38 @@ function TreeFolder(props: TreeFolderProps) {
             className="ml-2 min-w-0 flex-1 rounded border border-primary px-1 py-0.5 text-sm outline-none"
           />
         ) : (
-          <FileNameText name={name} className="font-medium" />
+          <FileNameText name={name} className="ml-2 text-[13px] font-medium leading-5" />
         )}
-        <span
-          onClick={startRename}
-          title="重命名"
-          className="hidden cursor-pointer rounded px-1 py-0.5 text-[11px] text-primary transition-colors hover:bg-primary/10 group-hover:inline"
-        >
-          改名
-        </span>
-        <span
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!isOpen) toggle(fullPath);
-            cb.setCreatingInDir(fullPath);
-          }}
-          title="新建子文件夹"
-          className="hidden cursor-pointer rounded px-1 py-0.5 text-[13px] leading-none text-primary transition-colors hover:bg-primary/10 group-hover:inline"
-        >
-          +
-        </span>
-        <span
-          onClick={(e) => { e.stopPropagation(); cb.setDeletingFolderPath(fullPath); }}
-          className="hidden cursor-pointer rounded px-1 py-0.5 text-[11px] text-danger transition-colors hover:bg-danger/5 group-hover:inline"
-        >
-          删除
-        </span>
+        {/* 文件夹沿用列表行惯用的 trailing 图标组；按钮保留布局占位，hover 时
+            只切换可见性，避免文件名与操作区发生重叠或跳动。 */}
+        <div className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          <RowIconButton
+            label="重命名"
+            onClick={startRename}
+          >
+            <Pencil className="h-4 w-4" aria-hidden />
+          </RowIconButton>
+          <RowIconButton
+            label="新建子文件夹"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!isOpen) toggle(fullPath);
+              cb.setCreatingInDir(fullPath);
+            }}
+          >
+            <FolderPlus className="h-4 w-4" aria-hidden />
+          </RowIconButton>
+          <RowIconButton
+            label="删除文件夹"
+            tone="danger"
+            onClick={(e) => {
+              e.stopPropagation();
+              cb.setDeletingFolderPath(fullPath);
+            }}
+          >
+            <Trash2 className="h-4 w-4" aria-hidden />
+          </RowIconButton>
+        </div>
         {cb.deletingFolderPath === fullPath && (
           <DeleteConfirmOverlay
             message="移除文件夹？(文件不删)"
