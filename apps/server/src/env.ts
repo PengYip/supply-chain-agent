@@ -133,8 +133,8 @@ const EnvSchema = z.object({
   BATCH_SPLIT_ENABLED: z
     .preprocess((v) => v === 'true' || v === '1' || v === true, z.boolean())
     .default(false),
-  // 逐页 VLM 版面清点的并发数(原型实测: 串行 8 页约 9 分钟, 并发 4 时墙钟
-  // 约等于最慢一页)。
+  // 拆分器 VLM 并发数: Phase 1 逐页版面清点 + Phase 2 逐 unit 凭证抽取共用
+  // (原型实测: 串行 8 页约 9 分钟, 并发 4 时墙钟约等于最慢一页)。
   BATCH_SPLIT_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
   // 参与拆分检测的最大 PDF 页数上限: 超过则跳过拆分走旧路径(保护延迟与
   // VLM 用量; 现实多单据拼版远小于该值)。

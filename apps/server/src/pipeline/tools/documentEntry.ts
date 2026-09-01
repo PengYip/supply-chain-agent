@@ -22,7 +22,20 @@ import {
   listContractLedgerEntries, findBindingByDocAndContract, listBindingProposals,
   updateBindingStatus, listTemplateTypes,
 } from '../db/repositories.js';
-import { detectDocumentUnits, type DetectedUnit } from '../batchSplit.js';
+import {
+  detectDocumentUnits,
+  UNIT_FORM_TYPE_ALIASES,
+  type DetectedUnit,
+} from '../batchSplit.js';
+import {
+  compareReadings,
+  CONSENSUS_MISMATCH_CONFIDENCE_CAP,
+  unitCandidateScore,
+  type DetectionReading,
+  type ReadingConsensus,
+} from '../batchConsensus.js';
+import { renderUnitImages, unitRotationPlans } from '../unitImages.js';
+import { mapLimit } from '../pageRecords.js';
 import { parseDocument } from '../parseDocument.js';
 import { extractGroundedFields, type ExtractionDeps } from '../extraction.js';
 import { runAutoExtraction, buildAutoExtractionDeps, type AutoExtractionDeps } from '../autoExtraction.js';
@@ -309,6 +322,21 @@ interface VoucherIngestInput {
   /** v2.1 双分支: PDF 凭证路由命中时携带(已渲染页 + 路由确定的业务类型)。
    *  存在时跳过单图读取, 走逐页聚合(重量组)或多图一次提取(其余组)。 */
   pdfVoucher?: { docType: DocType; pages: RenderedPage[] };
+  /** Phase 2 批量拆分: unit 子单据的裁剪图凭证抽取(与 pdfVoucher 同构,
+   *  额外携带旋回候选与检测遍读数)。 */
+  unitVoucher?: UnitVoucherInput;
+}
+
+/** 批量拆分器 Phase 2 的 unit 凭证抽取输入。 */
+export interface UnitVoucherInput {
+  docType: DocType;
+  /** 旋回候选图集(0/180 单候选; 90/270 双候选), rotations 为逐 region 的
+   *  顺时针旋回度数(与 images 一一对应, 审计/择优日志用)。 */
+  candidates: Array<{ rotations: number[]; images: RenderedPage[] }>;
+  /** 检测遍读数(两遍共识 + 候选择优用)。 */
+  detection: DetectionReading;
+  /** unit 页区间的 OCR 块模型(保留给 chunk/recall, 与 Phase 1 一致)。 */
+  ocrBlockModel: BlockModel;
 }
 
 /** runVoucherPipeline / ingestVoucherImage 的返回形状(与 ingestFile 一致)。 */
@@ -325,6 +353,44 @@ interface VoucherPipelineResult {
 }
 
 /**
+ * pdfVoucher / unitVoucher 共用的按类型页图提取(纯编排, 无落库):
+ * 重量组(WEIGHT_AGGREGATE_DOCTYPES)逐图单抽 + 服务端聚合, 其余类型多图
+ * 一次提取。opts.pageConcurrency 限制重量组页级并发(unit 路径并发已由
+ * 外层 unit 并发限制, 传较小值控制全局 VLM 在飞数)。
+ */
+async function extractVoucherPages(
+  pages: RenderedPage[],
+  dt: VoucherType,
+  vlm: VlmDeps | undefined,
+  opts: { pageConcurrency?: number } = {},
+): Promise<{ result: VlmResult; warnings: string[]; okPages: number[]; failedPages: number[] }> {
+  if (WEIGHT_AGGREGATE_DOCTYPES.has(dt)) {
+    const agg = await extractWeightDoc(pages, dt as WeightDocType, {
+      concurrency: opts.pageConcurrency,
+      extractOne: vlm?.extractOne
+        ? async (image, d) => vlm.extractOne!(image, d)
+        : undefined,
+    });
+    return {
+      result: { voucherType: dt, fields: agg.fields, 字段置信度: {} },
+      warnings: agg.warnings,
+      okPages: agg.okPages,
+      failedPages: agg.failedPages,
+    };
+  }
+  const typed = await (vlm?.extractTyped ?? extractVoucherTyped)(
+    pages.map((p) => ({ mime: p.mime, buffer: p.buffer })),
+    dt as Exclude<VoucherType, '其他'>,
+  );
+  return {
+    result: { voucherType: dt, fields: typed.fields, 字段置信度: typed.字段置信度 },
+    warnings: [],
+    okPages: pages.map((p) => p.page),
+    failedPages: [],
+  };
+}
+
+/**
  * 图片凭证 VLM 流水线核心(可复用, 步骤 2-10): 在 EXISTING docId 上执行
  * VLM 提取 -> zod 校验 -> 交叉校验 warnings -> 合成 block_model
  * (updateDocumentMeta) -> 分类(source 'classified') -> 单 chunk + embed ->
@@ -335,36 +401,88 @@ interface VoucherPipelineResult {
  * 置 'failed' 并 rethrow(调用方决定转 STATE)。
  */
 async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPipelineResult> {
-  const { ctx, sourcePath, docId, embedder, userId, vlm, pdfVoucher } = input;
+  const { ctx, sourcePath, docId, embedder, userId, vlm, pdfVoucher, unitVoucher } = input;
   const perf = new StageProfiler(`voucher docId=${docId}`);
   try {
     // 2. VLM 提取(可注入 fake; 缺省真实 extractVoucher, 未配置时抛明确错误)。
     //    v2.1 双分支: pdfVoucher 携带路由确定的 docType + 渲染页 -> 重量组逐页聚合,
     //    其余组多图一次提取; 无 pdfVoucher = 现有单图路径(jpg/png, 类型由 VLM 自报)。
+    //    Phase 2(unitVoucher): 裁剪图 + 旋回双候选(90/270 方向不可分辨, 各抽一次
+    //    按共识+置信度择优) + 两遍读数共识(分歧压置信度并强制 needs_review)。
     let result: VlmResult;
     let routeWarnings: string[] = [];
-    if (pdfVoucher) {
+    let consensus: ReadingConsensus | null = null;
+    if (unitVoucher) {
+      const dt = unitVoucher.docType as VoucherType;
+      if (!(dt in VOUCHER_SCHEMAS)) {
+        throw new Error(`凭证类型 ${dt} 无注册 schema, 不应进入 VLM 凭证分支`);
+      }
+      if (unitVoucher.candidates.length === 0) {
+        throw new Error('unit 凭证抽取缺少旋回候选图');
+      }
+      interface CandidateAttempt {
+        rotations: number[];
+        result: VlmResult;
+        warnings: string[];
+        consensus: ReadingConsensus;
+      }
+      const attempts: CandidateAttempt[] = [];
+      const failures: string[] = [];
+      for (const cand of unitVoucher.candidates) {
+        try {
+          const ex = await extractVoucherPages(cand.images, dt, vlm, { pageConcurrency: 2 });
+          attempts.push({
+            rotations: cand.rotations,
+            ...ex,
+            consensus: compareReadings(unitVoucher.detection, ex.result.fields),
+          });
+        } catch (e) {
+          failures.push(`rot=[${cand.rotations.join('/')}] ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      if (attempts.length === 0) {
+        throw new Error(`全部旋回候选提取失败: ${failures.join('; ')}`);
+      }
+      // 择优: 两遍共识命中 > 字段置信度均值 > 字段覆盖(unitCandidateScore)。
+      const scored = attempts
+        .map((a) => ({
+          a,
+          score: unitCandidateScore({
+            fields: a.result.fields,
+            fieldConfidences: a.result.字段置信度,
+            mismatchCount: a.consensus.mismatches.length,
+          }),
+        }))
+        .sort((x, y) => y.score - x.score);
+      const best = scored[0]!.a;
+      result = best.result;
+      routeWarnings = best.warnings;
+      consensus = best.consensus;
+      if (unitVoucher.candidates.length > 1) {
+        console.log(
+          `[perf-batch-split] unit docId=${docId} ${dt} 旋回双候选 ` +
+          scored
+            .map((s) => `rot=[${s.a.rotations.join('/')}] score=${s.score.toFixed(2)} mismatch=${s.a.consensus.mismatches.length}`)
+            .join(' vs ') +
+          ` -> 取 rot=[${best.rotations.join('/')}]`,
+        );
+      }
+      perf.mark(
+        'vlm_extract_unit',
+        `${dt} rot=[${best.rotations.join('/')}] candidates=${attempts.length}/${unitVoucher.candidates.length}`,
+      );
+    } else if (pdfVoucher) {
       const dt = pdfVoucher.docType;
       if (!(dt in VOUCHER_SCHEMAS)) {
         throw new Error(`凭证类型 ${dt} 无注册 schema, 不应进入 VLM 凭证分支`);
       }
-      if (WEIGHT_AGGREGATE_DOCTYPES.has(dt as VoucherType)) {
-        const agg = await extractWeightDoc(pdfVoucher.pages, dt as WeightDocType, {
-          extractOne: vlm?.extractOne
-            ? async (image, d) => vlm.extractOne!(image, d)
-            : undefined,
-        });
-        result = { voucherType: dt as VoucherType, fields: agg.fields, 字段置信度: {} };
-        routeWarnings = agg.warnings;
-        perf.mark('vlm_extract_pages', `${dt} ok=${agg.okPages.length} failed=${agg.failedPages.length}`);
-      } else {
-        const typed = await (vlm?.extractTyped ?? extractVoucherTyped)(
-          pdfVoucher.pages.map((p) => ({ mime: p.mime, buffer: p.buffer })),
-          dt as Exclude<VoucherType, '其他'>,
-        );
-        result = { voucherType: dt as VoucherType, fields: typed.fields, 字段置信度: typed.字段置信度 };
-        perf.mark('vlm_extract_typed', `${dt}`);
-      }
+      const ex = await extractVoucherPages(pdfVoucher.pages, dt as VoucherType, vlm);
+      result = ex.result;
+      routeWarnings = ex.warnings;
+      perf.mark(
+        WEIGHT_AGGREGATE_DOCTYPES.has(dt as VoucherType) ? 'vlm_extract_pages' : 'vlm_extract_typed',
+        `${dt} ok=${ex.okPages.length} failed=${ex.failedPages.length}`,
+      );
     } else {
       const ext = sourcePath.split('.').pop() ?? '';
       const mime = mimeForExtension(ext);
@@ -390,29 +508,54 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
       }
     }
     const warnings = [...validateVoucher(voucherType, result.fields), ...routeWarnings];
+    // Phase 2 两遍读数共识: 检测遍 evidence/identifier vs 抽取遍读数(设计 §5.3)。
+    // 分歧进入 _warnings(审核卡可见), 并在步骤 8 压置信度 + 强制 needs_review。
+    if (consensus) warnings.push(...consensus.mismatches.map((m) => m.message));
     const docType = voucherType as DocType;
     perf.mark('validate', `${warnings.length} warnings`);
 
-    // 4. 真实 block_model: 单合成块(与 schema 兼容, 无文本块可 span 接地)。
+    // 4. block_model: 单据级 = 单合成块; unit 子单据 = 页区间 OCR 块(保留给
+    //    chunk/recall, 与 Phase 1 一致) + 凭证 KV 合成块(空 OCR 也有召回文本)。
     const chunkText = voucherFieldsToText(result.voucherType, result.fields);
-    const blockModel: BlockModel = {
-      docId,
-      docType,
-      modality: 'scanned',
-      blocks: [
-        {
-          id: 'b0',
-          type: 'text',
-          text: chunkText,
-          page: 1,
-          bbox: null,
-          ocrConfidence: 1.0,
-        },
-      ],
-      sourceUri: sourcePath,
-      createdAt: new Date().toISOString(),
-    };
-    await updateDocumentMeta(ctx, docId, { docType, modality: 'scanned', blockModel }, userId);
+    let blockModel: BlockModel;
+    let chunks: Array<{ text: string; index: number }>;
+    if (unitVoucher) {
+      const ocr = unitVoucher.ocrBlockModel;
+      const lastOcrPage = ocr.blocks.length > 0 ? ocr.blocks[ocr.blocks.length - 1]!.page : 1;
+      blockModel = {
+        docId,
+        docType,
+        modality: ocr.modality,
+        blocks: [
+          ...ocr.blocks,
+          { id: 'b-voucher', type: 'text', text: chunkText, page: lastOcrPage, bbox: null, ocrConfidence: 1.0 },
+        ],
+        sourceUri: sourcePath,
+        createdAt: new Date().toISOString(),
+      };
+      chunks = chunkBlockModel(blockModel);
+    } else {
+      blockModel = {
+        docId,
+        docType,
+        modality: 'scanned',
+        blocks: [
+          {
+            id: 'b0',
+            type: 'text',
+            text: chunkText,
+            page: 1,
+            bbox: null,
+            ocrConfidence: 1.0,
+          },
+        ],
+        sourceUri: sourcePath,
+        createdAt: new Date().toISOString(),
+      };
+      chunks = [{ text: chunkText, index: 0 }];
+    }
+    if (chunks.length === 0) chunks = [{ text: chunkText, index: 0 }];
+    await updateDocumentMeta(ctx, docId, { docType, modality: blockModel.modality, blockModel }, userId);
     perf.mark('save_meta');
 
     // 5. 分类: source 'classified', confidence 用 VLM 自报类型置信;
@@ -427,39 +570,46 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
     );
     perf.mark('save_classification');
 
-    // 6. 单虚拟 chunk + 按类型策略嵌入(spec 2026-08-27): 仅合同/立项书子树
-    //    进入向量库; 其余类型跳过(FTS5 召回不受影响)。空文本防御: trim 为空的
-    //    块不进入 embed 输入(防单个空串导致整批 /v1/embeddings 400)。
-    const chunkRowIds = await saveChunks(ctx, docId, [{ text: chunkText, index: 0 }]);
+    // 6. chunk + 按类型策略嵌入(spec 2026-08-27): 单据级 = 单虚拟 KV chunk;
+    //    unit 子单据 = OCR 块 chunk(含 KV 合成块)。仅合同/立项书子树进入
+    //    向量库; 其余类型跳过(FTS5 召回不受影响)。空文本防御: trim 为空的块
+    //    不进入 embed 输入(防单个空串导致整批 /v1/embeddings 400)。
+    const chunkRowIds = await saveChunks(ctx, docId, chunks);
     perf.mark('save_chunks');
     const templateTypes = await listTemplateTypes(ctx);
-    let vectorization: VectorizationStatus = { status: 'skipped', mode: 'none', chunkCount: 1 };
+    const embeddable = chunkRowIds
+      .map((id, i) => ({ chunkRowId: id!, text: chunks[i]!.text }))
+      .filter((x) => x.text.trim().length > 0);
+    let vectorization: VectorizationStatus = { status: 'skipped', mode: 'none', chunkCount: chunks.length };
     if (!isVectorizableDocType(docType, templateTypes)) {
       vectorization = {
-        status: 'skipped', mode: embedder?.kind ?? 'none', chunkCount: 1,
+        status: 'skipped', mode: embedder?.kind ?? 'none', chunkCount: chunks.length,
         reason: SKIP_REASON_NOT_VECTORIZABLE,
       };
       perf.mark('embed', `skipped not-vectorizable ${docType}`);
-    } else if (!chunkText.trim()) {
-      vectorization = { status: 'skipped', mode: embedder?.kind ?? 'none', chunkCount: 1, reason: '无有效文本块' };
+    } else if (embeddable.length === 0) {
+      vectorization = { status: 'skipped', mode: embedder?.kind ?? 'none', chunkCount: chunks.length, reason: '无有效文本块' };
       perf.mark('embed', 'skipped empty-text');
     } else if (embedder) {
       if (await isVecReady(ctx)) {
         try {
-          const vecs = await embedder.embed([chunkText]);
-          await saveChunkVectors(ctx, [{ chunkRowId: chunkRowIds[0]!, vec: vecs[0] ?? [] }]);
-          vectorization = { status: 'ok', mode: embedder.kind, chunkCount: 1 };
+          const vecs = await embedder.embed(embeddable.map((x) => x.text));
+          await saveChunkVectors(
+            ctx,
+            embeddable.map((x, i) => ({ chunkRowId: x.chunkRowId, vec: vecs[i] ?? [] })),
+          );
+          vectorization = { status: 'ok', mode: embedder.kind, chunkCount: chunks.length };
           perf.mark('embed', `ok ${embedder.kind}`);
         } catch (e) {
           vectorization = {
-            status: 'failed', mode: embedder.kind, chunkCount: 1,
+            status: 'failed', mode: embedder.kind, chunkCount: chunks.length,
             reason: (e as Error).message,
           };
           perf.mark('embed', `failed ${embedder.kind}`);
           console.warn('[ingestVoucherImage] vector embedding failed; FTS5 recall still available:', vectorization.reason);
         }
       } else {
-        vectorization = { status: 'skipped', mode: embedder.kind, chunkCount: 1, reason: 'vec_store_not_ready' };
+        vectorization = { status: 'skipped', mode: embedder.kind, chunkCount: chunks.length, reason: 'vec_store_not_ready' };
         perf.mark('embed', 'skipped vec_store_not_ready');
       }
     } else {
@@ -497,8 +647,20 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
       fieldMeta[k] = { strength: 'none', confidence: typeof conf === 'number' ? conf : 0.9 };
     }
     const confidences = Object.values(fieldMeta).map((m) => m.confidence);
-    const overallConfidence = confidences.length > 0 ? Math.min(...confidences) : 0.9;
-    const needsReview = warnings.length > 0 || overallConfidence < 0.85;
+    let overallConfidence = confidences.length > 0 ? Math.min(...confidences) : 0.9;
+    let needsReview = warnings.length > 0 || overallConfidence < 0.85;
+    if (consensus && consensus.mismatches.length > 0) {
+      // Phase 2 两遍读数分歧(设计 §5.3): 模糊拼贴照片的数字读数不可自动入
+      // 台账——压低 overall_confidence, 涉及字段置信度同步压低, 强制人工复核。
+      overallConfidence = Math.min(overallConfidence, CONSENSUS_MISMATCH_CONFIDENCE_CAP);
+      for (const m of consensus.mismatches) {
+        for (const fieldKey of m.fields) {
+          const meta = fieldMeta[fieldKey];
+          if (meta) meta.confidence = Math.min(meta.confidence, CONSENSUS_MISMATCH_CONFIDENCE_CAP);
+        }
+      }
+      needsReview = true;
+    }
     (fieldMeta as Record<string, unknown>)['_warnings'] = {
       strength: 'none',
       confidence: 1,
@@ -1307,8 +1469,11 @@ export async function processDocument(
 //     BlockModel 生成 N 个子单据(batch_role='unit'), 各自独立走现有
 //     分类→抽取→审核→绑定 全链路, 不新增下游分支。
 //
-// Phase 1 切片粒度 = 页区间(同页并排多 unit 暂共享该页块); bbox 像素级切片与
-// 旋回双候选属 Phase 2(抽取层), 检测产出的逐页 region 明细已存 manifest_json。
+// Phase 2(抽取层): 图像型 unit 的 formType 经 formTypeRegistry(含检测词表
+// 别名桥)映射到 voucher 路由时, 按 manifest regions 的 padded bbox 裁图 +
+// 旋回候选(90/270 双候选择优)走现有 VLM 凭证抽取管线, 并做两遍读数共识
+// (分歧 -> needs_review); OCR 块仍保留给 chunk/recall, 未路由 unit 维持
+// Phase 1 的页区间 OCR 路径, container 行为不变。
 
 /** 按 unit 页区间切 container 的 BlockModel(浅拷贝 + blocks 过滤)。 */
 function sliceBlockModelForUnit(
@@ -1421,36 +1586,98 @@ export async function processDocumentWithBatch(
     return { ...containerRes, batchSplit: { unitCount: units.length, childDocIds } };
   }
 
-  // 子单据分类 hint: 检测 formType -> 业务粗类(映射缺失回落调用方 hint)。
+  // 子单据分类 hint + Phase 2 凭证路由: 检测 formType -> 注册表 formType
+  // (检测词表与注册表不同源, 经 UNIT_FORM_TYPE_ALIASES 桥接) -> route
+  // voucher 且业务类型有注册 schema 的 unit 用裁剪图走 VLM 凭证抽取。
   const types = await listTemplateTypes(ctx);
   const formIdx = buildFormTypeIndex(types);
+  const registryFormType = (formType: string): string =>
+    formIdx.docTypeOf(formType) !== undefined
+      ? formType
+      : UNIT_FORM_TYPE_ALIASES[formType] ?? formType;
+  const unitRoutes = units.map((u) => {
+    const canonical = registryFormType(u.formType);
+    const mapped = formIdx.docTypeOf(canonical);
+    if (formIdx.routeOf(canonical) !== 'voucher' || mapped === undefined || !(mapped in VOUCHER_SCHEMAS)) {
+      return null;
+    }
+    return mapped as VoucherType;
+  });
 
-  for (let i = 0; i < units.length; i++) {
-    const unit = units[i]!;
-    const hint = formIdx.docTypeOf(unit.formType) ?? opts.docType;
+  // 裁剪图懒渲染: 存在凭证路由 unit 时才重渲整本(150 DPI, 与检测同口径)。
+  // 渲染失败 -> 全部回落 OCR 块路径(Phase 2 永不劣于 Phase 1)。
+  let unitPages: RenderedPage[] | null = null;
+  if (unitRoutes.some(Boolean)) {
+    try {
+      unitPages = await renderPdfPages(sourceUri);
+    } catch (e) {
+      console.warn('[batch-split] unit 页图渲染失败, 凭证抽取回落 OCR 路径:', e instanceof Error ? e.message : e);
+    }
+  }
+
+  // unit 级并发(BATCH_SPLIT_CONCURRENCY, 与检测同参; 宣威 8 页串行原型约
+  // 9 分钟)。结果按 unit 序回填; 单个 unit 失败不阻断其余(状态可追溯)。
+  const processed = await mapLimit(units, env.BATCH_SPLIT_CONCURRENCY, async (unit, i) => {
+    const routedDocType = unitPages ? unitRoutes[i] : null;
+    const hint = routedDocType ?? formIdx.docTypeOf(registryFormType(unit.formType)) ?? opts.docType;
     let childId: string;
     try {
       const stub = await createDocumentStub(ctx, { sourceUri, userId: opts.userId, docType: hint });
       childId = stub.docId;
     } catch (e) {
       console.warn('[batch-split] 子单据存根创建失败:', e instanceof Error ? e.message : e);
-      continue;
+      return null;
     }
-    childDocIds.push(childId);
     await setDocumentBatchRole(ctx, childId, 'unit', opts.userId);
     await updateDocumentUnitChild(ctx, unitIds[i]!, childId, 'processing');
     try {
+      // 裁剪图生成(本地 CPU): 失败回落 OCR 块路径, 不让 unit 失败。
+      let candidates: Array<{ rotations: number[]; images: RenderedPage[] }> | null = null;
+      if (routedDocType) {
+        try {
+          candidates = [];
+          for (const rotations of unitRotationPlans(unit)) {
+            candidates.push({ rotations, images: await renderUnitImages(unitPages!, unit, rotations) });
+          }
+        } catch (e) {
+          console.warn('[batch-split] unit 裁剪图生成失败, 回落 OCR 块路径:', childId, e instanceof Error ? e.message : e);
+        }
+      }
+      if (routedDocType && candidates) {
+        // 图像型 unit + voucher 路由: padded bbox 裁图 + 旋回候选(90/270 双
+        // 候选, 0/180 单候选) -> 现有 VLM 凭证抽取管线; OCR 块(页区间切片)
+        // 仍保留给 chunk/recall。
+        const ocrBlockModel = sliceBlockModelForUnit(parentModel, childId, unit);
+        await setDocumentParseStatus(ctx, childId, 'parsing', opts.userId);
+        await runVoucherPipeline({
+          ctx, sourcePath: sourceUri, docId: childId,
+          embedder: opts.embedder, userId: opts.userId, vlm: opts.vlm,
+          unitVoucher: {
+            docType: routedDocType as DocType,
+            candidates,
+            detection: { identifier: unit.identifier, evidence: unit.evidence },
+            ocrBlockModel,
+          },
+        });
+        await updateDocumentUnitChild(ctx, unitIds[i]!, childId, 'processed');
+        return childId;
+      }
       const res = await processDocument(ctx, childId, {
         ...opts,
         docType: hint,
         parsedBlockModel: sliceBlockModelForUnit(parentModel, childId, unit),
       });
       await updateDocumentUnitChild(ctx, unitIds[i]!, childId, unitStatusFor(res.parseStatus));
+      return childId;
     } catch (e) {
       // 单个子单据失败不阻断其余拆分(状态可追溯, unit 行留 failed)。
       console.warn('[batch-split] 子单据处理失败:', childId, e instanceof Error ? e.message : e);
       await updateDocumentUnitChild(ctx, unitIds[i]!, childId, 'failed').catch(() => {});
+      return childId;
     }
+  });
+  for (const childId of processed) {
+    if (childId !== null) childDocIds.push(childId);
   }
 
   return { ...containerRes, batchSplit: { unitCount: units.length, childDocIds } };

@@ -20,6 +20,23 @@ export const UNIT_FORM_TYPES = [
   '货转单', '付款凭证', '微信聊天记录', '数据表格', '空白页', '其他',
 ] as const;
 
+/**
+ * 检测词表 -> 模板注册表 formTypes 的别名桥(Phase 2 抽取路由用)。
+ * P1 检测词表按清点质量选定, 与 v2.1 分类词表(templateSeed formTypes)
+ * 不同源(如检测输出"汽运磅单", 注册表登记"汽车过磅单票据")。路由仍以
+ * formTypeRegistry 的数据为准: 部署模板没有对应 formType 时不路由, 子单据
+ * 回落 Phase 1 的 OCR 块路径。微信聊天记录/数据表格/其他 无凭证 schema,
+ * 刻意不桥接。
+ */
+export const UNIT_FORM_TYPE_ALIASES: Readonly<Record<string, string>> = {
+  汽运磅单: '汽车过磅单票据',
+  轨道衡称重单: '轨道衡称重记录',
+  水尺计重单: '水尺计重单',
+  质检报告: '化验报告',
+  货转单: '货权转移证明',
+  付款凭证: '银行回单',
+};
+
 /** 空白页预判阈值: 非白像素占比 < 5% 视为空白, 跳过 VLM。 */
 export const BLANK_NON_WHITE_RATIO = 0.05;
 
