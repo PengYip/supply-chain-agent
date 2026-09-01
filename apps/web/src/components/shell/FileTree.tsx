@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import {
+  AlertTriangle,
   Check,
   ChevronRight,
   Download,
@@ -13,12 +14,20 @@ import {
   FolderInput,
   FolderOpen,
   FolderPlus,
+  Loader2,
   MessageSquarePlus,
   Pencil,
   Trash2,
 } from 'lucide-react';
 import { type FileEntry, type FileFolder } from '../../hooks/useFiles';
 import { normalizeMoveDirectory, nodeAt, type TreeNode } from '../../lib/fileTree';
+import { businessTypeTag } from '../../lib/businessTypeTag';
+import {
+  unitReviewStatusBadge,
+  unitStatusBadge,
+  type BatchUnitSummary,
+} from '../../api/documents';
+import { requestOpenReview } from '../../lib/reviewModal';
 import {
   isFolderSelfDrop,
   readPayload,
@@ -54,51 +63,8 @@ function parseBadge(
   }
 }
 
-/** 已解析业务类型的标签配色：按业务族群区分色系，但文本始终展示服务端
- *  识别出的完整类型，避免把「轨道衡称重单」这类精确结果弱化成泛化标签。 */
-const BUSINESS_TYPE_TAG_STYLES: Array<{ types: string[]; className: string }> = [
-  {
-    types: ['合同', '补充合同', '立项书', '履约凭证'],
-    className: 'border-[#F0D9B0] bg-[#FFFBF3] text-[#B45309]',
-  },
-  {
-    types: ['发票', '发票凭证', '进项票', '销项票'],
-    className: 'border-[#C7D6E3] bg-[#F5F8FF] text-[#1D4ED8]',
-  },
-  {
-    types: [
-      '提单', '装箱单', '货转单', '运输凭证', '收货单', '发货单',
-      '汽运磅单', '火运大票', '轨道衡称重单', '水尺计重单', '派船通知单',
-    ],
-    className: 'border-[#B8DCE4] bg-[#F2FAFC] text-[#0E7490]',
-  },
-  {
-    types: ['重量凭证'],
-    className: 'border-[#CBD5E1] bg-[#F8FAFC] text-[#475569]',
-  },
-  {
-    types: ['质检报告', '化验报告'],
-    className: 'border-[#F2CEE0] bg-[#FEF5FA] text-[#BE185D]',
-  },
-  {
-    types: ['结算单'],
-    className: 'border-[#DDD0F0] bg-[#FAF7FF] text-[#7C3AED]',
-  },
-  {
-    types: ['资金凭证', '付款单', '付款凭证'],
-    className: 'border-[#CBE5D3] bg-[#F4FAF5] text-[#15803D]',
-  },
-];
-
-/** 其他 = 上传兜底类型，不代表识别成功，因此不渲染业务类型标签。 */
-function businessTypeTag(businessType?: string | null) {
-  const text = businessType?.trim();
-  if (!text || text === '其他') return null;
-  const className = BUSINESS_TYPE_TAG_STYLES.find((entry) =>
-    entry.types.includes(text),
-  )?.className ?? 'border-line bg-surface text-ink-soft';
-  return { text, className };
-}
+/** 已解析业务类型的标签配色与样式查表已抽至 lib/businessTypeTag(文件树与
+ *  复核卡拆分清单共用同一 SSOT,含「单据组」容器族样式)。 */
 
 /** 行内图标按钮：以可见的图形按钮替代悬浮文字条，避免遮住文件名。
  *  所有按钮都带 aria-label / title；破坏性动作使用 danger 色但保持相同热区。 */
@@ -267,6 +233,10 @@ export interface TreeCallbacks {
   contextFileKeys: Set<string>;
   parsingDocIds: Set<string>;
   tree: TreeNode;
+  // 单据组(container)子单据层级：展开态与懒加载缓存由 FileDrawer 持有
+  // (面板常驻挂载，会话内自然记忆)，key = container docId。
+  containerUnits: Record<string, ContainerUnitsState>;
+  expandedContainers: ReadonlySet<string>;
   // 临态高亮
   selectedKey: string | null;
   movingFileKey: string | null;
@@ -287,6 +257,11 @@ export interface TreeCallbacks {
   onOpenBindings?: (docId: string) => void;
   /** 触发解析: parsed 状态的重新处理需带 {force:true}(服务端终态短路放行)。 */
   onTriggerParse?: (docId: string, opts?: { force?: boolean }) => void;
+  // 单据组(container)子单据层级
+  /** 展开/收起某 container 的子单据(展开时由容器侧懒加载)。 */
+  toggleContainerUnits: (docId: string) => void;
+  /** 失败重试: 重新拉取某 container 的子单据清单。 */
+  reloadContainerUnits: (docId: string) => void;
   // 子文件夹创建：creatingInDir 标记正在命名的目录（null 关闭输入行）
   creatingInDir: string | null;
   setCreatingInDir: (path: string | null) => void;
@@ -313,6 +288,15 @@ export interface TreeCallbacks {
   onReorderFiles: (directory: string, keys: string[]) => void;
 }
 
+/** container 子单据清单的加载态（FileDrawer 持有，树消费；key = docId）。 */
+export interface ContainerUnitsState {
+  status: 'loading' | 'ready' | 'error';
+  /** 已加载的子单据（loading/error 时保留上次结果做 stale-while-revalidate）。 */
+  units: BatchUnitSummary[];
+  /** status==='error' 时的中文错误信息。 */
+  error?: string;
+}
+
 /** parentOf('a/b/c') = 'a/b'；根层返回 ''。 */
 function parentOf(path: string): string {
   const idx = path.lastIndexOf('/');
@@ -330,6 +314,85 @@ function moveItem<T>(list: T[], fromIndex: number, toIndex: number, zone: 'above
   return next;
 }
 
+/** 单据组下的子单据行（缩进一层，depth 为所属 container 文件的层级）：
+ *  序号 + 类型徽标（优先子单据落库业务类型，兜底检测词表标签）+ 解析/
+ *  复核状态 + 待复核标记。整行与右侧「复核」按钮都打开该子单据的全局
+ *  复核弹窗；子单据与 container 共享物理文件，「添加到对话」等文件级
+ *  操作留在 container 行。不可拖拽。 */
+function UnitRow({ unit, depth }: { unit: BatchUnitSummary; depth: number }) {
+  const typeTag = businessTypeTag(unit.childDocType ?? unit.detectedFormType);
+  const status = unitStatusBadge(unit.unitStatus);
+  const review = unitReviewStatusBadge(unit.reviewStatus);
+  const canReview = typeof unit.docId === 'string' && unit.docId.length > 0;
+  const openReview = () => {
+    if (unit.docId) requestOpenReview(unit.docId);
+  };
+  return (
+    <div
+      onClick={(e) => {
+        e.stopPropagation();
+        openReview();
+      }}
+      title={canReview ? `复核第 ${unit.unitIndex} 份子单据` : '子单据尚未生成，暂时无法复核'}
+      className={clsx(
+        'flex items-center gap-1 border-b border-line/40 pr-2 text-sm transition-colors',
+        canReview ? 'cursor-pointer hover:bg-surface' : 'cursor-default',
+      )}
+      style={{ paddingLeft: 12 + (depth + 1) * 14, paddingTop: 4, paddingBottom: 4 }}
+    >
+      <span className="shrink-0 font-mono text-[10px] text-ink-soft">
+        #{unit.unitIndex}
+      </span>
+      {typeTag ? (
+        <span
+          title={`业务类型：${typeTag.text}`}
+          className={clsx(
+            'max-w-[96px] shrink-0 truncate rounded border px-1.5 py-px text-[10px] leading-4',
+            typeTag.className,
+          )}
+        >
+          {typeTag.text}
+        </span>
+      ) : (
+        <span className="max-w-[96px] shrink-0 truncate text-[10px] leading-4 text-ink-soft">
+          {unit.detectedFormType || '未识别'}
+        </span>
+      )}
+      <span className={clsx('shrink-0 whitespace-nowrap rounded px-1.5 py-px text-[10px]', status.className)}>
+        {status.label}
+      </span>
+      <span className={clsx('shrink-0 whitespace-nowrap rounded px-1.5 py-px text-[10px]', review.className)}>
+        {review.label}
+      </span>
+      {unit.needsReview && (
+        <span className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded bg-warning/10 px-1.5 py-px text-[10px] text-warning">
+          <AlertTriangle className="h-2.5 w-2.5" aria-hidden />
+          建议复核
+        </span>
+      )}
+      <span className="ml-auto shrink-0 pl-1">
+        {unit.docId ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              openReview();
+            }}
+            title="打开该子单据的复核卡"
+            className="cursor-pointer whitespace-nowrap rounded px-1.5 py-px text-[11px] font-medium text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+          >
+            复核
+          </button>
+        ) : (
+          <span className="whitespace-nowrap text-[11px] text-ink-soft/70" title="子单据尚未生成">
+            --
+          </span>
+        )}
+      </span>
+    </div>
+  );
+}
+
 function FileRow(props: {
   file: FileEntry;
   depth: number;
@@ -339,7 +402,13 @@ function FileRow(props: {
   const { file, depth, isSelected, cb } = props;
   const [edgeZone, setEdgeZone] = useState<'above' | 'below' | null>(null);
   const badge = parseBadge(file.parseStatus);
-  const typeTag = businessTypeTag(file.businessType);
+  // 单据组(container)：行为切换为「可展开的子单据层级」——批量徽标承载角色
+  // 与份数，普通业务类型标签与挂合同徽标不渲染（绑定发生在 unit 子单据上）。
+  const isContainer = file.batchRole === 'container' && !!file.docId;
+  const containerDocId = isContainer && file.docId ? file.docId : null;
+  const containerExpanded = containerDocId ? cb.expandedContainers.has(containerDocId) : false;
+  const unitsState = containerDocId ? cb.containerUnits[containerDocId] : undefined;
+  const typeTag = isContainer ? null : businessTypeTag(file.businessType);
   // 动作区在 hover / focus / 选中 / 移动中 / 删除确认中保持可见
   const showActions =
     isSelected || cb.movingFileKey === file.key || cb.deletingFilePath === file.key;
@@ -383,8 +452,10 @@ function FileRow(props: {
   // 挂合同徽标：判据是「存在已确认的合同绑定」，对合同与执行单据统一表述为
   // 「挂到合同」，避免合同类文档把「未绑定」误读为「未入台账」（入台账由
   // 抽取自动完成，与绑定无关）。未挂且有 docId 时可点击跳转绑定工作台。
+  // 单据组不渲染： 绑定发生在 unit 子单据上，container 自身永不绑定，
+  // 显示「未挂合同」会误导跳转到一份没有绑定关系的文档。
   const unbound = file.bound !== true;
-  const boundBadgeNode = !unbound ? (
+  const boundBadgeNode = isContainer ? null : !unbound ? (
     <span
       title="该文件已与合同建立确认绑定"
       className="whitespace-nowrap rounded bg-success/10 px-1.5 py-px text-[10px] text-success"
@@ -464,7 +535,41 @@ function FileRow(props: {
     ) : null;
   }
 
+  // 单据组批量徽标（第二行首位）： 虚线钢蓝族 + 展开箭头，点击切换子单据
+  // 层级（与文件夹行的 ChevronRight 旋转语义一致）。份数优先取 /api/files
+  // 的 unitCount，字段缺失（后端未升级）时兜底已加载清单长度。
+  const unitCountDisplay =
+    typeof file.unitCount === 'number' && file.unitCount >= 0
+      ? file.unitCount
+      : unitsState?.status === 'ready'
+        ? unitsState.units.length
+        : null;
+  const batchBadgeNode = containerDocId ? (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        cb.toggleContainerUnits(containerDocId);
+      }}
+      aria-expanded={containerExpanded}
+      title={containerExpanded ? '收起子单据清单' : '展开子单据清单'}
+      className={clsx(
+        'inline-flex max-w-full cursor-pointer items-center gap-0.5 whitespace-nowrap rounded border border-dashed px-1.5 py-px text-[10px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary',
+        containerExpanded
+          ? 'border-[#5D8FB5] bg-[#EDF3F8] text-[#1D5680]'
+          : 'border-[#A9BCCD] bg-[#F2F6FA] text-[#35719C] hover:border-[#5D8FB5]',
+      )}
+    >
+      <ChevronRight
+        className={clsx('h-3 w-3 shrink-0 transition-transform', containerExpanded && 'rotate-90')}
+        aria-hidden
+      />
+      单据组{unitCountDisplay != null ? ` · ${unitCountDisplay} 份单据` : ''}
+    </button>
+  ) : null;
+
   return (
+    <>
     <div
       onClick={() => cb.onSelect(file.key)}
       draggable
@@ -509,6 +614,7 @@ function FileRow(props: {
       </div>
       <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 pl-[26px]">
         <div className="flex min-w-0 flex-wrap items-center gap-1">
+          {batchBadgeNode}
           {boundBadgeNode}
           {parseBadgeNode}
           <span
@@ -582,6 +688,62 @@ function FileRow(props: {
         />
       )}
     </div>
+    {/* 单据组子单据层级： 展开时渲染（数据由 FileDrawer 懒加载）。缩进沿用
+        文件夹子级的视觉语言（左移位 + 竖向引导线），行内不可拖拽。 */}
+    {containerDocId && containerExpanded && (
+      <div
+        className="ml-5 border-l border-line/70 pl-2"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {(unitsState?.units ?? []).map((u) => (
+          <UnitRow key={u.unitId} unit={u} depth={depth} />
+        ))}
+        {unitsState?.status === 'loading' &&
+          (unitsState.units.length > 0 ? (
+            <div
+              className="flex items-center gap-1.5 py-1 text-[10px] text-ink-soft"
+              style={{ paddingLeft: 12 + (depth + 1) * 14 }}
+            >
+              <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+              刷新中...
+            </div>
+          ) : (
+            <div
+              className="flex items-center gap-1.5 py-1 text-[11px] text-ink-soft"
+              style={{ paddingLeft: 12 + (depth + 1) * 14 }}
+            >
+              <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+              加载子单据...
+            </div>
+          ))}
+        {unitsState?.status === 'error' && (
+          <div
+            className="flex items-center gap-2 py-1 text-[11px]"
+            style={{ paddingLeft: 12 + (depth + 1) * 14 }}
+          >
+            <span className="text-danger" title={unitsState.error}>
+              子单据加载失败{unitsState.error ? `：${unitsState.error}` : ''}
+            </span>
+            <button
+              type="button"
+              onClick={() => cb.reloadContainerUnits(containerDocId)}
+              className="cursor-pointer text-primary hover:underline"
+            >
+              重试
+            </button>
+          </div>
+        )}
+        {unitsState?.status === 'ready' && unitsState.units.length === 0 && (
+          <div
+            className="py-1 text-[11px] text-ink-soft"
+            style={{ paddingLeft: 12 + (depth + 1) * 14 }}
+          >
+            暂无子单据
+          </div>
+        )}
+      </div>
+    )}
+    </>
   );
 }
 

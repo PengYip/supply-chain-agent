@@ -22,6 +22,11 @@ export interface FileEntry {
   /* Optional because synthetic FileEntry literals elsewhere (e.g. the preview
    * trace in ContractExecutionSection) don't carry it; undefined reads as not bound. */
   bound?: boolean;     // true once the file is bound to a contract ledger row
+  /** 批量拆分角色： 'container' = 单据组（一个物理文件拆成多份子单据，行内
+   *  可展开子单据层级）；null/undefined = 普通文件（unit 子单据不占文件条目）。 */
+  batchRole?: 'container' | null;
+  /** container 的子单据数（GET /api/files 提供）；非 container 恒 null。 */
+  unitCount?: number | null;
 }
 
 export interface FileFolder {
@@ -45,6 +50,8 @@ type RawFile = {
   parseStatus?: unknown;
   businessType?: unknown;
   bound?: unknown;
+  batchRole?: unknown;
+  unitCount?: unknown;
 };
 
 type RawFolder = {
@@ -94,6 +101,13 @@ function normalizeFile(raw: RawFile): FileEntry {
         ? raw.businessType.trim()
         : null,
     bound: raw.bound === true,
+    // 单据组(container)谱系字段: 仅认 'container' 白名单值,其余一律 null
+    // (unitCount 只在 container 上有意义,后端对非 container 恒 null)。
+    batchRole: raw.batchRole === 'container' ? 'container' : null,
+    unitCount:
+      raw.batchRole === 'container' && typeof raw.unitCount === 'number'
+        ? raw.unitCount
+        : null,
   };
 }
 

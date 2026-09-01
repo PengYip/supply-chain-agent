@@ -11,7 +11,9 @@ import {
   AlertTriangle,
   AlertCircle,
   Bookmark,
+  Boxes,
   CheckCircle2,
+  FileStack,
   MinusCircle,
   Loader2,
   Check,
@@ -19,9 +21,18 @@ import {
   Share2,
   PenLine,
   Info,
+  Split,
 } from 'lucide-react'
 import { submitReview, fetchReviewSnapshot, type ReviewCorrection } from '../api/review'
 import { correctDocumentType, fetchActiveDocTypes } from '../api/documentType'
+import {
+  unitReviewStatusBadge,
+  unitStatusBadge,
+  type BatchLineage,
+  type BatchUnitSummary,
+} from '../api/documents'
+import { businessTypeTag } from '../lib/businessTypeTag'
+import { requestOpenReview } from '../lib/reviewModal'
 
 /** One chunk classified under a semantic tag. `text` is server-capped (800
  *  chars + '...'); the card renders it verbatim, never truncated client-side. */
@@ -95,6 +106,13 @@ export type DocumentReviewPayload = {
     reason?: string
   }
   reviewStatus: 'pending' | 'confirmed' | 'corrected'
+  /** 两遍读数共识分歧（批量拆分 unit 子单据，P2 已强制 needs_review）；
+   *  普通文档缺失或为空数组，渲染与现状零差异。 */
+  warnings?: string[]
+  /** 批量拆分谱系块： role='container' 时整卡切「拆分清单」导航形态；
+   *  role='unit' 时在图入库状态后增渲染「来源与拆分」区块；普通文档
+   *  null/缺失（api/review.ts 反向引用本类型，自动获得扩展）。 */
+  batch?: BatchLineage | null
 }
 
 const LOW_CONFIDENCE = 0.7
@@ -369,6 +387,181 @@ const ChunkTagSection: React.FC<{ details: DocumentReviewPayload['chunkTagDetail
   )
 }
 
+/** 拆分清单的单行子单据： 序号 / 类型徽标 / 解析状态 / 复核状态 / 待复核
+ *  标记 / 「复核」入口。与文件树 UnitRow 共用 api/documents 的徽标语言。 */
+const ContainerUnitRow: React.FC<{ unit: BatchUnitSummary }> = ({ unit }) => {
+  const typeTag = businessTypeTag(unit.childDocType ?? unit.detectedFormType)
+  const status = unitStatusBadge(unit.unitStatus)
+  const review = unitReviewStatusBadge(unit.reviewStatus)
+  const docId = unit.docId
+  return (
+    <div className="flex items-center gap-2 px-2 py-1.5 text-xs">
+      <span className="shrink-0 font-mono text-[11px] text-ink-soft">
+        #{unit.unitIndex}
+      </span>
+      {typeTag ? (
+        <span
+          title={`业务类型：${typeTag.text}`}
+          className={clsx(
+            'max-w-[110px] shrink-0 truncate rounded border px-1.5 py-px text-[10px] leading-4',
+            typeTag.className,
+          )}
+        >
+          {typeTag.text}
+        </span>
+      ) : (
+        <span className="max-w-[110px] shrink-0 truncate text-[10px] text-ink-soft">
+          {unit.detectedFormType || '未识别'}
+        </span>
+      )}
+      <span className={clsx('shrink-0 whitespace-nowrap rounded px-1.5 py-px text-[10px]', status.className)}>
+        {status.label}
+      </span>
+      <span className={clsx('shrink-0 whitespace-nowrap rounded px-1.5 py-px text-[10px]', review.className)}>
+        {review.label}
+      </span>
+      {unit.needsReview && <FlagBadge />}
+      <span className="ml-auto shrink-0">
+        {docId ? (
+          <button
+            type="button"
+            onClick={() => requestOpenReview(docId)}
+            title="打开该子单据的复核卡"
+            className="cursor-pointer whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+          >
+            复核
+          </button>
+        ) : (
+          <span className="whitespace-nowrap text-[11px] text-ink-soft/70" title="子单据尚未生成">
+            --
+          </span>
+        )}
+      </span>
+    </div>
+  )
+}
+
+/** 单据组（container）复核卡的「拆分清单」形态： 头部「单据组 · N 份单据」
+ *  + 待复核计数 chip，列表行为每份子单据提供「复核」入口（打开全局复核
+ *  弹窗）。container 无抽取（字段/关系/图/向量都在 unit 子单据上），标准
+ *  抽取区块与操作条全部不渲染。底部「重新拆分」为 Task 10 预留入口，
+ *  当前禁用置灰。 */
+const ContainerSplitCard: React.FC<{ batch: BatchLineage }> = ({ batch }) => {
+  const units = useMemo(
+    () => (Array.isArray(batch.units) ? batch.units : []),
+    [batch.units],
+  )
+  const unitCount = typeof batch.unitCount === 'number' ? batch.unitCount : units.length
+  const needsReviewCount =
+    typeof batch.needsReviewCount === 'number'
+      ? batch.needsReviewCount
+      : units.filter((u) => u.needsReview).length
+
+  return (
+    <div className="rounded-lg border border-line bg-white p-3 mt-2">
+      {/* 头部： 容器图标 + 单据组标题 + 待复核计数 chip */}
+      <div className="flex items-start gap-2.5 mb-3">
+        <div className="w-6 h-6 rounded-full border border-dashed border-[#A9BCCD] bg-[#F2F6FA] flex items-center justify-center shrink-0">
+          <Boxes className="w-3.5 h-3.5 text-[#35719C]" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-medium text-ink truncate">
+              单据组 · {unitCount} 份单据
+            </div>
+            {needsReviewCount > 0 && (
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded border shrink-0 bg-warning/10 text-warning border-warning/30">
+                <AlertTriangle className="w-3 h-3" />
+                {needsReviewCount} 份待复核
+              </span>
+            )}
+          </div>
+          <div className="text-[11px] text-ink-soft mt-0.5">
+            该文件已按单据拆分为多份子单据，请逐份复核
+          </div>
+        </div>
+      </div>
+
+      {/* 子单据清单 */}
+      {units.length === 0 ? (
+        <div className="text-xs text-ink-soft italic">暂无子单据</div>
+      ) : (
+        <div className="rounded-md border border-line/60 divide-y divide-line/60">
+          {units.map((u) => (
+            <ContainerUnitRow key={u.unitId} unit={u} />
+          ))}
+        </div>
+      )}
+
+      {/* 底部： 重新拆分修正入口（Task 10 接线，当前禁用） */}
+      <div className="mt-3 pt-3 border-t border-line flex items-center gap-2">
+        <button
+          type="button"
+          disabled
+          title="重新拆分入口将在后续版本开放"
+          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-line bg-surface text-ink-soft text-xs font-medium cursor-not-allowed"
+        >
+          <Split className="w-3.5 h-3.5" />
+          重新拆分
+        </button>
+        <span className="text-[11px] text-ink-soft">拆分修正（重拆/合并）入口待上线</span>
+      </div>
+    </div>
+  )
+}
+
+/** unit 子单据的「来源与拆分」明细： 来源文件 / 页区间 / 区域数 / 旋回方向 /
+ *  共识状态。字段缺失退化为「--」但不隐藏区块——区块本身是「这份数据从哪
+ *  来」的锚点。共识状态读 warnings（快照级，两遍读数分歧已强制复核）。 */
+const UnitLineagePanel: React.FC<{ batch: BatchLineage; warnings?: string[] }> = ({
+  batch,
+  warnings,
+}) => {
+  const pageRange =
+    typeof batch.pageStart === 'number' && typeof batch.pageEnd === 'number'
+      ? batch.pageStart === batch.pageEnd
+        ? `p${batch.pageStart}`
+        : `p${batch.pageStart}-p${batch.pageEnd}`
+      : '--'
+  const warningCount = warnings?.length ?? 0
+  const rows: Array<{ label: string; value: string; mono?: boolean }> = [
+    { label: '来源文件', value: batch.parentFileName || '--' },
+    { label: '页区间', value: pageRange, mono: true },
+    {
+      label: '区域数',
+      value: typeof batch.regionCount === 'number' ? String(batch.regionCount) : '--',
+      mono: true,
+    },
+    {
+      label: '旋回方向',
+      value: typeof batch.rotationDeg === 'number' ? `${batch.rotationDeg}°` : '--',
+      mono: true,
+    },
+    {
+      label: '共识状态',
+      value:
+        warningCount > 0
+          ? `${warningCount} 条读数分歧（已强制复核）`
+          : '两遍读数一致',
+    },
+  ]
+  return (
+    <div className="rounded border border-line/50 bg-surface/50 px-2 py-1.5 space-y-1">
+      {rows.map((r) => (
+        <div key={r.label} className="flex items-baseline gap-2 text-xs">
+          <span className="text-ink-soft shrink-0 w-16">{r.label}</span>
+          <span
+            title={r.value}
+            className={clsx('min-w-0 break-words', r.mono ? 'font-mono text-primary-500' : 'text-ink')}
+          >
+            {r.value}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export const DocumentReviewCard: React.FC<{
   payload: DocumentReviewPayload
   /** Optional callback fired after a successful review POST, with the updated
@@ -443,6 +636,8 @@ export const DocumentReviewCard: React.FC<{
     contractType,
     graphStatus,
     reviewStatus,
+    warnings,
+    batch,
   } = snapshot || {}
 
   const editable = reviewStatus === 'pending'
@@ -563,6 +758,17 @@ export const DocumentReviewCard: React.FC<{
       typeResultTimerRef.current = setTimeout(() => setTypeResult(null), 6000)
     }
   }
+
+  // -- 单据组(container)变体： 整卡切「拆分清单」导航形态 --
+  // container 无抽取（字段/关系/图/向量都在 unit 子单据上），业务类型固定
+  // 「单据组」（跳过分类器，词表也不允许改向），标准区块与操作条全部不
+  // 渲染。谱系角色对同一 docId 不可变，条件分支挂在所有 hooks 之后，不
+  // 违反 hooks 规则。
+  if (batch?.role === 'container') {
+    return <ContainerSplitCard batch={batch} />
+  }
+
+  const warningCount = warnings?.length ?? 0
 
   return (
     <div className="rounded-lg border border-line bg-white p-3 mt-2">
@@ -717,6 +923,24 @@ export const DocumentReviewCard: React.FC<{
             Editable when pending; read-only otherwise. */}
         <div>
           <SectionLabel icon={<ListChecks className="w-3 h-3" />}>结构化字段</SectionLabel>
+          {/* 批量拆分 unit 的两遍读数共识分歧（P2 已强制 needs_review）：
+              逐条列出，用户核对字段时对照原始分歧描述。普通文档 warningCount
+              为 0，不渲染，与现状零差异。 */}
+          {warningCount > 0 && (
+            <div className="mb-2 flex items-start gap-1.5 text-xs text-warning bg-warning/5 border border-warning/30 rounded px-2 py-1.5">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <div className="min-w-0 leading-relaxed">
+                <div className="font-medium">两遍读数存在 {warningCount} 条分歧，已按强制复核处理：</div>
+                <ul className="mt-0.5 space-y-0.5">
+                  {(warnings ?? []).map((w, i) => (
+                    <li key={i} className="font-mono text-[11px] break-words">
+                      {typeof w === 'string' ? w : ''}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
           {fields.length === 0 ? (
             <div className="text-xs text-ink-soft italic">暂无</div>
           ) : (
@@ -863,6 +1087,16 @@ export const DocumentReviewCard: React.FC<{
           <div>
             <SectionLabel icon={<Share2 className="w-3 h-3" />}>图入库状态</SectionLabel>
             <GraphStatusView g={graphStatus} />
+          </div>
+        )}
+
+        {/* 8. 来源与拆分 — 批量拆分 unit 子单据的谱系回链（Phase 3）： 来源
+            文件 / 页区间 / 区域数 / 旋回方向 / 共识状态。普通文档（batch 缺失
+            或 role 非 unit）不渲染，与现状零差异。 */}
+        {batch?.role === 'unit' && (
+          <div>
+            <SectionLabel icon={<FileStack className="w-3 h-3" />}>来源与拆分</SectionLabel>
+            <UnitLineagePanel batch={batch} warnings={warnings} />
           </div>
         )}
       </div>

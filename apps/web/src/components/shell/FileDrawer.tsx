@@ -7,9 +7,10 @@ import clsx from 'clsx';
 import { Folder, X } from 'lucide-react';
 import { type FileEntry, type FilesApi } from '../../hooks/useFiles';
 import { processDocument } from '../../api/process';
+import { listDocumentUnits } from '../../api/documents';
 import { FilePreviewModal } from '../FilePreviewModal';
 import { buildTree, normalizeMoveDirectory } from '../../lib/fileTree';
-import { FileTree, type TreeCallbacks } from './FileTree';
+import { FileTree, type ContainerUnitsState, type TreeCallbacks } from './FileTree';
 import { readPayload, useFileDnd, type DropTarget } from '../../hooks/useFileDnd';
 import { collectDropItems, type UploadQueueApi } from '../../hooks/useFolderDropUpload';
 
@@ -24,10 +25,16 @@ interface FileDrawerProps {
   uploadQueue: UploadQueueApi;
   /** 「未挂合同」徽标跳转绑定工作台的通道（App 分配 nonce 并导航）。 */
   onOpenBindings?: (docId: string) => void;
+  /** 复核弹窗关闭后的刷新令牌： App 递增时重拉已展开单据组的子单据清单
+   *  （复核确认/更正后，unit 行的复核状态徽标需要跟上）。 */
+  batchRefreshToken?: number;
 }
 
 export function FileDrawer(props: FileDrawerProps) {
-  const { open, onClose, onAddToConversation, contextFileKeys, filesApi, uploadQueue, onOpenBindings } = props;
+  const {
+    open, onClose, onAddToConversation, contextFileKeys, filesApi, uploadQueue,
+    onOpenBindings, batchRefreshToken = 0,
+  } = props;
   const {
     files, folders, loading, downloadFile, moveFile, createFolder,
     removeFolder, renameFolderPath, reorderFolders, reorderFiles, deleteFile, refresh,
@@ -172,13 +179,78 @@ export function FileDrawer(props: FileDrawerProps) {
     [refresh],
   );
 
+  // -- 单据组(container)子单据层级： 展开态 + 懒加载缓存（key = container
+  //    docId）。面板常驻挂载，展开记忆在会话内自然保留；每次展开都重拉
+  //    （刷新中保留旧清单做 stale-while-revalidate，失败可重试）。 --
+  const [expandedContainers, setExpandedContainers] = useState<Set<string>>(() => new Set());
+  const [containerUnits, setContainerUnits] = useState<Record<string, ContainerUnitsState>>({});
+  // 展开集合的 ref 镜像： 刷新令牌 effect 与 toggle 判定读取最新值，避免
+  // 依赖数组引入整集合导致 effect 频繁重挂。
+  const expandedContainersRef = useRef(expandedContainers);
+  useEffect(() => {
+    expandedContainersRef.current = expandedContainers;
+  }, [expandedContainers]);
+
+  const loadContainerUnits = useCallback(async (docId: string) => {
+    setContainerUnits((prev) => ({
+      ...prev,
+      [docId]: { status: 'loading', units: prev[docId]?.units ?? [] },
+    }));
+    try {
+      const units = await listDocumentUnits(docId);
+      setContainerUnits((prev) => ({ ...prev, [docId]: { status: 'ready', units } }));
+    } catch (e) {
+      setContainerUnits((prev) => ({
+        ...prev,
+        [docId]: {
+          status: 'error',
+          units: prev[docId]?.units ?? [],
+          error: e instanceof Error ? e.message : '加载失败',
+        },
+      }));
+    }
+  }, []);
+
+  const toggleContainerUnits = useCallback(
+    (docId: string) => {
+      const opening = !expandedContainersRef.current.has(docId);
+      setExpandedContainers((prev) => {
+        const next = new Set(prev);
+        if (next.has(docId)) next.delete(docId);
+        else next.add(docId);
+        return next;
+      });
+      if (opening) void loadContainerUnits(docId);
+    },
+    [loadContainerUnits],
+  );
+
+  const reloadContainerUnits = useCallback(
+    (docId: string) => {
+      void loadContainerUnits(docId);
+    },
+    [loadContainerUnits],
+  );
+
+  // 复核弹窗关闭后(App 递增令牌)： 重拉所有已展开 container 的子单据，
+  // 让 unit 行的复核状态徽标跟上弹窗内的确认/更正结果。
+  useEffect(() => {
+    if (!batchRefreshToken) return;
+    for (const docId of expandedContainersRef.current) void loadContainerUnits(docId);
+  }, [batchRefreshToken, loadContainerUnits]);
+
   const tree = useMemo(() => buildTree(files, folders), [files, folders]);
 
   // Esc 关闭抽屉。文件夹命名输入中的 Esc 由输入框自行消费（stopPropagation）。
+  // 顶层 modal（全局复核弹窗等 role=dialog 元素）打开时让给 modal 自己的
+  // Esc 处理： 两侧都是 document 级监听、触发顺序无法保证，此处只退避，
+  // 避免「关弹窗连带收起抽屉」。
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key !== 'Escape') return;
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      onClose();
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
@@ -215,6 +287,8 @@ export function FileDrawer(props: FileDrawerProps) {
     contextFileKeys,
     parsingDocIds,
     tree,
+    containerUnits,
+    expandedContainers,
     selectedKey,
     movingFileKey,
     deletingFolderPath,
@@ -232,6 +306,8 @@ export function FileDrawer(props: FileDrawerProps) {
     setDeletingFilePath,
     onOpenBindings,
     onTriggerParse: triggerParse,
+    toggleContainerUnits,
+    reloadContainerUnits,
     creatingInDir,
     setCreatingInDir,
     onCreateSubfolder: (parentPath, name) => {

@@ -21,6 +21,8 @@ import { AuditView } from './components/audit/AuditView';
 import { ProjectsView } from './components/projects/ProjectsView';
 import { ProjectLedgerView } from './components/ledger/ProjectLedgerView';
 import { SharePage } from './components/share/SharePage';
+import { ReviewModal } from './components/ReviewModal';
+import { subscribeReviewRequests } from './lib/reviewModal';
 import type { GraphFocus, GraphFocusTarget } from './components/graph/focus';
 
 /** 免登录分享路由：pathname 匹配 /share/<token> 时在认证网关之前分流，
@@ -139,6 +141,16 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
     },
     [navigate],
   );
+  // 全局复核弹窗（App 层单例）： 文件树子单据行/复核卡拆分清单经
+  // lib/reviewModal 通道请求打开；弹窗已开时切换目标（key 化重挂载）。
+  const [reviewDocId, setReviewDocId] = useState<string | null>(null);
+  // 复核弹窗关闭后递增，驱动文件抽屉重拉已展开单据组的子单据清单。
+  const [batchRefreshToken, setBatchRefreshToken] = useState(0);
+  useEffect(() => subscribeReviewRequests((docId) => setReviewDocId(docId)), []);
+  const closeReview = useCallback(() => {
+    setReviewDocId(null);
+    setBatchRefreshToken((t) => t + 1);
+  }, []);
   // 导航入口的统一跳转：手动进入图谱/绑定页时清掉旧的外部定位，避免残留
   // 定位覆盖用户操作（openInGraph/openInBindings/openBindingsForDoc 直接调
   // navigate，不清自己刚设置的 focus）。
@@ -263,6 +275,7 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
           filesApi={filesApi}
           uploadQueue={uploadQueue}
           onOpenBindings={openBindingsForDoc}
+          batchRefreshToken={batchRefreshToken}
         />
       }
     >
@@ -303,6 +316,16 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
       ) : null}
       {/* 全页面拖拽上传提示遮罩：fixed 定位，z-modal 高于文件抽屉 */}
       <DragDropOverlay visible={dragActive} />
+      {/* 全局复核弹窗单例：docId 作 key，切换目标即重挂载重拉快照。
+          挂在 AppShell 内容区之后，z-modal 层级高于文件抽屉。 */}
+      {reviewDocId && (
+        <ReviewModal
+          key={reviewDocId}
+          docId={reviewDocId}
+          onClose={closeReview}
+          onOpenBindings={openBindingsForDoc}
+        />
+      )}
     </AppShell>
   );
 }
