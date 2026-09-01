@@ -1,6 +1,6 @@
-// 全局文件管理面板：布局内右侧伸缩停靠板（常驻挂载，收起时宽度归零不占空间，
-// 主对话区以 flex-1 延展占满），任意视图可从 AppTopbar 的「文件」开关唤起，
-// 左缘手柄可拖拽调宽（280–560px）。
+// 全局文件管理面板：布局内右侧伸缩停靠板（常驻挂载，默认展开，登录后可直接
+// 使用；收起时宽度归零不占空间，主对话区以 flex-1 延展占满）。AppTopbar 的
+// 右缘 panel 开关负责展开/收起，左缘手柄可拖拽调宽（280–560px）。
 // 树形展示已拆至 FileTree.tsx；本文件只负责容器状态编排与预览弹窗。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
@@ -265,6 +265,7 @@ export function FileDrawer(props: FileDrawerProps) {
 
   return (
     <aside
+      id="file-management-panel"
       className={clsx(
         'relative flex h-full shrink-0 flex-col overflow-hidden bg-white',
         open ? 'border-l border-line' : 'border-l-0',

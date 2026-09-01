@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
-import { FolderOpen, LogOut } from 'lucide-react';
+import { LogOut, PanelRightClose, PanelRightOpen } from 'lucide-react';
 
-/** 顶栏：左侧视图标题（来自 navigation 注册表），右侧全局「文件」按钮 + 用户菜单。
- *  登出入口从 RealChatView 迁到这里（原为聊天顶栏的图标按钮）。 */
+/** 顶栏：左侧视图标题（来自 navigation 注册表），右侧文件面板伸缩开关 +
+ *  用户菜单。登出入口从 RealChatView 迁到这里（原为聊天顶栏的图标按钮）。 */
 export function AppTopbar({
   title,
   subtitle,
@@ -43,20 +43,27 @@ export function AppTopbar({
         {subtitle && <p className="truncate text-xs leading-tight text-ink-soft">{subtitle}</p>}
       </div>
       <div className="flex shrink-0 items-center gap-2">
+        {/* 停靠面板使用标准 panel-right 开关：展开/收起共用同一位置和语义，
+            不再显示“文件”文字，避免顶栏出现按钮型标签。 */}
         <button
           type="button"
           onClick={onOpenFiles}
           title={filesOpen ? '收起文件面板' : '展开文件面板'}
-          aria-pressed={filesOpen}
+          aria-expanded={filesOpen}
+          aria-controls="file-management-panel"
+          aria-label={filesOpen ? '收起文件面板' : '展开文件面板'}
           className={clsx(
-            'flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors',
+            'flex h-8 w-8 items-center justify-center rounded-lg border transition-colors',
             filesOpen
-              ? 'border-primary/30 bg-primary/5 font-medium text-primary'
+              ? 'border-primary/30 bg-primary/5 text-primary'
               : 'border-line bg-white text-ink-soft hover:bg-surface hover:text-ink',
           )}
         >
-          <FolderOpen className="h-4 w-4" aria-hidden />
-          文件
+          {filesOpen ? (
+            <PanelRightClose className="h-4 w-4" aria-hidden />
+          ) : (
+            <PanelRightOpen className="h-4 w-4" aria-hidden />
+          )}
         </button>
         <div className="relative" ref={menuRef}>
           <button
