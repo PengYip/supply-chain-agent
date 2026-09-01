@@ -256,6 +256,42 @@ describe('validateVoucher (交叉校验 warnings)', () => {
     expect(warnings.some((w) => w.includes('ar') && w.includes('ad'))).toBe(true);
   });
 
+  // 跨量纲修复(设计文档 §8.2): ar 行报千卡/kg、ad 行报 MJ/kg 属可互换单位,
+  // 换算后物理关系成立时不得再报(此前直接比数值 -> 必然误报)。
+  it('化验报告: 跨量纲 ar(千卡) < ad(MJ) 换算后成立 -> 无 warning', () => {
+    // 25.7 MJ/kg = 25.7 * 238.8459 ~= 6138 kcal/kg > 5500 kcal/kg, 物理成立。
+    const mixed = {
+      指标: [
+        { 基准: 'ar', 低位发热量_千卡每kg: 5500 },
+        { 基准: 'ad', 低位发热量_MJ每kg: 25.7 },
+      ],
+    };
+    expect(validateVoucher('化验报告', mixed)).toEqual([]);
+  });
+
+  it('化验报告: 跨量纲但换算后 ar>=ad(真实违反) -> warning', () => {
+    // 25.7 MJ/kg ~= 6138 kcal/kg < 6500 kcal/kg, 物理违反 -> 必须仍告警。
+    const mixedBad = {
+      指标: [
+        { 基准: 'ar', 低位发热量_千卡每kg: 6500 },
+        { 基准: 'ad', 低位发热量_MJ每kg: 25.7 },
+      ],
+    };
+    const warnings = validateVoucher('化验报告', mixedBad);
+    expect(warnings.some((w) => w.includes('ar') && w.includes('ad'))).toBe(true);
+  });
+
+  it('化验报告: 混合单位 ad(kcal) < d(MJ) 换算后成立 -> 无 warning', () => {
+    // ad 行千卡 6600 < d 行 28 MJ/kg(~6688 kcal) -> 成立。
+    const mixed = {
+      指标: [
+        { 基准: 'ad', 低位发热量_千卡每kg: 6600 },
+        { 基准: 'd', 低位发热量_MJ每kg: 28 },
+      ],
+    };
+    expect(validateVoucher('化验报告', mixed)).toEqual([]);
+  });
+
   it('化验报告: 全水(ar) <= 水分(ad) -> warning', () => {
     const bad = {
       ...化验报告Fixture,

@@ -390,6 +390,32 @@ function sumRows(rows: unknown[], key: string): number {
   }, 0);
 }
 
+// 能量换算(化验报告低位发热量跨基准校验用): 1 MJ/kg = 238.8459 kcal/kg
+// (1 cal = 4.1868 J, IT 卡, 煤质检测常规折算)。domain/units.ts 注册表仅含
+// 质量/计数两量纲, 能量对为此校验局部声明(spec 2026-09-01 §8.2 跨量纲修复)。
+const KCAL_PER_MJ = 238.8459;
+
+interface NormalizedLowHeat {
+  /** 归一化 kcal/kg(比较用)。 */
+  kcal: number;
+  /** 抽取原值 + 单位标签(告警文案忠实于原值)。 */
+  raw: number;
+  unitLabel: string;
+}
+
+/** 低位发热量行 -> 归一 kcal/kg; 两种单位字段均缺/非数值 -> null(跳过该行)。 */
+function normalizeLowHeat(row: Record<string, unknown>): NormalizedLowHeat | null {
+  const kcal = row['低位发热量_千卡每kg'];
+  if (typeof kcal === 'number' && Number.isFinite(kcal)) {
+    return { kcal, raw: kcal, unitLabel: '千卡/kg' };
+  }
+  const mj = row['低位发热量_MJ每kg'];
+  if (typeof mj === 'number' && Number.isFinite(mj)) {
+    return { kcal: mj * KCAL_PER_MJ, raw: mj, unitLabel: 'MJ/kg' };
+  }
+  return null;
+}
+
 /**
  * 凭证字段交叉校验(纯函数)。返回 warnings 列表(空数组 = 无警告); 校验失败
  * 只产生 warning, 不抛错、不拒绝入库 -- 由调用方决定 needs_review。
@@ -428,26 +454,24 @@ export function validateVoucher(
   if (voucherType === '化验报告') {
     const rows = Array.isArray(fields['指标']) ? fields['指标'] : [];
     // 多基准并存时 低位发热量 ar < ad < d(物理关系近似校验)。
-    const byBasis = new Map<string, number>();
+    // 跨量纲修复(spec 2026-09-01 §8.2): 各行单位可不同(ar 行千卡/kg、ad/d 行
+    // MJ/kg)—— 先换算到 kcal/kg 再比较, 可互换单位不再误报; 未知单位/字段
+    // 缺失的行跳过(与旧行为一致)。
+    const byBasis = new Map<string, NormalizedLowHeat>();
     for (const r of rows) {
       const row = r as Record<string, unknown> | null;
       const basis = row?.['基准'];
-      const v =
-        typeof row?.['低位发热量_千卡每kg'] === 'number'
-          ? (row['低位发热量_千卡每kg'] as number)
-          : typeof row?.['低位发热量_MJ每kg'] === 'number'
-            ? (row['低位发热量_MJ每kg'] as number)
-            : undefined;
-      if (typeof basis === 'string' && v !== undefined) byBasis.set(basis, v);
+      const norm = row ? normalizeLowHeat(row) : null;
+      if (typeof basis === 'string' && norm !== null) byBasis.set(basis, norm);
     }
     const ar = byBasis.get('ar');
     const ad = byBasis.get('ad');
     const d = byBasis.get('d');
-    if (ar !== undefined && ad !== undefined && ar >= ad) {
-      warnings.push(`低位发热量 ar(${ar}) 应小于 ad(${ad})`);
+    if (ar !== undefined && ad !== undefined && ar.kcal >= ad.kcal) {
+      warnings.push(`低位发热量 ar(${ar.raw}${ar.unitLabel}) 应小于 ad(${ad.raw}${ad.unitLabel})`);
     }
-    if (ad !== undefined && d !== undefined && ad >= d) {
-      warnings.push(`低位发热量 ad(${ad}) 应小于 d(${d})`);
+    if (ad !== undefined && d !== undefined && ad.kcal >= d.kcal) {
+      warnings.push(`低位发热量 ad(${ad.raw}${ad.unitLabel}) 应小于 d(${d.raw}${d.unitLabel})`);
     }
     // 全水(ar) <= 水分(ad) 违反 -> warning(物理关系近似校验, 按规格字面规则)。
     const arRow = rows.find((r) => (r as Record<string, unknown> | null)?.['基准'] === 'ar') as
