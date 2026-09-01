@@ -102,7 +102,7 @@ describe('三类凭证 schema 校验 (实测真实输出 fixture)', () => {
     }
   });
 
-  it('化验报告: 三基(ar/ad/d)指标通过校验', () => {
+  it('化验报告: 四基(ar/ad/d/daf)指标通过校验', () => {
     const parsed = 化验报告Schema.safeParse(化验报告Fixture);
     expect(parsed.success).toBe(true);
     if (parsed.success) {
@@ -110,6 +110,17 @@ describe('三类凭证 schema 校验 (实测真实输出 fixture)', () => {
       expect(parsed.data.指标![0]!.基准).toBe('ar');
       expect(parsed.data.指标![2]!.基准).toBe('d');
     }
+  });
+
+  it('化验报告: daf 基准(干燥无灰基, 挥发分常用)通过校验', () => {
+    const parsed = 化验报告Schema.safeParse({
+      ...化验报告Fixture,
+      指标: [
+        ...化验报告Fixture.指标!,
+        { 基准: 'daf', 挥发分_百分比: 38.5 },
+      ],
+    });
+    expect(parsed.success).toBe(true);
   });
 
   it('化验报告: 非法基准值校验失败', () => {

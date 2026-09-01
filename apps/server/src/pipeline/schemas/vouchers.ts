@@ -59,7 +59,9 @@ export const 付款凭证Schema = z.object({
 // ---- 化验报告 (入库化验与到港化验共用, 方向不做区分) ------------------------
 
 export const 化验指标Schema = z.object({
-  基准: z.enum(['ar', 'ad', 'd']),
+  /** 四基: 空干基 ar / 空气干燥基 ad / 干基 d / 干燥无灰基 daf(挥发分常用,
+   *  2026-09-01 华新实测 VLM 正确输出 daf 被旧三基词表拒绝, 补齐)。 */
+  基准: z.enum(['ar', 'ad', 'd', 'daf']),
   全水_百分比: z.number().nullable().optional(),
   灰分_百分比: z.number().nullable().optional(),
   挥发分_百分比: z.number().nullable().optional(),
@@ -205,7 +207,7 @@ export const VOUCHER_DOC_PROMPTS: Partial<Record<Exclude<VoucherType, '其他'>,
     '输出: 出具机构(字符串,必填), 报告编号(字符串或null), 送检单位(字符串或null),',
     '委托方(字符串或null), 品名(字符串或null), 重量_吨(数字或null),',
     '采样地点(字符串或null), 装卸地点(字符串或null), 检测日期(字符串,必填),',
-    '指标(数组或null,每项含: 基准(枚举 ar/ad/d), 全水_百分比(数字或null),',
+    '指标(数组或null,每项含: 基准(枚举 ar/ad/d/daf), 全水_百分比(数字或null),',
     '灰分_百分比(数字或null), 挥发分_百分比(数字或null), 全硫_百分比(数字或null),',
     '水分_百分比(数字或null), 低位发热量_MJ每kg(数字或null), 低位发热量_千卡每kg(数字或null)))。',
     '数字字段输出为数字; 无法辨认填 null, 严禁编造。',
