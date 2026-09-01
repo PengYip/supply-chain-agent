@@ -1,7 +1,7 @@
 # 批量拆分器设计：一个物理文件 ≠ 一份业务单据
 
-日期: 2026-09-01 · 状态: Phase 1(后端)已实现(BATCH_SPLIT_ENABLED 默认关闭);
-Phase 2(抽取切片)/Phase 3(前端层级)待做
+日期: 2026-09-01 · 状态: Phase 1(后端)+Phase 2(抽取切片)已实现
+(BATCH_SPLIT_ENABLED 默认关闭); Phase 3(前端层级)待做
 
 ## 0. 背景与问题
 
@@ -165,3 +165,83 @@ formType 词表: 汽运磅单 / 轨道衡称重单 / 水尺计重单 / 质检报
 - Phase 1 切片粒度 = 页区间: 同页并排多 unit 的子单据暂共享该页块,
   bbox 像素级切片 + 旋回双候选 + 两遍读数共识属 Phase 2(逐页 region 明细
   已存 manifest_json, 供 Phase 2 直接消费)。
+
+## 8. Phase 2 落地记录(2026-09-01, 抽取层)
+
+- **裁剪层** `src/pipeline/unitImages.ts`: 按 manifest regions 的 padded
+  归一化 bbox 从 150 DPI 页图裁出每个 unit 的图(@napi-rs/canvas loadImage +
+  canvas 变换 + toBuffer('image/png'); 该包是 pdf-to-img 的传递依赖, 在
+  apps/server/package.json 显式声明 ^0.1.100 对齐 lockfile, 零新增原生解码
+  路径)。rotationDeg 语义 = 顺时针旋回度数; 90/270 方向不可分辨(原型实测
+  宣威第 6 页 4 张全旋反), 对歧义 region 生成 [检测方向, 反方向] 两个候选,
+  0/180 单候选(unitRotationPlans, 跨页 unit 的 0/180 region 在两个计划中
+  保持不变)。
+- **旋回双候选择优** `src/pipeline/batchConsensus.ts#unitCandidateScore`:
+  两遍共识命中(+2) > 字段置信度均值(VLM 自报, 旋反图常仍高自信) > 非空
+  字段数(微量 tie-break)。择优结果打 `[perf-batch-split] unit ... 旋回双候选
+  rot=[90] score=2.65 mismatch=0 vs rot=[270] score=0.59 mismatch=1` 日志。
+- **两遍读数共识** `compareReadings`(纯函数): 检测遍 identifier/evidence 与
+  抽取遍读数比对——单号/编号类字段(含 明细行N.编号 数组行叶子, 归一化去
+  非字母数字后双向包含, 长度>=4 才比对); evidence 中带标签重量读数
+  (净重34250 等)与同名字段数值比对, 含 kg/吨 千倍容差。分歧 -> 写入
+  field_meta._warnings(审核卡可见), overall_confidence 压低至 <=0.5, 涉及
+  字段置信度同步压低, 强制 needs_review=true。无可比对(任一侧缺读数)不
+  产生分歧(覆盖缺口由字段置信度兜底)。
+- **接线**(runVoucherPipeline 新增 unitVoucher 分支, 不新增下游分支):
+  重量组(WEIGHT_AGGREGATE_DOCTYPES)单图单抽 + 服务端聚合, 其余类型按 unit
+  多图一次抽(与 pdfVoucher 分支共用 extractVoucherPages 编排)。unit 子单据
+  的 block_model = 页区间 OCR 块(保留给 chunk/recall, 与 Phase 1 一致) +
+  凭证 KV 合成块(空 OCR 也有召回文本), chunk 走标准 chunkBlockModel。
+  OCR 管线 = 生产同款 千帆 PaddleOCR-VL API(PARSE_BACKEND=qianfan)。
+- **路由桥**: 检测受控词表与 v2.1 分类词表不同源(检测"汽运磅单" vs 注册表
+  "汽车过磅单票据"), `UNIT_FORM_TYPE_ALIASES` 做别名桥后仍经
+  formTypeRegistry 数据路由(部署模板无对应 formType = 不路由, 回落 Phase 1
+  OCR 块路径); 微信聊天记录/数据表格/其他 无凭证 schema 刻意不桥接。
+- **并发**: unit 级抽取并发复用 BATCH_SPLIT_CONCURRENCY(默认 4, 重量组页级
+  并发压到 2 控全局在飞数); 页图懒渲染(存在路由 unit 才重渲整本)。
+- **灰度不变**: BATCH_SPLIT_ENABLED=false 零行为变化(测试锁定); 未映射
+  formType / 页图渲染失败 / 单个 unit 裁剪失败 -> 回落 Phase 1 OCR 路径;
+  全部旋回候选提取失败才让该 unit failed(不阻断其余 unit)。container 行为
+  与 Phase 1 完全一致。
+- **顺带修复**: 化验指标 基准 词表补 daf(干燥无灰基, 挥发分标准基准)——
+  Phase 2 把化验报告 unit 接入凭证管线后, 华新实测 VLM 正确输出 daf 被旧
+  三基(ar/ad/d)词表拒绝, 2/10 unit 失败, 补齐后 10/10。
+- **实查工具**: `npx tsx apps/server/scripts/processBatch.ts <pdf>
+  [--concurrency N] [--keep]` —— 内存 SQLite + 模板种子跑全链路, 打印逐
+  unit 检测/抽取/复核结论, 不触碰业务库。
+
+### 8.1 实测(2026-09-01, 10.10.0.2 生产同款: 千帆 PaddleOCR-VL + 百炼 qwen3.8-max, 并发 4)
+
+| 样例 | 检测 | 抽取 | 复核联动 | 耗时 |
+|---|---|---|---|---|
+| 宣威 8 页 | 11/11(3 空白页跳过) | 磅单全走裁剪+双候选; 微信/报表走 OCR 路径 | 第 5 页清晰照片 4/4 读数一致不入复核; 第 6/7 页模糊拼贴 5/5 强制 needs_review(编号+毛/皮/净重分歧全记录) | 922s |
+| 华新 5 页 | 10/10 | 10/10 processed(daf 修复后) | 报告编号两遍分歧 9/10 -> 全部强制复核 | 212s |
+| 下游收货数据+磅单 7 页 | 12/12(页 1 旋转表格 + 11 磅单) | 11/11 磅单裁剪抽取; 跨页续表合并 unit(p6-7 同订单号)双图一次抽; 90/180 混合旋转 | 订单号 305/308 分歧 1 例转人工, 其余一致不入复核 | 579s |
+| 下游收货证明 8 页 | 12/12(1 空白页跳过; 页 1 旋转化验单 + 11 磅单) | 12/12 processed; 磅单全走裁剪+双候选 | 全部读数共识命中, 0 误报 0 漏判(实重/净重 别名 + kg/吨 容差生效) | 980s |
+
+过程中按实测修了两处(均有回归测试):
+
+1. **daf 基准词表**(华新): 化验指标 基准 枚举缺 daf(干燥无灰基, 挥发分
+   标准基准), 2/10 unit 被 zod 拒绝; 补齐 ar/ad/d/daf 后 10/10。
+2. **重量共识标签精确匹配**(下游收货证明): 初版子串匹配把 毛重时间/
+   皮重时间(时间字段) 误拉进重量共识, evidence "毛重63.16" 与字段
+   "2026-06-08 19:23:12" 被强行比对, 8/11 磅单 unit 误报分歧。改为裸字段
+   名(数组行取行内字段)去单位后缀后精确命中标签集合, evidence 标签后紧跟
+   时间/日期不算重量读数, 补 实重=净重 别名; 修复后 12/12 零误报。
+
+**关键发现(华新编号仲裁)**: 用千帆 PaddleOCR 对华新全文档立读数得到真值
+报告编号 1192608004901-4910; 检测遍 identifierOrNull 误读为 19xx(小字号
+长数字不稳定, P1 原型的"1901-1910 唯一"实为误读但仍唯一), 抽取遍部分读对
+(049xx/49xx)。两遍分歧全部被共识拦截 -> needs_review, 零漏判(没有错误
+编号被自动入账); 复核时人工看到的抽取值多与真值一致。**结论: 检测遍读数
+本身不可信, "两遍一致才放行"是正确防线**; 后续增强方向 = 把千帆 OCR 文本
+纳入三向共识(实测其读数全对)。
+
+### 8.2 已知边界(后续项)
+
+- 检测 formType 标签跨 run 漂移(宣威磅单 汽运磅单 <-> 轨道衡称重单):
+  两者同属重量组且别名桥都覆盖, 抽取不受影响; 词表归一是后续优化。
+- validateVoucher 低位发热量 ar(kcal) vs ad(MJ) 跨量纲比较会产生误报
+  warning(既有问题, 只抬高复核率不影响正确性)。
+- 单图双候选使旋转 unit 的 VLM 调用翻倍(设计接受的可靠性成本; 宣威
+  9 个磅单 unit 约 690s)。
