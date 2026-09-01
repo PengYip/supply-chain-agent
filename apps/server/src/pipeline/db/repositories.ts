@@ -10,6 +10,7 @@ import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.
 import { normalizeCompanyName, parseSelfPartyNames } from '../../domain/flowDirection.js';
 import { deriveContractType, type ContractTypeDerivation } from '../../domain/contractType.js';
 import type { ContractType } from '../../domain/tradeSemantics.js';
+import { isVectorizableDocType } from '../vectorPolicy.js';
 import { env } from '../../env.js';
 // Postgres impls. Static import: pg is a declared dep on both backends now; the
 // functions are only CALLED on the postgres branch (lazy Pool connect), so the
@@ -20,6 +21,7 @@ import {
   saveExtractionPg,
   saveBindingPg,
   listBindingsForContractPg,
+  listRecallVisibleDocIdsPg,
   saveChunksPg,
   listChunksByDocumentPg,
   searchChunksPg,
@@ -724,6 +726,47 @@ export async function listBindingsForContract(
 ): Promise<BindingRow[]> {
   if (ctx.backend === 'postgres') return listBindingsForContractPg(ctx, contractNo);
   return ctx.db.select().from(bindings).where(eq(bindings.contractNo, contractNo)).all().map(rowToBinding);
+}
+
+/**
+ * recall 可见性过滤(2026-09-01 悬空单据不可见): 无 contractNo 检索的可见文档集合 =
+ *   锚点类型文档(模板树根为 合同/立项书, 与向量化策略同源) ∪ 存在有效绑定的文档
+ *   (status != 'rejected', 含 proposed 待确认) ∪ 合同台账条目文档。
+ * 悬空凭证(无任何绑定)不参与检索——按合同找单据的归属关系必须先建立。
+ */
+export async function listRecallVisibleDocIds(
+  ctx: DbContext,
+  userId?: string,
+): Promise<Set<string>> {
+  if (ctx.backend === 'postgres') return listRecallVisibleDocIdsPg(ctx, userId);
+  const uid = effectiveUserId(userId);
+  const out = new Set<string>();
+  const types = await listTemplateTypes(ctx);
+  const docTypes = ctx.sqlite
+    .prepare('SELECT DISTINCT doc_type AS t FROM documents')
+    .all() as Array<{ t: string }>;
+  const anchorNames = docTypes.map((r) => r.t).filter((t) => isVectorizableDocType(t, types));
+  if (anchorNames.length > 0) {
+    const placeholders = anchorNames.map(() => '?').join(',');
+    const anchorSql =
+      `SELECT id FROM documents WHERE doc_type IN (${placeholders})` +
+      (uid ? ' AND user_id = ?' : '');
+    const anchorArgs = uid ? [...anchorNames, uid] : anchorNames;
+    for (const r of ctx.sqlite.prepare(anchorSql).all(...anchorArgs) as Array<{ id: string }>) {
+      out.add(r.id);
+    }
+  }
+  const bindSql =
+    'SELECT DISTINCT document_id AS d FROM bindings WHERE status != \'rejected\'' +
+    (uid ? ' AND user_id = ?' : '');
+  for (const r of ctx.sqlite.prepare(bindSql).all(...(uid ? [uid] : [])) as Array<{ d: string }>) {
+    out.add(r.d);
+  }
+  const ledgerSql = 'SELECT document_id AS d FROM contract_ledger' + (uid ? ' WHERE user_id = ?' : '');
+  for (const r of ctx.sqlite.prepare(ledgerSql).all(...(uid ? [uid] : [])) as Array<{ d: string }>) {
+    out.add(r.d);
+  }
+  return out;
 }
 
 // ---- Phase B: bindings 状态机 -------------------------------------------------

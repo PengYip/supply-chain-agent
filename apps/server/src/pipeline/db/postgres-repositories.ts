@@ -24,7 +24,8 @@ import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.
 import { normalizeCompanyName } from '../../domain/flowDirection.js';
 import { deriveContractType } from '../../domain/contractType.js';
 import type { ContractType } from '../../domain/tradeSemantics.js';
-import { parseGraphStatus, effectiveSelfPartyNamesForDerivation, normalizeProjectCode, ledgerRowFieldsToProjection } from './repositories.js';
+import { isVectorizableDocType } from '../vectorPolicy.js';
+import { parseGraphStatus, effectiveSelfPartyNamesForDerivation, normalizeProjectCode, ledgerRowFieldsToProjection, listTemplateTypes } from './repositories.js';
 import type {
   ExtractionInput,
   BindingInput,
@@ -197,6 +198,38 @@ export async function listBindingsForContractPg(
     [contractNo],
   );
   return res.rows.map(bindingRowFromPg);
+}
+
+/** recall 可见性过滤的 Postgres 实现(语义同 repositories.listRecallVisibleDocIds)。 */
+export async function listRecallVisibleDocIdsPg(
+  ctx: PostgresDbContext,
+  userId?: string,
+): Promise<Set<string>> {
+  const uid = effectiveUserId(userId);
+  const out = new Set<string>();
+  const types = await listTemplateTypes(ctx);
+  const { rows: docTypes } = await ctx.pool.query('SELECT DISTINCT doc_type AS t FROM documents');
+  const anchorNames = (docTypes as Array<{ t: string }>)
+    .map((r) => r.t)
+    .filter((t) => isVectorizableDocType(t, types));
+  if (anchorNames.length > 0) {
+    const { rows } = await ctx.pool.query(
+      `SELECT id FROM documents WHERE doc_type = ANY($1)${uid ? ' AND user_id = $2' : ''}`,
+      uid ? [anchorNames, uid] : [anchorNames],
+    );
+    for (const r of rows as Array<{ id: string }>) out.add(r.id);
+  }
+  const { rows: bound } = await ctx.pool.query(
+    `SELECT DISTINCT document_id AS d FROM bindings WHERE status != 'rejected'${uid ? ' AND user_id = $1' : ''}`,
+    uid ? [uid] : [],
+  );
+  for (const r of bound as Array<{ d: string }>) out.add(r.d);
+  const { rows: ledger } = await ctx.pool.query(
+    `SELECT document_id AS d FROM contract_ledger${uid ? ' WHERE user_id = $1' : ''}`,
+    uid ? [uid] : [],
+  );
+  for (const r of ledger as Array<{ d: string }>) out.add(r.d);
+  return out;
 }
 
 // ---- Phase B: bindings 状态机 (pg twins) -------------------------------------

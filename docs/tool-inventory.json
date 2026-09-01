@@ -117,7 +117,7 @@
       "status": "active",
       "mount": "always",
       "whenToUse": "按内容召回已录入单据片段（fts/vector/hybrid + reranker + wantTags/contractNo 过滤）。",
-      "boundary": "只能召回已录入且通过权限过滤的 chunk；未命中返回空数组，不得编造；台账结构化信息用 query_business。",
+      "boundary": "只能召回已录入且通过权限过滤的 chunk；未命中返回空数组，不得编造；台账结构化信息用 query_business；未绑定合同的悬空凭证不参与检索（合同/立项书类文档始终可搜）。",
       "rationale": "唯一的通用文本召回入口；fullText 模式见 docs/superpowers/specs 设计。"
     },
     {
