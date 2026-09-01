@@ -9,6 +9,14 @@ export type FileParseStatus =
   | 'needs_ocr'
   | 'failed';
 
+/** 解析进行中的细分阶段（parseStage；后端未部署阶段字段/无阶段为 null，
+ *  解析落终态时后端清为 null）。 */
+export type FileParseStage =
+  | 'detecting'
+  | 'ocr'
+  | 'extracting'
+  | 'indexing';
+
 export interface FileEntry {
   key: string;
   name: string;        // extracted filename
@@ -19,6 +27,10 @@ export interface FileEntry {
   parseStatus: FileParseStatus | null;
   /** 已解析出的具体业务类型；解析未完成、失败或兜底其他时为 null。 */
   businessType?: string | null;
+  /** 解析阶段（仅解析进行中有意义；null = 后端未部署阶段字段/无阶段）。 */
+  parseStage?: FileParseStage | null;
+  /** 当前阶段的起始时间（ISO，后端随阶段推进重置）；null = 未知。 */
+  stageStartedAt?: string | null;
   /* Optional because synthetic FileEntry literals elsewhere (e.g. the preview
    * trace in ContractExecutionSection) don't carry it; undefined reads as not bound. */
   bound?: boolean;     // true once the file is bound to a contract ledger row
@@ -49,6 +61,8 @@ type RawFile = {
   directory?: unknown;
   parseStatus?: unknown;
   businessType?: unknown;
+  parseStage?: unknown;
+  stageStartedAt?: unknown;
   bound?: unknown;
   batchRole?: unknown;
   unitCount?: unknown;
@@ -65,6 +79,13 @@ const FILE_PARSE_STATUSES: readonly string[] = [
   'parsed',
   'needs_ocr',
   'failed',
+];
+
+const FILE_PARSE_STAGES: readonly string[] = [
+  'detecting',
+  'ocr',
+  'extracting',
+  'indexing',
 ];
 
 function normalizeFile(raw: RawFile): FileEntry {
@@ -95,6 +116,16 @@ function normalizeFile(raw: RawFile): FileEntry {
     parseStatus:
       typeof raw.parseStatus === 'string' && FILE_PARSE_STATUSES.includes(raw.parseStatus)
         ? (raw.parseStatus as FileParseStatus)
+        : null,
+    // 阶段字段同样白名单归一: 未知/缺失一律 null, 保证前端可先于后端部署
+    // (null 走旧「解析中」文案, 行为零变化)。
+    parseStage:
+      typeof raw.parseStage === 'string' && FILE_PARSE_STAGES.includes(raw.parseStage)
+        ? (raw.parseStage as FileParseStage)
+        : null,
+    stageStartedAt:
+      typeof raw.stageStartedAt === 'string' && raw.stageStartedAt
+        ? raw.stageStartedAt
         : null,
     businessType:
       typeof raw.businessType === 'string' && raw.businessType.trim().length > 0
@@ -133,18 +164,24 @@ export function useFiles() {
   const [folders, setFolders] = useState<FileFolder[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const refresh = useCallback(async () => {
+  /** 拉取文件列表并整表替换(keys 稳定, 行实例/选中/展开状态不受影响)。
+   *  返回本次拉到的最新列表供调用方立即判定(如进度轮询的 in-flight 计算);
+   *  请求失败或非 2xx 返回 null, 调用方保留旧状态自行兜底。 */
+  const refresh = useCallback(async (): Promise<FileEntry[] | null> => {
+    let next: FileEntry[] | null = null;
     try {
       const res = await fetch('/api/files');
       if (res.ok) {
         const data = (await res.json()) as RawFile[] | { files?: RawFile[]; folders?: RawFolder[] };
         const rawFiles: RawFile[] = Array.isArray(data) ? data : data.files ?? [];
         const rawFolders: RawFolder[] = Array.isArray(data) ? [] : data.folders ?? [];
-        setFiles(rawFiles.map(normalizeFile));
+        next = rawFiles.map(normalizeFile);
+        setFiles(next);
         setFolders(rawFolders.map(normalizeFolder));
       }
     } catch { /* ignore */ }
     setLoading(false);
+    return next;
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);

@@ -190,24 +190,38 @@ export function FileDrawer(props: FileDrawerProps) {
   useEffect(() => {
     expandedContainersRef.current = expandedContainers;
   }, [expandedContainers]);
+  // 缓存 ref 镜像： 进度轮询 tick 内读最新缓存计算轮询目标，同理避免
+  // useCallback 依赖整缓存对象。
+  const containerUnitsRef = useRef(containerUnits);
+  useEffect(() => {
+    containerUnitsRef.current = containerUnits;
+  }, [containerUnits]);
 
-  const loadContainerUnits = useCallback(async (docId: string) => {
-    setContainerUnits((prev) => ({
-      ...prev,
-      [docId]: { status: 'loading', units: prev[docId]?.units ?? [] },
-    }));
+  /** 拉取某 container 的子单据清单。silent=true 供进度轮询复用： 不把状态
+   *  翻成 loading（避免展开行的「刷新中」每 4s 闪烁）、失败静默保留旧缓存
+   *  下一轮再试；手动展开/重试走非静默路径，保留既有加载/失败反馈。 */
+  const loadContainerUnits = useCallback(async (docId: string, opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
+    if (!silent) {
+      setContainerUnits((prev) => ({
+        ...prev,
+        [docId]: { status: 'loading', units: prev[docId]?.units ?? [] },
+      }));
+    }
     try {
       const units = await listDocumentUnits(docId);
       setContainerUnits((prev) => ({ ...prev, [docId]: { status: 'ready', units } }));
     } catch (e) {
-      setContainerUnits((prev) => ({
-        ...prev,
-        [docId]: {
-          status: 'error',
-          units: prev[docId]?.units ?? [],
-          error: e instanceof Error ? e.message : '加载失败',
-        },
-      }));
+      if (!silent) {
+        setContainerUnits((prev) => ({
+          ...prev,
+          [docId]: {
+            status: 'error',
+            units: prev[docId]?.units ?? [],
+            error: e instanceof Error ? e.message : '加载失败',
+          },
+        }));
+      }
     }
   }, []);
 
@@ -238,6 +252,64 @@ export function FileDrawer(props: FileDrawerProps) {
     if (!batchRefreshToken) return;
     for (const docId of expandedContainersRef.current) void loadContainerUnits(docId);
   }, [batchRefreshToken, loadContainerUnits]);
+
+  // -- 解析进度轮询： 解析常耗时数分钟（拼贴 PDF 实测 >900s），抽屉展开
+  //    期间用 4s 轮询让行内进度可见。定时器仅在「抽屉开 + 存在进行中解析」
+  //    时存在： 进行中 = 任一文件 parseStatus='parsing' / 本地刚触发解析
+  //    （parsingDocIds，覆盖 /api/files 尚未翻成 parsing 的窗口）/ 任一已
+  //    缓存 container 存在未终态子单据。全部空闲或抽屉收起即拆除定时器，
+  //    网络行为与现状零差异（FileDrawer 常驻挂载，必须以 open 为门）。 --
+  const filesParsing = files.some((f) => f.parseStatus === 'parsing');
+  const unitsParsing = Object.values(containerUnits).some((s) =>
+    s.units.some((u) => u.unitStatus === 'pending' || u.unitStatus === 'processing'),
+  );
+  const progressPollActive =
+    open && (filesParsing || parsingDocIds.size > 0 || unitsParsing);
+
+  /** 一轮进度轮询： 拉一次 /api/files（整表替换但 keys 稳定，排序由服务端
+   *  rank 持有，选中/展开态在组件 state 里不受影响），再静默拉取相关
+   *  container 的子单据。目标优先级： 缓存未终态 > 容器仍在 parsing >
+   *  已展开（展开行实时刷新状态徽标）；每轮上限 8 个防多容器并发刷屏。
+   *  页面隐藏时整轮跳过；上一轮未返回时跳过本轮，避免请求堆叠。 */
+  const tickBusyRef = useRef(false);
+  const runProgressTick = useCallback(async () => {
+    if (tickBusyRef.current || document.visibilityState === 'hidden') return;
+    tickBusyRef.current = true;
+    try {
+      const fresh = await refresh();
+      const freshFiles = fresh ?? [];
+      const nonTerminal: string[] = [];
+      for (const [docId, s] of Object.entries(containerUnitsRef.current)) {
+        if (
+          s.units.some((u) => u.unitStatus === 'pending' || u.unitStatus === 'processing')
+        ) {
+          nonTerminal.push(docId);
+        }
+      }
+      const parsingContainers: string[] = [];
+      for (const f of freshFiles) {
+        if (f.batchRole === 'container' && f.docId && f.parseStatus === 'parsing') {
+          parsingContainers.push(f.docId);
+        }
+      }
+      const targets = [
+        ...new Set([...nonTerminal, ...parsingContainers, ...expandedContainersRef.current]),
+      ];
+      for (const docId of targets.slice(0, 8)) {
+        void loadContainerUnits(docId, { silent: true });
+      }
+    } finally {
+      tickBusyRef.current = false;
+    }
+  }, [refresh, loadContainerUnits]);
+
+  useEffect(() => {
+    if (!progressPollActive) return;
+    // 激活即跑一轮（抽屉展开/解析刚触发时立刻探一次），之后每 4s 一拍。
+    void runProgressTick();
+    const id = window.setInterval(() => void runProgressTick(), 4000);
+    return () => window.clearInterval(id);
+  }, [progressPollActive, runProgressTick]);
 
   const tree = useMemo(() => buildTree(files, folders), [files, folders]);
 

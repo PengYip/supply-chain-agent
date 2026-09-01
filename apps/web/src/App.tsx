@@ -236,6 +236,9 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
     // mid-parse is fine -- the backend waits for referenced docs before the
     // agent runs.
     setDocParseStates((prev) => ({ ...prev, [docId]: 'parsing' }));
+    // 解析常耗时数分钟： 立即刷新一次文件列表，让文件抽屉的解析进度轮询
+    // 拿到 parsing 状态开始跟踪（结束后的 finally 刷新保持不变）。
+    void refreshFiles();
     processDocument(docId)
       .then((res) => {
         setDocParseStates((prev) => ({ ...prev, [docId]: res.parseStatus }));

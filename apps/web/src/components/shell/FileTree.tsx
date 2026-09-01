@@ -19,7 +19,7 @@ import {
   Pencil,
   Trash2,
 } from 'lucide-react';
-import { type FileEntry, type FileFolder } from '../../hooks/useFiles';
+import { type FileEntry, type FileFolder, type FileParseStage } from '../../hooks/useFiles';
 import { normalizeMoveDirectory, nodeAt, type TreeNode } from '../../lib/fileTree';
 import { businessTypeTag } from '../../lib/businessTypeTag';
 import {
@@ -61,6 +61,22 @@ function parseBadge(
     default:
       return null;
   }
+}
+
+/** 解析阶段文案（parseStage 徽标；后端未部署阶段字段时为 null，走旧
+ *  「解析中」文案，保证前端可独立于后端灰度部署）。 */
+const PARSE_STAGE_LABEL: Record<FileParseStage, string> = {
+  detecting: '检测单据边界',
+  ocr: '整本 OCR 解析',
+  extracting: '逐份抽取',
+  indexing: '分块与向量化',
+};
+
+/** 秒数 → 「42 秒」/「2 分 10 秒」（解析/阶段徽标的已耗时读数，
+ *  随进度轮询驱动的重渲染约 4s 刷新一拍）。 */
+function formatElapsedSec(sec: number): string {
+  if (sec < 60) return `${sec} 秒`;
+  return `${Math.floor(sec / 60)} 分 ${String(sec % 60).padStart(2, '0')} 秒`;
 }
 
 /** 已解析业务类型的标签配色与样式查表已抽至 lib/businessTypeTag(文件树与
@@ -494,13 +510,79 @@ function FileRow(props: {
     !!cb.onTriggerParse &&
     !parseInFlight &&
     (file.parseStatus === 'uploaded' || file.parseStatus === 'failed' || file.parseStatus === 'parsed');
+
+  // 首次观察到「解析中」的时间戳（仅组件内存，重挂载归零）： 已耗时读数随
+  // 进度轮询驱动的重渲染（约 4s 一拍）自然刷新，不另设每秒定时器。
+  const [inFlightSince, setInFlightSince] = useState<number | null>(null);
+  useEffect(() => {
+    if (parseInFlight && inFlightSince === null) setInFlightSince(Date.now());
+    else if (!parseInFlight && inFlightSince !== null) setInFlightSince(null);
+  }, [parseInFlight, inFlightSince]);
+  // 已耗时锚点： 优先后端 stageStartedAt（阶段内已耗时，随阶段推进重置，
+  // 展示为「整本 OCR 解析 · 已 2 分 10 秒」）；字段缺失（后端未部署阶段
+  // 字段/无阶段）时回落组件内存时间戳。客户端与服务端时钟偏差由 >=0 钳制。
+  const stage = file.parseStage ?? null;
+  const elapsedLabel = (() => {
+    if (!parseInFlight) return null;
+    const serverStart = file.stageStartedAt ? Date.parse(file.stageStartedAt) : NaN;
+    const anchor = Number.isFinite(serverStart) ? serverStart : inFlightSince;
+    if (anchor === null) return null;
+    return formatElapsedSec(Math.max(0, Math.round((Date.now() - anchor) / 1000)));
+  })();
+
+  // 单据组抽取进度： 缓存里已有 unit 行且存在未终态（pending/processing）时，
+  // 行级渲染「抽取中 i/N」+ 细进度条 —— 收起态同样可见（进度长在行上，而非
+  // 仅展开清单里）。容器自身仍在 parsing 且尚无 unit 行时回落普通「解析中」。
+  // done 口径 = processed + needs_ocr + failed（终态即已处理）。
+  const containerProgress = (() => {
+    if (!containerDocId || !unitsState) return null;
+    const total = unitsState.units.length;
+    if (total === 0) return null;
+    const done = unitsState.units.filter(
+      (u) =>
+        u.unitStatus === 'processed' ||
+        u.unitStatus === 'needs_ocr' ||
+        u.unitStatus === 'failed',
+    ).length;
+    const inFlight = unitsState.units.some(
+      (u) => u.unitStatus === 'pending' || u.unitStatus === 'processing',
+    );
+    return inFlight ? { total, done } : null;
+  })();
+
   let parseBadgeNode: ReactNode = null;
   if (parseInFlight) {
-    parseBadgeNode = (
-      <span className="animate-pulse whitespace-nowrap rounded bg-surface px-1.5 py-px text-[10px] text-ink-soft">
-        解析中
-      </span>
-    );
+    // 容器进入逐份抽取且 unit 进度可得时，由「抽取中 i/N」进度节点接管
+    // （信息量更大），解析/阶段徽标让位；其余阶段（检测/OCR/向量化）与
+    // 无 unit 进度时照常显示阶段徽标。
+    const suppressedByUnitProgress =
+      containerProgress !== null && (stage === null || stage === 'extracting');
+    if (suppressedByUnitProgress) {
+      parseBadgeNode = null;
+    } else {
+      const stageLabel = stage ? PARSE_STAGE_LABEL[stage] : null;
+      const text = stageLabel
+        ? elapsedLabel
+          ? `${stageLabel} · 已 ${elapsedLabel}`
+          : stageLabel
+        : elapsedLabel
+          ? `解析中 · ${elapsedLabel}`
+          : '解析中';
+      parseBadgeNode = (
+        <span
+          className="animate-pulse whitespace-nowrap rounded bg-surface px-1.5 py-px text-[10px] text-ink-soft"
+          title={
+            stageLabel
+              ? `解析进行中，当前阶段：${stageLabel}`
+              : elapsedLabel
+                ? `解析进行中，已持续 ${elapsedLabel}`
+                : '解析进行中'
+          }
+        >
+          {text}
+        </span>
+      );
+    }
   } else if (canTriggerParse && badge) {
     const isRetry = file.parseStatus === 'failed';
     const isReprocess = file.parseStatus === 'parsed';
@@ -615,6 +697,24 @@ function FileRow(props: {
       <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 pl-[26px]">
         <div className="flex min-w-0 flex-wrap items-center gap-1">
           {batchBadgeNode}
+          {containerProgress && (
+            <span
+              className="flex shrink-0 items-center gap-1"
+              title={`子单据抽取进度：已处理 ${containerProgress.done}/${containerProgress.total} 份`}
+            >
+              <span className="whitespace-nowrap rounded bg-primary/10 px-1.5 py-px text-[10px] text-primary animate-pulse">
+                抽取中 {containerProgress.done}/{containerProgress.total}
+              </span>
+              <span className="h-1 w-12 overflow-hidden rounded-full bg-surface" aria-hidden>
+                <span
+                  className="block h-full rounded-full bg-primary transition-all duration-500"
+                  style={{
+                    width: `${Math.round((containerProgress.done / containerProgress.total) * 100)}%`,
+                  }}
+                />
+              </span>
+            </span>
+          )}
           {boundBadgeNode}
           {parseBadgeNode}
           <span
