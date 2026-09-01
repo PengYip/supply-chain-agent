@@ -21,6 +21,7 @@ import {
 import clsx from 'clsx'
 import { DocumentReviewCard, type DocumentReviewPayload } from '../DocumentReviewCard'
 import { MarkdownContent } from './MarkdownContent'
+import { SettlementEvidenceCard, parseSettlementEvidence } from './SettlementEvidenceCard'
 
 /** 工具调用渲染族（2026-08-31 从 RealMessageItem 原样抽取为共享组件）：
  *  主聊天与只读分享页共用，保证工具卡片的折叠行、展开详情、通用结果框、
@@ -48,6 +49,11 @@ const formatResult = (result: unknown): string => {
     if (Array.isArray(r.orders)) {
       const missing = Array.isArray(r.missingInvoices) ? r.missingInvoices.length : 0
       return `${r.orders.length} 笔订单${missing > 0 ? ` · ${missing} 笔缺发票` : ''}`
+    }
+    // gather_settlement_evidence 成功态的单行摘要(详细卡片见专属分支)
+    if (r.status === 'ok' && typeof r.contractNo === 'string' && Array.isArray(r.flows)) {
+      const settleCount = Array.isArray(r.settlements) ? r.settlements.length : 0
+      return `合同 ${r.contractNo} · ${r.flows.length} 行执行流水 · ${settleCount} 笔历史结算`
     }
     return JSON.stringify(result)
   }
@@ -212,6 +218,9 @@ const RealToolStep: React.FC<{
   const reviewPayload = readOnly ? null : isReviewResult(step.toolName, step.result)
   // load_skill 成功结果走专属 SkillCard(2026-08-28 Skill 化); 失败回落通用框。
   const skillPayload = isSkillPayload(step.toolName, step.result)
+  // gather_settlement_evidence 成功态走结算取证卡(结构化证据 + 溯源入口);
+  // error 形状与只读宿主(分享页, 无复核弹窗总线)回落通用框。
+  const settlementPayload = readOnly ? null : parseSettlementEvidence(step.toolName, step.result)
 
   // 折叠态状态图标与文案：运行中 / 完成 / 失败
   const statusIcon = isCompleted ? (
@@ -258,6 +267,8 @@ const RealToolStep: React.FC<{
               <SkillCard payload={skillPayload} />
             ) : reviewPayload ? (
               <DocumentReviewCard payload={reviewPayload} onOpenBindings={onOpenBindings} />
+            ) : settlementPayload ? (
+              <SettlementEvidenceCard payload={settlementPayload} />
             ) : (
               <ToolResultBox result={step.result} initiallyExpanded />
             )
