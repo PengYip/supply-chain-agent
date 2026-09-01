@@ -21,6 +21,7 @@ import {
   createDocumentStub,
   deleteDocument,
   clearDocumentUnits,
+  updateDocumentParseStage,
   type TemplateTypeRow,
   // Phase B bindings state machine.
   listContractLedgerEntries, findBindingByDocAndContract, listBindingProposals,
@@ -1260,6 +1261,8 @@ export async function processDocument(
   // 2. Mark parsing in progress.
   await setDocumentParseStatus(ctx, docId, 'parsing', opts.userId);
   perf.mark('stamp_parsing');
+  // 阶段级进度: 解析尝试开始 -> 'ocr'(单图凭证路径/OCR/数字解析统称解析段)。
+  await updateDocumentParseStage(ctx, docId, 'ocr');
 
   // Phase A: 图片凭证走 VLM 分支(与 ingestFile 同一分流; digitalAdapter 按
   // utf-8 读图是乱码, 分类器对乱码块会失败 -> 'failed')。VLM 失败 -> 'failed'
@@ -1269,6 +1272,7 @@ export async function processDocument(
       const v = await runVoucherPipeline({
         ctx, sourcePath: sourceUri, docId, embedder: opts.embedder, userId: opts.userId, vlm: opts.vlm,
       });
+      await updateDocumentParseStage(ctx, docId, null);
       perf.finish();
       return {
         docId, parseStatus: 'parsed' as const, blockCount: v.blockCount,
@@ -1277,6 +1281,7 @@ export async function processDocument(
       };
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
+      await updateDocumentParseStage(ctx, docId, null);
       perf.finish(`voucher failed: ${reason}`);
       return { docId, parseStatus: 'failed' as const, blockCount: 0, reason };
     }
@@ -1321,6 +1326,7 @@ export async function processDocument(
   } else if (imageLike) {
     const routed = opts.skipVoucherRoute ? null : await tryVoucherRouteForPdf(ctx, docId, sourceUri, opts);
     if (routed) {
+      await updateDocumentParseStage(ctx, docId, null);
       perf.finish('voucher-routed');
       return routed;
     }
@@ -1344,6 +1350,7 @@ export async function processDocument(
     const last = parseErrors[parseErrors.length - 1];
     const reason = last instanceof Error ? last.message : '文件解析得到 0 个内容块';
     await setDocumentParseStatus(ctx, docId, 'needs_ocr', opts.userId).catch(() => {});
+    await updateDocumentParseStage(ctx, docId, null);
     perf.finish(`needs_ocr: ${reason}`);
     return { docId, parseStatus: 'needs_ocr', blockCount: 0, reason };
   }
@@ -1385,6 +1392,8 @@ export async function processDocument(
     // 7. Chunk + tag + save chunks (Lane B, same as ingestFile). tagChunks never
     //    throws and short-circuits to all-null when the tagger is unset or the
     //    taxonomy is empty (其他).
+    // 阶段级进度: 解析完成 -> 切块/索引/向量化段。
+    await updateDocumentParseStage(ctx, docId, 'indexing');
     const chunks = chunkBlockModel(blockModel);
     perf.mark('chunk', `${chunks.length} chunks`);
     const taxonomy = getTaxonomy(blockModel.docType);
@@ -1477,6 +1486,7 @@ export async function processDocument(
     }
     perf.finish();
 
+    await updateDocumentParseStage(ctx, docId, null);
     return {
       docId,
       parseStatus: 'parsed',
@@ -1489,6 +1499,7 @@ export async function processDocument(
     };
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
+    await updateDocumentParseStage(ctx, docId, null);
     perf.finish(`failed: ${reason}`);
     await setDocumentParseStatus(ctx, docId, 'failed', opts.userId).catch(() => {});
     return { docId, parseStatus: 'failed', reason };
@@ -1713,6 +1724,7 @@ export async function processDocumentWithBatch(
 
   // 版面清点。任何失败(渲染 / 超页数上限 / VLM 异常)都回落旧路径——拆分器
   // 永不劣于现状。
+  await updateDocumentParseStage(ctx, docId, 'detecting');
   let units: DetectedUnit[];
   try {
     const detection = await detectDocumentUnits(
@@ -1806,6 +1818,8 @@ export async function processDocumentWithBatch(
   // unit 级并发(BATCH_SPLIT_CONCURRENCY, 与检测同参; 宣威 8 页串行原型约
   // 9 分钟)。结果按 unit 序回填; 单个 unit 失败不阻断其余(状态可追溯)。
   // 循环体已提取为 processUnitChild(Task 9 重抽/合并重建共用, 行为等价)。
+  // 阶段级进度: container 进入子单据抽取段(每个 unit 自身再走 ocr/indexing)。
+  await updateDocumentParseStage(ctx, docId, 'extracting');
   const processed = await mapLimit(units, env.BATCH_SPLIT_CONCURRENCY, async (unit, i) => {
     const routedDocType = (unitPages ? unitRoutes[i] : null) ?? null;
     const hint = routedDocType ?? formIdx.docTypeOf(registryFormType(unit.formType)) ?? opts.docType;
@@ -1822,6 +1836,9 @@ export async function processDocumentWithBatch(
   for (const childId of processed) {
     if (childId !== null) childDocIds.push(childId);
   }
+
+  // 阶段级进度: 拆分流程终态, 清 container 的进度阶段(子单据各自已清)。
+  await updateDocumentParseStage(ctx, docId, null);
 
   // P3 谱系图: 刷新 container 的 CONTAINS 边(内部已捕获异常折算 'failed',
   // 只 warn 不阻断返回)。

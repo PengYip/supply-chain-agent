@@ -132,6 +132,8 @@ import {
   getBatchLineageForDocumentsPg,
   clearDocumentUnitsPg,
   deleteDocumentUnitsByIdsPg,
+  updateDocumentParseStagePg,
+  getDocumentParseStagesPg,
   updateGraphLinkStatusPg,
   updateGraphLinkPropsPg,
   setGraphLinkGraphStatusPg,
@@ -1654,6 +1656,71 @@ export async function getBatchRolesForDocuments(
         .all(...ids)) as Array<{ id: string; batch_role: string | null; unit_count: number }>;
   for (const r of rows) {
     out.set(r.id, { batchRole: r.batch_role ?? null, unitCount: Number(r.unit_count) });
+  }
+  return out;
+}
+
+// ---- 阶段级解析进度(2026-09-01): documents.parse_stage + stage_started_at ----
+
+/** documents.parse_stage 取值域; NULL=非解析中(终态/未开始)。 */
+export type ParseStage = 'detecting' | 'ocr' | 'extracting' | 'indexing';
+
+/**
+ * 写/清解析进度阶段。非空 -> parse_stage + stage_started_at=now(ISO);
+ * null -> 两列清空(解析终态必须清, 防残留)。
+ */
+export async function updateDocumentParseStage(
+  ctx: DbContext,
+  docId: string,
+  stage: ParseStage | null,
+): Promise<void> {
+  if (ctx.backend === 'postgres') return updateDocumentParseStagePg(ctx, docId, stage);
+  if (stage === null) {
+    ctx.sqlite
+      .prepare('UPDATE documents SET parse_stage = NULL, stage_started_at = NULL WHERE id = ?')
+      .run(docId);
+  } else {
+    ctx.sqlite
+      .prepare('UPDATE documents SET parse_stage = ?, stage_started_at = ? WHERE id = ?')
+      .run(stage, new Date().toISOString(), docId);
+  }
+}
+
+export interface DocumentParseStageInfo {
+  parseStage: string | null;
+  stageStartedAt: string | null;
+}
+
+/**
+ * 批量读解析进度阶段(/api/files 条目用, 一次 IN 查询替代逐文件读)。
+ * user 过滤与 getDocumentTypes/getBatchRolesForDocuments 同惯例。
+ */
+export async function getDocumentParseStages(
+  ctx: DbContext,
+  docIds: string[],
+  userId?: string,
+): Promise<Map<string, DocumentParseStageInfo>> {
+  if (ctx.backend === 'postgres') return getDocumentParseStagesPg(ctx, docIds, userId);
+  const ids = [...new Set(docIds.filter(Boolean))];
+  const out = new Map<string, DocumentParseStageInfo>();
+  if (ids.length === 0) return out;
+  const uid = effectiveUserId(userId);
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = (uid
+    ? ctx.sqlite
+        .prepare(
+          `SELECT id, parse_stage, stage_started_at FROM documents
+           WHERE id IN (${placeholders})
+             AND (user_id = ? OR user_id = '' OR user_id IS NULL)`,
+        )
+        .all(...ids, uid)
+    : ctx.sqlite
+        .prepare(
+          `SELECT id, parse_stage, stage_started_at FROM documents WHERE id IN (${placeholders})`,
+        )
+        .all(...ids)) as Array<{ id: string; parse_stage: string | null; stage_started_at: string | null }>;
+  for (const r of rows) {
+    out.set(r.id, { parseStage: r.parse_stage ?? null, stageStartedAt: r.stage_started_at ?? null });
   }
   return out;
 }

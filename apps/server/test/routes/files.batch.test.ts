@@ -7,6 +7,7 @@ import {
   setDocumentBatchRole,
   saveDocumentUnits,
   findDocIdsByMinioKeys,
+  updateDocumentParseStage,
 } from '../../src/pipeline/db/repositories.js';
 
 // P3 谱系(批量拆分器 Phase 3): /api/files 条目带 batchRole/unitCount;
@@ -104,6 +105,26 @@ describe('GET /api/files batch lineage fields (P3)', () => {
     expect(container.unitCount).toBe(2);
     expect(plain.batchRole).toBeNull();
     expect(plain.unitCount).toBeNull();
+  });
+
+  it('parseStage/stageStartedAt: 置了阶段的条目带值, 未置阶段恒 null', async () => {
+    const containerId = await seedContainer();
+    await seedPlain();
+    // 手工置阶段(模拟解析进行中; 终态清空由管线测试覆盖)。
+    await updateDocumentParseStage(ctx, containerId, 'ocr');
+
+    const res = await appAs('u1').request('/api/files');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      files: Array<{ name: string; parseStage: string | null; stageStartedAt: string | null }>;
+    };
+    const container = body.files.find((f) => f.name.includes('拼版件'))!;
+    const plain = body.files.find((f) => f.name.includes('普通件'))!;
+    expect(container.parseStage).toBe('ocr');
+    expect(typeof container.stageStartedAt).toBe('string');
+    expect(Number.isNaN(Date.parse(container.stageStartedAt!))).toBe(false);
+    expect(plain.parseStage).toBeNull();
+    expect(plain.stageStartedAt).toBeNull();
   });
 });
 

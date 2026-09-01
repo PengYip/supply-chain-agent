@@ -45,6 +45,7 @@ import {
   deleteDocument,
   createDocumentStub,
   getDocumentParseStatus,
+  getDocumentParseStages,
   getDocumentTypes,
   listDocumentIdsWithConfirmedBindings,
 } from '../pipeline/db/repositories.js';
@@ -334,12 +335,21 @@ filesRoute.get('/', requireRole('admin', 'trader', 'viewer'), async (c) => {
       parseStatusByDoc.set(f.docId, status ?? null);
     }),
   );
+  // 阶段级解析进度(2026-09-01): parseStage ∈ detecting/ocr/extracting/indexing,
+  // NULL=非解析中(终态/未开始); stageStartedAt 为阶段起始 ISO。批量一次查。
+  const stagesByDoc = await getDocumentParseStages(
+    ctx(),
+    files.filter((f) => f.docId).map((f) => f.docId!),
+    user.id,
+  );
   // bound: docId 是否存在 ≥1 条 status='confirmed' 的绑定（仅有 proposed 不算）。
   const boundDocIds = new Set(await listDocumentIdsWithConfirmedBindings(ctx(), user.id));
   const filesWithStatus = files.map((f) => ({
     ...f,
     parseStatus: f.docId ? (parseStatusByDoc.get(f.docId) ?? null) : null,
     bound: f.docId ? boundDocIds.has(f.docId) : false,
+    parseStage: f.docId ? (stagesByDoc.get(f.docId)?.parseStage ?? null) : null,
+    stageStartedAt: f.docId ? (stagesByDoc.get(f.docId)?.stageStartedAt ?? null) : null,
   }));
   // Type tags only make sense once parsing has selected a concrete business
   // type. '其他' is the upload fallback and is omitted client-side so the tag

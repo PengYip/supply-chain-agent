@@ -101,6 +101,9 @@ export const documents = pgTable(
     // 批量拆分器(spec 2026-09-01): NULL=老数据/未参与拆分; 'container'=多单据
     // 物理文件; 'unit'=拆出的子单据。
     batchRole: text('batch_role'),
+    // 阶段级解析进度(2026-09-01): NULL=非解析中; stage_started_at 为阶段起始。
+    parseStage: text('parse_stage'),
+    stageStartedAt: text('stage_started_at'),
   },
   (t) => ({
     userIdx: index('idx_documents_user').on(t.userId),

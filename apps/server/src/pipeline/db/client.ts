@@ -566,6 +566,15 @@ export function migrate(sqlite: Database.Database): void {
     if (!have.has('batch_role')) {
       try { sqlite.exec('ALTER TABLE documents ADD COLUMN batch_role TEXT'); } catch { /* concurrent */ }
     }
+    // 阶段级解析进度(2026-09-01): parse_stage ∈ detecting/ocr/extracting/indexing,
+    // NULL=非解析中; stage_started_at 为该阶段起始 ISO 时间。SQLite 一次 ALTER
+    // 只能加一列 -> 两条 guarded ALTER。
+    if (!have.has('parse_stage')) {
+      try { sqlite.exec('ALTER TABLE documents ADD COLUMN parse_stage TEXT'); } catch { /* concurrent */ }
+    }
+    if (!have.has('stage_started_at')) {
+      try { sqlite.exec('ALTER TABLE documents ADD COLUMN stage_started_at TEXT'); } catch { /* concurrent */ }
+    }
   }
   // Lane B: per-chunk semantic tags. Pre-existing dev DBs created doc_chunk
   // WITHOUT this column (CREATE TABLE IF NOT EXISTS adds no columns), so a
@@ -1035,6 +1044,9 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     // 批量拆分器(spec 2026-09-01 §2): documents.batch_role + document_units。
     // 老数据 batch_role IS NULL 天然兼容; 声明镜像见 postgres-schema.ts。
     `ALTER TABLE documents ADD COLUMN IF NOT EXISTS batch_role TEXT`,
+    // 阶段级解析进度(2026-09-01): parse_stage ∈ detecting/ocr/extracting/indexing。
+    `ALTER TABLE documents ADD COLUMN IF NOT EXISTS parse_stage TEXT`,
+    `ALTER TABLE documents ADD COLUMN IF NOT EXISTS stage_started_at TEXT`,
     `CREATE TABLE IF NOT EXISTS document_units (
        id TEXT PRIMARY KEY,
        parent_document_id TEXT NOT NULL,

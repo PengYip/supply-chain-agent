@@ -81,6 +81,8 @@ import type {
   BatchUnitSummary,
   BatchLineage,
   DocBatchLineage,
+  ParseStage,
+  DocumentParseStageInfo,
 } from './repositories.js';
 
 // Phase 2 business-data isolation: same convention as repositories.ts -- a
@@ -3382,4 +3384,50 @@ export async function deleteDocumentUnitsByIdsPg(
   if (ids.length === 0) return;
   const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
   await ctx.pool.query(`DELETE FROM document_units WHERE id IN (${placeholders})`, ids);
+}
+
+/** pg twin of updateDocumentParseStage: 非 NULL 同时盖 stage_started_at(ISO)。 */
+export async function updateDocumentParseStagePg(
+  ctx: PostgresDbContext,
+  docId: string,
+  stage: ParseStage | null,
+): Promise<void> {
+  if (stage === null) {
+    await ctx.pool.query(
+      'UPDATE documents SET parse_stage = NULL, stage_started_at = NULL WHERE id = $1',
+      [docId],
+    );
+  } else {
+    await ctx.pool.query(
+      'UPDATE documents SET parse_stage = $1, stage_started_at = $2 WHERE id = $3',
+      [stage, new Date().toISOString(), docId],
+    );
+  }
+}
+
+/** pg twin of getDocumentParseStages: 批量读解析进度阶段。 */
+export async function getDocumentParseStagesPg(
+  ctx: PostgresDbContext,
+  docIds: string[],
+  userId?: string,
+): Promise<Map<string, DocumentParseStageInfo>> {
+  const ids = [...new Set(docIds.filter(Boolean))];
+  const out = new Map<string, DocumentParseStageInfo>();
+  if (ids.length === 0) return out;
+  const uid = effectiveUserId(userId);
+  const placeholders = ids.map((_, i) => `$${i + 2}`).join(', ');
+  const res = await ctx.pool.query(
+    `SELECT id, parse_stage, stage_started_at FROM documents
+     WHERE id IN (${placeholders})
+       AND (user_id = $1 OR user_id = '' OR user_id IS NULL)`,
+    [uid, ...ids],
+  );
+  for (const r of res.rows as Array<{
+    id: string;
+    parse_stage: string | null;
+    stage_started_at: string | null;
+  }>) {
+    out.set(r.id, { parseStage: r.parse_stage ?? null, stageStartedAt: r.stage_started_at ?? null });
+  }
+  return out;
 }

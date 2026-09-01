@@ -388,6 +388,33 @@ describe('processDocumentWithBatch (灰度入口)', () => {
     expect(units.map((u) => u.childDocumentId).sort()).toEqual([...secondChildren].sort());
   });
 
+  it('解析终态后 parse_stage/stage_started_at 清空(进度阶段不残留)', async () => {
+    const pdfPath = join(dir, 'stage-clear.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A CONTRACT HT-001', 'REPORT-B CONTRACT HT-002']);
+    const docId = await stubFor(pdfPath);
+
+    const res = await ensureDocumentParsed(ctx, docId, {
+      modality: 'scanned',
+      userId: 'u1',
+      vlm: fakeDetect([
+        { regions: [region({ identifierOrNull: 'HX-A' })] },
+        { regions: [region({ identifierOrNull: 'HX-B' })] },
+      ]),
+    });
+    expect(res.parseStatus).toBe('parsed');
+
+    // container + 2 unit 子单据: 全部行在终态后不得残留进度阶段。
+    const rows = ctx.sqlite
+      .prepare('SELECT id, parse_stage, stage_started_at FROM documents')
+      .all() as Array<{ id: string; parse_stage: string | null; stage_started_at: string | null }>;
+    expect(rows).toHaveLength(3);
+    for (const r of rows) {
+      expect(r.parse_stage).toBeNull();
+      expect(r.stage_started_at).toBeNull();
+    }
+  });
+
   it('开启 + container 解析失败: unit 行保留 pending, 不生成子单据', async () => {
     const pdfPath = join(dir, 'ocr-fail.pdf');
     await makeTwoPagePdf(pdfPath);
