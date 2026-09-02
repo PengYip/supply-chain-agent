@@ -311,6 +311,21 @@ export function FileDrawer(props: FileDrawerProps) {
     return () => window.clearInterval(id);
   }, [progressPollActive, runProgressTick]);
 
+  // -- 已耗时秒表（单一共享时钟，2026-09-02 修复「停在 0 秒」事故）： 行内
+  //    已耗时读数需要每秒走字，但不能每行一个定时器、也不能在渲染期调
+  //    Date.now（react purity）。此处仅一枚 1s interval，激活条件与进度
+  //    轮询完全一致（抽屉开 + 存在进行中的解析），经 TreeCallbacks.nowMs
+  //    下发驱动行重渲染；全部空闲或抽屉收起即拆除，空闲行不显示读数、
+  //    不产生任何额外请求。 --
+  const [nowMs, setNowMs] = useState(0);
+  useEffect(() => {
+    if (!progressPollActive) return;
+    // 激活帧不立即写时钟（行读数在首拍前由锚点基线 baseSec 正确显示），
+    // 之后每秒一拍；interval 回调属异步上下文，不触发 set-state-in-effect。
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [progressPollActive]);
+
   const tree = useMemo(() => buildTree(files, folders), [files, folders]);
 
   // Esc 关闭抽屉。文件夹命名输入中的 Esc 由输入框自行消费（stopPropagation）。
@@ -361,6 +376,7 @@ export function FileDrawer(props: FileDrawerProps) {
     tree,
     containerUnits,
     expandedContainers,
+    nowMs,
     selectedKey,
     movingFileKey,
     deletingFolderPath,

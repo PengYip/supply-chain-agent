@@ -253,6 +253,10 @@ export interface TreeCallbacks {
   // (面板常驻挂载，会话内自然记忆)，key = container docId。
   containerUnits: Record<string, ContainerUnitsState>;
   expandedContainers: ReadonlySet<string>;
+  // 已耗时秒表（单一共享时钟值，毫秒）：仅进度轮询激活期间每秒更新，
+  // 0 = 时钟未走动；行内已耗时读数以此驱动重渲染，渲染期不再调 Date.now
+  // （修复 react(purity) 警告与「停在 0 秒」的显示事故）。
+  nowMs: number;
   // 临态高亮
   selectedKey: string | null;
   movingFileKey: string | null;
@@ -511,23 +515,47 @@ function FileRow(props: {
     !parseInFlight &&
     (file.parseStatus === 'uploaded' || file.parseStatus === 'failed' || file.parseStatus === 'parsed');
 
-  // 首次观察到「解析中」的时间戳（仅组件内存，重挂载归零）： 已耗时读数随
-  // 进度轮询驱动的重渲染（约 4s 一拍）自然刷新，不另设每秒定时器。
-  const [inFlightSince, setInFlightSince] = useState<number | null>(null);
+  // 已耗时秒表锚点（仅组件内存）：进入 in-flight、或阶段锚点对
+  // (parseStage, stageStartedAt) 变化时记录客户端时刻 at；baseSec 以服务端
+  // stageStartedAt 估算「首次见到时该阶段已进行时长」作基线。服务端与
+  // 客户端时钟存在偏差（dev 实测曾快约 50s，导致旧实现钳在「已 0 秒」
+  // 不动、偏差追平后瞬间跳读）——负基线钳到 0：读数保证单调递增每秒走字，
+  // 绝对精确让位于稳定。阶段切换 = 锚点对变化 = 重新起算（进入新阶段
+  // 重置耗时是口径设计）；stageStartedAt 缺失时 baseSec=0，退化为首次
+  // 见到 in-flight 起算。走字由 cb.nowMs（FileDrawer 的共享秒表）驱动。
+  const stageAnchorKey =
+    file.parseStage && file.stageStartedAt
+      ? `${file.parseStage}|${file.stageStartedAt}`
+      : null;
+  const [stageClock, setStageClock] = useState<{ key: string; at: number; baseSec: number } | null>(
+    null,
+  );
   useEffect(() => {
-    if (parseInFlight && inFlightSince === null) setInFlightSince(Date.now());
-    else if (!parseInFlight && inFlightSince !== null) setInFlightSince(null);
-  }, [parseInFlight, inFlightSince]);
-  // 已耗时锚点： 优先后端 stageStartedAt（阶段内已耗时，随阶段推进重置，
-  // 展示为「整本 OCR 解析 · 已 2 分 10 秒」）；字段缺失（后端未部署阶段
-  // 字段/无阶段）时回落组件内存时间戳。客户端与服务端时钟偏差由 >=0 钳制。
+    if (!parseInFlight) {
+      if (stageClock !== null) setStageClock(null);
+      return;
+    }
+    const nextKey = stageAnchorKey ?? '__inflight__';
+    if (stageClock?.key === nextKey) return;
+    const now = Date.now();
+    let baseSec = 0;
+    if (stageAnchorKey && file.stageStartedAt) {
+      const serverStart = Date.parse(file.stageStartedAt);
+      if (Number.isFinite(serverStart)) {
+        baseSec = Math.max(0, Math.round((now - serverStart) / 1000));
+      }
+    }
+    setStageClock({ key: nextKey, at: now, baseSec });
+  }, [parseInFlight, stageAnchorKey, file.stageStartedAt, stageClock]);
   const stage = file.parseStage ?? null;
+  // 纯函数读数：基线 + 共享时钟走过的秒数（时钟未走动时退化为锚点时刻，
+  // 即 0 秒——仅存在于激活后首帧之前的窗口）。
   const elapsedLabel = (() => {
-    if (!parseInFlight) return null;
-    const serverStart = file.stageStartedAt ? Date.parse(file.stageStartedAt) : NaN;
-    const anchor = Number.isFinite(serverStart) ? serverStart : inFlightSince;
-    if (anchor === null) return null;
-    return formatElapsedSec(Math.max(0, Math.round((Date.now() - anchor) / 1000)));
+    if (!parseInFlight || !stageClock) return null;
+    const live = cb.nowMs > 0 ? cb.nowMs : stageClock.at;
+    return formatElapsedSec(
+      Math.max(0, stageClock.baseSec + Math.round((live - stageClock.at) / 1000)),
+    );
   })();
 
   // 单据组抽取进度： 缓存里已有 unit 行且存在未终态（pending/processing）时，
