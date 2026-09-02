@@ -1,6 +1,7 @@
 import type { BlockModel, DocType, Modality } from './types.js';
 import { ingestWithDigital } from './digitalAdapter.js';
 import { ingestWithMinerU } from './mineruAdapter.js';
+import { ingestWithMinerUApi } from './mineruApiAdapter.js';
 import { ingestWithPaddleOCR } from './paddleocrAdapter.js';
 import { env } from '../env.js';
 import { statSync } from 'node:fs';
@@ -9,11 +10,17 @@ import { recordOcrCall } from '../harness/usageAudit.js';
 import { getSessionId } from '../harness/sessionContext.js';
 
 // Scanned-document OCR backend, switched by PARSE_BACKEND (default 'mineru').
-// Both adapters honor their `<file>.*.json` hermetic sidecars for tests.
-const ingestWithScannedOCR =
-  env.PARSE_BACKEND === 'qianfan' ? ingestWithPaddleOCR : ingestWithMinerU;
-const ocrLabel = env.PARSE_BACKEND === 'qianfan' ? 'qianfan' : 'mineru';
-const ocrSidecar = env.PARSE_BACKEND === 'qianfan' ? '.paddleocr.json' : '.mineru.json';
+// All adapters honor their `<file>.*.json` hermetic sidecars for tests.
+type OcrBackend =
+  | { ingest: typeof ingestWithPaddleOCR; label: 'qianfan'; sidecar: '.paddleocr.json' }
+  | { ingest: typeof ingestWithMinerUApi; label: 'mineru-api'; sidecar: '.mineru.json' }
+  | { ingest: typeof ingestWithMinerU; label: 'mineru'; sidecar: '.mineru.json' };
+const ocrBackend: OcrBackend =
+  env.PARSE_BACKEND === 'qianfan'
+    ? { ingest: ingestWithPaddleOCR, label: 'qianfan', sidecar: '.paddleocr.json' }
+    : env.PARSE_BACKEND === 'mineru-api'
+      ? { ingest: ingestWithMinerUApi, label: 'mineru-api', sidecar: '.mineru.json' }
+      : { ingest: ingestWithMinerU, label: 'mineru', sidecar: '.mineru.json' };
 
 export interface ParseDocumentInput {
   /** Absolute path inside INGEST_ROOT (caller enforces the allowlist). */
@@ -25,7 +32,7 @@ export interface ParseDocumentInput {
 
 /** One adapter attempt inside a parse (audited as one ocr_calls row). */
 interface ParseAttempt {
-  backend: 'digital' | typeof ocrLabel;
+  backend: 'digital' | 'mineru' | 'qianfan' | 'mineru-api';
   startedAt: number;
 }
 
@@ -77,10 +84,10 @@ export async function parseDocument(opts: ParseDocumentInput): Promise<BlockMode
   const attempts: ParseAttempt[] = [];
 
   const t0 = performance.now();
-  attempts.push({ backend: modality === 'scanned' ? ocrLabel : 'digital', startedAt: t0 });
+  attempts.push({ backend: modality === 'scanned' ? ocrBackend.label : 'digital', startedAt: t0 });
   let blockModel =
     modality === 'scanned'
-      ? await ingestWithScannedOCR(sourcePath, docType, docId)
+      ? await ocrBackend.ingest(sourcePath, docType, docId)
       : await ingestWithDigital(sourcePath, docType, docId);
   console.log(
     `[perf-parse] ${docId} ${modality === 'scanned' ? 'ocr' : 'digital'} `
@@ -93,11 +100,11 @@ export async function parseDocument(opts: ParseDocumentInput): Promise<BlockMode
     modality !== 'scanned' &&
     /\.pdf$/i.test(sourcePath)
   ) {
-    console.warn(`[parse] digital yielded 0 blocks for PDF; retrying as scanned via ${ocrLabel} OCR`);
+    console.warn(`[parse] digital yielded 0 blocks for PDF; retrying as scanned via ${ocrBackend.label} OCR`);
     const ocrT0 = performance.now();
-    attempts.push({ backend: ocrLabel, startedAt: ocrT0 });
+    attempts.push({ backend: ocrBackend.label, startedAt: ocrT0 });
     try {
-      const ocrModel = await ingestWithScannedOCR(sourcePath, docType, docId);
+      const ocrModel = await ocrBackend.ingest(sourcePath, docType, docId);
       console.log(
         `[perf-parse] ${docId} ocr-fallback ${Math.round(performance.now() - ocrT0)}ms ${ocrModel.blocks.length} blocks`,
       );
@@ -107,7 +114,7 @@ export async function parseDocument(opts: ParseDocumentInput): Promise<BlockMode
         return blockModel;
       }
     } catch (e) {
-      console.warn(`[parse] ${ocrLabel} OCR fallback failed:`, (e as Error).message);
+      console.warn(`[parse] ${ocrBackend.label} OCR fallback failed:`, (e as Error).message);
       console.log(`[perf-parse] ${docId} ocr-fallback-failed ${Math.round(performance.now() - ocrT0)}ms`);
       auditAttempts(docId, docType, sourcePath, attempts, null, (e as Error).message);
       throw e;
@@ -117,8 +124,8 @@ export async function parseDocument(opts: ParseDocumentInput): Promise<BlockMode
   if (blockModel.blocks.length === 0) {
     const msg =
       modality === 'scanned'
-        ? `文件解析得到 0 个内容块。${ocrLabel} OCR 可能失败，请检查 ${ocrSidecar} 或 OCR 服务配置。`
-        : `文件解析得到 0 个内容块。该文件可能是扫描件(无文字层)，${ocrLabel} OCR 也未能提取内容。`;
+        ? `文件解析得到 0 个内容块。${ocrBackend.label} OCR 可能失败，请检查 ${ocrBackend.sidecar} 或 OCR 服务配置。`
+        : `文件解析得到 0 个内容块。该文件可能是扫描件(无文字层)，${ocrBackend.label} OCR 也未能提取内容。`;
     auditAttempts(docId, docType, sourcePath, attempts, null, msg);
     throw new Error(msg);
   }

@@ -120,13 +120,22 @@ const EnvSchema = z.object({
   // Scanned-document OCR backend for parseDocument. 'mineru' (default) shells
   // out to the local MinerU CLI (CPU); 'qianfan' calls Baidu Qianfan's hosted
   // PaddleOCR-VL endpoint (needs QIANFAN_API_KEY, checked at call time not
-  // boot). Both honor the <file>.{mineru,paddleocr}.json hermetic sidecars.
-  PARSE_BACKEND: z.enum(['mineru', 'qianfan']).default('mineru'),
+  // boot); 'mineru-api' calls the MinerU cloud API at mineru.net (needs
+  // MINERU_API_KEY, checked at call time not boot). All three honor the
+  // <file>.{mineru,paddleocr}.json hermetic sidecars.
+  PARSE_BACKEND: z.enum(['mineru', 'qianfan', 'mineru-api']).default('mineru'),
   // Baidu Qianfan PaddleOCR-VL endpoint credentials/settings. The key is never
   // hardcoded; it only reaches the adapter when PARSE_BACKEND=qianfan.
   QIANFAN_API_KEY: z.string().optional(),
   QIANFAN_OCR_URL: z.string().url().default('https://qianfan.baidubce.com/v2/ocr/paddleocr'),
   QIANFAN_TIMEOUT_MS: z.coerce.number().int().positive().default(300000),
+  // Cloud MinerU (mineru.net) API backend. Token from mineru.net API 管理页;
+  // only used when PARSE_BACKEND='mineru-api'. 'pipeline' 匹配本地 CLI 的
+  // middle.json 输出形状(normalizer 共用); 'vlm' 为官方推荐但形状未验证.
+  MINERU_API_KEY: z.string().optional(),
+  MINERU_API_BASE_URL: z.string().url().default('https://mineru.net/api/v4'),
+  MINERU_API_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
+  MINERU_API_MODEL_VERSION: z.enum(['pipeline', 'vlm']).default('pipeline'),
   // 批量拆分器(spec 2026-09-01, Phase 1): 一个物理文件 ≠ 一份业务单据。
   // BATCH_SPLIT_ENABLED 是灰度总开关(默认关闭 = 完全走旧路径, 零行为变化)。
   // 注意不能用 z.coerce.boolean(): 它会把字符串 "false" 强转为 true。
