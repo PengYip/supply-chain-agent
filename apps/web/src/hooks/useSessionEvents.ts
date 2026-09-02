@@ -42,26 +42,38 @@ export interface SessionEventHandlers {
  * Switching sessionId closes the old EventSource and opens a new one. The
  * browser auto-reconnects on transient network errors; the server sends a
  * fresh status snapshot as the first event on (re)connect.
+ *
+ * connected: SSE 当前是否在线。瞬时断线(服务端 CD 重启/网络抖动)期间为
+ * false —— EventSource 仍在自动重连, 此时 UI 显示轻提示「连接中断，正在
+ * 重连」; 重连成功(onopen)或收到事件即恢复 true。永久断开(readyState
+ * CLOSED)仍走既有 error 展示, 不与提示重复。
  */
 export function useSessionEvents(
   sessionId: string | null,
   handlers: SessionEventHandlers,
-): { status: SessionStatus; error: SessionError | null } {
+): { status: SessionStatus; error: SessionError | null; connected: boolean } {
   const handlersRef = useRef(handlers)
   handlersRef.current = handlers
   const [status, setStatus] = useState<SessionStatus>('idle')
   const [error, setError] = useState<SessionError | null>(null)
+  // 乐观初始 true: 避免挂载/切换会话时首连前的提示闪烁; onerror 即翻 false。
+  const [connected, setConnected] = useState(true)
 
   useEffect(() => {
     if (!sessionId) {
       setStatus('idle')
       setError(null)
+      setConnected(true)
       return
     }
 
     let closed = false
     const url = `/api/sessions/${encodeURIComponent(sessionId)}/events`
     const es = new EventSource(url)
+
+    es.onopen = () => {
+      if (!closed) setConnected(true)
+    }
 
     es.onmessage = (ev: MessageEvent<string>) => {
       let event: SessionEvent
@@ -107,6 +119,9 @@ export function useSessionEvents(
       // server's reconnect snapshot event will re-sync status. Only flag an
       // error if the connection is permanently closed (readyState CLOSED).
       if (closed) return
+      // 瞬时断线也翻转 connected —— 死窗口(CD 重启)期间 UI 用轻提示告知
+      // 正在重连, 而不是沉默地停留在「生成中」。
+      setConnected(false)
       if (es.readyState === EventSource.CLOSED) {
         setError({ message: '连接已断开' })
       }
@@ -118,5 +133,5 @@ export function useSessionEvents(
     }
   }, [sessionId])
 
-  return { status, error }
+  return { status, error, connected }
 }

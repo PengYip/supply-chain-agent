@@ -28,6 +28,10 @@ export function useSessionMessages(
 ) {
   const [messages, setMessages] = useState<UIMessage[]>([])
   const pipelineRef = useRef<RunPipeline | null>(null)
+  // 是否见过 busy(快照或 run.started): 覆盖「run 被杀时连一个 chunk 都没
+  // 到达(pipeline 尚未建立)」的窗口 —— 此时同样需要按服务端快照重同步,
+  // 否则被杀 run 已持久化的部分文本永远不会出现。
+  const sawBusyRef = useRef(false)
   const onSessionCreatedRef = useRef(opts?.onSessionCreated)
   onSessionCreatedRef.current = opts?.onSessionCreated
 
@@ -119,18 +123,26 @@ export function useSessionMessages(
       })
   }, [sessionId])
 
-  const { status, error } = useSessionEvents(sessionId, {
+  const { status, error, connected } = useSessionEvents(sessionId, {
     onStatus: (st) => {
-      // Reconnect reconciliation: if a run finished while we were
-      // disconnected, its events were pruned and no run.finished will ever
-      // arrive on this connection — the idle snapshot is the only signal.
-      // Close the stale pipeline and re-sync from the snapshot.
-      if (st === 'idle' && pipelineRef.current) {
+      // 重连和解： 服务端每个 (重)连接都会先发状态快照 —— 任何权威的非忙
+      // 快照都必须终结本地等待： idle = run 正常收尾(断线期间事件被清剪,
+      // 快照是唯一信号)； interrupted = 孤儿 busy 对账(如 CD 重启杀死在途
+      // run, 后端启动时翻牌)。两种都关闭装配管线并按服务端持久化消息
+      // 重同步（被杀 run 已落库的部分文本随之出现）。wasBusy 兜底
+      // pipeline 尚未建立的窗口（run.started 后一个 chunk 都没到就被杀）。
+      const wasBusy = sawBusyRef.current
+      sawBusyRef.current = st === 'busy'
+      if ((st === 'idle' || st === 'interrupted') && (pipelineRef.current || wasBusy)) {
         closePipeline()
+        sawBusyRef.current = false
         refreshSnapshot()
       }
     },
-    onRunStart: () => startPipeline(),
+    onRunStart: () => {
+      sawBusyRef.current = true
+      startPipeline()
+    },
     onChunk: (part) => {
       // If a run is already busy but we missed run.started (rejoin), lazily
       // start the pipeline so subsequent chunks are captured.
@@ -142,16 +154,19 @@ export function useSessionMessages(
       }
     },
     onRunFinish: () => {
+      sawBusyRef.current = false
       closePipeline()
       // The persisted assistant message (server-generated id) replaces the
       // locally-assembled one — authoritative dedupe.
       refreshSnapshot()
     },
     onRunAborted: () => {
+      sawBusyRef.current = false
       closePipeline()
       refreshSnapshot()
     },
     onRunError: () => {
+      sawBusyRef.current = false
       closePipeline()
       refreshSnapshot()
     },
@@ -303,5 +318,5 @@ export function useSessionMessages(
     }
   }, [sessionId])
 
-  return { messages, status: status as SessionStatus, error, sendMessage, stopRun, setMessages }
+  return { messages, status: status as SessionStatus, error, connected, sendMessage, stopRun, setMessages }
 }

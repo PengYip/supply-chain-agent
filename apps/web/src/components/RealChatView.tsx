@@ -367,7 +367,7 @@ export const RealChatView: React.FC<{
   const contextFilesRef = useRef(contextFiles)
   useEffect(() => { contextFilesRef.current = contextFiles }, [contextFiles])
 
-  const { messages, status, error, sendMessage, stopRun } = useSessionMessages(sessionId ?? null, {
+  const { messages, status, error, connected, sendMessage, stopRun } = useSessionMessages(sessionId ?? null, {
     onSessionCreated: (id) => onSessionCreated?.(id),
   })
   const liveSessionId = sessionId ?? null
@@ -811,6 +811,15 @@ export const RealChatView: React.FC<{
             </div>
           )}
       </div>
+
+      {/* SSE 断线重连提示（服务端 CD 重启/网络抖动的死窗口）: 轻量韧性提示,
+          重连成功即自动消失; 永久断开走既有 error 展示, 不重复。 */}
+      {!connected && !error && (
+        <div className="flex shrink-0 items-center gap-1.5 border-b border-warning/20 bg-warning/5 px-4 py-1.5 text-[11px] text-warning">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          连接中断，正在重连…
+        </div>
+      )}
 
       {/* Agent status strip (real mode only) */}
       <HumanAgentStatusBar sessionId={liveSessionId} status={agentStatus} />
