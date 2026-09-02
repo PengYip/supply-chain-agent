@@ -1,6 +1,6 @@
 import { generateText, type LanguageModel } from 'ai';
-import { createDeepSeek } from '@ai-sdk/deepseek';
 import { env } from '../env.js';
+import { resolveAuxModel } from '../pipeline/ingestModel.js';
 import { recordLlmCall } from './usageAudit.js';
 
 const MAX_TITLE_LEN = 20;
@@ -68,9 +68,11 @@ export async function generateSessionTitle(
   }
 }
 
-// Phase 5 title-generation model handle. Lazy singleton reusing the SAME
-// factory as agent.ts (createDeepSeek(...).chat(env.OPENAI_MODEL)). Only used on
-// the first turn of a session (one-shot title), so construction amortizes.
+// Phase 5 title-generation model handle. Lazy singleton reusing the shared
+// auxiliary resolver (resolveAuxModel): PIPELINE_LLM_* (Bailian qwen) when
+// configured, else the main OPENAI_* (DeepSeek) config — the same model the
+// ingest pipeline uses. Only used on the first turn of a session (one-shot
+// title), so construction amortizes.
 //
 // Migrated here from routes/chat.ts so the background run executor (runSession)
 // and chat.ts share one source of truth for the title model. chat.ts still has
@@ -78,10 +80,9 @@ export async function generateSessionTitle(
 let titleModel: LanguageModel | null = null;
 export function getTitleModel(): LanguageModel {
   if (!titleModel) {
-    titleModel = createDeepSeek({
-      baseURL: env.OPENAI_BASE_URL,
-      apiKey: env.OPENAI_API_KEY,
-    }).chat(env.OPENAI_MODEL);
+    const { model, label } = resolveAuxModel();
+    titleModel = model;
+    console.log(`[boot] title llm: ${label}`);
   }
   return titleModel;
 }

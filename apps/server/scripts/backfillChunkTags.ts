@@ -17,9 +17,9 @@
 
 import 'dotenv/config';
 import { performance } from 'node:perf_hooks';
-import { createDeepSeek } from '@ai-sdk/deepseek';
 import { getDbContext } from '../src/pipeline/db/dbBackend.js';
 import { env } from '../src/env.js';
+import { getIngestModel } from '../src/pipeline/ingestModel.js';
 import { makeLlmTagger, tagChunks } from '../src/pipeline/chunkTagging.js';
 import { CHUNK_TAG_TAXONOMY } from '../src/domain/tradeSemantics.js';
 import type { DbContext } from '../src/pipeline/db/client.js';
@@ -60,12 +60,9 @@ async function writeTags(ctx: DbContext, cid: number, tags: string[] | null): Pr
 async function main(): Promise<void> {
   const dryRun = process.argv.includes('--dry-run');
   const ctx = getDbContext();
-  const model = createDeepSeek({
-    baseURL: env.OPENAI_BASE_URL,
-    apiKey: env.OPENAI_API_KEY,
-  }).chat(env.OPENAI_MODEL);
+  const model = getIngestModel();
   const tagger = makeLlmTagger(model);
-  console.log(`[backfill:tags] backend=${ctx.backend} model=${env.OPENAI_MODEL}`);
+  console.log(`[backfill:tags] backend=${ctx.backend} model=${env.PIPELINE_LLM_MODEL ?? env.OPENAI_MODEL}`);
 
   const rows = await listUntagged(ctx);
   // group by doc, skipping docTypes with no taxonomy (tagChunks would no-op).

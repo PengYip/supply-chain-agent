@@ -3,7 +3,7 @@
 // vlmAdapter 相同(原生 fetch + response_format json_object, 失败回灌重试 1 次)。
 import { env } from '../env.js';
 import { recordLlmCall } from '../harness/usageAudit.js';
-import { emitVlmUsageSpan } from './vlmTelemetry.js';
+import { emitVlmUsageSpan, vlmModelFor } from './vlmTelemetry.js';
 
 export interface ClassifyPage {
   mime: string;
@@ -43,7 +43,7 @@ export async function vlmCall(
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${env.VLM_API_KEY}` },
       body: JSON.stringify({
-        model: env.VLM_MODEL,
+        model: vlmModelFor(kind),
         // 2026-09-02: 关闭 thinking(推理 token 按输出计费, 确定性分类无需思考)。
         enable_thinking: false,
         messages: [
@@ -71,7 +71,7 @@ export async function vlmCall(
     // the base64 image payload. Fire-and-forget (recordLlmCall never throws).
     recordLlmCall({
       kind,
-      model: env.VLM_MODEL,
+      model: vlmModelFor(kind),
       inputTokens: data.usage?.prompt_tokens ?? null,
       outputTokens: data.usage?.completion_tokens ?? null,
       totalTokens: data.usage?.total_tokens ?? null,
@@ -87,7 +87,7 @@ export async function vlmCall(
   } catch (e) {
     recordLlmCall({
       kind,
-      model: env.VLM_MODEL,
+      model: vlmModelFor(kind),
       inputText: prompt,
       durationMs: Math.round(performance.now() - t0),
       status: 'error',

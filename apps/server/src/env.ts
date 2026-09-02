@@ -110,12 +110,23 @@ const EnvSchema = z.object({
   EVAL_JUDGE_BASE_URL: z.string().url().optional(),
   EVAL_JUDGE_API_KEY: z.string().optional(),
   EVAL_JUDGE_MODEL: z.string().optional(),
+  // 管线侧 LLM(字段抽取/分类/分块打标)独立模型组: 设 PIPELINE_LLM_API_KEY 即启用
+  // 百炼 qwen-flash 等便宜快速模型; 全部可选, 未配置回落主 OPENAI_* 配置(零行为变化)。
+  // 标题/历史压缩随管线组, 仅对话(harness 主模型)保留 OPENAI_*。
+  PIPELINE_LLM_BASE_URL: z.string().url().optional(),
+  PIPELINE_LLM_API_KEY: z.string().optional(),
+  PIPELINE_LLM_MODEL: z.string().optional(),
   // VLM (vision-language model) for image voucher parsing (Phase A: 图片凭证
   // VLM 解析分支). All optional: when unset, image-voucher ingest fails with an
   // explicit error instead of crashing startup. Keys are never hardcoded.
   VLM_BASE_URL: z.string().url().optional(),
   VLM_API_KEY: z.string().optional(),
   VLM_MODEL: z.string().default('qwen3.8-max'),
+  // 按用途细分 VLM 模型: 未配置回落 VLM_MODEL 零行为变化。抽取默认留 max
+  // (数字零幻觉主战场), 分类/拆分检测可降级 flash-VL 便宜模型。
+  VLM_CLASSIFY_MODEL: z.string().optional(),
+  VLM_SPLIT_MODEL: z.string().optional(),
+  VLM_EXTRACT_MODEL: z.string().optional(),
   VLM_TIMEOUT_MS: z.coerce.number().int().positive().default(180000),
   // Scanned-document OCR backend for parseDocument. 'mineru' (default) shells
   // out to the local MinerU CLI (CPU); 'qianfan' calls Baidu Qianfan's hosted

@@ -9,6 +9,17 @@ import { env } from '../env.js';
 
 export type VlmUsageKind = 'vlm_extract' | 'vlm_classify' | 'vlm_batch_split';
 
+/**
+ * 按用途解析 VLM 模型名: 分类/拆分检测/抽取各自可配独立模型(VLM_CLASSIFY_MODEL /
+ * VLM_SPLIT_MODEL / VLM_EXTRACT_MODEL), 未配置回落 VLM_MODEL(零行为变化)。
+ * 单一解析点, vlmClassifier / vlmAdapter 与遥测共用, 避免循环依赖。
+ */
+export function vlmModelFor(kind: VlmUsageKind): string {
+  if (kind === 'vlm_classify') return env.VLM_CLASSIFY_MODEL ?? env.VLM_MODEL;
+  if (kind === 'vlm_batch_split') return env.VLM_SPLIT_MODEL ?? env.VLM_MODEL;
+  return env.VLM_EXTRACT_MODEL ?? env.VLM_MODEL;
+}
+
 /** VLM 响应 usage(OpenAI 兼容字段名)。 */
 export interface VlmUsage {
   prompt_tokens?: number;
@@ -70,7 +81,7 @@ export function emitVlmUsageSpan(args: VlmSpanArgs): void {
     const span = trace
       .getTracer('sca-vlm')
       .startSpan(args.kind, {
-        attributes: vlmSpanAttributes(args.kind, env.VLM_MODEL, args.usage, args.prompt, args.content),
+        attributes: vlmSpanAttributes(args.kind, vlmModelFor(args.kind), args.usage, args.prompt, args.content),
       });
     if (args.err !== undefined) {
       span.recordException(args.err instanceof Error ? args.err : String(args.err));

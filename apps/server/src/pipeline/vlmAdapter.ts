@@ -14,7 +14,7 @@ import type { VoucherType } from './schemas/vouchers.js';
 import { VOUCHER_PAGE_PROMPTS, VOUCHER_DOC_PROMPTS } from './schemas/vouchers.js';
 import { throwVlmHttpError } from './vlmClassifier.js';
 import { recordLlmCall } from '../harness/usageAudit.js';
-import { emitVlmUsageSpan } from './vlmTelemetry.js';
+import { emitVlmUsageSpan, vlmModelFor } from './vlmTelemetry.js';
 
 export interface VlmResult {
   voucherType: VoucherType;
@@ -140,7 +140,7 @@ export async function extractVoucher(
     ) => {
       recordLlmCall({
         kind: 'vlm_extract',
-        model: env.VLM_MODEL,
+        model: vlmModelFor('vlm_extract'),
         inputTokens: usage?.prompt_tokens ?? null,
         outputTokens: usage?.completion_tokens ?? null,
         totalTokens: usage?.total_tokens ?? null,
@@ -164,7 +164,7 @@ export async function extractVoucher(
           authorization: `Bearer ${env.VLM_API_KEY}`,
         },
         body: JSON.stringify({
-          model: env.VLM_MODEL,
+          model: vlmModelFor('vlm_extract'),
           // 2026-09-02: 关闭 thinking。qwen3.5+ 系列默认思考, 推理 token 按输出
           // 计费(qwen3.8-max ¥36/M); 确定性凭证提取无需思考, 显式禁用。
           enable_thinking: false,
@@ -249,7 +249,7 @@ async function typedVlmFetch(prompt: string, images: TypedImage[]): Promise<stri
         authorization: `Bearer ${env.VLM_API_KEY}`,
       },
       body: JSON.stringify({
-        model: env.VLM_MODEL,
+        model: vlmModelFor('vlm_extract'),
         // 2026-09-02: 关闭 thinking(推理 token 按输出计费, 确定性提取无需思考)。
         enable_thinking: false,
         messages: [
@@ -279,7 +279,7 @@ async function typedVlmFetch(prompt: string, images: TypedImage[]): Promise<stri
     // is the prompt text only -- never the base64 image payload. Fire-and-forget.
     recordLlmCall({
       kind: 'vlm_extract',
-      model: env.VLM_MODEL,
+      model: vlmModelFor('vlm_extract'),
       inputTokens: data.usage?.prompt_tokens ?? null,
       outputTokens: data.usage?.completion_tokens ?? null,
       totalTokens: data.usage?.total_tokens ?? null,
@@ -295,7 +295,7 @@ async function typedVlmFetch(prompt: string, images: TypedImage[]): Promise<stri
   } catch (e) {
     recordLlmCall({
       kind: 'vlm_extract',
-      model: env.VLM_MODEL,
+      model: vlmModelFor('vlm_extract'),
       inputText: prompt,
       durationMs: Math.round(performance.now() - t0),
       status: 'error',

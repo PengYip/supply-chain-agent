@@ -30,15 +30,14 @@ import { saveDocument } from '../src/pipeline/db/repositories.js';
 import { ingestWithDigital } from '../src/pipeline/digitalAdapter.js';
 import { ingestWithMinerU } from '../src/pipeline/mineruAdapter.js';
 import { extractGroundedFields } from '../src/pipeline/extraction.js';
+import { getIngestModel } from '../src/pipeline/ingestModel.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-// Build the real DeepSeek LanguageModel from env (same factory as the agent harness).
-async function getModel() {
-  const { createOpenAI } = await import('@ai-sdk/openai');
-  const { env } = await import('../src/env.js');
-  const openai = createOpenAI({ baseURL: env.OPENAI_BASE_URL, apiKey: env.OPENAI_API_KEY });
-  return openai.chat(env.OPENAI_MODEL);
+// Pipeline LLM handle (shared factory): PIPELINE_LLM_* if configured, else the
+// main OPENAI_* (DeepSeek) model — same model the parse path uses.
+function getModel() {
+  return getIngestModel();
 }
 
 interface Sample {
@@ -52,7 +51,7 @@ function eq(a: unknown, b: unknown): boolean {
 
 async function main() {
   const gt = JSON.parse(readFileSync(resolve(here, 'contracts/ground-truth.json'), 'utf-8')) as { samples: Sample[] };
-  const model = await getModel();
+  const model = getModel();
   const ctx = createDb(':memory:');
   migrate(ctx.sqlite);
 
