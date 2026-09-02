@@ -431,6 +431,8 @@ export interface BatchUnitSummary {
   childDocType: string | null;    // 子单据落库业务类型(可与 detectedFormType 不同)
   unitStatus: string;             // pending|processing|processed|needs_ocr|failed
   reviewStatus: 'pending' | 'confirmed' | 'corrected' | null;
+  /** 子单据解析状态(2026-09-01 复核 UX 补充); 无子单据 -> null。 */
+  parseStatus: string | null;
   needsReview: boolean;           // 最新 extraction needs_review=1
 }
 
@@ -1562,6 +1564,7 @@ export function batchUnitSummaryFromRow(r: Record<string, unknown>): BatchUnitSu
     unitStatus: String(r.unit_status ?? 'pending'),
     reviewStatus:
       review === 'pending' || review === 'confirmed' || review === 'corrected' ? review : null,
+    parseStatus: r.child_parse_status == null ? null : String(r.child_parse_status),
     needsReview: Number(r.needs_review ?? 0) === 1,
   };
 }
@@ -1610,7 +1613,7 @@ export async function listContainerUnitSummaries(
     .prepare(
       `SELECT u.id AS unit_id, u.child_document_id, u.unit_index,
               u.doc_type AS detected_form_type, u.status AS unit_status,
-              d.doc_type AS child_doc_type, d.review_status,
+              d.doc_type AS child_doc_type, d.review_status, d.parse_status AS child_parse_status,
               COALESCE(e.needs_review, 0) AS needs_review
        FROM document_units u
        LEFT JOIN documents d ON d.id = u.child_document_id

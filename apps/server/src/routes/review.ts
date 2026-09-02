@@ -12,6 +12,7 @@
 // (app.use('/api/documents/*', requireAuth)), so a user is always attached here.
 
 import { Hono } from 'hono';
+import { existsSync } from 'node:fs';
 import { z } from 'zod';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
@@ -24,6 +25,8 @@ import {
   listTemplateTypes,
   getBatchRolesForDocuments,
   listContainerUnitSummaries,
+  getDocumentUnitByChild,
+  getDocumentSourceUri,
 } from '../pipeline/db/repositories.js';
 import { ensureDocumentExtracted } from '../pipeline/tools/documentEntry.js';
 import { refreshExecutionFlowsForDocument } from '../pipeline/executionFlow.js';
@@ -31,6 +34,13 @@ import { commitDocumentGraph, syncDocumentTypeToGraph } from '../pipeline/graphC
 import { buildIngestDeps, defaultEmbedder } from '../pipeline/ingestModel.js';
 import { reconcileVectorizationAfterDocTypeChange } from '../pipeline/vectorReconcile.js';
 import { getModalityHint } from '../pipeline/modalityHints.js';
+import { renderPdfPages } from '../pipeline/pdfRender.js';
+import {
+  renderUnitImages,
+  stackImagesVertically,
+  unitFromStoredRow,
+  effectiveRotationOf,
+} from '../pipeline/unitImages.js';
 import type { DocType, Modality } from '../pipeline/types.js';
 
 export const reviewRoute = new Hono<AuthEnv>();
@@ -218,6 +228,84 @@ reviewRoute.get('/:docId/units', async (c) => {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[review] units fetch failed:', msg);
     return c.json({ ok: false, error: msg }, 500);
+  }
+});
+
+// ---- 复核原片预览(GET /:docId/unit-preview) --------------------------------
+//
+// 渲染成本: 需把 container PDF 渲到 unit 的末页(renderPdfPages {first})再裁剪,
+// 大批量件并不便宜 -> 32 条 LRU(docId+rotation 为键)挡重复轮询。旋回变更会
+// 重抽/reextract 后改写 manifest.chosenRotation, 键含 rotation 自然失效。
+
+const PREVIEW_LRU_MAX = 32;
+const previewLru = new Map<string, Buffer>();
+
+function previewCacheGet(key: string): Buffer | null {
+  const hit = previewLru.get(key);
+  if (hit === undefined) return null;
+  previewLru.delete(key);
+  previewLru.set(key, hit);
+  return hit;
+}
+
+function previewCacheSet(key: string, buf: Buffer): void {
+  if (previewLru.has(key)) previewLru.delete(key);
+  previewLru.set(key, buf);
+  if (previewLru.size > PREVIEW_LRU_MAX) {
+    const oldest = previewLru.keys().next().value;
+    if (oldest !== undefined) previewLru.delete(oldest);
+  }
+}
+
+/**
+ * GET /api/documents/:docId/unit-preview
+ *
+ * 复核原片预览(复核 UX, 2026-09-01): docId 必须是批量拆分的 unit 子单据。
+ * 用 document_units 存量行(页区间/bbox/manifest.regions)经 renderUnitImages
+ * 裁剪 + 旋回(有效旋回 = manifest.chosenRotation ?? rotation_deg), 返回的
+ * 就是抽取/VLM 所见的那张裁剪图。跨页合并 unit 的多区域纵向拼为一张。
+ *
+ * 响应:
+ *   200 image/png(原始字节)
+ *   404 { ok: false, error: '<中文原因>' }   非unit / 无unit行 / 原文件缺失 /
+ *                                            渲染失败
+ *   401 { error: 'unauthorized' }            (requireAuth, applied in index.ts)
+ */
+reviewRoute.get('/:docId/unit-preview', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const docId = c.req.param('docId');
+  try {
+    // 与 units 端点同款三态守卫(不存在/他人文档/角色不符 -> 404), unit 侧。
+    const roles = await getBatchRolesForDocuments(ctx(), [docId], user.id);
+    if (roles.get(docId)?.batchRole !== 'unit') {
+      return c.json({ ok: false, error: '单据不存在或不是拆分单元' }, 404);
+    }
+    const unit = await getDocumentUnitByChild(ctx(), docId);
+    if (!unit) {
+      return c.json({ ok: false, error: '未找到该单元的检测记录' }, 404);
+    }
+    const sourceUri = await getDocumentSourceUri(ctx(), unit.parentDocumentId, user.id);
+    if (!sourceUri || !existsSync(sourceUri)) {
+      return c.json({ ok: false, error: '原始文件不存在或已被清理, 无法生成预览' }, 404);
+    }
+    const rotation = effectiveRotationOf(unit);
+    const cacheKey = `${docId}:${rotation}`;
+    const cached = previewCacheGet(cacheKey);
+    if (cached) {
+      return c.body(new Uint8Array(cached), 200, { 'Content-Type': 'image/png' });
+    }
+    // 只渲染到 unit 末页(renderPdfPages 支持 first N), 裁剪按页号取图。
+    const pages = await renderPdfPages(sourceUri, { first: unit.pageEnd ?? unit.pageStart ?? 1 });
+    const detected = unitFromStoredRow(unit);
+    const images = await renderUnitImages(pages, detected, detected.regions.map(() => rotation));
+    const png = await stackImagesVertically(images);
+    previewCacheSet(cacheKey, png);
+    return c.body(new Uint8Array(png), 200, { 'Content-Type': 'image/png' });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn('[review] unit-preview 生成失败:', docId, msg);
+    return c.json({ ok: false, error: `预览图生成失败: ${msg}` }, 404);
   }
 });
 

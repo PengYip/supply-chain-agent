@@ -12,8 +12,9 @@
 // 操作, 页图仍由 pdfRender 统一渲染, 不新增解码路径。
 
 import { createCanvas, loadImage } from '@napi-rs/canvas';
-import type { DetectedUnit } from './batchSplit.js';
+import type { DetectedUnit, UnitBBox } from './batchSplit.js';
 import type { RenderedPage } from './pdfRender.js';
+import type { DocumentUnitRow } from './db/repositories.js';
 
 /** 单个 unit 区域裁出的图(与 RenderedPage 同构, page 保留来源页号)。 */
 export type UnitRegionImage = RenderedPage;
@@ -84,4 +85,84 @@ export async function renderUnitImages(
     out.push({ page: region.page, mime: 'image/png', buffer: canvas.toBuffer('image/png') });
   }
   return out;
+}
+
+// ---- 复核原片预览(2026-09-01): 存量 unit 行 -> 裁剪图 ----------------------
+
+function regionsFromManifest(manifest: Record<string, unknown>): Array<{ page: number; bbox: UnitBBox; rotationDeg: number }> {
+  const raw = manifest.regions;
+  if (!Array.isArray(raw)) return [];
+  const out: Array<{ page: number; bbox: UnitBBox; rotationDeg: number }> = [];
+  for (const r of raw) {
+    if (r === null || typeof r !== 'object') continue;
+    const rec = r as Record<string, unknown>;
+    const page = Number(rec.page);
+    const bbox = rec.bbox;
+    if (!Number.isFinite(page) || bbox === null || typeof bbox !== 'object') continue;
+    out.push({ page, bbox: bbox as UnitBBox, rotationDeg: Number(rec.rotationDeg) || 0 });
+  }
+  return out;
+}
+
+/**
+ * 存量 unit 行 -> 检测期 DetectedUnit 视图(复核原片预览用, 与抽取所见一致)。
+ * 区域优先取 manifest.regions(逐页 padded bbox); 缺失时回落单区域(bbox_json +
+ * 页区间, 检测器单页 unit 形态)。无任何区域 -> regions 空(renderUnitImages 会拒)。
+ */
+export function unitFromStoredRow(row: DocumentUnitRow): DetectedUnit {
+  const regions = regionsFromManifest(row.manifest);
+  if (regions.length === 0 && row.bboxJson) {
+    try {
+      const bbox = JSON.parse(row.bboxJson) as UnitBBox | null;
+      const page = row.pageStart ?? 1;
+      if (bbox && typeof bbox === 'object' && Number.isFinite(page)) {
+        regions.push({ page, bbox, rotationDeg: row.rotationDeg ?? 0 });
+      }
+    } catch {
+      // bbox_json 损坏 -> 保持空 regions(由调用方报生成失败)。
+    }
+  }
+  const identifier = row.manifest.identifier;
+  const evidence = row.manifest.evidence;
+  return {
+    unitIndex: row.unitIndex,
+    formType: row.docType,
+    confidence: row.detectorConfidence,
+    identifier: typeof identifier === 'string' && identifier.length > 0 ? identifier : null,
+    evidence: typeof evidence === 'string' ? evidence : '',
+    pageStart: row.pageStart ?? 1,
+    pageEnd: row.pageEnd ?? row.pageStart ?? 1,
+    bbox: null,
+    rotationDeg: row.rotationDeg ?? 0,
+    regions,
+  };
+}
+
+/** 复核预览的有效旋回: 人工/择优写回的 chosenRotation 优先, 否则检测方向。 */
+export function effectiveRotationOf(row: DocumentUnitRow): number {
+  const chosen = row.manifest.chosenRotation;
+  if (typeof chosen === 'number' && Number.isFinite(chosen)) return chosen;
+  return row.rotationDeg ?? 0;
+}
+
+/**
+ * 跨页合并 unit 的多区域图纵向拼成一张 PNG(预览响应单图返回用)。宽度取最大,
+ * 不足处补白。
+ */
+export async function stackImagesVertically(images: Array<{ buffer: Buffer }>): Promise<Buffer> {
+  if (images.length === 0) throw new Error('无图可拼');
+  if (images.length === 1) return images[0]!.buffer;
+  const imgs = await Promise.all(images.map((i) => loadImage(i.buffer)));
+  const width = Math.max(...imgs.map((i) => i.width));
+  const height = imgs.reduce((s, i) => s + i.height, 0);
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+  let y = 0;
+  for (const img of imgs) {
+    ctx.drawImage(img, Math.floor((width - img.width) / 2), y);
+    y += img.height;
+  }
+  return canvas.toBuffer('image/png');
 }

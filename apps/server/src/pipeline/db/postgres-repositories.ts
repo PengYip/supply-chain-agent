@@ -3258,7 +3258,7 @@ export async function listContainerUnitSummariesPg(
   const res = await ctx.pool.query(
     `SELECT u.id AS unit_id, u.child_document_id, u.unit_index,
             u.doc_type AS detected_form_type, u.status AS unit_status,
-            d.doc_type AS child_doc_type, d.review_status,
+            d.doc_type AS child_doc_type, d.review_status, d.parse_status AS child_parse_status,
             COALESCE(e.needs_review, false) AS needs_review
      FROM document_units u
      LEFT JOIN documents d ON d.id = u.child_document_id
