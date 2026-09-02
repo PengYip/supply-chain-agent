@@ -170,6 +170,82 @@ const coerceCorrectionValue = (original: string | number, edited: string): strin
   return edited
 }
 
+/** A parsed row of a table-shaped field value (see parseTableField). Values
+ *  are whatever JSON.parse produced; nested objects/arrays only get display
+ *  treatment (compact JSON text). */
+type TableFieldRow = Record<string, unknown>
+
+/** A field value is "table-shaped" iff it is a string that JSON.parses to a
+ *  non-empty Array whose every element is a non-null plain object — the
+ *  persistence shape the backend (documentEntry saveExtraction) writes for
+ *  array/object fields via compact JSON.stringify (化验报告「指标」、货转单/
+ *  汽运磅单「明细行」等). Returns the parsed rows, or null for anything else
+ *  (parse failure / empty array / non-object rows) so the caller falls back
+ *  to the existing single-line rendering byte-for-byte. */
+const parseTableField = (raw: string): TableFieldRow[] | null => {
+  if (typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  if (!trimmed.startsWith('[')) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return null
+  for (const row of parsed) {
+    if (typeof row !== 'object' || row === null || Array.isArray(row)) return null
+  }
+  return parsed as TableFieldRow[]
+}
+
+/** Union of row keys in first-seen order (JSON.parse preserves document
+ *  order, so leading keys like 基准 keep their natural position; rows may
+ *  have heterogeneous keys). Key names map 1:1 to correction keys — headers
+ *  show them verbatim, never renamed or stripped. */
+const tableFieldColumns = (rows: TableFieldRow[]): string[] => {
+  const cols: string[] = []
+  for (const row of rows) {
+    for (const key of Object.keys(row)) {
+      if (!cols.includes(key)) cols.push(key)
+    }
+  }
+  return cols
+}
+
+/** Display text for one cell: null/undefined -> '--'; nested objects/arrays
+ *  fall back to compact JSON text (display-only). */
+const tableCellText = (v: unknown): string => {
+  if (v === null || v === undefined) return '--'
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
+}
+
+/** Coerce an edited cell string back to a JSON value, deterministically,
+ *  guided by the ORIGINAL cell's type:
+ *  - empty input -> null (the '--' no-value state)
+ *  - original number -> Number(input) when finite, else the raw string
+ *  - original null/undefined -> finite numbers become numbers (numeric
+ *    columns like 灰分_百分比 often start null), else the raw string
+ *  - original string -> the raw string */
+const coerceTableCell = (original: unknown, edited: string): string | number | null => {
+  if (edited.trim() === '') return null
+  if (typeof original === 'string') return edited
+  const n = Number(edited)
+  return Number.isFinite(n) ? n : edited
+}
+
+/** Loose cell equality for per-cell changed highlighting: the same literal
+ *  across string/number ("18.2" typed over 18.2 mid-edit) counts as equal. */
+const tableCellEquals = (a: unknown, b: unknown): boolean => {
+  if (a === b) return true
+  if (a === null || a === undefined) return b === null || b === undefined
+  if (typeof a === 'object' || b === null || typeof b === 'object') {
+    return JSON.stringify(a) === JSON.stringify(b)
+  }
+  return String(a) === String(b)
+}
+
 const SectionLabel: React.FC<{ icon: React.ReactNode; children: React.ReactNode }> = ({
   icon,
   children,
@@ -217,6 +293,124 @@ const FlagBadge: React.FC = () => (
     建议复核
   </span>
 )
+
+/** 表格型结构化字段的渲染块：标签行（字段名 + 行数 + 置信度 + 复核/已改
+ *  徽标，与单行字段同款信息）+ 下方占满整行宽度的紧凑迷你表格。可编辑时
+ *  单元格为输入框：键入期间按原文保存（避免 "18." 这类中间态被数字强转
+ *  吃掉小数点），失焦时按原始单元格类型 coerce 回数字/字符串/null，由父
+ *  级把整行数组序列化回紧凑 JSON 写入 edits 缓冲。只读态渲染纯文本格。 */
+const TableFieldValue: React.FC<{
+  label: string
+  confidence: number
+  editable: boolean
+  rows: TableFieldRow[]
+  /** 解析自字段原值的行（未编辑时与 rows 同源）；用于逐格「已改」高亮与
+   *  失焦 coerce 的类型基准。 */
+  origRows: TableFieldRow[] | null
+  changed: boolean
+  flagged: boolean
+  onCellChange: (rowIndex: number, key: string, raw: string, commit: boolean) => void
+}> = ({ label, confidence, editable, rows, origRows, changed, flagged, onCellChange }) => {
+  const cols = tableFieldColumns(rows)
+  const cellChanged = (r: number, key: string): boolean => {
+    if (!origRows) return false
+    const origRow = origRows[r]
+    if (!origRow || !(key in origRow)) return true
+    return !tableCellEquals(origRow[key], rows[r][key])
+  }
+  return (
+    <div
+      className={clsx(
+        'text-xs px-2 py-1.5 rounded border transition-colors min-w-0',
+        changed
+          ? 'bg-primary-500/5 border-primary-500/40'
+          : flagged
+            ? 'bg-warning/5 border-warning/30'
+            : 'bg-surface/50 border-line/50',
+      )}
+    >
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="text-ink-soft shrink-0 truncate">{label}</span>
+        <span className="text-[10px] font-mono text-ink-soft/70 shrink-0">
+          {rows.length} 行
+        </span>
+        <span className="ml-auto text-ink-soft text-[11px] font-mono shrink-0">
+          {pct(confidence)}
+        </span>
+        {changed ? (
+          <span className="inline-flex items-center gap-0.5 text-[10px] text-primary-500 bg-primary-500/10 border border-primary-500/30 rounded px-1 py-0.5 shrink-0">
+            <Check className="w-2.5 h-2.5" />
+            已改
+          </span>
+        ) : (
+          flagged && <FlagBadge />
+        )}
+      </div>
+      <div className="mt-1.5 overflow-x-auto rounded border border-line/50 bg-surface/50">
+        <table className="w-full min-w-max border-collapse text-xs">
+          <thead>
+            <tr className="border-b border-line/50">
+              {cols.map((c) => (
+                <th
+                  key={c}
+                  className="text-left font-medium text-ink-soft whitespace-nowrap px-2 py-1 bg-white/40"
+                >
+                  {c}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, ri) => (
+              <tr key={ri} className="border-b border-line/30 last:border-b-0">
+                {cols.map((key) => {
+                  const v = row[key]
+                  if (!editable) {
+                    return (
+                      <td key={key} className="px-2 py-1 whitespace-nowrap">
+                        <span
+                          className={clsx(
+                            'font-mono',
+                            v === null || v === undefined ? 'text-ink-soft/60' : 'text-ink',
+                          )}
+                        >
+                          {tableCellText(v)}
+                        </span>
+                      </td>
+                    )
+                  }
+                  const touched = cellChanged(ri, key)
+                  const text = v === null || v === undefined ? '' : tableCellText(v)
+                  return (
+                    <td key={key} className="px-1 py-0.5 whitespace-nowrap">
+                      <input
+                        type="text"
+                        size={10}
+                        value={text}
+                        placeholder="--"
+                        onChange={(e) => onCellChange(ri, key, e.target.value, false)}
+                        onBlur={(e) => onCellChange(ri, key, e.target.value, true)}
+                        spellCheck={false}
+                        autoComplete="off"
+                        className={clsx(
+                          'w-full bg-transparent font-mono outline-none rounded px-1 py-0.5 transition-colors',
+                          'placeholder:text-ink-soft/50',
+                          touched
+                            ? 'text-primary-500'
+                            : 'text-ink focus:bg-white focus:ring-1 focus:ring-primary-500/40',
+                        )}
+                      />
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
 
 const VectorizationStatus: React.FC<{ v: DocumentReviewPayload['vectorization'] }> = ({ v }) => {
   const map = {
@@ -1485,7 +1679,48 @@ export const DocumentReviewCard: React.FC<{
                   f.needsReview ||
                   (typeof f.confidence === 'number' && f.confidence < LOW_CONFIDENCE)
                 const edited = edits[f.name]
-                const changed = edited !== undefined && edited !== String(f.value ?? '')
+                const originalText = String(f.value ?? '')
+                const changed = edited !== undefined && edited !== originalText
+                // 表格型字段：数组/对象字段值（后端紧凑 JSON 持久化）解析为对象
+                // 行渲染成可编辑迷你表格；解析失败/空数组/非对象行回落下方既有
+                // 单行渲染，普通字段零差异。
+                const tableRows = parseTableField(edited ?? originalText)
+                if (tableRows) {
+                  const origRows = parseTableField(originalText)
+                  const handleCell = (
+                    rowIndex: number,
+                    key: string,
+                    raw: string,
+                    commit: boolean,
+                  ) => {
+                    const next = tableRows.map((row, idx) => {
+                      if (idx !== rowIndex) return row
+                      const value = commit
+                        ? coerceTableCell(origRows?.[rowIndex]?.[key], raw)
+                        : raw.trim() === ''
+                          ? null
+                          : raw
+                      return { ...row, [key]: value }
+                    })
+                    // 整表序列化回紧凑 JSON 写入 edits 缓冲：后端同样以紧凑
+                    // JSON 持久化，未改动的表格 round-trip 后字符串相等，不会
+                    // 被误标「已改」；corrections 计算与提交链路零改动。
+                    updateField(f.name, JSON.stringify(next))
+                  }
+                  return (
+                    <TableFieldValue
+                      key={`${f.name}-${i}`}
+                      label={f.name}
+                      confidence={f.confidence}
+                      editable={editable}
+                      rows={tableRows}
+                      origRows={origRows}
+                      changed={changed}
+                      flagged={flagged}
+                      onCellChange={handleCell}
+                    />
+                  )
+                }
                 return (
                   <div
                     key={`${f.name}-${i}`}
@@ -1502,7 +1737,7 @@ export const DocumentReviewCard: React.FC<{
                     {editable ? (
                       <input
                         type="text"
-                        value={edited ?? String(f.value ?? '')}
+                        value={edited ?? originalText}
                         onChange={(e) => updateField(f.name, e.target.value)}
                         spellCheck={false}
                         autoComplete="off"
