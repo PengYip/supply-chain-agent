@@ -256,15 +256,21 @@ export function FileDrawer(props: FileDrawerProps) {
   // -- 解析进度轮询： 解析常耗时数分钟（拼贴 PDF 实测 >900s），抽屉展开
   //    期间用 4s 轮询让行内进度可见。定时器仅在「抽屉开 + 存在进行中解析」
   //    时存在： 进行中 = 任一文件 parseStatus='parsing' / 本地刚触发解析
-  //    （parsingDocIds，覆盖 /api/files 尚未翻成 parsing 的窗口）/ 任一已
-  //    缓存 container 存在未终态子单据。全部空闲或抽屉收起即拆除定时器，
-  //    网络行为与现状零差异（FileDrawer 常驻挂载，必须以 open 为门）。 --
+  //    （parsingDocIds，覆盖 /api/files 尚未翻成 parsing 的窗口）/ 任一容器
+  //    parseStage='extracting'（单据组抽取阶段 parse_status 已提前翻成
+  //    parsed，parse_stage 才是真正的在途信号；页面刷新后只有靠它才能让
+  //    「抽取中」进度条复活）/ 任一已缓存 container 存在未终态子单据。
+  //    全部空闲或抽屉收起即拆除定时器，网络行为与现状零差异（FileDrawer
+  //    常驻挂载，必须以 open 为门）。 --
   const filesParsing = files.some((f) => f.parseStatus === 'parsing');
+  const filesExtracting = files.some(
+    (f) => f.batchRole === 'container' && f.parseStage === 'extracting',
+  );
   const unitsParsing = Object.values(containerUnits).some((s) =>
     s.units.some((u) => u.unitStatus === 'pending' || u.unitStatus === 'processing'),
   );
   const progressPollActive =
-    open && (filesParsing || parsingDocIds.size > 0 || unitsParsing);
+    open && (filesParsing || filesExtracting || parsingDocIds.size > 0 || unitsParsing);
 
   /** 一轮进度轮询： 拉一次 /api/files（整表替换但 keys 稳定，排序由服务端
    *  rank 持有，选中/展开态在组件 state 里不受影响），再静默拉取相关
@@ -288,7 +294,10 @@ export function FileDrawer(props: FileDrawerProps) {
       }
       const parsingContainers: string[] = [];
       for (const f of freshFiles) {
-        if (f.batchRole === 'container' && f.docId && f.parseStatus === 'parsing') {
+        if (
+          f.batchRole === 'container' && f.docId &&
+          (f.parseStatus === 'parsing' || f.parseStage === 'extracting')
+        ) {
           parsingContainers.push(f.docId);
         }
       }
