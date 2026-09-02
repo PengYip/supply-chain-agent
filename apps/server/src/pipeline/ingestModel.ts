@@ -10,7 +10,6 @@
 // session-title / history-compaction model in harness/titleGen.ts.
 
 import { createDeepSeek } from '@ai-sdk/deepseek';
-import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModel } from 'ai';
 import { env } from '../env.js';
 import { makeLlmTagger, type ChunkTagger } from './chunkTagging.js';
@@ -36,12 +35,15 @@ export function resolveAuxModel(): { model: LanguageModel; label: string } {
   if (env.PIPELINE_LLM_API_KEY) {
     const baseURL = env.PIPELINE_LLM_BASE_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1';
     const modelId = env.PIPELINE_LLM_MODEL ?? 'qwen-flash-2025-07-28';
-    const provider = createOpenAI({ baseURL, apiKey: env.PIPELINE_LLM_API_KEY });
-    // structuredOutputs stays DISABLED (schema-in-prompt + response_format
-    // json_object) for maximal endpoint compatibility. It is a per-call
-    // provider option in AI SDK 6, applied by the consumers (extraction /
-    // classifier / chunkTagging) via `openai: { structuredOutputs: false }`
-    // — the same JSON-mode path DeepSeek already uses.
+    // Use the DeepSeek provider (a plain OpenAI-compatible client) — NOT
+    // createOpenAI. Verified 2026-09-02 against qwen-flash on Bailian: the
+    // openai provider's v2 compatibility mode drops generateObject's
+    // schema-injection ("unsupported-setting: responseFormat" -> model never
+    // sees the field structure -> "response did not match schema"), while the
+    // deepseek provider keeps the JSON-mode semantics (response_format
+    // json_object + schema-in-prompt) that the fallback branch already uses
+    // in production. DashScope accepts both the wire format and json_object.
+    const provider = createDeepSeek({ baseURL, apiKey: env.PIPELINE_LLM_API_KEY });
     return { model: provider.chat(modelId), label: `${modelId} @ ${new URL(baseURL).host}` };
   }
   // Fallback: the main OPENAI_* (DeepSeek) config, reusing the SAME factory as
