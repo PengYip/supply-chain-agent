@@ -2,6 +2,7 @@
 // 只输出表单类型; route/业务类型由 formTypeRegistry 派生。调用模式与
 // vlmAdapter 相同(原生 fetch + response_format json_object, 失败回灌重试 1 次)。
 import { env } from '../env.js';
+import { recordLlmCall } from '../harness/usageAudit.js';
 
 export interface ClassifyPage {
   mime: string;
@@ -28,32 +29,68 @@ export async function throwVlmHttpError(res: Response): Promise<never> {
   throw err;
 }
 
-export async function vlmCall(prompt: string, page: ClassifyPage): Promise<string> {
+export async function vlmCall(
+  prompt: string,
+  page: ClassifyPage,
+  kind: 'vlm_classify' | 'vlm_batch_split' = 'vlm_classify',
+): Promise<string> {
   if (!env.VLM_BASE_URL || !env.VLM_API_KEY) throw new Error('VLM 未配置，无法分类');
   const url = `${env.VLM_BASE_URL.replace(/\/+$/, '')}/chat/completions`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${env.VLM_API_KEY}` },
-    body: JSON.stringify({
+  const t0 = performance.now();
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${env.VLM_API_KEY}` },
+      body: JSON.stringify({
+        model: env.VLM_MODEL,
+        // 2026-09-02: 关闭 thinking(推理 token 按输出计费, 确定性分类无需思考)。
+        enable_thinking: false,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: prompt },
+              { type: 'image_url', image_url: { url: `data:${page.mime};base64,${page.buffer.toString('base64')}` } },
+            ],
+          },
+        ],
+        response_format: { type: 'json_object' },
+      }),
+      signal: AbortSignal.timeout(env.VLM_TIMEOUT_MS),
+    });
+    if (!res.ok) await throwVlmHttpError(res);
+    const data = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+    };
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) throw new Error('VLM 返回空内容');
+    // Usage audit (2026-09-02): record the VLM call (form classification or
+    // batch-split page detection). inputText is the prompt text only -- never
+    // the base64 image payload. Fire-and-forget (recordLlmCall never throws).
+    recordLlmCall({
+      kind,
       model: env.VLM_MODEL,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: prompt },
-            { type: 'image_url', image_url: { url: `data:${page.mime};base64,${page.buffer.toString('base64')}` } },
-          ],
-        },
-      ],
-      response_format: { type: 'json_object' },
-    }),
-    signal: AbortSignal.timeout(env.VLM_TIMEOUT_MS),
-  });
-  if (!res.ok) await throwVlmHttpError(res);
-  const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) throw new Error('VLM 返回空内容');
-  return content;
+      inputTokens: data.usage?.prompt_tokens ?? null,
+      outputTokens: data.usage?.completion_tokens ?? null,
+      totalTokens: data.usage?.total_tokens ?? null,
+      inputText: prompt,
+      outputText: content,
+      durationMs: Math.round(performance.now() - t0),
+      status: 'ok',
+    });
+    return content;
+  } catch (e) {
+    recordLlmCall({
+      kind,
+      model: env.VLM_MODEL,
+      inputText: prompt,
+      durationMs: Math.round(performance.now() - t0),
+      status: 'error',
+      error: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
 }
 
 export function buildFormClassifyPrompt(formTypes: string[]): string {

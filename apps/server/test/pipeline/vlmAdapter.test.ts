@@ -67,6 +67,7 @@ describe('extractVoucher', () => {
     expect(headers.authorization).toBe('Bearer test-key');
     const body = JSON.parse(init.body as string);
     expect(body.model).toBe('test-model');
+    expect(body.enable_thinking).toBe(false);
     expect(body.response_format).toEqual({ type: 'json_object' });
     const content = body.messages[0].content as Array<{ type: string; image_url?: { url: string } }>;
     expect(content[0]!.type).toBe('text');

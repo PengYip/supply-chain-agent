@@ -365,7 +365,9 @@ async function detectPage(
   if (blank) return { page: page.page, nonWhiteRatio: ratio, blank, regions: [] };
   const call =
     deps.call ??
-    ((p: string, pg: { mime: string; buffer: Buffer }) => vlmCall(p, pg));
+    // 2026-09-02: 批量拆分逐页清点复用 vlmCall, 但以 vlm_batch_split 记账区分
+    // 于表单分类(vlm_classify), 便于审计页级清点用量。
+    ((p: string, pg: { mime: string; buffer: Buffer }) => vlmCall(p, pg, 'vlm_batch_split'));
   const prompt = buildUnitDetectPrompt();
   const once = async (p: string): Promise<RawRegion[]> =>
     parsePageUnits(await call(p, { page: page.page, mime: page.mime, buffer: page.buffer }));

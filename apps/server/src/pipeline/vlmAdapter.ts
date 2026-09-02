@@ -13,6 +13,7 @@ import { env } from '../env.js';
 import type { VoucherType } from './schemas/vouchers.js';
 import { VOUCHER_PAGE_PROMPTS, VOUCHER_DOC_PROMPTS } from './schemas/vouchers.js';
 import { throwVlmHttpError } from './vlmClassifier.js';
+import { recordLlmCall } from '../harness/usageAudit.js';
 
 export interface VlmResult {
   voucherType: VoucherType;
@@ -126,35 +127,72 @@ export async function extractVoucher(
   const url = `${env.VLM_BASE_URL.replace(/\/+$/, '')}/chat/completions`;
 
   const call = async (prompt: string): Promise<VlmResult> => {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${env.VLM_API_KEY}`,
-      },
-      body: JSON.stringify({
+    // Usage audit (2026-09-02): record every VLM extraction call so qwen3.8-max
+    // spend is attributable. Fire-and-forget (recordLlmCall never throws).
+    // inputText is the PROMPT TEXT ONLY -- the base64 image payload (up to 10MB)
+    // must never reach the DB. No docId is threaded through this seam.
+    const audit = (
+      start: number,
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number },
+      content?: string,
+      err?: unknown,
+    ) => {
+      recordLlmCall({
+        kind: 'vlm_extract',
         model: env.VLM_MODEL,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: prompt },
-              { type: 'image_url', image_url: { url: `data:${mime};base64,${b64}` } },
-            ],
-          },
-        ],
-        response_format: { type: 'json_object' },
-      }),
-      signal: AbortSignal.timeout(env.VLM_TIMEOUT_MS),
-    });
-    if (!res.ok) await throwVlmHttpError(res);
-    const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    const content = data.choices?.[0]?.message?.content;
-    if (!content) throw new Error('VLM 返回空内容');
-    const parsed: unknown = JSON.parse(content);
-    const result = normalizeVlmResult(parsed);
-    opts.validate?.(result);
-    return result;
+        inputTokens: usage?.prompt_tokens ?? null,
+        outputTokens: usage?.completion_tokens ?? null,
+        totalTokens: usage?.total_tokens ?? null,
+        inputText: prompt,
+        outputText: content,
+        durationMs: Math.round(performance.now() - start),
+        status: err ? 'error' : 'ok',
+        error: err ? (err instanceof Error ? err.message : String(err)) : undefined,
+      });
+    };
+
+    const t0 = performance.now();
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${env.VLM_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: env.VLM_MODEL,
+          // 2026-09-02: 关闭 thinking。qwen3.5+ 系列默认思考, 推理 token 按输出
+          // 计费(qwen3.8-max ¥36/M); 确定性凭证提取无需思考, 显式禁用。
+          enable_thinking: false,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: prompt },
+                { type: 'image_url', image_url: { url: `data:${mime};base64,${b64}` } },
+              ],
+            },
+          ],
+          response_format: { type: 'json_object' },
+        }),
+        signal: AbortSignal.timeout(env.VLM_TIMEOUT_MS),
+      });
+      if (!res.ok) await throwVlmHttpError(res);
+      const data = (await res.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+      };
+      const content = data.choices?.[0]?.message?.content;
+      if (!content) throw new Error('VLM 返回空内容');
+      const parsed: unknown = JSON.parse(content);
+      const result = normalizeVlmResult(parsed);
+      opts.validate?.(result);
+      audit(t0, data.usage, content);
+      return result;
+    } catch (e) {
+      audit(t0, undefined, undefined, e);
+      throw e;
+    }
   };
 
   try {
@@ -198,36 +236,67 @@ async function typedVlmFetch(prompt: string, images: TypedImage[]): Promise<stri
     }
   }
   const url = `${env.VLM_BASE_URL.replace(/\/+$/, '')}/chat/completions`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${env.VLM_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: env.VLM_MODEL,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: prompt },
-            ...images.map((img) => ({
-              type: 'image_url' as const,
-              image_url: { url: `data:${img.mime};base64,${img.buffer.toString('base64')}` },
-            })),
-          ],
-        },
-      ],
-      response_format: { type: 'json_object' },
-    }),
+  const t0 = performance.now();
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${env.VLM_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: env.VLM_MODEL,
+        // 2026-09-02: 关闭 thinking(推理 token 按输出计费, 确定性提取无需思考)。
+        enable_thinking: false,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: prompt },
+              ...images.map((img) => ({
+                type: 'image_url' as const,
+                image_url: { url: `data:${img.mime};base64,${img.buffer.toString('base64')}` },
+              })),
+            ],
+          },
+        ],
+        response_format: { type: 'json_object' },
+      }),
       signal: AbortSignal.timeout(env.VLM_TIMEOUT_MS),
     });
     if (!res.ok) await throwVlmHttpError(res);
-    const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const data = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+    };
     const content = data.choices?.[0]?.message?.content;
     if (!content) throw new Error('VLM 返回空内容');
+    // Usage audit (2026-09-02): record the typed VLM extraction call. inputText
+    // is the prompt text only -- never the base64 image payload. Fire-and-forget.
+    recordLlmCall({
+      kind: 'vlm_extract',
+      model: env.VLM_MODEL,
+      inputTokens: data.usage?.prompt_tokens ?? null,
+      outputTokens: data.usage?.completion_tokens ?? null,
+      totalTokens: data.usage?.total_tokens ?? null,
+      inputText: prompt,
+      outputText: content,
+      durationMs: Math.round(performance.now() - t0),
+      status: 'ok',
+    });
     return content;
+  } catch (e) {
+    recordLlmCall({
+      kind: 'vlm_extract',
+      model: env.VLM_MODEL,
+      inputText: prompt,
+      durationMs: Math.round(performance.now() - t0),
+      status: 'error',
+      error: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
   }
+}
 
 /** 容忍输出形状差异: 取 fields 对象与 字段置信度(缺省空对象, 不硬失败)。 */
 function normalizeTypedResult(parsed: unknown): TypedVlmResult {
