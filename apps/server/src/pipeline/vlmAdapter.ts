@@ -14,6 +14,7 @@ import type { VoucherType } from './schemas/vouchers.js';
 import { VOUCHER_PAGE_PROMPTS, VOUCHER_DOC_PROMPTS } from './schemas/vouchers.js';
 import { throwVlmHttpError } from './vlmClassifier.js';
 import { recordLlmCall } from '../harness/usageAudit.js';
+import { emitVlmUsageSpan } from './vlmTelemetry.js';
 
 export interface VlmResult {
   voucherType: VoucherType;
@@ -149,6 +150,9 @@ export async function extractVoucher(
         status: err ? 'error' : 'ok',
         error: err ? (err instanceof Error ? err.message : String(err)) : undefined,
       });
+      // 2026-09-02: VLM 是裸 fetch, OTel 自动埋点盖不住, 手工 GenAI span 让
+      // Langfuse 统一展示; prompt 仅文本不含 base64。fire-and-forget, 永不抛错。
+      emitVlmUsageSpan({ kind: 'vlm_extract', usage, prompt, content, err });
     };
 
     const t0 = performance.now();
@@ -284,6 +288,9 @@ async function typedVlmFetch(prompt: string, images: TypedImage[]): Promise<stri
       durationMs: Math.round(performance.now() - t0),
       status: 'ok',
     });
+    // 2026-09-02: VLM 是裸 fetch, OTel 自动埋点盖不住, 手工 GenAI span 让
+    // Langfuse 统一展示; prompt 仅文本不含 base64。fire-and-forget, 永不抛错。
+    emitVlmUsageSpan({ kind: 'vlm_extract', usage: data.usage, prompt, content });
     return content;
   } catch (e) {
     recordLlmCall({
@@ -294,6 +301,7 @@ async function typedVlmFetch(prompt: string, images: TypedImage[]): Promise<stri
       status: 'error',
       error: e instanceof Error ? e.message : String(e),
     });
+    emitVlmUsageSpan({ kind: 'vlm_extract', prompt, err: e });
     throw e;
   }
 }

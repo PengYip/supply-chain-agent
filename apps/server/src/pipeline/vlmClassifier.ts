@@ -3,6 +3,7 @@
 // vlmAdapter 相同(原生 fetch + response_format json_object, 失败回灌重试 1 次)。
 import { env } from '../env.js';
 import { recordLlmCall } from '../harness/usageAudit.js';
+import { emitVlmUsageSpan } from './vlmTelemetry.js';
 
 export interface ClassifyPage {
   mime: string;
@@ -79,6 +80,9 @@ export async function vlmCall(
       durationMs: Math.round(performance.now() - t0),
       status: 'ok',
     });
+    // 2026-09-02: VLM 是裸 fetch, OTel 自动埋点盖不住, 手工 GenAI span 让
+    // Langfuse 统一展示; prompt 仅文本不含 base64。fire-and-forget, 永不抛错。
+    emitVlmUsageSpan({ kind, usage: data.usage, prompt, content });
     return content;
   } catch (e) {
     recordLlmCall({
@@ -89,6 +93,7 @@ export async function vlmCall(
       status: 'error',
       error: e instanceof Error ? e.message : String(e),
     });
+    emitVlmUsageSpan({ kind, prompt, err: e });
     throw e;
   }
 }
