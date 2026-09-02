@@ -891,7 +891,7 @@ export async function ingestFile(opts: IngestOptions): Promise<{
   const types = await listTemplateTypes(ctx);
   const vocab = buildClassifierVocab(types);
   const cls = classifier
-    ? await classifyDocument(classifier, { blocks: blockModel.blocks, hint: docType, vocab })
+    ? await classifyDocument(classifier, { blocks: blockModel.blocks, hint: docType, vocab, docId })
     : classifyDocumentWithoutModel({ blocks: blockModel.blocks, hint: docType });
   perf.mark('classify', `${cls.docType} src=${cls.source} conf=${cls.confidence.toFixed(2)}`);
   // The classified docType is the source of truth from here on (design §6:
@@ -1235,6 +1235,15 @@ function startBackgroundExtraction(
         `[perf] bg-extract docId=${docId} ${outcome.status}`
         + ` ${outcome.elapsedMs ?? Math.round(performance.now() - t0)}ms f=${outcome.fieldCount ?? 0}`,
       );
+      if (outcome.status === 'skipped') {
+        // 可观测性(2026-09-02): runAutoExtraction 唯一 skipped 路径 = 单飞等待
+        // 超时(默认 150s)。行为不变, 仅告警点名被跳过的 docId, 便于排查
+        // 复核卡「暂无字段」是否由锁等待超时引起。
+        console.warn(
+          `[bg-extract] docId=${docId} 抽取被跳过(单飞等待超时 `
+          + `${outcome.elapsedMs ?? Math.round(performance.now() - t0)}ms), 复核卡暂无字段, 可重新发起解析重试`,
+        );
+      }
       if (outcome.status !== 'ok') {
         console.error(`[bg-extract] auto-extraction ${outcome.status}:`, outcome.reason ?? 'no reason');
       }
@@ -1385,7 +1394,7 @@ export async function processDocument(
     const cls = opts.fixedDocType
       ? { docType: opts.fixedDocType as DocType, confidence: 1, source: 'hint' as const }
       : opts.classifier
-        ? await classifyDocument(opts.classifier, { blocks: blockModel.blocks, hint: opts.docType, vocab })
+        ? await classifyDocument(opts.classifier, { blocks: blockModel.blocks, hint: opts.docType, vocab, docId })
         : classifyDocumentWithoutModel({ blocks: blockModel.blocks, hint: opts.docType });
     perf.mark('classify', `${cls.docType} src=${cls.source} conf=${cls.confidence.toFixed(2)}`);
     blockModel.docType = cls.docType;

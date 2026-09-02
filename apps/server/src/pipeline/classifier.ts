@@ -2,6 +2,7 @@ import { generateObject, type LanguageModel } from 'ai';
 import { z } from 'zod';
 import type { Block, DocType } from './types.js';
 import type { TemplateTypeRow } from './db/repositories.js';
+import { recordLlmCall } from '../harness/usageAudit.js';
 
 /** Injected small-model handle (same seam as ExtractionDeps). */
 export interface ClassifierDeps {
@@ -21,6 +22,8 @@ export interface ClassifierInput {
   hint?: DocType;
   /** 模板派生词表(缺省用内置粗类 + 空细类, 保持单阶段兼容)。 */
   vocab?: ClassifierVocab;
+  /** Optional owning document id, prefixed onto the usage-audit input preview. */
+  docId?: string;
 }
 
 export interface ClassifierResult {
@@ -113,19 +116,50 @@ export async function classifyDocument(
   const vocab = input.vocab ?? { coarse: DEFAULT_COARSE, fineByCoarse: {} };
   const t0 = performance.now();
   let coarseMs: number | null = null;
+  // Usage audit (2026-09-02): record every classification LLM call (coarse +
+  // fine) so DeepSeek spend is attributable. Fire-and-forget (never throws).
+  const docId = input.docId;
+  const auditInput = (docId ? `doc:${docId} ` : '') + blocksToPrompt(input.blocks);
+  const modelId = (deps.model as { modelId?: string }).modelId ?? '';
+  const auditClassify = (
+    start: number,
+    res?: { usage?: { inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null }; finishReason?: string; object: unknown },
+    err?: unknown,
+  ) => {
+    recordLlmCall({
+      kind: 'classification',
+      model: modelId,
+      inputTokens: res?.usage?.inputTokens ?? null,
+      outputTokens: res?.usage?.outputTokens ?? null,
+      totalTokens: res?.usage?.totalTokens ?? null,
+      inputText: auditInput,
+      outputText: res ? JSON.stringify(res.object) : undefined,
+      durationMs: Math.round(performance.now() - start),
+      finishReason: res?.finishReason ?? undefined,
+      status: err ? 'error' : 'ok',
+      error: err ? (err instanceof Error ? err.message : String(err)) : undefined,
+    });
+  };
   try {
     const coarseSchema = z.object({
       docType: z.enum(vocab.coarse as [string, ...string[]]),
       confidence: z.number().min(0).max(1),
     });
     const coarseStart = performance.now();
-    const coarse = await generateObject({
-      model: deps.model,
-      schema: coarseSchema,
-      system: buildCoarsePrompt(vocab.coarse),
-      prompt: blocksToPrompt(input.blocks),
-      providerOptions: { openai: { structuredOutputs: false } },
-    });
+    let coarse: { object: { docType: string; confidence: number }; usage?: { inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null }; finishReason?: string };
+    try {
+      coarse = await generateObject({
+        model: deps.model,
+        schema: coarseSchema,
+        system: buildCoarsePrompt(vocab.coarse),
+        prompt: blocksToPrompt(input.blocks),
+        providerOptions: { openai: { structuredOutputs: false } },
+      });
+      auditClassify(coarseStart, coarse);
+    } catch (e) {
+      auditClassify(coarseStart, undefined, e);
+      throw e;
+    }
     coarseMs = Math.round(performance.now() - coarseStart);
     const fineCandidates = vocab.fineByCoarse[coarse.object.docType] ?? [];
     if (fineCandidates.length === 0) {
@@ -149,13 +183,20 @@ export async function classifyDocument(
         confidence: z.number().min(0).max(1),
       });
       const fineStart = performance.now();
-      const fine = await generateObject({
-        model: deps.model,
-        schema: fineSchema,
-        system: buildFinePrompt(coarse.object.docType, fineCandidates),
-        prompt: blocksToPrompt(input.blocks),
-        providerOptions: { openai: { structuredOutputs: false } },
-      });
+      let fine: { object: { docType: string; confidence: number }; usage?: { inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null }; finishReason?: string };
+      try {
+        fine = await generateObject({
+          model: deps.model,
+          schema: fineSchema,
+          system: buildFinePrompt(coarse.object.docType, fineCandidates),
+          prompt: blocksToPrompt(input.blocks),
+          providerOptions: { openai: { structuredOutputs: false } },
+        });
+        auditClassify(fineStart, fine);
+      } catch (e) {
+        auditClassify(fineStart, undefined, e);
+        throw e;
+      }
       console.log(
         `[perf-classify] coarse=${coarseMs}ms fine=${Math.round(performance.now() - fineStart)}ms`
         + ` total=${Math.round(performance.now() - t0)}ms -> ${fine.object.docType}`,

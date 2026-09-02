@@ -12,6 +12,7 @@
 
 import { generateObject, type LanguageModel } from 'ai';
 import { z } from 'zod';
+import { recordLlmCall } from '../harness/usageAudit.js';
 
 /**
  * Assigns 0..N taxonomy tags to each indexed chunk. Implementations must be
@@ -108,19 +109,47 @@ export function makeLlmTagger(model: LanguageModel): ChunkTagger {
     const chunksLine = `文本块:\n${JSON.stringify(
       chunks.map((c) => ({ index: c.index, text: c.text })),
     )}`;
-
-    const { object } = await generateObject({
-      model,
-      schema: TagAssignmentResultSchema,
-      system: CHUNK_TAGGER_SYSTEM_PROMPT,
-      prompt: `${taxonomyLine}\n\n${chunksLine}`,
-      providerOptions: { openai: { structuredOutputs: false } },
-    });
-
-    const out: Record<number, string[]> = {};
-    for (const a of object.assignments ?? []) {
-      out[a.chunkIndex] = Array.isArray(a.tags) ? a.tags.slice() : [];
+    const prompt = `${taxonomyLine}\n\n${chunksLine}`;
+    // Usage audit (2026-09-02): record every chunk-tagging LLM call so DeepSeek
+    // spend is attributable. Fire-and-forget (never throws). No docId is
+    // threaded through the tagger seam (would require signature reshuffling).
+    const modelId = (model as { modelId?: string }).modelId ?? '';
+    const t0 = performance.now();
+    try {
+      const res = await generateObject({
+        model,
+        schema: TagAssignmentResultSchema,
+        system: CHUNK_TAGGER_SYSTEM_PROMPT,
+        prompt,
+        providerOptions: { openai: { structuredOutputs: false } },
+      });
+      recordLlmCall({
+        kind: 'chunk_tagging',
+        model: modelId,
+        inputTokens: res.usage?.inputTokens ?? null,
+        outputTokens: res.usage?.outputTokens ?? null,
+        totalTokens: res.usage?.totalTokens ?? null,
+        inputText: prompt,
+        outputText: JSON.stringify(res.object),
+        durationMs: Math.round(performance.now() - t0),
+        finishReason: res.finishReason ?? undefined,
+        status: 'ok',
+      });
+      const out: Record<number, string[]> = {};
+      for (const a of res.object.assignments ?? []) {
+        out[a.chunkIndex] = Array.isArray(a.tags) ? a.tags.slice() : [];
+      }
+      return out;
+    } catch (e) {
+      recordLlmCall({
+        kind: 'chunk_tagging',
+        model: modelId,
+        inputText: prompt,
+        durationMs: Math.round(performance.now() - t0),
+        status: 'error',
+        error: e instanceof Error ? e.message : String(e),
+      });
+      throw e;
     }
-    return out;
   };
 }

@@ -7,6 +7,7 @@ import { REQUIRED_CONTRACT_FIELDS } from './schemas/contract.js';
 import { isEmptyValue } from './fieldValue.js';
 import type { ProposedRelationship, ProposedEdge } from './db/repositories.js';
 import { TRADE_VOCAB, type TradeVocabulary } from '../domain/tradeSemantics.js';
+import { recordLlmCall } from '../harness/usageAudit.js';
 
 export interface GroundedField {
   name: string;
@@ -213,18 +214,52 @@ export async function extractGroundedFields(
     ...(Object.keys(hints).length ? [`字段提示: ${Object.entries(hints).map(([k, v]) => `${k}(${v})`).join('; ')}。`] : []),
   ].join('\n');
   const system = dynamicPrompt ? `${GROUNDED_EXTRACTION_PROMPT}\n${dynamicPrompt}` : GROUNDED_EXTRACTION_PROMPT;
-  const { object } = await generateObject({
-    model: deps.model,
-    schema: GroundedExtractionSchema,
-    system,
-    prompt: blocksToPrompt(input.blockModel),
-    // DeepSeek's OpenAI-compatible API rejects response_format=json_schema
-    // ("This response_format type is unavailable now"). Force JSON mode
-    // (response_format=json_object + schema-in-prompt) via structuredOutputs:false.
-    // This is the standard OpenAI-compatible-provider setting; it is a no-op for
-    // providers that do not honor providerOptions.openai.
-    providerOptions: { openai: { structuredOutputs: false } },
-  });
+  const prompt = blocksToPrompt(input.blockModel);
+  // Usage audit (2026-09-02): every extraction LLM call is recorded so DeepSeek
+  // spend is attributable per document. Fire-and-forget (recordLlmCall never
+  // throws); the docId is prefixed onto the input preview for queryability.
+  const docId = input.blockModel.docId;
+  const auditInput = docId ? `doc:${docId} ${prompt}` : prompt;
+  const modelId = (deps.model as { modelId?: string }).modelId ?? '';
+  const t0 = performance.now();
+  let object: z.infer<typeof GroundedExtractionSchema>;
+  try {
+    const res = await generateObject({
+      model: deps.model,
+      schema: GroundedExtractionSchema,
+      system,
+      prompt,
+      // DeepSeek's OpenAI-compatible API rejects response_format=json_schema
+      // ("This response_format type is unavailable now"). Force JSON mode
+      // (response_format=json_object + schema-in-prompt) via structuredOutputs:false.
+      // This is the standard OpenAI-compatible-provider setting; it is a no-op for
+      // providers that do not honor providerOptions.openai.
+      providerOptions: { openai: { structuredOutputs: false } },
+    });
+    object = res.object;
+    recordLlmCall({
+      kind: 'extraction',
+      model: modelId,
+      inputTokens: res.usage?.inputTokens ?? null,
+      outputTokens: res.usage?.outputTokens ?? null,
+      totalTokens: res.usage?.totalTokens ?? null,
+      inputText: auditInput,
+      outputText: JSON.stringify(res.object),
+      durationMs: Math.round(performance.now() - t0),
+      finishReason: res.finishReason ?? undefined,
+      status: 'ok',
+    });
+  } catch (e) {
+    recordLlmCall({
+      kind: 'extraction',
+      model: modelId,
+      inputText: auditInput,
+      durationMs: Math.round(performance.now() - t0),
+      status: 'error',
+      error: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
 
   const grounded: GroundedField[] = Object.entries(object.fields).map(([name, v]) => ({
     name,
