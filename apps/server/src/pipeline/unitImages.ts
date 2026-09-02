@@ -146,6 +146,30 @@ export function effectiveRotationOf(row: DocumentUnitRow): number {
 }
 
 /**
+ * 复核预览的逐区域旋回链(unit-preview 方向修复, 2026-09-02)。预览必须与
+ * 抽取/VLM 所见一致 —— 逐区域取:
+ *   1. manifest.chosenRotations[i](择优写回的逐区域 winner, 跨页混合旋回时精确);
+ *   2. manifest.regions[i].rotationDeg(检测期逐区域方向; 覆盖 OCR 路径/单候选/
+ *      写回前存量数据 —— 这些场景无 winner 记录, 检测方向是唯一信号);
+ *   3. 标量 chosenRotation ?? rotation_deg 填充(无逐区域信息时)。
+ * 返回与 regions 等长的数组(供 renderUnitImages 逐区域旋转)。
+ */
+export function effectiveRotationsOf(row: DocumentUnitRow): number[] {
+  const chosen = row.manifest.chosenRotations;
+  if (
+    Array.isArray(chosen) &&
+    chosen.length > 0 &&
+    chosen.every((r) => typeof r === 'number' && Number.isFinite(r))
+  ) {
+    return chosen.map(Number);
+  }
+  const regions = regionsFromManifest(row.manifest);
+  if (regions.length > 0) return regions.map((r) => r.rotationDeg);
+  const scalar = effectiveRotationOf(row);
+  return [scalar];
+}
+
+/**
  * 跨页合并 unit 的多区域图纵向拼成一张 PNG(预览响应单图返回用)。宽度取最大,
  * 不足处补白。
  */

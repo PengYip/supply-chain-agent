@@ -489,6 +489,7 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
         );
         // P3 择优旋回落库(双候选才有择优): 最终方向 + 择优证据写回 unit 行,
         // 「来源与拆分」区块据此展示。fire-and-forget, 失败不阻断抽取主流程。
+        // chosenRotations 为逐区域 winner(跨页混合旋回 unit 的预览/展示精确值)。
         if (unitVoucher.unitId) {
           const chosenRotation = best.rotations[0] ?? 0;
           void updateDocumentUnitManifest(ctx, unitVoucher.unitId, {
@@ -496,6 +497,7 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
             manifest: {
               ...unitVoucher.unitManifest,
               chosenRotation,
+              chosenRotations: best.rotations,
               candidateScores: scored.map((s) => ({
                 rot: s.a.rotations[0] ?? 0,
                 score: s.score,

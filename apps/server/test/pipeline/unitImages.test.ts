@@ -6,9 +6,31 @@ import {
   candidateRotations,
   renderUnitImages,
   unitRotationPlans,
+  effectiveRotationsOf,
 } from '../../src/pipeline/unitImages.js';
 import type { DetectedUnit } from '../../src/pipeline/batchSplit.js';
 import type { RenderedPage } from '../../src/pipeline/pdfRender.js';
+import type { DocumentUnitRow } from '../../src/pipeline/db/repositories.js';
+
+/** 构造 DocumentUnitRow 的最小夹具(仅预览旋回链用到的字段)。 */
+function unitRow(overrides: Partial<DocumentUnitRow> = {}): DocumentUnitRow {
+  return {
+    id: 'DU-x',
+    parentDocumentId: 'DOC-p',
+    childDocumentId: 'DOC-c',
+    unitIndex: 1,
+    docType: '汽运磅单',
+    pageStart: 1,
+    pageEnd: 1,
+    bboxJson: null,
+    rotationDeg: 0,
+    detectorConfidence: 0.9,
+    manifest: {},
+    status: 'processed',
+    createdAt: '',
+    ...overrides,
+  };
+}
 
 /** 200x100 页: 左半红, 右半蓝, 左上角 20x20 黑块(旋转方向判别用)。 */
 function makePage(page: number): RenderedPage {
@@ -112,5 +134,50 @@ describe('renderUnitImages', () => {
     await expect(
       renderUnitImages([makePage(1)], unit([{ page: 2, bbox: { x: 0, y: 0, w: 1, h: 1 }, rotationDeg: 0 }]), [0]),
     ).rejects.toThrow('不在渲染页集');
+  });
+});
+
+// ---- 复核预览旋回链(unit-preview 方向修复, 2026-09-02) ----------------------
+
+describe('effectiveRotationsOf (预览旋回源链)', () => {
+  it('chosenRotations(逐区域择优)优先 -> 逐区域返回', () => {
+    const row = unitRow({
+      rotationDeg: 90,
+      manifest: {
+        regions: [{ page: 1, bbox: { x: 0, y: 0, w: 1, h: 1 }, rotationDeg: 90 }],
+        chosenRotation: 90,
+        chosenRotations: [270],
+      },
+    });
+    expect(effectiveRotationsOf(row)).toEqual([270]);
+  });
+
+  it('无 chosenRotations 但有逐区域检测 rotationDeg -> 用逐区域检测值(非标量覆盖)', () => {
+    // 跨页合并 unit: 区域 1 检测 0°, 区域 2 检测 90° —— 预览必须逐区域, 不得
+    // 用区域 1 的 0° 覆盖区域 2(否则区域 2 上下颠倒)。
+    const row = unitRow({
+      rotationDeg: 0,
+      manifest: {
+        regions: [
+          { page: 1, bbox: { x: 0, y: 0, w: 1, h: 1 }, rotationDeg: 0 },
+          { page: 2, bbox: { x: 0, y: 0, w: 1, h: 1 }, rotationDeg: 90 },
+        ],
+      },
+    });
+    expect(effectiveRotationsOf(row)).toEqual([0, 90]);
+  });
+
+  it('无逐区域信息 -> 标量 chosenRotation ?? rotation_deg 填充', () => {
+    expect(effectiveRotationsOf(unitRow({ rotationDeg: 270, manifest: { chosenRotation: 90 } }))).toEqual([90]);
+    expect(effectiveRotationsOf(unitRow({ rotationDeg: 270 }))).toEqual([270]);
+    expect(effectiveRotationsOf(unitRow({ rotationDeg: 0 }))).toEqual([0]);
+  });
+
+  it('OCR 路径 unit(无 chosenRotation, 仅检测 rotation_deg) -> 检测方向(唯一信号)', () => {
+    const row = unitRow({
+      rotationDeg: 90,
+      manifest: { regions: [{ page: 1, bbox: { x: 0, y: 0, w: 1, h: 1 }, rotationDeg: 90 }] },
+    });
+    expect(effectiveRotationsOf(row)).toEqual([90]);
   });
 });

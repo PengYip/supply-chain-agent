@@ -39,7 +39,7 @@ import {
   renderUnitImages,
   stackImagesVertically,
   unitFromStoredRow,
-  effectiveRotationOf,
+  effectiveRotationsOf,
 } from '../pipeline/unitImages.js';
 import type { DocType, Modality } from '../pipeline/types.js';
 
@@ -289,8 +289,10 @@ reviewRoute.get('/:docId/unit-preview', async (c) => {
     if (!sourceUri || !existsSync(sourceUri)) {
       return c.json({ ok: false, error: '原始文件不存在或已被清理, 无法生成预览' }, 404);
     }
-    const rotation = effectiveRotationOf(unit);
-    const cacheKey = `${docId}:${rotation}`;
+    // 逐区域旋回(与抽取/VLM 所见一致): chosenRotations -> 检测期逐区域 ->
+    // 标量 chosenRotation ?? rotation_deg。跨页混合旋回 unit 不再被单标量覆盖。
+    const rotations = effectiveRotationsOf(unit);
+    const cacheKey = `${docId}:${rotations.join(',')}`;
     const cached = previewCacheGet(cacheKey);
     if (cached) {
       return c.body(new Uint8Array(cached), 200, { 'Content-Type': 'image/png' });
@@ -298,7 +300,7 @@ reviewRoute.get('/:docId/unit-preview', async (c) => {
     // 只渲染到 unit 末页(renderPdfPages 支持 first N), 裁剪按页号取图。
     const pages = await renderPdfPages(sourceUri, { first: unit.pageEnd ?? unit.pageStart ?? 1 });
     const detected = unitFromStoredRow(unit);
-    const images = await renderUnitImages(pages, detected, detected.regions.map(() => rotation));
+    const images = await renderUnitImages(pages, detected, rotations);
     const png = await stackImagesVertically(images);
     previewCacheSet(cacheKey, png);
     return c.body(new Uint8Array(png), 200, { 'Content-Type': 'image/png' });
