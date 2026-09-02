@@ -234,7 +234,12 @@ export async function extractGroundedFields(
       // (response_format=json_object + schema-in-prompt) via structuredOutputs:false.
       // This is the standard OpenAI-compatible-provider setting; it is a no-op for
       // providers that do not honor providerOptions.openai.
-      providerOptions: { openai: { structuredOutputs: false } },
+      // 2026-09-02: 关闭 thinking。DeepSeek 默认开启思考, 推理 token 按输出计费
+      // (一次抽取 27k 输出 token 换 669 字符 JSON); 确定性任务无需思考, 显式禁用。
+      providerOptions: {
+        openai: { structuredOutputs: false },
+        deepseek: { thinking: { type: 'disabled' } },
+      },
     });
     object = res.object;
     recordLlmCall({

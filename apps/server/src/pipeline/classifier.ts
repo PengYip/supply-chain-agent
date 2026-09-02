@@ -153,7 +153,11 @@ export async function classifyDocument(
         schema: coarseSchema,
         system: buildCoarsePrompt(vocab.coarse),
         prompt: blocksToPrompt(input.blocks),
-        providerOptions: { openai: { structuredOutputs: false } },
+        // 2026-09-02: 关闭 thinking(确定性分类, 推理 token 按输出计费)。
+        providerOptions: {
+          openai: { structuredOutputs: false },
+          deepseek: { thinking: { type: 'disabled' } },
+        },
       });
       auditClassify(coarseStart, coarse);
     } catch (e) {
@@ -190,7 +194,11 @@ export async function classifyDocument(
           schema: fineSchema,
           system: buildFinePrompt(coarse.object.docType, fineCandidates),
           prompt: blocksToPrompt(input.blocks),
-          providerOptions: { openai: { structuredOutputs: false } },
+          // 2026-09-02: 关闭 thinking(确定性分类, 推理 token 按输出计费)。
+          providerOptions: {
+            openai: { structuredOutputs: false },
+            deepseek: { thinking: { type: 'disabled' } },
+          },
         });
         auditClassify(fineStart, fine);
       } catch (e) {

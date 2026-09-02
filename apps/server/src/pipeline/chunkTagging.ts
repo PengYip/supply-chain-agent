@@ -121,7 +121,11 @@ export function makeLlmTagger(model: LanguageModel): ChunkTagger {
         schema: TagAssignmentResultSchema,
         system: CHUNK_TAGGER_SYSTEM_PROMPT,
         prompt,
-        providerOptions: { openai: { structuredOutputs: false } },
+        // 2026-09-02: 关闭 thinking(确定性打标, 推理 token 按输出计费)。
+        providerOptions: {
+          openai: { structuredOutputs: false },
+          deepseek: { thinking: { type: 'disabled' } },
+        },
       });
       recordLlmCall({
         kind: 'chunk_tagging',

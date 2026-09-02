@@ -34,6 +34,10 @@ export async function generateSessionTitle(
       system:
         '你是一个会话标题生成器。根据用户的首条消息和助手的首条回复，生成一个不超过12个汉字的简洁标题。只输出标题文字，不要引号、不要标点、不要解释。',
       prompt: `用户: ${firstUserText.slice(0, 500)}\n助手: ${firstReply.slice(0, 500)}`,
+      // 2026-09-02: 关闭 thinking(确定性标题生成, 推理 token 按输出计费)。
+      providerOptions: {
+        deepseek: { thinking: { type: 'disabled' } },
+      },
     });
     recordLlmCall({
       kind: 'title',
