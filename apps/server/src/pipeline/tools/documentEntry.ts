@@ -1708,6 +1708,12 @@ export async function processDocumentWithBatch(
   }
   if (!imageLike) return processDocument(ctx, docId, opts);
 
+  // 拆分工作自此真正开始: 容器先落 parsing(此前停留在 uploaded, 前端刷新页面
+  // 会丢失在途文件的解析中状态)。探针/幂等命中路径不经此处 —— 各回落分支由
+  // processDocument 自管状态; ensureDocumentParsed 的终态短路在进入本函数前
+  // 已返回, 不会被本戳覆盖。
+  await setDocumentParseStatus(ctx, docId, 'parsing', opts.userId);
+
   // 幂等: 已拆分过的文件重跑(6b force / 重试)只重解析 container, 不重复生成
   // 子单据。Task 9 forceResplit(/api/batch/:docId/resplit)例外: 删旧子单据
   // (级联 chunks/extractions/bindings/向量, unit 行随 child 级联)与残留 unit
@@ -1902,9 +1908,17 @@ export async function ensureDocumentParsed(
   // 4. 'uploaded' / 'failed' / 'parsing'-without-flight / missing -> start a run.
   //    批量拆分器灰度入口包在 processDocument 之前: 开关关闭时它是纯透传
   //    (零行为变化); 开启且检测到 N>1 份逻辑单据时先拆分再逐 unit 走全链路。
-  const run = processDocumentWithBatch(ctx, docId, fullOpts).finally(() => {
-    parseFlights.delete(docId);
-  });
+  //    抛错兜底(刷新丢失解析状态修复): 进程内抛错(非崩溃)时 parse_status 仍可
+  //    写 —— 在途 'parsing' 不得残留为卡死态, 落 'failed' 后向调用方原样传递
+  //    (崩溃残留由启动清扫 failStaleParsingDocuments 兜底)。
+  const run = processDocumentWithBatch(ctx, docId, fullOpts)
+    .catch(async (e: unknown) => {
+      await setDocumentParseStatus(ctx, docId, 'failed', userId).catch(() => {});
+      throw e;
+    })
+    .finally(() => {
+      parseFlights.delete(docId);
+    });
   parseFlights.set(docId, run);
   return run;
 }

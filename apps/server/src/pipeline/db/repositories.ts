@@ -134,6 +134,7 @@ import {
   deleteDocumentUnitsByIdsPg,
   updateDocumentParseStagePg,
   getDocumentParseStagesPg,
+  failStaleParsingDocumentsPg,
   updateGraphLinkStatusPg,
   updateGraphLinkPropsPg,
   setGraphLinkGraphStatusPg,
@@ -2658,6 +2659,20 @@ export async function getDocumentParseStatus(
     .prepare('SELECT parse_status FROM documents WHERE id = ?')
     .get(docId) as { parse_status: string } | undefined;
   return row ? (row.parse_status as ParseStatus) : null;
+}
+
+/**
+ * 启动清扫(2026-09-01 刷新丢失解析状态): 服务重启/崩溃时在途解析
+ * (parse_status='parsing')永无终态 —— 全部翻转为 'failed', 用户可重新发起
+ * 解析。幂等(仅命中 parsing); 返回翻转行数。status-only(parse_status 无
+ * 持久化 reason 列, 前端以现有 failed 文案呈现)。
+ */
+export async function failStaleParsingDocuments(ctx: DbContext): Promise<number> {
+  if (ctx.backend === 'postgres') return failStaleParsingDocumentsPg(ctx);
+  const res = ctx.sqlite
+    .prepare("UPDATE documents SET parse_status = 'failed' WHERE parse_status = 'parsing'")
+    .run();
+  return res.changes;
 }
 
 /**

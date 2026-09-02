@@ -418,6 +418,151 @@ describe('processDocumentWithBatch (灰度入口)', () => {
     }
   });
 
+  // ---- 在途状态可观测(刷新丢失解析状态修复, 2026-09-01) ----------------------
+
+  async function waitForParseStatus(docId: string, want: string, timeoutMs = 3000): Promise<void> {
+    const t0 = Date.now();
+    for (;;) {
+      const s = await getDocumentParseStatus(ctx, docId, 'u1');
+      if (s === want) return;
+      if (Date.now() - t0 > timeoutMs) throw new Error(`parse_status 迟迟未到 ${want}(当前 ${s})`);
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  }
+
+  it('拆分进行中(容器检测期) parse_status=parsing, 终态覆盖(刷新不丢在途状态)', async () => {
+    const pdfPath = join(dir, 'inflight.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A CONTRACT HT-001', 'REPORT-B CONTRACT HT-002']);
+    const docId = await stubFor(pdfPath);
+    expect(await getDocumentParseStatus(ctx, docId, 'u1')).toBe('uploaded');
+
+    // 检测 VLM 挂起: 工作已开始但尚未完成 —— 在途状态必须已在服务端可观测。
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const run = ensureDocumentParsed(ctx, docId, {
+      modality: 'scanned',
+      userId: 'u1',
+      vlm: {
+        extract: async () => {
+          throw new Error('voucher extract not expected');
+        },
+        detectUnits: async () => {
+          await gate;
+          return JSON.stringify({
+            units: [region({ identifierOrNull: 'HX-A' }), region({ identifierOrNull: 'HX-B' })],
+          });
+        },
+      },
+    });
+    await waitForParseStatus(docId, 'parsing');
+    release();
+    const res = await run;
+
+    // 终态覆盖: 检测出 2 份 -> 拆分 -> container 终态 parsed(不再是 parsing)。
+    expect(res.parseStatus).toBe('parsed');
+    expect(await getDocumentParseStatus(ctx, docId, 'u1')).toBe('parsed');
+  });
+
+  it('幂等探针(终态短路)不改写 parse_status', async () => {
+    const pdfPath = join(dir, 'probe.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A CONTRACT HT-001', 'REPORT-B CONTRACT HT-002']);
+    const docId = await stubFor(pdfPath);
+    await ensureDocumentParsed(ctx, docId, {
+      modality: 'scanned',
+      userId: 'u1',
+      vlm: fakeDetect([
+        { regions: [region({ identifierOrNull: 'HX-A' })] },
+        { regions: [region({ identifierOrNull: 'HX-B' })] },
+      ]),
+    });
+    expect(await getDocumentParseStatus(ctx, docId, 'u1')).toBe('parsed');
+
+    // 终态短路: 不进入拆分工作, 状态不得翻成 parsing。
+    const second = await ensureDocumentParsed(ctx, docId, {
+      modality: 'scanned',
+      userId: 'u1',
+      vlm: fakeDetect([{ regions: [] }, { regions: [] }]),
+    });
+    expect(second.batchSplit).toBeUndefined();
+    expect(await getDocumentParseStatus(ctx, docId, 'u1')).toBe('parsed');
+  });
+
+  it('force+forceResplit 重跑(重拆)同样 parsing -> 终态覆盖', async () => {
+    const pdfPath = join(dir, 'force-inflight.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A CONTRACT HT-001', 'REPORT-B CONTRACT HT-002']);
+    const docId = await stubFor(pdfPath);
+    const plan = [
+      { regions: [region({ identifierOrNull: 'HX-A' })] },
+      { regions: [region({ identifierOrNull: 'HX-B' })] },
+    ];
+    await ensureDocumentParsed(ctx, docId, {
+      modality: 'scanned',
+      userId: 'u1',
+      vlm: fakeDetect(plan),
+    });
+
+    // force+forceResplit = 重拆语义: 删旧子单据后重新检测(检测挂起可观测)。
+    // 仅 force 的幂等重跑走容器快速 legacy 重解析, parsing 窗口过短不可靠观测。
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const run = ensureDocumentParsed(ctx, docId, {
+      modality: 'scanned',
+      userId: 'u1',
+      force: true,
+      forceResplit: true,
+      vlm: {
+        extract: async () => {
+          throw new Error('voucher extract not expected');
+        },
+        detectUnits: async () => {
+          await gate;
+          return JSON.stringify({
+            units: [region({ identifierOrNull: 'HX-A' }), region({ identifierOrNull: 'HX-B' })],
+          });
+        },
+      },
+    });
+    await waitForParseStatus(docId, 'parsing');
+    release();
+    const res = await run;
+    expect(res.batchSplit).toBeDefined();
+    expect(res.parseStatus).toBe('parsed');
+    expect(await getDocumentParseStatus(ctx, docId, 'u1')).toBe('parsed');
+  });
+
+  it('管线中途抛错(容器行丢失)向上传递, 不悬挂', async () => {
+    const pdfPath = join(dir, 'midrun-throw.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A CONTRACT HT-001', 'REPORT-B CONTRACT HT-002']);
+    const docId = await stubFor(pdfPath);
+
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const run = ensureDocumentParsed(ctx, docId, {
+      modality: 'scanned',
+      userId: 'u1',
+      vlm: {
+        extract: async () => {
+          throw new Error('voucher extract not expected');
+        },
+        detectUnits: async () => {
+          await gate;
+          // 容器行在检测期间被删除 -> 后续容器解析抛 document_not_found。
+          ctx.sqlite.prepare('DELETE FROM documents WHERE id = ?').run(docId);
+          return JSON.stringify({
+            units: [region({ identifierOrNull: 'HX-A' }), region({ identifierOrNull: 'HX-B' })],
+          });
+        },
+      },
+    });
+    await waitForParseStatus(docId, 'parsing');
+    release();
+    await expect(run).rejects.toThrow(/document_not_found/);
+  });
+
   it('开启 + container 解析失败: unit 行保留 pending, 不生成子单据', async () => {
     const pdfPath = join(dir, 'ocr-fail.pdf');
     await makeTwoPagePdf(pdfPath);

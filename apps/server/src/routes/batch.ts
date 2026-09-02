@@ -28,6 +28,7 @@ import {
   updateDocumentUnitManifest,
   deleteDocument,
   deleteDocumentUnitsByIds,
+  setDocumentParseStatus,
   type DocumentUnitRow,
 } from '../pipeline/db/repositories.js';
 import {
@@ -183,6 +184,8 @@ batchRoute.post('/:docId/resplit', async (c) => {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[batch] resplit failed:', docId, msg);
+    // 重拆已把容器置 parsing(在途状态), 抛错路径必须落终态(不留卡死 parsing)。
+    await setDocumentParseStatus(ctx(), docId, 'failed', user.id).catch(() => {});
     return fail(c, 500, `重拆失败: ${msg}`, 'resplit_failed');
   }
 });

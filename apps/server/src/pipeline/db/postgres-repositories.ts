@@ -1841,6 +1841,14 @@ export async function getDocumentParseStatusPg(
   return res.rows[0].parse_status as ParseStatus;
 }
 
+/** pg twin of failStaleParsingDocuments: 残留 parsing -> failed, 返回翻转行数。 */
+export async function failStaleParsingDocumentsPg(ctx: PostgresDbContext): Promise<number> {
+  const res = await ctx.pool.query(
+    "UPDATE documents SET parse_status = 'failed' WHERE parse_status = 'parsing'",
+  );
+  return res.rowCount ?? 0;
+}
+
 /** Batch-read doc_type for listed documents (pg twin of getDocumentTypes). */
 export async function getDocumentTypesPg(
   ctx: PostgresDbContext,

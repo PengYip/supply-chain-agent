@@ -32,6 +32,7 @@ import { evalDatasetsRoute } from './routes/evalDatasets.js';
 import { shareRoute } from './routes/share.js';
 import { ensureBucket } from './lib/minio.js';
 import { migrateOnStartup, getDbContext } from './pipeline/db/dbBackend.js';
+import { failStaleParsingDocuments } from './pipeline/db/repositories.js';
 import { purgeOldUsageRecords } from './harness/usageAudit.js';
 import { ensureTemplateSeed } from './pipeline/templateSeed.js';
 import { migrateDocTypeAliases } from './pipeline/db/repositories.js';
@@ -226,6 +227,14 @@ process.on('SIGINT', async () => { await closeNeo4j(); });
     await migrateDocTypeAliases(getDbContext());
   } catch (e) {
     console.warn('[templateSeed] docType 别名迁移失败(不阻塞启动):', (e as Error).message);
+  }
+  // 解析中断清扫(幂等): 崩溃/重启残留的 parse_status='parsing' 永无终态,
+  // 翻转为 'failed'(前端现有失败渲染, 用户可重新发起解析)。失败仅告警不阻塞启动。
+  try {
+    const flipped = await failStaleParsingDocuments(getDbContext());
+    if (flipped > 0) console.warn(`[boot] ${flipped} 个文档解析中断(服务重启残留), 已标记 failed`);
+  } catch (e) {
+    console.warn('[boot] 解析中断清扫失败(不阻塞启动):', (e as Error).message);
   }
   // 用量审计保留期清理(90 天, 见 harness/usageAudit.ts)。失败仅告警不阻塞启动。
   try {

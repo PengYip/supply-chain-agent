@@ -3,6 +3,8 @@ import { createDb, migrate } from '../../../src/pipeline/db/client.js';
 import {
   createDocumentStub,
   updateDocumentParseStage,
+  setDocumentParseStatus,
+  failStaleParsingDocuments,
 } from '../../../src/pipeline/db/repositories.js';
 
 // 阶段级解析进度(2026-09-01): documents.parse_stage + stage_started_at。
@@ -52,5 +54,35 @@ describe('updateDocumentParseStage', () => {
     await expect(updateDocumentParseStage(ctx, docId, null)).resolves.toBeUndefined();
     expect(stageRow(docId).parse_stage).toBeNull();
     expect(stageRow(docId).stage_started_at).toBeNull();
+  });
+});
+
+// ---- 启动清扫(刷新丢失解析状态修复): 残留 parsing -> failed ----------------
+
+describe('failStaleParsingDocuments (boot sweep)', () => {
+  it('仅 parsing 翻转为 failed, 其余状态不动; 返回翻转数; 幂等', async () => {
+    const statuses = ['parsing', 'parsing', 'uploaded', 'parsed', 'needs_ocr', 'failed'] as const;
+    const ids: string[] = [];
+    for (const [i, st] of statuses.entries()) {
+      const { docId } = await createDocumentStub(ctx, { sourceUri: `file:///s${i}.pdf`, userId: 'u1' });
+      if (st !== 'uploaded') await setDocumentParseStatus(ctx, docId, st, 'u1');
+      ids.push(docId);
+    }
+
+    await expect(failStaleParsingDocuments(ctx)).resolves.toBe(2);
+
+    for (const [i, st] of statuses.entries()) {
+      const row = ctx.sqlite
+        .prepare('SELECT parse_status FROM documents WHERE id = ?')
+        .get(ids[i]) as { parse_status: string };
+      expect(row.parse_status).toBe(st === 'parsing' ? 'failed' : st);
+    }
+
+    // 幂等: 第二次清扫无残留。
+    await expect(failStaleParsingDocuments(ctx)).resolves.toBe(0);
+  });
+
+  it('空库 -> 返回 0(无害)', async () => {
+    await expect(failStaleParsingDocuments(ctx)).resolves.toBe(0);
   });
 });
