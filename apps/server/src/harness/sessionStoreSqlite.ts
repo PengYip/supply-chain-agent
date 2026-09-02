@@ -334,6 +334,11 @@ async function resetBusyOnStartup(): Promise<void> {
   db.prepare("UPDATE sessions SET status = 'interrupted' WHERE status = 'busy'").run();
 }
 
+async function listBusySessionIds(): Promise<string[]> {
+  const rows = db.prepare("SELECT id FROM sessions WHERE status = 'busy'").all() as Array<{ id: string }>;
+  return rows.map((r) => r.id);
+}
+
 async function sessionBelongsTo(id: string, userId: string): Promise<boolean> {
   const row = stmtGetSession.get(id) as SessionRow | undefined;
   return !!row && row.user_id === userId;
@@ -531,6 +536,7 @@ export const sqliteSessionStore: SessionStoreBackend = {
   setSessionStatus,
   getSessionStatus,
   resetBusyOnStartup,
+  listBusySessionIds,
   sessionBelongsTo,
   loadSession,
   deleteSession,

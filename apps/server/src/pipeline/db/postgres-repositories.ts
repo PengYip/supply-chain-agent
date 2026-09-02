@@ -1841,10 +1841,28 @@ export async function getDocumentParseStatusPg(
   return res.rows[0].parse_status as ParseStatus;
 }
 
-/** pg twin of failStaleParsingDocuments: 残留 parsing -> failed, 返回翻转行数。 */
+/** pg twin of failStaleParsingDocuments: 残留 parsing -> failed, 返回翻转行数;
+ *  终态行残留 parse_stage 一并清空。 */
 export async function failStaleParsingDocumentsPg(ctx: PostgresDbContext): Promise<number> {
   const res = await ctx.pool.query(
     "UPDATE documents SET parse_status = 'failed' WHERE parse_status = 'parsing'",
+  );
+  await ctx.pool.query(
+    "UPDATE documents SET parse_stage = NULL, stage_started_at = NULL " +
+      "WHERE parse_status IN ('parsed','failed') AND parse_stage IS NOT NULL",
+  );
+  return res.rowCount ?? 0;
+}
+
+/** pg twin of failStuckUnitsUnderTerminalDocuments: 终态文档下残留的非终态
+ *  unit(pending/processing) -> failed, 返回翻转行数。 */
+export async function failStuckUnitsUnderTerminalDocumentsPg(
+  ctx: PostgresDbContext,
+): Promise<number> {
+  const res = await ctx.pool.query(
+    "UPDATE document_units SET status = 'failed' " +
+      "WHERE status IN ('pending','processing') AND parent_document_id IN " +
+      "(SELECT id FROM documents WHERE parse_status IN ('parsed','failed'))",
   );
   return res.rowCount ?? 0;
 }

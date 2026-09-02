@@ -306,6 +306,14 @@ export function createAgentSessionStore(pool: Pool): SessionStoreBackend {
       await pool.query("UPDATE sessions SET status = 'interrupted' WHERE status = 'busy'");
     },
 
+    async listBusySessionIds(): Promise<string[]> {
+      await ensure();
+      const { rows } = await pool.query<{ id: string }>(
+        "SELECT id FROM sessions WHERE status = 'busy'",
+      );
+      return rows.map((r) => r.id);
+    },
+
     async sessionBelongsTo(id: string, userId: string): Promise<boolean> {
       await ensure();
       const { rows } = await pool.query<{ user_id: string | null }>(

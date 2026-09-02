@@ -135,6 +135,7 @@ import {
   updateDocumentParseStagePg,
   getDocumentParseStagesPg,
   failStaleParsingDocumentsPg,
+  failStuckUnitsUnderTerminalDocumentsPg,
   updateGraphLinkStatusPg,
   updateGraphLinkPropsPg,
   setGraphLinkGraphStatusPg,
@@ -2666,11 +2667,39 @@ export async function getDocumentParseStatus(
  * (parse_status='parsing')永无终态 —— 全部翻转为 'failed', 用户可重新发起
  * 解析。幂等(仅命中 parsing); 返回翻转行数。status-only(parse_status 无
  * 持久化 reason 列, 前端以现有 failed 文案呈现)。
+ * 2026-09-02 扩展: 终态行(parsed/failed)残留的 parse_stage/stage_started_at
+ * 一并清空(终态权威, 阶段列只作在途展示; 00be248 清扫漏了这类组合)。
  */
 export async function failStaleParsingDocuments(ctx: DbContext): Promise<number> {
   if (ctx.backend === 'postgres') return failStaleParsingDocumentsPg(ctx);
   const res = ctx.sqlite
     .prepare("UPDATE documents SET parse_status = 'failed' WHERE parse_status = 'parsing'")
+    .run();
+  ctx.sqlite
+    .prepare(
+      "UPDATE documents SET parse_stage = NULL, stage_started_at = NULL " +
+        "WHERE parse_status IN ('parsed','failed') AND parse_stage IS NOT NULL",
+    )
+    .run();
+  return res.changes;
+}
+
+/**
+ * 启动清扫(2026-09-02 扩展): 批量容器文档的抽取在解析 HTTP 请求内联执行,
+ * 服务重启/崩溃时容器被留在 parse_status='parsed' + parse_stage='extracting',
+ * 而 document_units 行永远停在 'pending'/'processing' —— 前端"抽取中 i/N"进度条
+ * 冻结。终态文档(parsed/failed)下残留的非终态 unit 必为崩溃残留(一次完整抽取
+ * 不会留下非终态 unit), 全部翻转为 'failed'。幂等(仅命中 pending/processing);
+ * 返回翻转行数。
+ */
+export async function failStuckUnitsUnderTerminalDocuments(ctx: DbContext): Promise<number> {
+  if (ctx.backend === 'postgres') return failStuckUnitsUnderTerminalDocumentsPg(ctx);
+  const res = ctx.sqlite
+    .prepare(
+      "UPDATE document_units SET status = 'failed' " +
+        "WHERE status IN ('pending','processing') AND parent_document_id IN " +
+        "(SELECT id FROM documents WHERE parse_status IN ('parsed','failed'))",
+    )
     .run();
   return res.changes;
 }

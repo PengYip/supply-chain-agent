@@ -32,14 +32,17 @@ import { evalDatasetsRoute } from './routes/evalDatasets.js';
 import { shareRoute } from './routes/share.js';
 import { ensureBucket } from './lib/minio.js';
 import { migrateOnStartup, getDbContext } from './pipeline/db/dbBackend.js';
-import { failStaleParsingDocuments } from './pipeline/db/repositories.js';
+import {
+  failStaleParsingDocuments,
+  failStuckUnitsUnderTerminalDocuments,
+} from './pipeline/db/repositories.js';
 import { purgeOldUsageRecords } from './harness/usageAudit.js';
 import { ensureTemplateSeed } from './pipeline/templateSeed.js';
 import { migrateDocTypeAliases } from './pipeline/db/repositories.js';
 import { runExtractionBackfill } from './pipeline/extractionBackfill.js';
 import { getDriver, closeNeo4j } from './graph/neo4j.js';
 import { listToolNames, type Role } from './harness/roleToolRegistry.js';
-import { resetBusyOnStartup } from './harness/sessionStore.js';
+import { reconcileOrphanBusySessions } from './harness/runManager.js';
 import { fetchDeepseekBalance, formatDeepseekBalance } from './harness/deepseekBalance.js';
 import { auth } from './lib/auth.js';
 import {
@@ -237,6 +240,15 @@ process.on('SIGINT', async () => { await closeNeo4j(); });
   } catch (e) {
     console.warn('[boot] 解析中断清扫失败(不阻塞启动):', (e as Error).message);
   }
+  // 残留子单据清扫(幂等): 终态文档(parsed/failed)下 stuck 在 pending/processing
+  // 的 document_units 必为崩溃残留(完整抽取不留非终态 unit), 翻转为 'failed',
+  // 解除前端"抽取中 i/N"进度条冻结。失败仅告警不阻塞启动。
+  try {
+    const flipped = await failStuckUnitsUnderTerminalDocuments(getDbContext());
+    if (flipped > 0) console.warn(`[boot] ${flipped} 个残留子单据(所属文档已终态)已标记 failed`);
+  } catch (e) {
+    console.warn('[boot] 残留子单据清扫失败(不阻塞启动):', (e as Error).message);
+  }
   // 用量审计保留期清理(90 天, 见 harness/usageAudit.ts)。失败仅告警不阻塞启动。
   try {
     const purged = await purgeOldUsageRecords();
@@ -246,12 +258,15 @@ process.on('SIGINT', async () => { await closeNeo4j(); });
   }
   // Background session runtime: any session left 'busy' by a previous process
   // was interrupted by a crash/restart. Flip it to 'interrupted' so the UI can
-  // flag it and the caller can decide to resume or discard. Best-effort: a
-  // failure here would only leave a stale 'busy' flag, not crash the boot.
+  // flag it and the caller can decide to resume or discard, and append a
+  // session.status event so a reconnecting client gets an authoritative
+  // snapshot. Best-effort: a failure here would only leave a stale 'busy' flag,
+  // not crash the boot.
   try {
-    await resetBusyOnStartup();
+    const flipped = await reconcileOrphanBusySessions();
+    if (flipped > 0) console.warn(`[boot] ${flipped} 个会话运行中断(服务重启残留), 已标记 interrupted`);
   } catch (e) {
-    console.error('[boot] resetBusyOnStartup failed:', e instanceof Error ? e.message : e);
+    console.error('[boot] reconcileOrphanBusySessions failed:', e instanceof Error ? e.message : e);
   }
   // DeepSeek 余额探测(2026-09-02 双供应商错误分类配套): 仅 DeepSeek base URL
   // 时探测 /user/balance; 非 200(含 CI dummy key 的 401)/超时/非 DeepSeek 一律

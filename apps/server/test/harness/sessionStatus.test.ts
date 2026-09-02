@@ -9,7 +9,9 @@ import {
   appendMessages,
   loadSession,
   resetBusyOnStartup,
+  listSessionEventsSince,
 } from '../../src/harness/sessionStore.js';
+import { reconcileOrphanBusySessions } from '../../src/harness/runManager.js';
 
 // Store API is async on BOTH backends (SQLite/Postgres dual-backend split),
 // so every call awaits once.
@@ -79,5 +81,26 @@ describe('session status', () => {
     await setSessionStatus(s.id, 'busy', 'run-x');
     await resetBusyOnStartup();
     expect((await getSessionStatus(s.id))?.status).toBe('interrupted');
+  });
+
+  it('reconcileOrphanBusySessions: busy 无在途 run -> interrupted + session.status 事件', async () => {
+    const s = await createSession('trader', 'u4');
+    await setSessionStatus(s.id, 'busy', 'run-orphan');
+    const n = await reconcileOrphanBusySessions();
+    expect(n).toBe(1);
+    expect((await getSessionStatus(s.id))?.status).toBe('interrupted');
+    // 镜像 runManager 的状态变更事件: 重连客户端可从事件流拿到权威快照。
+    const events = await listSessionEventsSince(s.id, 0);
+    expect(
+      events.some(
+        (e) => e.type === 'session.status' && (e.payload as { status?: string }).status === 'interrupted',
+      ),
+    ).toBe(true);
+  });
+
+  it('reconcileOrphanBusySessions: idle 行不动, 返回 0', async () => {
+    const s = await createSession('trader', 'u5');
+    expect(await reconcileOrphanBusySessions()).toBe(0);
+    expect((await getSessionStatus(s.id))?.status).toBe('idle');
   });
 });

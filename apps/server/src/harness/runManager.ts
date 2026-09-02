@@ -5,7 +5,7 @@
 // Single-flight per session (busy => conflict); different sessions run concurrently.
 
 import { randomUUID } from 'node:crypto';
-import { setSessionStatus, pruneSessionEvents } from './sessionStore.js';
+import { setSessionStatus, pruneSessionEvents, listBusySessionIds } from './sessionStore.js';
 import { runSessionContext } from './sessionContext.js';
 import { emit } from './sessionEvents.js';
 import { classifyProviderError } from './providerErrors.js';
@@ -125,4 +125,24 @@ export function abortSessionRun(sessionId: string): boolean {
 
 export function isRunning(sessionId: string): boolean {
   return runs.has(sessionId);
+}
+
+/**
+ * 启动时孤儿 busy 对账(2026-09-02): 服务重启/崩溃后, 进程内 runManager 的
+ * 在途 run 全部丢失, 但 PG/SQLite sessions.status 可能仍为 'busy' —— 客户端
+ * 重连会看到卡死的「运行中」且永远收不到 token。对账: 对每个 status='busy'
+ * 且进程内无在途 run 的会话, 置 'interrupted' 并镜像 runManager 的状态变更
+ * 事件(session.status)追加一条事件, 供重连客户端拿到权威快照。有在途 run
+ * 的行不动(启动时理论为空, 逻辑保持诚实)。返回翻转行数。
+ */
+export async function reconcileOrphanBusySessions(): Promise<number> {
+  const busyIds = await listBusySessionIds();
+  let flipped = 0;
+  for (const sessionId of busyIds) {
+    if (runs.has(sessionId)) continue;
+    await setSessionStatus(sessionId, 'interrupted');
+    await emit({ type: 'session.status', sessionId, status: 'interrupted' });
+    flipped += 1;
+  }
+  return flipped;
 }

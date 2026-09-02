@@ -175,6 +175,8 @@ export interface SessionStoreBackend {
   setSessionStatus(id: string, status: SessionStatus, runId?: string): Promise<void>;
   getSessionStatus(id: string): Promise<SessionStatusInfo | null>;
   resetBusyOnStartup(): Promise<void>;
+  /** 列出全部 status='busy' 的会话 id(孤儿 busy 对账用)。 */
+  listBusySessionIds(): Promise<string[]>;
   sessionBelongsTo(id: string, userId: string): Promise<boolean>;
   loadSession(id: string): Promise<LoadedSession | null>;
   deleteSession(id: string): Promise<boolean>;
@@ -347,6 +349,11 @@ export async function getSessionStatus(id: string): Promise<SessionStatusInfo | 
  */
 export async function resetBusyOnStartup(): Promise<void> {
   return (await getBackend()).resetBusyOnStartup();
+}
+
+/** 列出全部 status='busy' 的会话 id(孤儿 busy 对账用, 见 runManager.reconcileOrphanBusySessions)。 */
+export async function listBusySessionIds(): Promise<string[]> {
+  return (await getBackend()).listBusySessionIds();
 }
 
 /**
