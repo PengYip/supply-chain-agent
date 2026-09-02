@@ -108,6 +108,17 @@ async function makeTwoPagePdf(path: string): Promise<void> {
   writeFileSync(path, await pdf.save());
 }
 
+/** n 页无文字层 PDF(整页嵌图)。 */
+async function makeNPagePdf(path: string, n: number): Promise<void> {
+  const pdf = await PDFDocument.create();
+  const img = await pdf.embedPng(CONTENT_PNG);
+  for (let p = 0; p < n; p++) {
+    const page = pdf.addPage([200, 280]);
+    page.drawImage(img, { x: 0, y: 0, width: 200, height: 280 });
+  }
+  writeFileSync(path, await pdf.save());
+}
+
 /** MinerU hermetic sidecar: 每页一个文本块(页号真实, 供页区间切片断言)。 */
 function writeMineruSidecar(pdfPath: string, pageTexts: string[]): void {
   writeFileSync(
@@ -214,6 +225,36 @@ describe('processDocumentWithBatch (灰度入口)', () => {
       vlm: fakeDetect([{ regions: [region({ identifierOrNull: 'HX-ALL' })] }, { regions: [] }]),
     });
 
+    expect(res.parseStatus).toBe('parsed');
+    expect(res.batchSplit).toBeUndefined();
+    expect(docRows()).toHaveLength(1);
+    expect(docRows()[0]!.batch_role).toBeNull();
+    expect(ctx.sqlite.prepare('SELECT COUNT(*) n FROM document_units').get()).toMatchObject({ n: 0 });
+  });
+
+  it('多页合同文件(首页整页合同 + 续页 units:[]) 走 legacy 路径, 不拆分', async () => {
+    const pdfPath = join(dir, 'contract.pdf');
+    await makeNPagePdf(pdfPath, 6);
+    writeMineruSidecar(pdfPath, [
+      'CONTRACT HT-001', 'CONTRACT HT-001', 'CONTRACT HT-001',
+      'CONTRACT HT-001', 'CONTRACT HT-001', 'CONTRACT HT-001',
+    ]);
+    const docId = await stubFor(pdfPath);
+
+    const res = await ensureDocumentParsed(ctx, docId, {
+      modality: 'scanned',
+      userId: 'u1',
+      vlm: fakeDetect([
+        { regions: [region({ formType: '合同', identifierOrNull: 'HT-001', bbox: { x: 0.01, y: 0.02, w: 0.98, h: 0.95 } })] },
+        { regions: [] },
+        { regions: [] },
+        { regions: [] },
+        { regions: [] },
+        { regions: [] },
+      ]),
+    });
+
+    // 检测折叠为 1 个 unit -> units.length<=1 门 -> 完全旧路径。
     expect(res.parseStatus).toBe('parsed');
     expect(res.batchSplit).toBeUndefined();
     expect(docRows()).toHaveLength(1);

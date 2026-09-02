@@ -17,7 +17,7 @@ import { vlmCall } from './vlmClassifier.js';
 /** formType 受控词表(设计文档 §3)。 */
 export const UNIT_FORM_TYPES = [
   '汽运磅单', '轨道衡称重单', '水尺计重单', '质检报告',
-  '货转单', '付款凭证', '微信聊天记录', '数据表格', '空白页', '其他',
+  '货转单', '付款凭证', '合同', '微信聊天记录', '数据表格', '空白页', '其他',
 ] as const;
 
 /**
@@ -42,6 +42,7 @@ export const UNIT_FORM_TYPE_ALIASES: Readonly<Record<string, string>> = {
   质检报告: '化验报告',
   货转单: '货权转移证明',
   付款凭证: '银行回单',
+  合同: '合同扫描件',
 };
 
 /** 空白页预判阈值: 非白像素占比 < 5% 视为空白, 跳过 VLM。 */
@@ -247,6 +248,9 @@ export function buildUnitDetectPrompt(): string {
     '- 数出该页独立完整业务单据的数量; 并排、堆叠、拼贴的照片都各算 1 份独立单据。',
     '- 不把印章、logo、页眉页脚、表格中的单行当作单据。',
     '- 一张化验报表内含多个样品行 = 1 个单据(不要按样品拆分)。',
+    '- 标题或首部含"合同"/"协议"的整页文书是 1 份 formType=合同 的单据(补充合同/补充协议也属合同)。',
+    '- 合同/协议等长文书的条款续页(整页连续正文、页脚页码如 2/7、无新单据标题或独立单号)不是独立单据, 输出 units: []。',
+    '- 合同正文内的表格(价格表/检验条款表/结算表)是合同的一部分, 不是独立单据, 不得输出为 数据表格。',
     '- 每个区域给 bbox(归一化坐标 {x,y,w,h}, 原点左上, 取值 0.0-1.0)。',
     '- rotationDeg 只允许 0/90/180/270: 该区域内容需顺时针旋转多少度才能正立阅读; 拿不准给 0。',
     `- formType 只允许以下值之一: ${UNIT_FORM_TYPES.join(' / ')}。`,
@@ -313,7 +317,11 @@ function parsePageUnits(content: string): RawRegion[] {
     const u = item as Record<string, unknown>;
     const bbox = normalizeBBox(u.bbox);
     if (!bbox) continue;
-    const formType = typeof u.formType === 'string' && u.formType.length > 0 ? u.formType : '其他';
+    let formType = typeof u.formType === 'string' && u.formType.length > 0 ? u.formType : '其他';
+    // 未知词表标签收敛为 其他, 防止 清点器 杜撰类型绕过下游守卫。
+    if (!(UNIT_FORM_TYPES as readonly string[]).includes(formType)) {
+      formType = '其他';
+    }
     if (formType === '空白页') continue;
     const idRaw = u.identifierOrNull ?? u.identifier;
     const identifier =
@@ -406,6 +414,11 @@ async function mapWithConcurrency<T, R>(
 /**
  * 跨页续表合并: 相邻页 + 同 formType + 同(非空)单号 → 一个逻辑单据。
  * 保守规则——单号为空不合并(两份匿名磅单背靠背会被错并)。
+ *
+ * 合同例外(2026-09-02 双章合同事故修复): 合同首页带 合同编号, 续页单号为
+ * null —— 单号不得阻断同一份合同内的相邻页合并; 但两份背靠背的不同合同
+ * (两首页单号均非空且不同)仍须保持分离。故对 formType=合同 额外放开一条
+ * 相邻页合并: 只要不是"双方单号均非空且归一后不同"即合并。
  */
 function mergeUnits(pages: PageDetection[]): DetectedUnit[] {
   interface OpenUnit {
@@ -443,6 +456,28 @@ function mergeUnits(pages: PageDetection[]): DetectedUnit[] {
           merged = true;
         }
       }
+      // 合同例外: 续页单号为 null 时, 只要不是"双方单号均非空且归一后不同"
+      // (即两份背靠背的不同合同), 就并入最后一个打开的合同 unit。
+      if (!merged && r.formType === '合同') {
+        const last = open[open.length - 1];
+        const idsDiffer =
+          last !== undefined &&
+          last.formType === '合同' &&
+          last.identifier !== null &&
+          r.identifier !== null &&
+          normalizeIdentifier(last.identifier) !== normalizeIdentifier(r.identifier);
+        if (
+          last !== undefined &&
+          last.formType === '合同' &&
+          last.pageEnd === page.page - 1 &&
+          !idsDiffer
+        ) {
+          last.pageEnd = page.page;
+          last.confidence = Math.min(last.confidence, r.confidence);
+          last.rawRegions.push({ page: page.page, bbox: r.bbox, rotationDeg: r.rotationDeg });
+          merged = true;
+        }
+      }
       if (!merged) {
         open.push({
           formType: r.formType,
@@ -459,6 +494,37 @@ function mergeUnits(pages: PageDetection[]): DetectedUnit[] {
   }
   // 全局排序: 先按起始页; 页内创建顺序即阅读顺序(稳定排序保持)。
   open.sort((a, b) => a.pageStart - b.pageStart);
+
+  // 整本"一份连续文书"守卫(2026-09-02 双章合同事故): 同一份合同被扫描两遍
+  // (中间夹空白页)时, 逐页合并会因空白页断开而拆成多份。若全部 unit 都是
+  // 合同、且所有非空单号归一后相同(允许 null, 如续页), 则视为同一份合同被
+  // 重复扫描进一个文件, 折叠为 1 个 unit —— 灰度入口的 units.length<=1 门
+  // 据此把整本路由回 legacy 单文档路径, 合同永不拆分。
+  if (
+    open.length >= 2 &&
+    open.every((u) => u.formType === '合同')
+  ) {
+    const normIds = open
+      .map((u) => (u.identifier === null ? null : normalizeIdentifier(u.identifier)))
+      .filter((id): id is string => id !== null);
+    const allSame = normIds.every((id) => id === normIds[0]);
+    if (allSame) {
+      const first = open[0]!;
+      const collapsed: OpenUnit = {
+        formType: '合同',
+        confidence: Math.min(...open.map((u) => u.confidence)),
+        identifier: open.find((u) => u.identifier !== null)?.identifier ?? null,
+        evidence: first.evidence,
+        pageStart: Math.min(...open.map((u) => u.pageStart)),
+        pageEnd: Math.max(...open.map((u) => u.pageEnd)),
+        rotationDeg: first.rotationDeg,
+        rawRegions: open.flatMap((u) => u.rawRegions),
+      };
+      open.length = 0;
+      open.push(collapsed);
+    }
+  }
+
   return open.map((u, i) => {
     const regions = u.rawRegions.map((r) => ({ ...r, bbox: padBBox(r.bbox) }));
     return {

@@ -44,6 +44,13 @@ describe('buildClassifierVocab', () => {
     expect(vocab.fineByCoarse['合同']).toContain('补充合同');
   });
 
+  it('粗类自身进细类候选(合同 -> [合同, 补充合同], 2026-09-02 事故修复)', async () => {
+    const types = await listTemplateTypes(ctx);
+    const vocab = buildClassifierVocab(types);
+    // 合同 的唯一后代是 补充合同; 修复后粗类自身成为首个细类候选, 使细类阶段真正判别。
+    expect(vocab.fineByCoarse['合同']).toEqual(['合同', '补充合同']);
+  });
+
   it('isActive=false 的类型不进细类候选(与 bindings docTypes 过滤对称, 小修 2)', async () => {
     // 置灰 收货单(履约凭证子类, 无后代) -> buildClassifierVocab 候选必须排除。
     ctx.sqlite.prepare(`UPDATE template_types SET is_active = 0 WHERE name = '收货单'`).run();

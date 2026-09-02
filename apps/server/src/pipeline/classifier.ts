@@ -61,7 +61,9 @@ export function buildClassifierVocab(types: TemplateTypeRow[]): ClassifierVocab 
   const fineByCoarse: Record<string, string[]> = {};
   for (const c of DEFAULT_COARSE) {
     const fine = descendants(c);
-    if (fine.length) fineByCoarse[c] = fine;
+    // 单子类短路曾把粗类硬映射到唯一子类(合同全部误落 补充合同, 2026-09-02 事故),
+    // 粗类自身进候选让细类阶段真正判别。
+    if (fine.length) fineByCoarse[c] = [c, ...fine];
   }
   return { coarse: DEFAULT_COARSE, fineByCoarse };
 }
@@ -89,6 +91,8 @@ function buildFinePrompt(coarse: string, fine: string[]): string {
   return [
     `这份单据已判定为「${coarse}」。请进一步判定其细类。`,
     `细类取值: ${fine.join(' / ')}。`,
+    `- 原文没有明确的细类特征时选粗类本身(如「${coarse}」), 不要强行落到子类。`,
+    `- 只有标题或正文明确出现"补充协议"/"补充合同"字样才选「补充合同」; 普通买卖/采购/销售合同选「合同」。`,
     'confidence 是自评置信度 (0..1); 不确定就给较低值。',
     '严禁凭空臆造原文中不存在的单据类型信号。',
     '严格以 JSON 格式输出, 不要包含任何注释或解释文字。',

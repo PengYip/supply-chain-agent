@@ -100,6 +100,13 @@ describe('buildUnitDetectPrompt', () => {
     // 关键业务语义: 一表多样品不拆分。
     expect(prompt).toContain('1 个单据');
   });
+
+  it('包含合同清点规则: formType=合同 与 条款续页 语义', () => {
+    const prompt = buildUnitDetectPrompt();
+    expect(prompt).toContain('formType=合同');
+    expect(prompt).toContain('条款续页');
+    expect(prompt).toContain('合同正文内的表格');
+  });
 });
 
 describe('detectDocumentUnits', () => {
@@ -227,5 +234,92 @@ describe('detectDocumentUnits', () => {
     expect(b.x + b.w).toBeLessThanOrEqual(1 + 1e-9);
     expect(b.y + b.h).toBeLessThanOrEqual(1 + 1e-9);
     expect(b.w).toBeGreaterThanOrEqual(2 * BBOX_PADDING - 0.001);
+  });
+
+  it('词表外 formType(购销合同)收敛为 其他, 不绕过下游守卫', async () => {
+    const pages = [contentPage(1)];
+    const deps: DetectUnitsDeps = {
+      renderPages: async () => pages,
+      call: async () => pageJson([regionJson({ formType: '购销合同', identifierOrNull: 'HT-001' })]),
+    };
+    const res = await detectDocumentUnits({ sourcePath: 'x.pdf' }, deps);
+    expect(res.units).toHaveLength(1);
+    expect(res.units[0]!.formType).toBe('其他');
+  });
+
+  it('7 页合同: 首页带单号 + 续页单号 null 合并为 1 个 unit', async () => {
+    const pages = Array.from({ length: 7 }, (_, i) => contentPage(i + 1));
+    const deps: DetectUnitsDeps = {
+      renderPages: async () => pages,
+      call: async (_prompt, page) =>
+        pageJson([
+          regionJson({
+            formType: '合同',
+            identifierOrNull: page.page === 1 ? 'X' : null,
+            bbox: { x: 0.01, y: 0.02, w: 0.98, h: 0.95 },
+          }),
+        ]),
+    };
+    const res = await detectDocumentUnits({ sourcePath: 'x.pdf' }, deps);
+    expect(res.units).toHaveLength(1);
+    const u = res.units[0]!;
+    expect(u.pageStart).toBe(1);
+    expect(u.pageEnd).toBe(7);
+    expect(u.identifier).toBe('X');
+  });
+
+  it('双章合同(同一合同扫两遍, 中间夹空白页): 折叠为 1 个 unit 跨两遍', async () => {
+    // 两遍扫描: 第一遍 p1(单号 X)+p2,p3(续页 null); 空白页 p4; 第二遍
+    // p5(单号 X)+p6(续页 null)。逐页合并因空白页断开成两段, 折叠守卫须
+    // 把两段(单号均归一为 X)合并为 1 个 unit 跨 1-6。
+    const pages = [contentPage(1), contentPage(2), contentPage(3), blankPage(4), contentPage(5), contentPage(6)];
+    const deps: DetectUnitsDeps = {
+      renderPages: async () => pages,
+      call: async (_prompt, page) => {
+        if (page.page === 4) throw new Error('空白页不应调用 VLM');
+        return pageJson([
+          regionJson({
+            formType: '合同',
+            identifierOrNull: page.page === 1 || page.page === 5 ? 'X' : null,
+            bbox: { x: 0.01, y: 0.02, w: 0.98, h: 0.95 },
+          }),
+        ]);
+      },
+    };
+    const res = await detectDocumentUnits({ sourcePath: 'x.pdf' }, deps);
+    expect(res.units).toHaveLength(1);
+    const u = res.units[0]!;
+    expect(u.pageStart).toBe(1);
+    expect(u.pageEnd).toBe(6);
+    expect(u.identifier).toBe('X');
+  });
+
+  it('两份不同合同(首页单号 A/B 不同): 保持 2 个 unit, 不折叠', async () => {
+    const pages = [contentPage(1), contentPage(2), contentPage(3), contentPage(4)];
+    const deps: DetectUnitsDeps = {
+      renderPages: async () => pages,
+      call: async (_prompt, page) =>
+        pageJson([
+          regionJson({
+            formType: '合同',
+            identifierOrNull: page.page === 1 ? 'A' : page.page === 3 ? 'B' : null,
+            bbox: { x: 0.01, y: 0.02, w: 0.98, h: 0.95 },
+          }),
+        ]),
+    };
+    const res = await detectDocumentUnits({ sourcePath: 'x.pdf' }, deps);
+    expect(res.units).toHaveLength(2);
+    expect(res.units[0]).toMatchObject({ pageStart: 1, pageEnd: 2, identifier: 'A' });
+    expect(res.units[1]).toMatchObject({ pageStart: 3, pageEnd: 4, identifier: 'B' });
+  });
+
+  it('回归: 相邻匿名汽运磅单(单号 null)仍不合并', async () => {
+    const pages = [contentPage(1), contentPage(2)];
+    const deps: DetectUnitsDeps = {
+      renderPages: async () => pages,
+      call: async () => pageJson([regionJson({ formType: '汽运磅单', identifierOrNull: null })]),
+    };
+    const res = await detectDocumentUnits({ sourcePath: 'x.pdf' }, deps);
+    expect(res.units).toHaveLength(2);
   });
 });

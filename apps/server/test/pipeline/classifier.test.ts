@@ -28,6 +28,39 @@ const blocks = (text: string): Block[] => [
   { id: 'b0', type: 'text', text, page: 1, bbox: null, ocrConfidence: 1 },
 ];
 
+// 序列版 stub: 每次 doGenerate 依次返回 returnObjects; 同时记录每次调用的
+// system prompt(AI SDK v6 将 system 作为 prompt 数组首条 system 消息传入),
+// 供断言细类阶段确实执行(2026-09-02 单子类短路事故回归)。
+function stubModelSequence(returnObjects: Array<unknown | Error>) {
+  let i = 0;
+  const prompts: string[] = [];
+  return {
+    prompts,
+    specificationVersion: 'v2' as const,
+    provider: 'fake', modelId: 'fake-model', supportedUrls: {} as Record<string, RegExp[]>,
+    async doGenerate(input: { prompt?: Array<{ role: string; content: string }> } = {}) {
+      const sys = input.prompt?.find((m) => m.role === 'system')?.content ?? '';
+      prompts.push(sys);
+      const obj = returnObjects[Math.min(i, returnObjects.length - 1)];
+      i++;
+      if (obj instanceof Error) throw obj;
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(obj) }],
+        finishReason: 'stop' as const,
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        warnings: [] as unknown[],
+      };
+    },
+    async doStream() { throw new Error('doStream not used by classifyDocument'); },
+  } as any;
+}
+
+// 合同 粗类 + 细类候选(含粗类自身, 与 buildClassifierVocab 修复后形状一致)。
+const contractVocab = {
+  coarse: ['合同', '立项书', '履约凭证', '其他'],
+  fineByCoarse: { '合同': ['合同', '补充合同'] },
+};
+
 describe('classifyDocument', () => {
   it('returns the LLM-classified docType + confidence (两阶段: 粗类->细类)', async () => {
     // 两阶段: 粗类(履约凭证) -> 细类(发票)。发票非粗类, 需经细类阶段产出。
@@ -74,6 +107,54 @@ describe('classifyDocument', () => {
     expect(res.docType).toBe('提单');
     expect(res.source).toBe('hint');
     expect(res.confidence).toBe(0);
+  });
+
+  // 2026-09-02 事故回归: 合同 粗类唯一子类是 补充合同, 单子类短路曾把普通合同
+  // 硬判成 补充合同。修复后粗类自身进候选 -> 细类阶段真正执行, 普通合同落「合同」。
+  it('合同粗类: 细类阶段执行, 普通合同(无补充字样)落「合同」', async () => {
+    const model = stubModelSequence([
+      { docType: '合同', confidence: 0.98 },
+      { docType: '合同', confidence: 0.95 },
+    ]);
+    const res = await classifyDocument(
+      { model },
+      { blocks: blocks('煤炭购销合同, 甲方乙方约定数量与价格'), hint: '其他', vocab: contractVocab },
+    );
+    expect(res.docType).toBe('合同');
+    expect(res.source).toBe('classified');
+    // 细类阶段确实执行(两次调用), 且细类 prompt 携带判别说明。
+    expect(model.prompts).toHaveLength(2);
+    expect(model.prompts[1]).toContain('补充合同');
+    expect(model.prompts[1]).toContain('不要强行落到子类');
+  });
+
+  it('合同粗类: 原文含"补充协议"时细类落「补充合同」', async () => {
+    const model = stubModelSequence([
+      { docType: '合同', confidence: 0.98 },
+      { docType: '补充合同', confidence: 0.9 },
+    ]);
+    const res = await classifyDocument(
+      { model },
+      { blocks: blocks('本补充协议对原合同价款进行调整'), hint: '其他', vocab: contractVocab },
+    );
+    expect(res.docType).toBe('补充合同');
+    expect(res.source).toBe('classified');
+    expect(model.prompts).toHaveLength(2);
+  });
+
+  it('粗类无细类候选(立项书): 不触发细类调用, 直接返回粗类', async () => {
+    const model = stubModelSequence([{ docType: '立项书', confidence: 0.9 }]);
+    const res = await classifyDocument(
+      { model },
+      {
+        blocks: blocks('项目立项申请书'),
+        hint: '其他',
+        vocab: { coarse: ['合同', '立项书', '履约凭证', '其他'], fineByCoarse: {} },
+      },
+    );
+    expect(res.docType).toBe('立项书');
+    expect(res.source).toBe('classified');
+    expect(model.prompts).toHaveLength(1); // 仅粗类一次调用
   });
 });
 
