@@ -29,6 +29,7 @@ import {
 } from '../db/repositories.js';
 import {
   detectDocumentUnits,
+  BatchSplitPageLimitError,
   CONTAINER_DOC_TYPE,
   UNIT_FORM_TYPE_ALIASES,
   type DetectedUnit,
@@ -1512,7 +1513,9 @@ export async function processDocument(
 // chat 兜底两条入口):
 //   BATCH_SPLIT_ENABLED=false        -> processDocument 旧路径, 零行为变化;
 //   非 PDF / 有文字层 / VLM 未配置 / 已拆分过 -> 旧路径;
-//   检测失败 / 超页数上限 / 0 或 1 份 -> 旧路径(batch_role 保持 NULL);
+//   检测失败 / 0 或 1 份 -> 旧路径(batch_role 保持 NULL); 页数超上限 -> 显式
+//   failed(BATCH_SPLIT_MAX_PAGES, reason 含实际页数与上限, 大拼贴整本慢路径
+//   且混单据不拆是错误方向);
 //   检测 N>1 份                      -> parent 标 container + document_units
 //     落库, container 仍走旧链路解析(仅跳过 Voucher 路由: 把多单据整文件硬喂
 //     单据级 schema 正是本功能要修的 bug), 再按 unit 页区间切 container 的
@@ -1722,8 +1725,10 @@ export async function processDocumentWithBatch(
     await clearDocumentUnits(ctx, docId);
   }
 
-  // 版面清点。任何失败(渲染 / 超页数上限 / VLM 异常)都回落旧路径——拆分器
-  // 永不劣于现状。
+  // 版面清点。VLM/渲染失败回落旧路径(永不劣于现状); 页数超 BATCH_SPLIT_MAX_PAGES
+  // 例外 —— 大拼贴整本走慢路径且混单据不拆是错误方向, 显式失败并给出
+  // 含实际页数与配置上限的中文 reason(经 ProcessDocumentResult.reason 透出,
+  // parse_status 落 'failed' 走现有前端失败渲染)。
   await updateDocumentParseStage(ctx, docId, 'detecting');
   let units: DetectedUnit[];
   try {
@@ -1733,6 +1738,13 @@ export async function processDocumentWithBatch(
     );
     units = detection.units;
   } catch (e) {
+    if (e instanceof BatchSplitPageLimitError) {
+      const reason = `文件共 ${e.pages} 页, 超过批量拆分上限 ${e.maxPages} 页, 请拆分后分批上传`;
+      console.warn(`[batch-split] ${docId} ${reason}`);
+      await updateDocumentParseStage(ctx, docId, null);
+      await setDocumentParseStatus(ctx, docId, 'failed', opts.userId).catch(() => {});
+      return { docId, parseStatus: 'failed' as const, reason };
+    }
     console.warn('[batch-split] 检测失败, 回落旧路径:', e instanceof Error ? e.message : e);
     return processDocument(ctx, docId, opts);
   }

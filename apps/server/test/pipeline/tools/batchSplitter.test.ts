@@ -21,6 +21,7 @@ import { createDb, migrate } from '../../../src/pipeline/db/client.js';
 import { env } from '../../../src/env.js';
 import {
   createDocumentStub,
+  getDocumentParseStatus,
   loadDocument,
   listDocumentUnitsByParent,
 } from '../../../src/pipeline/db/repositories.js';
@@ -37,6 +38,7 @@ const SAVED_ENV = {
   vlmUrl: env.VLM_BASE_URL,
   vlmKey: env.VLM_API_KEY,
   concurrency: env.BATCH_SPLIT_CONCURRENCY,
+  maxPages: env.BATCH_SPLIT_MAX_PAGES,
 };
 
 beforeEach(() => {
@@ -55,6 +57,7 @@ afterEach(() => {
   env.VLM_BASE_URL = SAVED_ENV.vlmUrl;
   env.VLM_API_KEY = SAVED_ENV.vlmKey;
   env.BATCH_SPLIT_CONCURRENCY = SAVED_ENV.concurrency;
+  env.BATCH_SPLIT_MAX_PAGES = SAVED_ENV.maxPages;
 });
 
 const CONTENT_PNG = buildPng(64, 64, (_x, y) => (y < 32 ? [0, 0, 0, 255] : [255, 255, 255, 255]));
@@ -436,6 +439,66 @@ describe('processDocumentWithBatch (灰度入口)', () => {
     const units = await listDocumentUnitsByParent(ctx, docId);
     expect(units).toHaveLength(2);
     expect(units.every((u) => u.status === 'pending' && u.childDocumentId === null)).toBe(true);
+  });
+
+  it('页数超上限: 显式失败(reason 含实际页数与上限), 不回落整本 legacy', async () => {
+    env.BATCH_SPLIT_MAX_PAGES = 1; // 2 页夹具即超限(上限取自真实配置, 非硬编码)
+    const pdfPath = join(dir, 'over-limit.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A CONTRACT HT-001', 'REPORT-B CONTRACT HT-002']);
+    const docId = await stubFor(pdfPath);
+
+    let detectCalls = 0;
+    const res = await ensureDocumentParsed(ctx, docId, {
+      modality: 'scanned',
+      userId: 'u1',
+      vlm: fakeDetect(
+        [
+          { regions: [region({ identifierOrNull: 'HX-A' })] },
+          { regions: [region({ identifierOrNull: 'HX-B' })] },
+        ],
+        { onCall: () => { detectCalls += 1; } },
+      ),
+    });
+
+    // 显式失败: failed 终态 + 中文 reason(实际页数 + 配置上限 + 指引)。
+    expect(res.parseStatus).toBe('failed');
+    expect(res.reason).toContain('2 页');
+    expect(res.reason).toContain('上限 1');
+    expect(res.reason).toContain('拆分后分批上传');
+    // parse_status 落库为 failed(前端现有失败渲染可直接用)。
+    expect((await getDocumentParseStatus(ctx, docId, 'u1'))).toBe('failed');
+    // 不回落 legacy: 无 sidecar 解析副作用, 不产生子单据。
+    expect(docRows()).toHaveLength(1);
+    expect((res as { batchSplit?: unknown }).batchSplit).toBeUndefined();
+    // 上限判定在逐页清点之前(render 后即拒): VLM 一次都不被调用。
+    expect(detectCalls).toBe(0);
+  });
+
+  it('其他检测失败(VLM 输出坏)仍回落整本 legacy, 不显式失败', async () => {
+    const pdfPath = join(dir, 'vlm-fail.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A CONTRACT HT-001', 'REPORT-B CONTRACT HT-002']);
+    const docId = await stubFor(pdfPath);
+
+    const res = await ensureDocumentParsed(ctx, docId, {
+      modality: 'scanned',
+      userId: 'u1',
+      vlm: {
+        extract: async () => {
+          throw new Error('voucher extract not expected');
+        },
+        detectUnits: async () => {
+          throw new Error('vlm 输出无法解析');
+        },
+      },
+    });
+
+    // 回落旧路径: 无 batchSplit 摘要, 结果是 legacy 解析的终态(此处 sidecar
+    // 在 -> parsed), 绝不是页数超限式失败。
+    expect(res.batchSplit).toBeUndefined();
+    expect(res.parseStatus).toBe('parsed');
+    expect(res.reason).toBeUndefined();
   });
 
   it('文字层 PDF 不参与拆分(digital 路径行为不变)', async () => {

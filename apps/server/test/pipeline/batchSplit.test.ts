@@ -6,6 +6,7 @@ import {
   pngNonWhiteRatio,
   buildUnitDetectPrompt,
   detectDocumentUnits,
+  BatchSplitPageLimitError,
   BLANK_NON_WHITE_RATIO,
   BBOX_PADDING,
   type DetectUnitsDeps,
@@ -199,10 +200,18 @@ describe('detectDocumentUnits', () => {
     expect(res.units).toHaveLength(1);
   });
 
-  it('页数超过上限直接抛错(由灰度入口回落旧路径)', async () => {
+  it('页数超过上限抛 BatchSplitPageLimitError(灰度入口显式失败, 不回落)', async () => {
     const pages = [contentPage(1), contentPage(2)];
     const deps: DetectUnitsDeps = { renderPages: async () => pages, call: async () => pageJson([]) };
-    await expect(detectDocumentUnits({ sourcePath: 'x.pdf', maxPages: 1 }, deps)).rejects.toThrow(/上限/);
+    const err = await detectDocumentUnits({ sourcePath: 'x.pdf', maxPages: 1 }, deps).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(BatchSplitPageLimitError);
+    const limit = err as BatchSplitPageLimitError;
+    expect(limit.pages).toBe(2);
+    expect(limit.maxPages).toBe(1);
+    expect(limit.message).toMatch(/上限/);
   });
 
   it('padding 不越界: 边缘 bbox 截断在 [0,1]', async () => {

@@ -91,6 +91,22 @@ export interface DetectDocumentUnitsResult {
   pages: PageInventory[];
 }
 
+/**
+ * 页数超过 BATCH_SPLIT_MAX_PAGES 的可判型错误。灰度入口(processDocumentWithBatch)
+ * 据此把超限从"静默回落整本 legacy"区分为显式失败(其余检测失败仍回落, 永不
+ * 劣于现状原则不变)。携带实际页数与配置上限, 供失败 reason 使用真实值。
+ */
+export class BatchSplitPageLimitError extends Error {
+  readonly pages: number;
+  readonly maxPages: number;
+  constructor(pages: number, maxPages: number) {
+    super(`页数 ${pages} 超过批量拆分上限 ${maxPages}, 跳过拆分`);
+    this.name = 'BatchSplitPageLimitError';
+    this.pages = pages;
+    this.maxPages = maxPages;
+  }
+}
+
 /** 可注入依赖(测试用固定页图 + fake VLM)。 */
 export interface DetectUnitsDeps {
   renderPages?: (sourcePath: string) => Promise<RenderedPage[]>;
@@ -460,7 +476,8 @@ function mergeUnits(pages: PageDetection[]): DetectedUnit[] {
 
 /**
  * 检测一个 PDF 的全部逻辑单据。逐页 150 DPI 渲染 → 空白预判 → VLM 清点,
- * 按页并发(默认 4)。渲染失败/超页数上限直接抛错——由灰度入口决定回落旧路径。
+ * 按页并发(默认 4)。超页数上限抛 BatchSplitPageLimitError(灰度入口显式失败);
+ * 渲染失败/清点异常抛普通错误(灰度入口回落旧路径, 永不劣于现状)。
  */
 export async function detectDocumentUnits(
   input: { sourcePath: string; maxPages?: number },
@@ -470,7 +487,7 @@ export async function detectDocumentUnits(
   const pages = await render(input.sourcePath);
   const maxPages = input.maxPages ?? Number.POSITIVE_INFINITY;
   if (pages.length > maxPages) {
-    throw new Error(`页数 ${pages.length} 超过批量拆分上限 ${maxPages}, 跳过拆分`);
+    throw new BatchSplitPageLimitError(pages.length, maxPages);
   }
   const t0 = performance.now();
   const detections = await mapWithConcurrency(pages, deps.concurrency ?? 4, (p) => detectPage(p, deps));
