@@ -62,6 +62,17 @@ export function usePageFileDrop(opts: { onDropFiles: (dt: DataTransfer) => void 
       onDropFilesRef.current(dt);
     };
 
+    // 遮罩归零兜底（2026-09-02 修复「拖到文件夹松手后遮罩不消失」）:
+    // 文件夹行/子级容器的 drop 处理器会 stopPropagation —— React 合成事件的
+    // stopPropagation 会在 React 根容器委托处截停原生事件, 冒泡到 window 的
+    // drop 永远不触发, depthRef 遗留 >0、遮罩卡死。捕获阶段监听先于任何
+    // 目标处理器执行、不依赖事件能否冒泡: 任何携带 OS 文件的落点都先归零
+    // 遮罩; 后续冒泡 handler 的「无人认领才上传」语义不变(归零幂等)。
+    const handleDropCapture = (e: DragEvent) => {
+      if (!carriesOsFiles(e.dataTransfer)) return;
+      reset();
+    };
+
     // 拖拽被 Esc 取消等边缘场景兜底归零（dragend 不冒泡，走捕获监听）。
     const handleDragEnd = () => reset();
 
@@ -69,12 +80,14 @@ export function usePageFileDrop(opts: { onDropFiles: (dt: DataTransfer) => void 
     window.addEventListener('dragover', handleDragOver);
     window.addEventListener('dragleave', handleDragLeave);
     window.addEventListener('drop', handleDrop);
+    window.addEventListener('drop', handleDropCapture, true);
     window.addEventListener('dragend', handleDragEnd, true);
     return () => {
       window.removeEventListener('dragenter', handleDragEnter);
       window.removeEventListener('dragover', handleDragOver);
       window.removeEventListener('dragleave', handleDragLeave);
       window.removeEventListener('drop', handleDrop);
+      window.removeEventListener('drop', handleDropCapture, true);
       window.removeEventListener('dragend', handleDragEnd, true);
     };
   }, []);
