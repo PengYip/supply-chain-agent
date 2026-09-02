@@ -15,6 +15,7 @@ import { PDFDocument, rgb } from 'pdf-lib';
 import { createDb, migrate } from '../../src/pipeline/db/client.js';
 import { env } from '../../src/env.js';
 import { processDocument, type VlmDeps } from '../../src/pipeline/tools/documentEntry.js';
+import type { VlmResult } from '../../src/pipeline/vlmAdapter.js';
 import { createDocumentStub, listTemplateTypes } from '../../src/pipeline/db/repositories.js';
 import { ensureTemplateSeed } from '../../src/pipeline/templateSeed.js';
 
@@ -67,6 +68,8 @@ function seedMineruFixture(pdfPath: string): void {
 interface FakeOverrides {
   classifyResult?: { formType: string; confidence: number };
   classifyError?: string;
+  /** Direct throw object (e.g. error carrying statusCode/responseBody) for classification tests. */
+  classifyErrorObj?: unknown;
   extractOne?: (image: { buffer: Buffer }, docType: string) => Promise<{ fields: Record<string, unknown> }>;
   extractTyped?: (images: unknown[], docType: string) => Promise<{ fields: Record<string, unknown>; 字段置信度: Record<string, number> }>;
 }
@@ -81,6 +84,7 @@ function fakeVlm(ov: FakeOverrides): VlmDeps & { classifyCalls: number; extractO
     },
     classify: async (input: { formTypes: string[] }) => {
       self.classifyCalls += 1;
+      if (ov.classifyErrorObj) throw ov.classifyErrorObj;
       if (ov.classifyError) throw new Error(ov.classifyError);
       return ov.classifyResult ?? { formType: '其他', confidence: 0 };
     },
@@ -186,6 +190,32 @@ describe('processDocument PDF VLM 门控路由', () => {
     const res = await processDocument(ctx, docId, { vlm });
     expect(res.parseStatus).toBe('parsed');
     expect(vlm.extractOneCalls).toBe(0);
+  });
+
+  it('分类抛错(内容安全拦截体) -> 分类告警含拦截标签后仍回落 OCR(行为不变)', async () => {
+    seedMineruFixture(twoPagePdf);
+    const { docId } = await createDocumentStub(ctx, { sourceUri: twoPagePdf, filename: 'blocked.pdf' });
+    // 模拟 vlmCall 的真实抛错形态: 百炼 DataInspectionFailed(绿网拦截)。
+    const blockedErr = Object.assign(new Error('VLM /chat/completions 失败 (400 Bad Request)'), {
+      statusCode: 400,
+      responseBody: JSON.stringify({
+        error: { code: 'DataInspectionFailed', message: 'Output data contains inappropriate content' },
+      }),
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const vlm = fakeVlm({ classifyErrorObj: blockedErr, extractOne: async () => ({ fields: {} }) });
+      const res = await processDocument(ctx, docId, { vlm });
+      // 回落行为不变: OCR 路径 parsed, 不进凭证提取。
+      expect(res.parseStatus).toBe('parsed');
+      expect(vlm.extractOneCalls).toBe(0);
+      // 新增: 分类告警行含短标签与回落去向。
+      const line = warnSpy.mock.calls.map((c) => c.map(String).join(' ')).find((l) => l.includes('[perf-route]'));
+      expect(line).toContain('内容安全拦截');
+      expect(line).toContain('回落 OCR');
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('凭证提取全页失败 -> 回落 OCR(route correction)', async () => {

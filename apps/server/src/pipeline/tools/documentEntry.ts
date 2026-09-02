@@ -54,6 +54,7 @@ import { deriveAutoTags } from '../tagging.js';
 import { chunkBlockModel } from '../chunking.js';
 import { linkDocumentToContract } from '../../data/seed.js';
 import { tagExternal, assertWithinRoot } from '../../harness/injectionDefense.js';
+import { classifyProviderError } from '../../harness/providerErrors.js';
 import { isVectorizableDocType, SKIP_REASON_NOT_VECTORIZABLE } from '../vectorPolicy.js';
 import type { Embedder } from '../embedder.js';
 import { isVecReady, saveChunkVectors } from '../db/vecStore.js';
@@ -450,7 +451,14 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
             consensus: compareReadings(unitVoucher.detection, ex.result.fields),
           });
         } catch (e) {
-          failures.push(`rot=[${cand.rotations.join('/')}] ${e instanceof Error ? e.message : String(e)}`);
+          const reason = e instanceof Error ? e.message : String(e);
+          // 分类可见性(2026-09-02): 供应商级失败(欠费/限流/内容安全拦截等)
+          // 逐候选告警; 失败仍只进 failures 汇总, 择优/报错行为不变。
+          const cls = classifyProviderError(e);
+          if (cls.code) {
+            console.warn(`[batch-split] unit 凭证候选提取失败(${cls.shortLabel}): rot=[${cand.rotations.join('/')}] ${reason}`);
+          }
+          failures.push(`rot=[${cand.rotations.join('/')}] ${reason}`);
         }
       }
       if (attempts.length === 0) {
@@ -1175,7 +1183,15 @@ async function tryVoucherRouteForPdf(
       classificationSource: v.classificationSource, tags: v.tags, vectorization: v.vectorization,
     };
   } catch (e) {
-    console.warn('[perf-route] VLM 凭证路由失败, 回落 OCR:', (e as Error).message);
+    // 分类可见性(2026-09-02): 命中供应商错误表时给出短标签(欠费/限流/内容安全
+    // 拦截等), 回落行为不变(仍回落 OCR, 永不劣于现状)。
+    const msg = (e as Error).message;
+    const cls = classifyProviderError(e);
+    if (cls.code) {
+      console.warn(`[perf-route] VLM 调用失败(${cls.shortLabel}), 回落 OCR: ${msg}`);
+    } else {
+      console.warn('[perf-route] VLM 凭证路由失败, 回落 OCR:', msg);
+    }
     return null;
   }
 }
@@ -1751,7 +1767,16 @@ export async function processDocumentWithBatch(
       await setDocumentParseStatus(ctx, docId, 'failed', opts.userId).catch(() => {});
       return { docId, parseStatus: 'failed' as const, reason };
     }
-    console.warn('[batch-split] 检测失败, 回落旧路径:', e instanceof Error ? e.message : e);
+    // 可见性(2026-09-02 双供应商分类): VLM 失败此前只有笼统一条 warn, 百炼
+    // 欠费/限流/内容安全拦截等运维相关原因不可见。分类命中时给出短标签;
+    // 回落行为本身不变(仍走旧路径, 永不劣于现状)。
+    const msg = e instanceof Error ? e.message : String(e);
+    const cls = classifyProviderError(e);
+    if (cls.code) {
+      console.warn(`[batch-split] ${docId} VLM 调用失败(${cls.shortLabel}), 回落整本解析: ${msg}`);
+    } else {
+      console.warn('[batch-split] 检测失败, 回落旧路径:', msg);
+    }
     return processDocument(ctx, docId, opts);
   }
 

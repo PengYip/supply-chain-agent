@@ -40,6 +40,7 @@ import { runExtractionBackfill } from './pipeline/extractionBackfill.js';
 import { getDriver, closeNeo4j } from './graph/neo4j.js';
 import { listToolNames, type Role } from './harness/roleToolRegistry.js';
 import { resetBusyOnStartup } from './harness/sessionStore.js';
+import { fetchDeepseekBalance, formatDeepseekBalance } from './harness/deepseekBalance.js';
 import { auth } from './lib/auth.js';
 import {
   attachSession,
@@ -252,6 +253,17 @@ process.on('SIGINT', async () => { await closeNeo4j(); });
   } catch (e) {
     console.error('[boot] resetBusyOnStartup failed:', e instanceof Error ? e.message : e);
   }
+  // DeepSeek 余额探测(2026-09-02 双供应商错误分类配套): 仅 DeepSeek base URL
+  // 时探测 /user/balance; 非 200(含 CI dummy key 的 401)/超时/非 DeepSeek 一律
+  // 静默跳过。fire-and-forget(5s 超时不阻塞启动); is_available=false 显著告警。
+  void fetchDeepseekBalance()
+    .then((b) => {
+      if (!b) return;
+      const line = `[boot] deepseek 余额: ${formatDeepseekBalance(b)}`;
+      if (b.available) console.log(line);
+      else console.warn(`${line} —— 聊天模型调用将失败(402), 请尽快充值`);
+    })
+    .catch(() => {});
   // 接线闭环: 启动抽取回填(不 await, 不阻塞启动)。重新跑历史上抽取
   // pending/skipped/failed/NULL 的已解析文档, 把合同台账回填齐。失败只记日志。
   void runExtractionBackfill({

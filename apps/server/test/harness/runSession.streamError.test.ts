@@ -20,13 +20,21 @@ import { fakeStreamingModel } from '../fakeLanguageModel.js';
 //   4. happy turns are unchanged (no fallback, audit status 'ok');
 //   5. aborted runs keep today's skip semantics (no fallback, no error audit).
 
-const { ctxHolder } = vi.hoisted(() => ({
+const { ctxHolder, fetchDeepseekBalanceMock } = vi.hoisted(() => ({
   ctxHolder: { current: null as DbContext | null },
+  // DeepSeek balance re-check is fire-and-forget on arrears-classified errors;
+  // mocked so tests never touch the network and can assert the trigger.
+  fetchDeepseekBalanceMock: vi.fn(async () => null),
 }));
 vi.mock('../../src/pipeline/db/dbBackend.js', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../../src/pipeline/db/dbBackend.js')>();
   return { ...mod, getDbContext: () => ctxHolder.current };
 });
+vi.mock('../../src/harness/deepseekBalance.js', () => ({
+  fetchDeepseekBalance: fetchDeepseekBalanceMock,
+  formatDeepseekBalance: (b: { available: boolean; currency: string | null; totalBalance: string | null }) =>
+    `可用=${b.available}${b.currency ? `, ${b.currency} 总额=${b.totalBalance ?? '?'}` : ''}`,
+}));
 
 const { runSession, describeStreamError } = await import('../../src/harness/runSession.js');
 const { createSession, loadSession } = await import('../../src/harness/sessionStore.js');
@@ -39,6 +47,7 @@ beforeEach(() => {
   ctx = createDb(':memory:');
   migrate(ctx.sqlite);
   ctxHolder.current = ctx;
+  fetchDeepseekBalanceMock.mockClear();
 });
 
 /** Fake model whose doStream throws immediately (provider call never yields a chunk). */
@@ -174,6 +183,8 @@ describe('runSession terminal stream-error handling (incident 2026-09-02)', () =
     expect(rows[0]!.error).toContain('provider_arrears');
     expect(rows[0]!.error).toContain('status=402');
     expect(rows[0]!.error).toContain('Insufficient Balance');
+    // Arrears classification triggers the fire-and-forget balance re-check.
+    expect(fetchDeepseekBalanceMock).toHaveBeenCalledTimes(1);
 
     const assistant = assistantOf(await loadSession(s.id));
     expect(assistant).toBeTruthy();
@@ -184,7 +195,7 @@ describe('runSession terminal stream-error handling (incident 2026-09-02)', () =
     expect(texts[0]!.text).not.toContain('工具调用连续失败');
   });
 
-  it('records an ERROR llm_call and persists the generic API-failure closing text on a non-arrears provider failure', async () => {
+  it('records an ERROR llm_call and persists the server-error closing text on a 500 provider failure', async () => {
     const s = await createSession('trader', 'u-err500');
     const err = new APICallError({
       message: 'Internal Server Error',
@@ -208,11 +219,15 @@ describe('runSession terminal stream-error handling (incident 2026-09-02)', () =
     expect(rows).toHaveLength(1);
     expect(rows[0]!.error).toContain('status=500');
     expect(rows[0]!.error).toContain('Internal Server Error');
+    // Non-arrears errors must NOT trigger the balance re-check.
+    expect(fetchDeepseekBalanceMock).not.toHaveBeenCalled();
 
     const assistant = assistantOf(await loadSession(s.id));
     const texts = textPartsOf(assistant);
     expect(texts).toHaveLength(1);
-    expect(texts[0]!.text).toContain('模型服务调用失败');
+    // Dual-provider table (2026-09-02): 500 classifies as provider_server, so
+    // the closing text is the specific server-error label, not the generic one.
+    expect(texts[0]!.text).toContain('服务端异常');
     expect(texts[0]!.text).not.toContain('工具调用连续失败');
   });
 

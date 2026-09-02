@@ -3,6 +3,7 @@
 // 服务端确定性聚合总净重(聚合零幻觉: 模型只对单页/单行负责)。
 import type { RenderedPage } from './pdfRender.js';
 import { extractVoucherTyped } from './vlmAdapter.js';
+import { classifyProviderError } from '../harness/providerErrors.js';
 import {
   汽运磅单行Schema,
   轨道衡行Schema,
@@ -97,6 +98,12 @@ export async function extractWeightDoc(
       } catch (e) {
         if (attempt === 0) continue;
         const reason = e instanceof Error ? e.message : String(e);
+        // 分类可见性(2026-09-02 双供应商错误分类): 供应商级失败(欠费/限流/
+        // 内容安全拦截等)逐页告警。页仍照常记入 failedPages, 行为不变。
+        const cls = classifyProviderError(e);
+        if (cls.code) {
+          console.warn(`[voucher] 重量凭证第 ${p.page} 页 VLM 调用失败(${cls.shortLabel}), 记为失败页: ${reason}`);
+        }
         warnings.push(`页 ${p.page} 提取失败: ${reason}`);
         return { page: p.page, fields: null };
       }

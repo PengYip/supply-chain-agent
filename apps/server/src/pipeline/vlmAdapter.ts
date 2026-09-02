@@ -12,6 +12,7 @@
 import { env } from '../env.js';
 import type { VoucherType } from './schemas/vouchers.js';
 import { VOUCHER_PAGE_PROMPTS, VOUCHER_DOC_PROMPTS } from './schemas/vouchers.js';
+import { throwVlmHttpError } from './vlmClassifier.js';
 
 export interface VlmResult {
   voucherType: VoucherType;
@@ -146,9 +147,7 @@ export async function extractVoucher(
       }),
       signal: AbortSignal.timeout(env.VLM_TIMEOUT_MS),
     });
-    if (!res.ok) {
-      throw new Error(`VLM /chat/completions 失败 (${res.status} ${res.statusText})`);
-    }
+    if (!res.ok) await throwVlmHttpError(res);
     const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
     const content = data.choices?.[0]?.message?.content;
     if (!content) throw new Error('VLM 返回空内容');
@@ -221,16 +220,14 @@ async function typedVlmFetch(prompt: string, images: TypedImage[]): Promise<stri
       ],
       response_format: { type: 'json_object' },
     }),
-    signal: AbortSignal.timeout(env.VLM_TIMEOUT_MS),
-  });
-  if (!res.ok) {
-    throw new Error(`VLM /chat/completions 失败 (${res.status} ${res.statusText})`);
+      signal: AbortSignal.timeout(env.VLM_TIMEOUT_MS),
+    });
+    if (!res.ok) await throwVlmHttpError(res);
+    const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) throw new Error('VLM 返回空内容');
+    return content;
   }
-  const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) throw new Error('VLM 返回空内容');
-  return content;
-}
 
 /** 容忍输出形状差异: 取 fields 对象与 字段置信度(缺省空对象, 不硬失败)。 */
 function normalizeTypedResult(parsed: unknown): TypedVlmResult {

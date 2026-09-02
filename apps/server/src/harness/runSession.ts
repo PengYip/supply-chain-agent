@@ -31,6 +31,7 @@ import { generateSessionTitle, getTitleModel } from './titleGen.js';
 import { maybeCompactHistory } from './historyCompaction.js';
 import { recordLlmCall } from './usageAudit.js';
 import { classifyProviderError } from './providerErrors.js';
+import { fetchDeepseekBalance, formatDeepseekBalance } from './deepseekBalance.js';
 import { env } from '../env.js';
 import type { Role } from './roleToolRegistry.js';
 
@@ -145,6 +146,20 @@ export async function runSession(opts: RunSessionOpts): Promise<void> {
   // the failure was previously invisible -- no audit row, no log line).
   const logStreamError = (errorText: string) => {
     console.error(JSON.stringify({ event: 'chat_stream_error', sessionId, error: errorText }));
+  };
+  // Arrears follow-up (dual-provider work 2026-09-02): when the failed turn
+  // classifies as provider_arrears, fire-and-forget a DeepSeek balance
+  // re-check so pm2 logs show the actual balance next to the error diagnostic.
+  // Fault-isolated: fetchDeepseekBalance never throws (resolves null on any
+  // skip condition) and the .catch swallows the rest. Never blocks the run.
+  const recheckBalanceIfArrears = (raw: unknown) => {
+    if (classifyProviderError(raw).code !== 'provider_arrears') return;
+    void fetchDeepseekBalance()
+      .then((b) => {
+        if (!b) return;
+        console.error(`[runSession] DeepSeek 余额复查: ${formatDeepseekBalance(b)} (sessionId=${sessionId})`);
+      })
+      .catch(() => {});
   };
 
   // Raw error of the terminal stream failure, captured via runStream's
@@ -309,6 +324,7 @@ export async function runSession(opts: RunSessionOpts): Promise<void> {
         streamFailed = true;
         auditStreamError(part.errorText);
         logStreamError(part.errorText);
+        recheckBalanceIfArrears(streamError);
       }
       // await emit: the store persist is async on both backends; awaiting keeps
       // per-session seq assignment + SSE forwarding in stream order.
@@ -324,6 +340,7 @@ export async function runSession(opts: RunSessionOpts): Promise<void> {
       const errorText = describeStreamError(err);
       auditStreamError(errorText);
       logStreamError(errorText);
+      recheckBalanceIfArrears(err);
     }
     throw err;
   }

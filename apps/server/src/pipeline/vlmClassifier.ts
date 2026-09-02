@@ -10,6 +10,24 @@ export interface ClassifyPage {
 
 export type VlmCall = (prompt: string, page: ClassifyPage) => Promise<string>;
 
+/**
+ * 非 2xx 响应 -> 抛错(行为与原 `new Error(...)` 一致: 同一消息文本、同一抛错
+ * 时机), 但把 statusCode 与 responseBody 挂到错误对象上。responseBody 是百炼
+ * OpenAI 兼容错误({"error":{code,message}})的唯一载体 —— 上层
+ * classifyProviderError 依赖它做欠费/限流/内容安全等分类告警。
+ */
+export async function throwVlmHttpError(res: Response): Promise<never> {
+  let responseBody: string | undefined;
+  try {
+    responseBody = await res.text();
+  } catch {
+    // body 不可读时保持 undefined, 分类退化为仅状态码匹配。
+  }
+  const err = new Error(`VLM /chat/completions 失败 (${res.status} ${res.statusText})`);
+  Object.assign(err, { statusCode: res.status, responseBody });
+  throw err;
+}
+
 export async function vlmCall(prompt: string, page: ClassifyPage): Promise<string> {
   if (!env.VLM_BASE_URL || !env.VLM_API_KEY) throw new Error('VLM 未配置，无法分类');
   const url = `${env.VLM_BASE_URL.replace(/\/+$/, '')}/chat/completions`;
@@ -31,7 +49,7 @@ export async function vlmCall(prompt: string, page: ClassifyPage): Promise<strin
     }),
     signal: AbortSignal.timeout(env.VLM_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`VLM /chat/completions 失败 (${res.status} ${res.statusText})`);
+  if (!res.ok) await throwVlmHttpError(res);
   const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
   const content = data.choices?.[0]?.message?.content;
   if (!content) throw new Error('VLM 返回空内容');

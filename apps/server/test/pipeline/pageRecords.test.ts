@@ -72,6 +72,35 @@ describe('extractWeightDoc: 汽运磅单(一页一车)', () => {
     expect(r.fields['总净重_吨']).toBe(32.5);
   });
 
+  it('页失败(百炼限流体) -> 分类告警含限流标签, 页照常记为失败页(行为不变)', async () => {
+    // 模拟 typedVlmFetch 的真实抛错形态: 429 + 百炼 Throttling.RateQuota 体。
+    const rateErr = Object.assign(new Error('VLM /chat/completions 失败 (429 Too Many Requests)'), {
+      statusCode: 429,
+      responseBody: JSON.stringify({ error: { code: 'Throttling.RateQuota', message: '请求速率过快' } }),
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const r = await extractWeightDoc([page(1), page(2)], '汽运磅单', {
+        extractOne: async (img: { buffer: Buffer }) => {
+          if (img.buffer[0] === 1) {
+            return { fields: { 编号: 'ERP1', 车号: '渝DD5739', 毛重_吨: 48.82, 皮重_吨: 16.18, 净重_吨: 32.64 } };
+          }
+          throw rateErr;
+        },
+      });
+      // 行为不变: 失败页照常记录, 好页照常聚合。
+      expect(r.failedPages).toEqual([2]);
+      expect(r.okPages).toEqual([1]);
+      expect(r.warnings.some((w) => w.includes('页 2'))).toBe(true);
+      // 新增: 分类告警行含短标签与页码。
+      const line = warnSpy.mock.calls.map((c) => c.map(String).join(' ')).find((l) => l.includes('[voucher]'));
+      expect(line).toContain('限流');
+      expect(line).toContain('第 2 页');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('全部页失败 -> 抛错', async () => {
     const extractOne = vi.fn().mockRejectedValue(new Error('VLM down'));
     await expect(extractWeightDoc([page(1), page(2)], '汽运磅单', { extractOne })).rejects.toThrow('全部页面提取失败');

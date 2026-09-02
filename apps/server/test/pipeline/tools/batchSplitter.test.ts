@@ -12,7 +12,7 @@
 //
 // 夹具: pdf-lib 生成 2 页"无文字层"PDF(整页嵌入 PNG 图, 上半黑), MinerU
 // hermetic sidecar 提供逐页 OCR 块; VLM 清点走注入的 fake。
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PDFDocument } from 'pdf-lib';
@@ -644,6 +644,46 @@ describe('processDocumentWithBatch (灰度入口)', () => {
     expect(res.batchSplit).toBeUndefined();
     expect(res.parseStatus).toBe('parsed');
     expect(res.reason).toBeUndefined();
+  });
+
+  it('检测失败(百炼欠费体) -> 分类告警含欠费标签后仍回落整本 legacy(行为不变)', async () => {
+    const pdfPath = join(dir, 'vlm-arrears.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A CONTRACT HT-001', 'REPORT-B CONTRACT HT-002']);
+    const docId = await stubFor(pdfPath);
+
+    // 模拟 vlmCall/typedVlmFetch 的真实抛错形态: 消息 + statusCode + responseBody
+    // (百炼 OpenAI 兼容错误体)。分类表据此给出 欠费 短标签。
+    const arrearsErr = Object.assign(new Error('VLM /chat/completions 失败 (403 Forbidden)'), {
+      statusCode: 403,
+      responseBody: JSON.stringify({ error: { code: 'Arrearage', message: '账户已欠费' } }),
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const res = await ensureDocumentParsed(ctx, docId, {
+        modality: 'scanned',
+        userId: 'u1',
+        vlm: {
+          extract: async () => {
+            throw new Error('voucher extract not expected');
+          },
+          detectUnits: async () => {
+            throw arrearsErr;
+          },
+        },
+      });
+
+      // 回落行为不变(同上一个用例): legacy 解析终态, 无 batchSplit 摘要。
+      expect(res.batchSplit).toBeUndefined();
+      expect(res.parseStatus).toBe('parsed');
+      expect(res.reason).toBeUndefined();
+      // 新增: 分类告警行含短标签与回落去向。
+      const line = warnSpy.mock.calls.map((c) => c.map(String).join(' ')).find((l) => l.includes('[batch-split]'));
+      expect(line).toContain('欠费');
+      expect(line).toContain('回落整本解析');
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('文字层 PDF 不参与拆分(digital 路径行为不变)', async () => {
