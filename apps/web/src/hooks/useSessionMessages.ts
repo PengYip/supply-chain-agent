@@ -279,5 +279,29 @@ export function useSessionMessages(
     [sessionId],
   )
 
-  return { messages, status: status as SessionStatus, error, sendMessage, setMessages }
+  /** 请求服务端中止当前后台运行（POST /api/sessions/:id/abort）。运行由
+   *  服务端 runManager 持有 —— POST /api/chat 立即返回 runId、token 经 SSE
+   *  推送，客户端断开不会停止生成，因此「停止」的唯一正确途径就是该端点
+   *  （abortSessionRun 触发 run 的 AbortSignal，AI SDK 把中止传播到模型流
+   *  与工具调用）。中止后经 SSE run.aborted / session.status=idle 事件回流，
+   *  界面自然回到空闲（onRunAborted 已做 pipeline 收尾与快照重同步）。
+   *  返回 aborted 布尔：false = 会话无进行中的运行或请求失败（调用方据此
+   *  复位按钮态）；对无运行的会话调用是幂等的（服务端返回 aborted=false）。 */
+  const stopRun = useCallback(async (): Promise<boolean> => {
+    const sid = sessionId ?? lastSidRef.current
+    if (!sid) return false
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/abort`, {
+        method: 'POST',
+        credentials: 'include',
+      })
+      if (!res.ok) return false
+      const j = (await res.json().catch(() => null)) as { aborted?: boolean } | null
+      return j?.aborted === true
+    } catch {
+      return false
+    }
+  }, [sessionId])
+
+  return { messages, status: status as SessionStatus, error, sendMessage, stopRun, setMessages }
 }

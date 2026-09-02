@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react'
 import { useSessionMessages } from '../hooks/useSessionMessages'
-import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, Paperclip, Check, Star, ArrowDown } from 'lucide-react'
+import { Send, Sparkles, ShieldCheck, Loader2, AlertCircle, Paperclip, Check, Star, ArrowDown, Square } from 'lucide-react'
 import { getFavorite, setFavorite, clearFavorite, type FavoriteProbe } from '../api/favorites'
 import { RealMessageItem, ErrorMessage, ArrearsNotice } from './RealMessageItem'
 import AutoGrowTextarea from './AutoGrowTextarea'
@@ -367,12 +367,28 @@ export const RealChatView: React.FC<{
   const contextFilesRef = useRef(contextFiles)
   useEffect(() => { contextFilesRef.current = contextFiles }, [contextFiles])
 
-  const { messages, status, error, sendMessage } = useSessionMessages(sessionId ?? null, {
+  const { messages, status, error, sendMessage, stopRun } = useSessionMessages(sessionId ?? null, {
     onSessionCreated: (id) => onSessionCreated?.(id),
   })
   const liveSessionId = sessionId ?? null
   const isBusy = status === 'busy'
   const isStreaming = isBusy
+
+  // -- 停止生成（2026-09-02）: 生成中发送按钮变形为「停止」。停止是对
+  //    服务端后台运行发 abort（见 useSessionMessages.stopRun 的接线说明），
+  //    成功后 SSE 推 run.aborted + status=idle，界面自然回空闲。stopping
+  //    标记只在「服务端确认中止了某次运行」到「状态翻转」的窗口内锁定
+  //    按钮；abort 未命中运行/请求失败立即解锁，允许重试。 --
+  const [stopping, setStopping] = useState(false)
+  const handleStop = useCallback(async () => {
+    if (!isBusy || stopping) return
+    setStopping(true)
+    const aborted = await stopRun()
+    if (!aborted) setStopping(false)
+  }, [isBusy, stopping, stopRun])
+  useEffect(() => {
+    if (!isBusy) setStopping(false)
+  }, [isBusy])
 
   // Phase 5: refresh the sidebar when a run finishes (isBusy transitions to
   // false). Uses a ref so it only fires on the transition, not on mount.
@@ -1005,18 +1021,43 @@ export const RealChatView: React.FC<{
               maxHeight={200}
               className="flex-1 min-h-[44px] p-2.5 rounded-lg border border-line text-sm text-ink placeholder:text-ink-soft focus:outline-none focus:border-primary-500"
             />
-            <button
-              type="submit"
-              disabled={!input.trim() || isStreaming}
-              className={clsx(
-                'h-10 px-3 rounded-lg flex items-center justify-center transition-colors',
-                input.trim() && !isStreaming
-                  ? 'bg-primary text-white hover:bg-opacity-90'
-                  : 'bg-line text-ink-soft cursor-not-allowed'
-              )}
-            >
-              <Send className="w-4 h-4" />
-            </button>
+            {isStreaming ? (
+              /* 生成中: 发送按钮变形为「停止」—— 运行在服务端后台, 停止走
+                 POST /api/sessions/:id/abort(见 handleStop); type=button,
+                 不触发表单提交, Enter 发送已被 onSubmit 的 isBusy 守卫拦下。 */
+              <button
+                type="button"
+                onClick={() => void handleStop()}
+                disabled={stopping}
+                title={stopping ? '正在停止生成…' : '停止生成'}
+                className={clsx(
+                  'h-10 px-3 rounded-lg flex items-center justify-center gap-1.5 text-sm font-medium text-white transition-colors',
+                  stopping
+                    ? 'bg-danger/60 cursor-not-allowed'
+                    : 'bg-danger hover:bg-danger/90',
+                )}
+              >
+                {stopping ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                )}
+                {stopping ? '停止中' : '停止'}
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!input.trim()}
+                className={clsx(
+                  'h-10 px-3 rounded-lg flex items-center justify-center transition-colors',
+                  input.trim()
+                    ? 'bg-primary text-white hover:bg-opacity-90'
+                    : 'bg-line text-ink-soft cursor-not-allowed'
+                )}
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            )}
           </form>
           <div className="mt-2 text-[11px] text-ink-soft">
             L2 写操作（如 bind_document 绑定单据）需你确认后执行；付款/退款等资金操作不在系统内执行，需要人工处理时会生成人工工单转人工复核。
