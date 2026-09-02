@@ -14,6 +14,7 @@ import {
   Boxes,
   CheckCircle2,
   Combine,
+  Crop,
   FileStack,
   MinusCircle,
   Loader2,
@@ -29,6 +30,7 @@ import { submitReview, fetchReviewSnapshot, type ReviewCorrection } from '../api
 import { correctDocumentType, DOC_TYPE_FALLBACK, fetchActiveDocTypes } from '../api/documentType'
 import {
   BatchApiError,
+  fetchDocumentUnitPreview,
   listDocumentUnits,
   mergeUnits,
   parseBoundUnitIndexes,
@@ -410,7 +412,11 @@ const ContainerUnitRow: React.FC<{
 }> = ({ unit, mergeMode = false, selected = false, onToggleMerge }) => {
   const typeTag = businessTypeTag(unit.childDocType ?? unit.detectedFormType)
   const status = unitStatusBadge(unit.unitStatus)
-  const review = unitReviewStatusBadge(unit.reviewStatus)
+  // 复核状态缺字段(旧版 /units 响应)时: 有子单据按「待复核」兜底(安全侧),
+  // 无子单据才是真正的「未生成」。
+  const review = unitReviewStatusBadge(
+    unit.reviewStatus ?? (unit.docId ? 'pending' : null),
+  )
   const docId = unit.docId
   const clickable = mergeMode && typeof onToggleMerge === 'function'
   return (
@@ -622,9 +628,17 @@ const ContainerSplitCard: React.FC<{ docId: string; batch: BatchLineage }> = ({ 
     }
   }
 
+  // 复核进度一览(行内徽标之外的汇总答案): 已复核 = confirmed + corrected;
+  // 未生成 = 无子单据(docId null) —— 复核状态缺字段的旧响应按「待复核」
+  // 兜底(见 ContainerUnitRow), 不计入已复核也不算未生成。
+  const reviewedCount = units.filter(
+    (u) => u.reviewStatus === 'confirmed' || u.reviewStatus === 'corrected',
+  ).length
+  const ungeneratedCount = units.filter((u) => !u.docId).length
+
   return (
     <div className="rounded-lg border border-line bg-white p-3 mt-2">
-      {/* 头部： 容器图标 + 单据组标题 + 待复核计数 chip */}
+      {/* 头部： 容器图标 + 单据组标题 + 待复核计数 chip + 复核进度 */}
       <div className="flex items-start gap-2.5 mb-3">
         <div className="w-6 h-6 rounded-full border border-dashed border-[#A9BCCD] bg-[#F2F6FA] flex items-center justify-center shrink-0">
           <Boxes className="w-3.5 h-3.5 text-[#35719C]" />
@@ -644,6 +658,38 @@ const ContainerSplitCard: React.FC<{ docId: string; batch: BatchLineage }> = ({ 
           <div className="text-[11px] text-ink-soft mt-0.5">
             该文件已按单据拆分为多份子单据，请逐份复核
           </div>
+          {units.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="text-[11px] text-ink-soft">
+                已复核{' '}
+                <span
+                  className={clsx(
+                    'font-mono',
+                    reviewedCount === units.length ? 'text-success' : 'text-ink',
+                  )}
+                >
+                  {reviewedCount}
+                </span>{' '}
+                / {units.length}
+              </span>
+              <span className="h-1 w-24 overflow-hidden rounded-full bg-line" aria-hidden>
+                <span
+                  className={clsx(
+                    'block h-full rounded-full transition-all duration-500',
+                    units.length > 0 && reviewedCount === units.length ? 'bg-success' : 'bg-primary',
+                  )}
+                  style={{
+                    width: `${units.length > 0 ? Math.round((reviewedCount / units.length) * 100) : 0}%`,
+                }}
+                />
+              </span>
+              {ungeneratedCount > 0 && (
+                <span className="text-[10px] text-ink-soft">
+                  另有 {ungeneratedCount} 份未生成
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -1183,6 +1229,34 @@ export const DocumentReviewCard: React.FC<{
     }
   }
 
+  // -- 原片预览(仅 unit 子单据): 拆分器裁切+旋正后的原片区域, 字段抽取
+  //    的「地面真值」—— 复核时先看原片再核字段。挂载即拉一次
+  //    (fetchDocumentUnitPreview 任何失败返回 null), 失败静默占位、不阻断
+  //    复核; objectURL 在卸载时回收。 --
+  const [unitPreview, setUnitPreview] = useState<
+    { state: 'loading' } | { state: 'ok'; url: string } | { state: 'unavailable' }
+  >({ state: 'loading' })
+  const [unitPreviewLarge, setUnitPreviewLarge] = useState(false)
+  const isUnitDoc = batch?.role === 'unit'
+  useEffect(() => {
+    if (!isUnitDoc) return
+    let cancelled = false
+    let objectUrl: string | null = null
+    void fetchDocumentUnitPreview(payload.docId).then((blob) => {
+      if (cancelled) return
+      if (!blob) {
+        setUnitPreview({ state: 'unavailable' })
+        return
+      }
+      objectUrl = URL.createObjectURL(blob)
+      setUnitPreview({ state: 'ok', url: objectUrl })
+    })
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [isUnitDoc, payload.docId])
+
   // -- 单据组(container)变体： 整卡切「拆分清单」导航形态 --
   // container 无抽取（字段/关系/图/向量都在 unit 子单据上），业务类型固定
   // 「单据组」（跳过分类器，词表也不允许改向），标准区块与复核操作条全部
@@ -1232,6 +1306,43 @@ export const DocumentReviewCard: React.FC<{
       </div>
 
       <div className="space-y-3">
+        {/* 0. 原片预览 — 仅 unit 子单据： 拆分器裁切+旋正后的原片区域，
+            字段抽取的地面真值。置于区块最前（先看原片再核字段，同屏共见）；
+            点击放大；端点未部署/拉取失败时静默占位，不阻断复核。普通文档
+            与 container 不渲染，渲染零差异。 */}
+        {isUnitDoc && (
+          <div>
+            <SectionLabel icon={<Crop className="w-3 h-3" />}>原片预览</SectionLabel>
+            {unitPreview.state === 'loading' && (
+              <div className="flex h-40 items-center justify-center rounded border border-line/50 bg-surface/50">
+                <Loader2 className="h-4 w-4 animate-spin text-ink-soft" />
+              </div>
+            )}
+            {unitPreview.state === 'unavailable' && (
+              <div className="flex h-20 items-center justify-center rounded border border-dashed border-line/60 bg-surface/40 text-[11px] text-ink-soft">
+                原片暂不可用（不影响复核）
+              </div>
+            )}
+            {unitPreview.state === 'ok' && (
+              <button
+                type="button"
+                onClick={() => setUnitPreviewLarge(true)}
+                title="点击放大查看原片"
+                className="block w-full cursor-zoom-in overflow-hidden rounded border border-line/50 bg-surface/50 transition-colors hover:border-primary/40"
+              >
+                <img
+                  src={unitPreview.url}
+                  alt="子单据原片（拆分裁切区域）"
+                  className="mx-auto max-h-64 w-auto object-contain"
+                />
+              </button>
+            )}
+            <div className="mt-1 text-[10px] text-ink-soft">
+              拆分器裁切并旋正后的原片区域，字段抽取以此为依据
+            </div>
+          </div>
+        )}
+
         {/* 1. 业务类型 */}
         <div>
           <SectionLabel icon={<FileText className="w-3 h-3" />}>业务类型</SectionLabel>
@@ -1703,6 +1814,24 @@ export const DocumentReviewCard: React.FC<{
               拆分修正（重新抽取）
             </button>
           )}
+        </div>
+      )}
+
+      {/* 原片放大灯箱： 点击遮罩任意处关闭（含图片本身）; 不抢 Esc ——
+          宿主弹窗(ReviewModal)的 Esc 语义保持「关闭整个复核弹窗」。 */}
+      {unitPreviewLarge && unitPreview.state === 'ok' && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="原片放大预览"
+          onClick={() => setUnitPreviewLarge(false)}
+          className="fixed inset-0 z-modal flex cursor-zoom-out items-center justify-center bg-ink/80 p-6 animate-fade-in"
+        >
+          <img
+            src={unitPreview.url}
+            alt="子单据原片（放大）"
+            className="max-h-[88vh] max-w-full rounded-lg bg-white shadow-2xl"
+          />
         </div>
       )}
     </div>

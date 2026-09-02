@@ -342,7 +342,12 @@ function moveItem<T>(list: T[], fromIndex: number, toIndex: number, zone: 'above
 function UnitRow({ unit, depth }: { unit: BatchUnitSummary; depth: number }) {
   const typeTag = businessTypeTag(unit.childDocType ?? unit.detectedFormType);
   const status = unitStatusBadge(unit.unitStatus);
-  const review = unitReviewStatusBadge(unit.reviewStatus);
+  // 复核状态缺字段(旧版 /units 响应)时: 有子单据按「待复核」兜底(安全侧),
+  // 无子单据才是真正的「未生成」—— 行内复核状态徽标即进度可见性, 无需
+  // 另加圆点。
+  const review = unitReviewStatusBadge(
+    unit.reviewStatus ?? (unit.docId ? 'pending' : null),
+  );
   const canReview = typeof unit.docId === 'string' && unit.docId.length > 0;
   const openReview = () => {
     if (unit.docId) requestOpenReview(unit.docId);

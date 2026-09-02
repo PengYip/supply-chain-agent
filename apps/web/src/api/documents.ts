@@ -23,6 +23,9 @@ export interface BatchUnitSummary {
   /** 子单据落库业务类型;可与 detectedFormType 不同,未分类为 null。 */
   childDocType: string | null;
   unitStatus: UnitStatus;
+  /** 子单据复核状态；子单据未生成(docId null)时为 null。旧版 /units 响应
+   *  可能整字段缺失 —— normalizeUnit 白名单归一为 null, 调用方以 docId
+   *  区分「未生成」与「复核状态未知」。 */
   reviewStatus: UnitReviewStatus | null;
   /** 最新抽取 needs_review=1(低置信/读数分歧,P2 已强制复核)。 */
   needsReview: boolean;
@@ -197,6 +200,24 @@ export async function listDocumentUnits(
   );
   const list = Array.isArray(data?.units) ? data.units : [];
   return list.map(normalizeUnit).filter((u): u is BatchUnitSummary => u !== null);
+}
+
+/** GET /api/documents/:docId/unit-preview — unit 子单据的原片裁切图
+ *  (docId = 子单据 docId; 拆分器裁切+旋正后、抽取器实际看到的那块区域,
+ *  PNG)。任何失败(404/未部署/网络/非图片体)一律返回 null,不抛错: 原片
+ *  预览是复核辅助信息, 缺席不得阻断复核流程。 */
+export async function fetchDocumentUnitPreview(docId: string): Promise<Blob | null> {
+  try {
+    const res = await fetch(`/api/documents/${encodeURIComponent(docId)}/unit-preview`, {
+      credentials: 'include',
+    });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (blob.size === 0 || !blob.type.startsWith('image/')) return null
+    return blob;
+  } catch {
+    return null;
+  }
 }
 
 /** POST /api/batch/:docId/resplit 的成功返回。 */
