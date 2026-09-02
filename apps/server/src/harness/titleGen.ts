@@ -38,6 +38,13 @@ export async function generateSessionTitle(
       providerOptions: {
         deepseek: { thinking: { type: 'disabled' } },
       },
+      // 2026-09-02: 解析 LLM 调用接入 Langfuse 观测(Tier 1)。
+      experimental_telemetry: {
+        isEnabled: true,
+        recordInputs: true,
+        recordOutputs: true,
+        functionId: 'harness.title_gen',
+      },
     });
     recordLlmCall({
       kind: 'title',

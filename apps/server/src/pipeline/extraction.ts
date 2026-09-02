@@ -240,6 +240,14 @@ export async function extractGroundedFields(
         openai: { structuredOutputs: false },
         deepseek: { thinking: { type: 'disabled' } },
       },
+      // 2026-09-02: 解析 LLM 调用接入 Langfuse 观测(Tier 1)。
+      experimental_telemetry: {
+        isEnabled: true,
+        recordInputs: true,
+        recordOutputs: true,
+        functionId: 'pipeline.extraction',
+        metadata: { docId: input.blockModel.docId },
+      },
     });
     object = res.object;
     recordLlmCall({

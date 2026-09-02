@@ -126,6 +126,13 @@ export function makeLlmTagger(model: LanguageModel): ChunkTagger {
           openai: { structuredOutputs: false },
           deepseek: { thinking: { type: 'disabled' } },
         },
+        // 2026-09-02: 解析 LLM 调用接入 Langfuse 观测(Tier 1)。
+        experimental_telemetry: {
+          isEnabled: true,
+          recordInputs: true,
+          recordOutputs: true,
+          functionId: 'pipeline.chunk_tagging',
+        },
       });
       recordLlmCall({
         kind: 'chunk_tagging',

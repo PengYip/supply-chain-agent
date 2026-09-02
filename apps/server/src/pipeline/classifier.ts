@@ -158,6 +158,14 @@ export async function classifyDocument(
           openai: { structuredOutputs: false },
           deepseek: { thinking: { type: 'disabled' } },
         },
+        // 2026-09-02: 解析 LLM 调用接入 Langfuse 观测(Tier 1)。
+        experimental_telemetry: {
+          isEnabled: true,
+          recordInputs: true,
+          recordOutputs: true,
+          functionId: 'pipeline.classification',
+          metadata: docId ? { docId } : {},
+        },
       });
       auditClassify(coarseStart, coarse);
     } catch (e) {
@@ -198,6 +206,14 @@ export async function classifyDocument(
           providerOptions: {
             openai: { structuredOutputs: false },
             deepseek: { thinking: { type: 'disabled' } },
+          },
+          // 2026-09-02: 解析 LLM 调用接入 Langfuse 观测(Tier 1)。
+          experimental_telemetry: {
+            isEnabled: true,
+            recordInputs: true,
+            recordOutputs: true,
+            functionId: 'pipeline.classification',
+            metadata: docId ? { docId } : {},
           },
         });
         auditClassify(fineStart, fine);
