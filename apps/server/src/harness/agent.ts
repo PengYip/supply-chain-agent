@@ -263,6 +263,18 @@ export interface RunStreamOpts {
    * 用户消息自动检测。测试与上游调用方(如审批恢复)可传入以固定可见工具集。
    */
   scenario?: import('./scenarios.js').ScenarioOrAll;
+
+  /**
+   * Terminal stream-error seam (incident 2026-09-02): invoked ONCE with the
+   * RAW error when the stream ends with a terminal `{type:'error'}` fullStream
+   * part (provider call failure / stream interruption). NEVER invoked for
+   * tool errors (those are non-fatal `tool-error` parts the loop continues
+   * past). Wired to streamText's `onError` (AI SDK 6: StreamTextOnErrorCallback,
+   * called from the eventProcessor for terminal error parts only -- verified
+   * against ai@6.0.259 index.mjs:7200-7210). runSession captures the raw error
+   * here because the UI message stream only carries the FORMATTED errorText.
+   */
+  onStreamError?: (error: unknown) => void;
 }
 
 // Scan a turn's response messages for v6 tool-approval-request parts (emitted
@@ -358,7 +370,7 @@ export async function buildAgentStatusSnapshot({
 // to pre-H1 behavior. When supplied (tests), no provider client is constructed and
 // no network/env is required, so the agent loop can be exercised offline against
 // a canned fake model + in-memory DbContext.
-export async function runStream({ messages, role, auditTraceId, model, deps, userId, sessionId, abortSignal, skipStatusMessage, scenario: scenarioOverride }: RunStreamOpts) {
+export async function runStream({ messages, role, auditTraceId, model, deps, userId, sessionId, abortSignal, skipStatusMessage, scenario: scenarioOverride, onStreamError }: RunStreamOpts) {
   // Production default: real DeepSeek model. If a model was injected, skip
   // building the provider client so tests need no API key / network.
   //
@@ -476,6 +488,20 @@ export async function runStream({ messages, role, auditTraceId, model, deps, use
     // Background-runtime seam: forwarded so RunManager can cancel a background
     // run via its AbortController (AI SDK 6 option name: abortSignal).
     ...(abortSignal ? { abortSignal } : {}),
+    // Terminal stream-error seam: forward the RAW error to the caller
+    // (runSession audits + classifies it). Trivially wrapped so a throwing
+    // callback cannot break the stream pipeline.
+    ...(onStreamError
+      ? {
+          onError: ({ error }: { error: unknown }) => {
+            try {
+              onStreamError(error);
+            } catch {
+              // the seam must never break the stream
+            }
+          },
+        }
+      : {}),
     // Phase 6 T3: experimental_onToolCallFinish was REMOVED. After T3,
     // withAudit catches all throws and records the success/fail signal directly
     // into `failures` (certain knowledge from its try/catch + result shape). The
