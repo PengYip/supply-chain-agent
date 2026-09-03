@@ -92,6 +92,28 @@ describe('tool-context contract registry', () => {
 });
 
 describe('contract injection-exposure mapping (integration point 1)', () => {
+  it('keeps evidence-bearing tool outputs untruncated for the model', () => {
+    // These tools return the business evidence the model reasons over (lists,
+    // extracted values, source snippets, settlement evidence, calculation
+    // output). Their budgets must be full: generic key-field compression can
+    // turn a non-empty result into an unreadable `{_summarized:true}` handle.
+    const evidenceTools = [
+      'query_orders',
+      'verify_document_fields',
+      'extract_fields',
+      'inspect_extraction',
+      'execute_code',
+      'graph_find_entity',
+      'present_document_review',
+      'list_binding_proposals',
+      'gather_settlement_evidence',
+      'recall_documents',
+    ] as const;
+    for (const name of evidenceTools) {
+      expect(getContract(name).budget, `${name} must not be summary-compressed`).toBe('full');
+    }
+  });
+
   it('marks tools that RETURN external-derived content as output tagged', () => {
     // extract_fields + verify_document_fields return field/OCR strings derived
     // from uploaded documents, and recall_documents returns BM25 snippets of

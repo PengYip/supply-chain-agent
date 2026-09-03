@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
-import { Loader2 } from 'lucide-react';
+import { Keyboard, ListFilter, Loader2 } from 'lucide-react';
 import type { OverviewDoc } from '../../hooks/useBindings';
 import type { TemplateContext, TemplateContractRef } from '../../api/templateContext';
 import {
   buildProjectOptions, deriveRelation, contractDisableReason, filterContracts, needsFilter,
+  validateManualContractNo,
 } from '../../lib/bindingFormModel';
 
 interface TemplateBindingFormProps {
@@ -44,11 +45,16 @@ export function TemplateBindingForm({
   const [listOpen, setListOpen] = useState(false);
   const [filterText, setFilterText] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
+  // 自定义编号入口: 台账/模板下拉只能选已有编号; 漂浮合同文件可能尚未解析出
+  // 合同号, 因此合同文件允许手工建一个新合同编号(执行类单据仍受台账门禁)。
+  const [manualInputOpen, setManualInputOpen] = useState(false);
+  const [manualContractNo, setManualContractNo] = useState('');
   const rootRef = useRef<HTMLDivElement>(null);
 
   const projectOptions = useMemo(() => buildProjectOptions(context), [context]);
   const currentProject = projectOptions.find((o) => o.key === selectedProjectKey);
   const contracts = useMemo(() => currentProject?.contracts ?? [], [currentProject]);
+  const activeContractNo = manualContractNo.trim() || selectedContract;
   const showFilter = needsFilter(contracts);
   const filtered = useMemo(
     () => (showFilter ? filterContracts(contracts, filterText) : contracts),
@@ -80,6 +86,8 @@ export function TemplateBindingForm({
   const chooseContract = (c: TemplateContractRef) => {
     if (disableReason(c)) return; // 禁用行 Enter 拦截
     setSelectedContract(c.contractNo);
+    setManualContractNo('');
+    setManualInputOpen(false);
     setListOpen(false);
   };
 
@@ -98,7 +106,7 @@ export function TemplateBindingForm({
     } else if (e.key === 'ArrowUp' && filtered.length > 0) {
       e.preventDefault();
       setActiveIndex((i) => (i - 1 + filtered.length) % filtered.length);
-    } else if (e.key === 'Enter' && listOpen && filtered[activeIndex]) {
+    } else if (e.key === 'Enter' && listOpen && !manualInputOpen && filtered[activeIndex]) {
       e.preventDefault();
       chooseContract(filtered[activeIndex]!);
     } else if (e.key === 'Escape') {
@@ -115,6 +123,8 @@ export function TemplateBindingForm({
     setFormError(null);
     setFilterText('');
     setListOpen(false);
+    setManualInputOpen(false);
+    setManualContractNo('');
   };
 
   // 切文档时重置全部选择态(QA #8: 不残留旧文档的项目/合同/方向)。
@@ -127,6 +137,8 @@ export function TemplateBindingForm({
     setFormError(null);
     setFilterText('');
     setListOpen(false);
+    setManualInputOpen(false);
+    setManualContractNo('');
   }, [context.documentId]);
 
   const submit = async () => {
@@ -143,13 +155,23 @@ export function TemplateBindingForm({
       }
       return;
     }
-    if (!selectedProjectKey) {
+    if (!activeContractNo && !selectedProjectKey) {
       setFormError('请选择项目');
       return;
     }
-    if (!selectedContract) {
+    if (!activeContractNo) {
       setFormError('请选择合同');
       return;
+    }
+    if (manualInputOpen) {
+      const manual = validateManualContractNo(manualContractNo, {
+        isExecutionDoc,
+        inLedger: establishedContracts.has(manualContractNo.trim()),
+      });
+      if (manual.error) {
+        setFormError(manual.error);
+        return;
+      }
     }
     if (relation.needsChoice && !chosenWord) {
       setFormError('请选择绑定方向');
@@ -157,7 +179,7 @@ export function TemplateBindingForm({
     }
     const word = relation.needsChoice ? chosenWord : relation.word;
     setFormError(null);
-    const ok = await onSubmit({ contractNo: selectedContract, relation: word, note: note.trim() || undefined });
+    const ok = await onSubmit({ contractNo: activeContractNo, relation: word, note: note.trim() || undefined });
     if (ok) {
       resetForm();
       onCancel();
@@ -215,6 +237,8 @@ export function TemplateBindingForm({
               onChange={(e) => {
                 setSelectedProjectKey(e.target.value);
                 setSelectedContract('');
+                setManualContractNo('');
+                setManualInputOpen(false);
                 setFilterText('');
                 setListOpen(false);
               }}
@@ -232,66 +256,110 @@ export function TemplateBindingForm({
           {/* ② 合同(过滤框 + listbox 向上展开, §0.3) */}
           <div ref={rootRef}>
             <label className="text-[11px] font-medium text-ink-soft">② 合同</label>
-            {showFilter && (
+            {manualInputOpen ? (
               <input
                 type="text"
-                value={filterText}
-                onChange={(e) => setFilterText(e.target.value)}
-                onKeyDown={onKeyDown}
-                onFocus={() => setListOpen(true)}
-                placeholder="过滤合同号"
-                aria-label="过滤合同"
+                value={manualContractNo}
+                onChange={(e) => {
+                  setManualContractNo(e.target.value);
+                  setSelectedContract('');
+                  setListOpen(false);
+                }}
+                placeholder="输入自定义合同编号"
+                aria-label="自定义合同编号"
+                autoFocus
                 className={inputCls}
               />
-            )}
-            <div className="relative mt-1">
-              <button
-                type="button"
-                onClick={() => setListOpen((v) => !v)}
-                onKeyDown={onKeyDown}
-                className={clsx(inputCls, 'text-left')}
-              >
-                {selectedContract || '请选择合同'}
-              </button>
-              {listOpen && (
-                <div className="absolute bottom-full z-30 mb-1 max-h-72 w-full overflow-auto rounded-md border border-line bg-white py-1 shadow-card animate-fade-in">
-                  {filtered.length === 0 ? (
-                    <div className="px-3 py-2 text-[12px] text-ink-soft">无匹配合同</div>
-                  ) : (
-                    filtered.map((c, i) => {
-                      const reason = disableReason(c);
-                      const disabled = reason !== null;
-                      return (
-                        <button
-                          key={c.contractNo}
-                          type="button"
-                          disabled={disabled}
-                          title={reason ?? undefined}
-                          onMouseEnter={() => setActiveIndex(i)}
-                          onClick={() => chooseContract(c)}
-                          className={clsx(
-                            'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px]',
-                            i === activeIndex ? 'bg-primary/10' : '',
-                            disabled ? 'cursor-not-allowed opacity-50' : 'text-ink hover:bg-surface',
-                          )}
-                        >
-                          <span className="truncate font-mono">{c.contractNo}</span>
-                          {c.contractType && (
-                            <span className="shrink-0 rounded border border-primary/20 bg-primary/10 px-1.5 py-px text-[10px] text-primary-500">
-                              {c.contractType}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })
+            ) : (
+              <>
+                {showFilter && (
+                  <input
+                    type="text"
+                    value={filterText}
+                    onChange={(e) => setFilterText(e.target.value)}
+                    onKeyDown={onKeyDown}
+                    onFocus={() => setListOpen(true)}
+                    placeholder="过滤合同号"
+                    aria-label="过滤合同"
+                    className={inputCls}
+                  />
+                )}
+                <div className="relative mt-1">
+                  <button
+                    type="button"
+                    onClick={() => setListOpen((v) => !v)}
+                    onKeyDown={onKeyDown}
+                    className={clsx(inputCls, 'text-left')}
+                  >
+                    {activeContractNo || '请选择合同'}
+                  </button>
+                  {listOpen && (
+                    <div className="absolute bottom-full z-30 mb-1 max-h-72 w-full overflow-auto rounded-md border border-line bg-white py-1 shadow-card animate-fade-in">
+                      {filtered.length === 0 ? (
+                        <div className="px-3 py-2 text-[12px] text-ink-soft">无匹配合同</div>
+                      ) : (
+                        filtered.map((c, i) => {
+                          const reason = disableReason(c);
+                          const disabled = reason !== null;
+                          return (
+                            <button
+                              key={c.contractNo}
+                              type="button"
+                              disabled={disabled}
+                              title={reason ?? undefined}
+                              onMouseEnter={() => setActiveIndex(i)}
+                              onClick={() => chooseContract(c)}
+                              className={clsx(
+                                'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px]',
+                                i === activeIndex ? 'bg-primary/10' : '',
+                                disabled ? 'cursor-not-allowed opacity-50' : 'text-ink hover:bg-surface',
+                              )}
+                            >
+                              <span className="truncate font-mono">{c.contractNo}</span>
+                              {c.contractType && (
+                                <span className="shrink-0 rounded border border-primary/20 bg-primary/10 px-1.5 py-px text-[10px] text-primary-500">
+                                  {c.contractType}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
+              </>
+            )}
+            <div className="mt-1 flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !manualInputOpen;
+                  setManualInputOpen(next);
+                  setListOpen(false);
+                  if (next) setSelectedContract('');
+                  else setManualContractNo('');
+                }}
+                aria-expanded={manualInputOpen}
+                className="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-white px-2 text-[11px] text-ink-soft transition-colors hover:border-primary/30 hover:text-primary-500"
+              >
+                {manualInputOpen
+                  ? <ListFilter className="h-3 w-3" aria-hidden />
+                  : <Keyboard className="h-3 w-3" aria-hidden />}
+                {manualInputOpen ? '从合同列表选择' : '手动输入编号'}
+              </button>
             </div>
-            {selectedContract && (
+            {activeContractNo && (
               <div className="mt-1 flex items-center gap-1 text-[11px] text-ink-soft">
-                <span className="truncate">已选 {selectedContract}</span>
-                <button type="button" onClick={() => setSelectedContract('')} className="text-danger hover:underline">
+                <span className="truncate">已选 {activeContractNo}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedContract('');
+                    setManualContractNo('');
+                  }}
+                  className="text-danger hover:underline"
+                >
                   清除
                 </button>
               </div>

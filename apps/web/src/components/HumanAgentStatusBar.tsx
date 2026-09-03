@@ -2,6 +2,7 @@ import React from 'react'
 import { Activity, Clock, ShieldAlert } from 'lucide-react'
 import clsx from 'clsx'
 import type { HumanAgentStatusState } from '../hooks/useHumanAgentStatus'
+import { toolLabel } from '../lib/toolLabels'
 
 interface HumanAgentStatusBarProps {
   sessionId: string | null
@@ -94,7 +95,9 @@ export const HumanAgentStatusBar: React.FC<HumanAgentStatusBarProps> = ({ sessio
           <span className="flex items-center gap-1 text-ink-soft min-w-0">
             <Clock className="w-3 h-3 shrink-0" />
             <span className="truncate">
-              <span className="font-medium text-ink">{data.lastToolName ?? '—'}</span>
+              <span className="font-medium text-ink" title={data.lastToolName ?? undefined}>
+                {toolLabel(data.lastToolName)}
+              </span>
               <span className="text-ink-soft/70 ml-1">{formatRelative(data.lastToolAt)}</span>
             </span>
           </span>

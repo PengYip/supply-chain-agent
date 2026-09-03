@@ -63,6 +63,10 @@ const VERDICT_MAX_CHARS = 160;
 const SNIPPETS_MAX_MATCHES = 10;
 /** Max snippet char length preserved by the 'snippets' tier. */
 const SNIPPETS_MAX_SNIPPET_CHARS = 500;
+/** Max fields preserved by the structured evidence summaries. */
+const EVIDENCE_MAX_FIELDS = 40;
+/** Max serialized size of one evidence field value. */
+const EVIDENCE_MAX_FIELD_VALUE_CHARS = 1200;
 
 /**
  * Top-level fields worth retaining when a 'summary'-budget JSON output is too
@@ -160,6 +164,87 @@ function truncateText(text: string, max: number): string {
   return text.slice(0, max) + `...[truncated ${text.length - max} chars]`;
 }
 
+// 'summary'-budget tools that carry structured field evidence must not lose
+// that evidence to the generic key-fields compressor: the user can see the
+// review card / extraction result while the model would only receive handles
+// (e.g. extractionId) and then wrongly claim the lab values were unavailable.
+const EVIDENCE_SUMMARY_TOOLS = new Set(['present_document_review', 'extract_fields']);
+
+/** Keep the evidence-bearing subset of a review-card output. */
+function compressReviewSummary(value: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of [
+    'docId',
+    'docType',
+    'classificationConfidence',
+    'fields',
+    'overallConfidence',
+    'proposedRelationships',
+    'tags',
+    'reviewStatus',
+    'warnings',
+    'batch',
+  ] as const) {
+    if (key in value) out[key] = value[key];
+  }
+  return out;
+}
+
+/** Keep the evidence-bearing subset of an extract_fields output. */
+function compressExtractionSummary(value: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of [
+    'extractionId',
+    'overallConfidence',
+    'needsReview',
+    'missingRequired',
+    'reason',
+  ] as const) {
+    if (key in value) out[key] = value[key];
+  }
+  if (!Array.isArray(value.fields)) return out;
+
+  const fields = value.fields.slice(0, EVIDENCE_MAX_FIELDS).map((item) => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return item;
+    const src = item as Record<string, unknown>;
+    const field: Record<string, unknown> = {};
+    for (const key of ['name', 'value', 'confidence', 'needsReview', 'autoAccepted'] as const) {
+      if (!(key in src)) continue;
+      let fieldValue = src[key];
+      if (key === 'value' && typeof fieldValue === 'string') {
+        fieldValue = truncateText(fieldValue, EVIDENCE_MAX_FIELD_VALUE_CHARS);
+      }
+      field[key] = fieldValue;
+    }
+    return field;
+  });
+  out.fields = fields;
+  if (value.fields.length > fields.length) {
+    out.fields_truncated = value.fields.length - fields.length;
+  }
+  return out;
+}
+
+/**
+ * Compact a structured evidence tool result while preserving the fields the
+ * model needs for grounded business reasoning. Returns null for non-evidence
+ * tools, so the caller falls back to the generic key-fields compressor.
+ */
+function compressStructuredEvidence(
+  toolName: string,
+  value: unknown,
+): Record<string, unknown> | null {
+  if (!EVIDENCE_SUMMARY_TOOLS.has(toolName)) return null;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  const src = value as Record<string, unknown>;
+  const evidence = toolName === 'present_document_review'
+    ? compressReviewSummary(src)
+    : compressExtractionSummary(src);
+  // Keep the generic handles too (e.g. ok/status) so structured-evidence
+  // compression remains a superset of the key-fields behavior.
+  return { ...pickKeyFields(src), ...evidence };
+}
+
 // ---- DeterministicSummarizer ------------------------------------------------
 
 /**
@@ -169,7 +254,7 @@ function truncateText(text: string, max: number): string {
 export class DeterministicSummarizer implements Summarizer {
   constructor(private readonly maxChars: number = DEFAULT_SUMMARY_MAX_CHARS) {}
 
-  summarize(_toolName: string, output: unknown): unknown {
+  summarize(toolName: string, output: unknown): unknown {
     const { type, value } = asOutput(output);
     if (type === 'text') {
       return { type: 'text', value: truncateText(String(value ?? ''), this.maxChars) };
@@ -177,6 +262,17 @@ export class DeterministicSummarizer implements Summarizer {
     if (type === 'json') {
       const serialized = safeStringify(value);
       if (serialized.length <= this.maxChars) return output; // small enough -> keep verbatim
+      const evidence = compressStructuredEvidence(toolName, value);
+      if (evidence) {
+        return {
+          type: 'json',
+          value: {
+            _summarized: true,
+            _omittedBytes: serialized.length,
+            ...evidence,
+          },
+        };
+      }
       const kept = pickKeyFields(value);
       return {
         type: 'json',

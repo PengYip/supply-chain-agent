@@ -1,17 +1,20 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertCircle, Bot, Clock, FileQuestion, Loader2, MessageSquare } from 'lucide-react'
-import { fetchSessionShare, type ShareSnapshot } from '../../api/share'
+import { fetchSessionShare, fetchSharedFileBlob, fetchSharedFileUrl, type ShareSnapshot } from '../../api/share'
 import { buildRenderItems, type RenderItem, type Segment } from '../../utils/realChatUtils'
+import type { AttachmentData } from '../../utils/realChatUtils'
 import { MarkdownContent } from '../chat/MarkdownContent'
 import { ToolGroupCard } from '../chat/RealToolSteps'
+import type { FileEntry } from '../../hooks/useFiles'
 import { FileAttachmentCard } from '../FileAttachmentCard'
+import { FilePreviewModal } from '../FilePreviewModal'
 
 /** 免登录只读分享页 /share/:token。
  *  独立于 AppShell 与登录门控（App 根组件按 pathname 在认证网关之前分流到此）。
- *  消息解析复用主聊天的 buildRenderItems：助手 text parts 走与主聊天同款的
- *  Markdown 渲染，tool-* parts 渲染同款只读工具卡片（可折叠展开）；
- *  approval-request 是登录态交互，快照中不渲染。不提供输入框、侧边栏或
- *  任何需要登录的交互。样式沿用主站语义 token，观感一致但独立成页。 */
+ *  消息解析复用主聊天的 buildRenderItems：助手 text parts 走与主聊天同款
+ *  Markdown 渲染，tool-* parts 渲染同款富卡片（复核/结算卡去交互、保内容）；
+ *  approval-request 是登录态交互，快照中不渲染。附件可打开 token 范围内的
+ *  只读原文件预览。不提供输入框、侧边栏或任何需要登录的交互。 */
 
 type LoadState =
   | { phase: 'loading' }
@@ -46,7 +49,15 @@ function hasRenderableSegment(item: RenderItem): boolean {
  *  只读工具卡片，段序保持模型产出顺序）；用户 = 右对齐 primary 气泡（主界面
  *  惯例为纯文本），附件卡堆叠在气泡上方。进入视口时错峰上浮（只做首屏节奏，
  *  长列表不拖沓）。 */
-function ShareMessageRow({ item, index }: { item: RenderItem; index: number }) {
+function ShareMessageRow({
+  item,
+  index,
+  onOpenAttachment,
+}: {
+  item: RenderItem
+  index: number
+  onOpenAttachment: (attachment: AttachmentData) => void
+}) {
   const style = { animationDelay: `${Math.min(index, 12) * 45}ms` }
 
   if (item.role === 'user') {
@@ -55,7 +66,11 @@ function ShareMessageRow({ item, index }: { item: RenderItem; index: number }) {
     return (
       <div className="flex animate-slide-up flex-col items-end gap-2" style={style}>
         {attachments.map((seg, i) => (
-          <FileAttachmentCard key={`att-${seg.attachment.docId}-${i}`} attachment={seg.attachment} />
+          <FileAttachmentCard
+            key={`att-${seg.attachment.docId}-${i}`}
+            attachment={seg.attachment}
+            onOpen={onOpenAttachment}
+          />
         ))}
         {texts.length > 0 && (
           <div className="max-w-[85%] space-y-2 rounded-2xl rounded-tr-md bg-primary-500 px-4 py-2.5 text-sm leading-relaxed text-white shadow-card">
@@ -86,12 +101,17 @@ function ShareMessageRow({ item, index }: { item: RenderItem; index: number }) {
               )
             }
             if (seg.kind === 'tool-group') {
-              // readOnly：跳过挂载即请求鉴权接口、且带编辑交互的复核卡，
-              // 回落通用只读结果框（见 RealToolSteps 文件头说明）。
+              // readOnly：富卡片保留完整快照内容，隐藏登录态编辑/复核跳转。
               return <ToolGroupCard key={`g-${i}`} steps={seg.steps} readOnly />
             }
             if (seg.kind === 'attachment') {
-              return <FileAttachmentCard key={`att-${seg.attachment.docId}-${i}`} attachment={seg.attachment} />
+              return (
+                <FileAttachmentCard
+                  key={`att-${seg.attachment.docId}-${i}`}
+                  attachment={seg.attachment}
+                  onOpen={onOpenAttachment}
+                />
+              )
             }
             // approval-request：登录态交互，只读快照不渲染
             return null
@@ -104,6 +124,7 @@ function ShareMessageRow({ item, index }: { item: RenderItem; index: number }) {
 
 export function SharePage({ token }: { token: string }) {
   const [state, setState] = useState<LoadState>({ phase: 'loading' })
+  const [previewFile, setPreviewFile] = useState<AttachmentData | null>(null)
 
   // 初态即 loading，首次加载由 effect 触发；重试按钮在事件处理器里显式
   // 复位加载态后再调 load，避免 effect 内同步 setState。
@@ -133,6 +154,24 @@ export function SharePage({ token }: { token: string }) {
 
   const rows = state.phase === 'ready' ? buildRenderItems(state.data.messages).filter(hasRenderableSegment) : []
   const sharedAt = state.phase === 'ready' ? formatSharedAt(state.data.createdAt) : ''
+  const previewEntry = useMemo<FileEntry | null>(() => {
+    if (!previewFile) return null
+    return {
+      key: previewFile.key,
+      name: previewFile.filename,
+      size: 0,
+      lastModified: '',
+      docId: previewFile.docId || undefined,
+      directory: '/',
+      parseStatus: null,
+      businessType: null,
+      parseStage: null,
+      stageStartedAt: null,
+      bound: false,
+      batchRole: null,
+      unitCount: null,
+    }
+  }, [previewFile])
 
   return (
     // w-full：#root 为 row 方向 flex 容器，此处不补宽度会让根节点收缩为
@@ -209,10 +248,25 @@ export function SharePage({ token }: { token: string }) {
                   该对话暂无文本内容
                 </div>
               ) : (
-                rows.map((item, i) => <ShareMessageRow key={item.id} item={item} index={i} />)
+                rows.map((item, i) => (
+                  <ShareMessageRow
+                    key={item.id}
+                    item={item}
+                    index={i}
+                    onOpenAttachment={setPreviewFile}
+                  />
+                ))
               )}
             </div>
           </main>
+          {previewEntry && previewFile && (
+            <FilePreviewModal
+              file={previewEntry}
+              onClose={() => setPreviewFile(null)}
+              fetchBlob={(key) => fetchSharedFileBlob(token, key)}
+              fetchDownloadUrl={(key) => fetchSharedFileUrl(token, key)}
+            />
+          )}
           <footer className="shrink-0 border-t border-line bg-white">
             <div className="mx-auto w-full max-w-[768px] px-6 py-4 text-center text-[11px] leading-relaxed text-ink-soft">
               本页为对话只读快照 · 内容由 AI 生成，关键数字来自系统台账与文档

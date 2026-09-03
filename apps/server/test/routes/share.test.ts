@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Hono } from 'hono';
+import { Readable } from 'node:stream';
 import type { AuthEnv, SessionUser } from '../../src/lib/auth-middleware.js';
 import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.js';
 import {
@@ -19,6 +20,15 @@ vi.mock('../../src/pipeline/db/dbBackend.js', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../../src/pipeline/db/dbBackend.js')>();
   return { ...mod, getDbContext: () => ctxHolder.current };
 });
+const { minioHolder } = vi.hoisted(() => ({
+  minioHolder: {
+    getObject: async () => { throw new Error('unexpected getObject') },
+  },
+}));
+vi.mock('../../src/lib/minio.js', () => ({
+  minioClient: minioHolder,
+  MINIO_BUCKET: 'sca-files',
+}));
 const { sessionsRoute } = await import('../../src/routes/sessions.js');
 const { shareRoute } = await import('../../src/routes/share.js');
 
@@ -48,6 +58,21 @@ function publicApp() {
 
 function msg(id: string, role: 'user' | 'assistant', text: string): UIMessage {
   return { id, role, parts: [{ type: 'text', text }] } as UIMessage;
+}
+
+function attachmentMsg(id: string, key: string): UIMessage {
+  return {
+    id,
+    role: 'user',
+    parts: [
+      {
+        type: 'data-attachment',
+        id: key,
+        data: { filename: 'contract.pdf', docId: 'DOC-test', key, fileType: 'PDF' },
+      },
+      { type: 'text', text: '请看这份文件' },
+    ],
+  } as UIMessage;
 }
 
 beforeEach(() => {
@@ -152,5 +177,39 @@ describe('GET /api/share/:token (public)', () => {
     };
     expect(body.messages).toHaveLength(1);
     expect((body.messages[0].parts[0] as { text: string }).text).toBe('分享前的消息');
+  });
+});
+
+describe('GET /api/share/:token/file (public, object-level authz)', () => {
+  const fileKey = 'users/u1/docs/00000000-0000-4000-8000-000000000000-contract.pdf';
+
+  beforeEach(() => {
+    minioHolder.getObject = vi.fn(async () => Readable.from([Buffer.from('pdf-bytes')]));
+  });
+
+  async function shareAttachment(tokenOwner = 'u1') {
+    const s = await createSession('trader', tokenOwner);
+    await appendMessages(s.id, [attachmentMsg('m1', fileKey)]);
+    return (await (
+      await appAs(trader(tokenOwner)).request(`/api/sessions/${s.id}/share`, { method: 'POST' })
+    ).json()) as { token: string };
+  }
+
+  it('无认证可流式预览快照中明确出现的附件', async () => {
+    const { token } = await shareAttachment();
+    const res = await publicApp().request(`/api/share/${token}/file?key=${encodeURIComponent(fileKey)}`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('pdf-bytes');
+    expect(res.headers.get('Content-Type')).toBe('application/pdf');
+    expect(res.headers.get('Content-Disposition')).toContain('contract.pdf');
+  });
+
+  it('拒绝不在快照里的任意对象（不能按 owner 前缀越权猜 key）', async () => {
+    const { token } = await shareAttachment();
+    const res = await publicApp().request(
+      `/api/share/${token}/file?key=${encodeURIComponent('users/u1/secret.pdf')}`,
+    );
+    expect(res.status).toBe(404);
+    expect(minioHolder.getObject).not.toHaveBeenCalled();
   });
 });
