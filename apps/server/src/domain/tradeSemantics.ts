@@ -61,6 +61,7 @@ export const TRADE_VOCAB: TradeVocabulary = {
     货转单: '货权转移',
     付款凭证: '付款',
     化验报告: '质检',
+    质检汇总表: '质检',
     汽运磅单: '凭证',
     轨道衡称重单: '凭证',
     水尺计重单: '凭证',
@@ -120,6 +121,7 @@ export const CHUNK_TAG_TAXONOMY: Record<DocType, string[]> = {
   // 空 taxonomy 与 其他 一致(信号 tagChunks 跳过 LLM 打标)。
   货转单: [],
   化验报告: [],
+  质检汇总表: [],
   付款凭证: [],
   其他: [],
   // v2 类型划分(spec 2026-08-26 §3.1): 新类型暂无段落语义标签集, 空数组

@@ -14,6 +14,7 @@ import type { AnchorQuantity } from '../../domain/units.js';
 export type VoucherType =
   | '货转单' | '化验报告' | '付款凭证'
   | '汽运磅单' | '轨道衡称重单' | '水尺计重单'
+  | '质检汇总表'
   | '其他';
 
 // ---- 货转单 (货权转移单) ----------------------------------------------------
@@ -84,6 +85,41 @@ export const 化验报告Schema = z.object({
   指标: z.array(化验指标Schema).nullable().optional(),
 });
 
+// ---- 质检汇总表 (收货质检混合汇总表, B 方案 2026-09-03) ----------------------
+// 现实载体: ERP「下游收货数据」导出件等, 逐行同时有重量列(净重或毛/皮/净)
+// 与质量列(水分/灰分/硫分/发热量), 常带合计行。行内重量与质量列均可缺
+// (混排版式), 硬性要求仅 明细行 min(1) —— 类型正确性由分类器把守, schema
+// 保持宽容避免把不完美 VLM 输出打成解析失败。
+
+export const 质检汇总行Schema = z.object({
+  车号: z.string().nullable().optional(),
+  日期: z.string().nullable().optional(),
+  毛重_吨: z.number().nullable().optional(),
+  皮重_吨: z.number().nullable().optional(),
+  净重_吨: z.number().nullable().optional(),
+  水分_百分比: z.number().nullable().optional(),
+  灰分_百分比: z.number().nullable().optional(),
+  挥发分_百分比: z.number().nullable().optional(),
+  全硫_百分比: z.number().nullable().optional(),
+  低位发热量_千卡每kg: z.number().nullable().optional(),
+  低位发热量_MJ每kg: z.number().nullable().optional(),
+});
+
+export const 质检汇总表Schema = z.object({
+  编号: z.string().nullable().optional(),
+  收货单位: z.string().nullable().optional(),
+  供货单位: z.string().nullable().optional(),
+  品名: z.string().nullable().optional(),
+  明细行: z.array(质检汇总行Schema).min(1),
+  合计净重_吨: z.number().nullable().optional(),
+  合计水分_百分比: z.number().nullable().optional(),
+  合计灰分_百分比: z.number().nullable().optional(),
+  合计全硫_百分比: z.number().nullable().optional(),
+  合计低位发热量_千卡每kg: z.number().nullable().optional(),
+  合计低位发热量_MJ每kg: z.number().nullable().optional(),
+  日期: z.string().nullable().optional(),
+});
+
 // ---- 汽运磅单 (一页一车, 文档级由聚合器组装) --------------------------------
 
 export const 汽运磅单行Schema = z.object({
@@ -145,6 +181,7 @@ export const VOUCHER_SCHEMAS: Record<Exclude<VoucherType, '其他'>, z.ZodTypeAn
   汽运磅单: 汽运磅单Schema,
   轨道衡称重单: 轨道衡称重单Schema,
   水尺计重单: 水尺计重单Schema,
+  质检汇总表: 质检汇总表Schema,
 };
 
 /** 重量聚合模式类型(spec 2026-08-28 §5.1): 逐页提取行 + 服务端 Σ净重聚合。 */
@@ -213,6 +250,19 @@ export const VOUCHER_DOC_PROMPTS: Partial<Record<Exclude<VoucherType, '其他'>,
     '数字字段输出为数字; 无法辨认填 null, 严禁编造。',
     '严格以 JSON 输出, 不要包含任何注释或解释文字。',
   ].join('\n'),
+  质检汇总表: [
+    '你是收货质检汇总表识别模型。图片是下游收货数据/收货质检汇总表(逐行同时含重量与质量指标的表格, 可能多页, 常带合计行), 提取表头与全部数据行。',
+    '输出: 编号(字符串或null), 收货单位(字符串或null), 供货单位(字符串或null), 品名(字符串或null),',
+    '明细行(数组,必填,每行含: 车号(字符串或null), 日期(字符串或null),',
+    '毛重_吨(数字或null), 皮重_吨(数字或null), 净重_吨(数字或null),',
+    '水分_百分比(数字或null), 灰分_百分比(数字或null), 挥发分_百分比(数字或null), 全硫_百分比(数字或null),',
+    '低位发热量_千卡每kg(数字或null), 低位发热量_MJ每kg(数字或null))),',
+    '合计净重_吨(数字或null), 合计水分_百分比(数字或null), 合计灰分_百分比(数字或null),',
+    '合计全硫_百分比(数字或null), 合计低位发热量_千卡每kg(数字或null), 合计低位发热量_MJ每kg(数字或null),',
+    '日期(字符串或null)。',
+    '一行数据一条明细, 严禁漏行; 数字去掉千分位逗号与单位; 表格没有的列填 null, 严禁编造。',
+    '严格以 JSON 输出, 不要包含任何注释或解释文字。',
+  ].join('\n'),
 };
 
 // ---- 锚点提取 (Phase B 绑定/台账用) -----------------------------------------
@@ -274,6 +324,16 @@ export function extractAnchors(
       return {
         buyer: anchorStr(fields['送检单位']) ?? anchorStr(fields['委托方']),
         date: anchorStr(fields['检测日期']),
+        quantityTon: qtyTon,
+        quantityUnit: qtyTon !== undefined ? '吨' : undefined,
+      };
+    }
+    case '质检汇总表': {
+      const qtyTon = anchorNum(fields['合计净重_吨']);
+      return {
+        buyer: anchorStr(fields['收货单位']),
+        seller: anchorStr(fields['供货单位']),
+        date: anchorStr(fields['日期']),
         quantityTon: qtyTon,
         quantityUnit: qtyTon !== undefined ? '吨' : undefined,
       };
@@ -516,6 +576,28 @@ export function validateVoucher(
     const total = fields['总净重_吨'];
     if (typeof total === 'number' && Math.abs(sumRows(rows, '净重_吨') - total) > 0.01) {
       warnings.push(`明细行净重合计 ${sumRows(rows, '净重_吨')} 与总净重 ${total} 不一致`);
+    }
+  }
+
+  // B 方案(2026-09-03): 质检汇总表守恒校验。行毛/皮/净三重齐全才做行内自洽
+  // (混排版式常缺毛皮列); 合计净重存在时做 Σ明细行守恒。均只产 warning。
+  if (voucherType === '质检汇总表') {
+    const rows = Array.isArray(fields['明细行']) ? fields['明细行'] : [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i] as Record<string, unknown> | null;
+      const g = r?.['毛重_吨'];
+      const t = r?.['皮重_吨'];
+      const n = r?.['净重_吨'];
+      if (
+        typeof g === 'number' && typeof t === 'number' && typeof n === 'number' &&
+        Math.abs(g - t - n) > 0.01
+      ) {
+        warnings.push(`明细行${i + 1} 毛重${g} - 皮重${t} != 净重${n}`);
+      }
+    }
+    const total = fields['合计净重_吨'];
+    if (typeof total === 'number' && Math.abs(sumRows(rows, '净重_吨') - total) > 0.01) {
+      warnings.push(`明细行净重合计 ${sumRows(rows, '净重_吨')} 与合计净重 ${total} 不一致`);
     }
   }
 

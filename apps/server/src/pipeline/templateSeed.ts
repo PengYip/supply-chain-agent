@@ -23,6 +23,10 @@ export const DOC_TYPE_SEED: Array<{ name: string; parent?: string; props?: Recor
   { name: '装箱单', parent: '货转单', props: { aliasOf: '货转单' } },
   { name: '质检报告', parent: '履约凭证' },
   { name: '化验报告', parent: '质检报告', props: { formTypes: ['化验报告'] } },
+  // B 方案(2026-09-03): 收货质检混合汇总表。两个 formType 别名同指本类型
+  // (页面标题「下游收货数据」与描述性名「收货质检汇总表」), buildFormTypeIndex
+  // 按 formType 字符串各自映射, 不冲突。
+  { name: '质检汇总表', parent: '质检报告', props: { formTypes: ['收货质检汇总表', '下游收货数据'] } },
   { name: '结算单', parent: '履约凭证', props: { formTypes: ['结算单'] } },
   { name: '运输凭证', parent: '履约凭证' },
   { name: '收货单', parent: '运输凭证', props: { formTypes: ['货物交接清单'] } },
