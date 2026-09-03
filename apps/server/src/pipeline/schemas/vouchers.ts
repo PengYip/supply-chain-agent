@@ -86,10 +86,12 @@ export const 化验报告Schema = z.object({
 });
 
 // ---- 质检汇总表 (收货质检混合汇总表, B 方案 2026-09-03) ----------------------
-// 现实载体: ERP「下游收货数据」导出件等, 逐行同时有重量列(净重或毛/皮/净)
-// 与质量列(水分/灰分/硫分/发热量), 常带合计行。行内重量与质量列均可缺
-// (混排版式), 硬性要求仅 明细行 min(1) —— 类型正确性由分类器把守, schema
-// 保持宽容避免把不完美 VLM 输出打成解析失败。
+// 现实载体: ERP「下游收货数据」导出件等, 两种版式(2026-09-03 验收修正):
+//   A. 多页逐行明细表, 逐行同时有重量列(净重或毛/皮/净)与质量列
+//      (水分/灰分/硫分/发热量), 常带合计行。
+//   B. 单页盖章确认函, 只有收货单位+合计净重+公章, 无逐行明细。
+// 明细行允许空数组(版式 B), 类型正确性由分类器把守, schema 保持宽容
+// 避免把确认函型 VLM 输出硬凑出明细行。
 
 export const 质检汇总行Schema = z.object({
   车号: z.string().nullable().optional(),
@@ -110,7 +112,7 @@ export const 质检汇总表Schema = z.object({
   收货单位: z.string().nullable().optional(),
   供货单位: z.string().nullable().optional(),
   品名: z.string().nullable().optional(),
-  明细行: z.array(质检汇总行Schema).min(1),
+  明细行: z.array(质检汇总行Schema),
   合计净重_吨: z.number().nullable().optional(),
   合计水分_百分比: z.number().nullable().optional(),
   合计灰分_百分比: z.number().nullable().optional(),
@@ -251,7 +253,7 @@ export const VOUCHER_DOC_PROMPTS: Partial<Record<Exclude<VoucherType, '其他'>,
     '严格以 JSON 输出, 不要包含任何注释或解释文字。',
   ].join('\n'),
   质检汇总表: [
-    '你是收货质检汇总表识别模型。图片是下游收货数据/收货质检汇总表(逐行同时含重量与质量指标的表格, 可能多页, 常带合计行), 提取表头与全部数据行。',
+    '你是收货质检汇总表识别模型。图片是下游收货数据/收货质检汇总表, 有两种版式: A. 逐行明细表格(每行有车号/日期/重量+质量指标, 可能多页, 带合计行); B. 单页盖章确认函(只有收货单位/合计净重/日期/公章, 没有逐行明细)。',
     '输出: 编号(字符串或null), 收货单位(字符串或null), 供货单位(字符串或null), 品名(字符串或null),',
     '明细行(数组,必填,每行含: 车号(字符串或null), 日期(字符串或null),',
     '毛重_吨(数字或null), 皮重_吨(数字或null), 净重_吨(数字或null),',
@@ -260,7 +262,7 @@ export const VOUCHER_DOC_PROMPTS: Partial<Record<Exclude<VoucherType, '其他'>,
     '合计净重_吨(数字或null), 合计水分_百分比(数字或null), 合计灰分_百分比(数字或null),',
     '合计全硫_百分比(数字或null), 合计低位发热量_千卡每kg(数字或null), 合计低位发热量_MJ每kg(数字或null),',
     '日期(字符串或null)。',
-    '一行数据一条明细, 严禁漏行; 数字去掉千分位逗号与单位; 表格没有的列填 null, 严禁编造。',
+    '一行数据一条明细, 严禁漏行; 如果是版式 B(盖章确认函, 无逐行明细), 明细行输出空数组[], 只填合计净重等合计字段; 数字去掉千分位逗号与单位; 表格没有的列填 null, 严禁编造。',
     '严格以 JSON 输出, 不要包含任何注释或解释文字。',
   ].join('\n'),
 };
@@ -596,7 +598,8 @@ export function validateVoucher(
       }
     }
     const total = fields['合计净重_吨'];
-    if (typeof total === 'number' && Math.abs(sumRows(rows, '净重_吨') - total) > 0.01) {
+    // 版式 B(盖章确认函)明细行为空数组: 只填合计不做守恒, 不产 warning。
+    if (rows.length > 0 && typeof total === 'number' && Math.abs(sumRows(rows, '净重_吨') - total) > 0.01) {
       warnings.push(`明细行净重合计 ${sumRows(rows, '净重_吨')} 与合计净重 ${total} 不一致`);
     }
   }
