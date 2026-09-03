@@ -21,6 +21,7 @@ import {
   createDocumentStub,
   deleteDocument,
   clearDocumentUnits,
+  failPendingUnitsByParent,
   updateDocumentParseStage,
   type TemplateTypeRow,
   // Phase B bindings state machine.
@@ -1831,12 +1832,16 @@ export async function processDocumentWithBatch(
   });
   const childDocIds: string[] = [];
   if (containerRes.parseStatus !== 'parsed') {
+    // No block model means no unit can ever be processed on this attempt.
+    // Fail them now so the file tree does not show pending work until reboot.
+    await failPendingUnitsByParent(ctx, docId);
     return { ...containerRes, batchSplit: { unitCount: units.length, childDocIds } };
   }
 
   const parentModel = await loadDocument(ctx, docId, opts.userId);
   if (!parentModel) {
     console.warn('[batch-split] container 解析成功但块模型读取失败, 跳过子单据生成');
+    await failPendingUnitsByParent(ctx, docId);
     return { ...containerRes, batchSplit: { unitCount: units.length, childDocIds } };
   }
 

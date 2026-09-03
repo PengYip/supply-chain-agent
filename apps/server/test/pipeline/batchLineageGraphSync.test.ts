@@ -4,6 +4,7 @@ import {
   createDocumentStub,
   setDocumentBatchRole,
   saveDocumentUnits,
+  listDocumentUnitsByParent,
 } from '../../src/pipeline/db/repositories.js';
 import { syncBatchLineageGraph } from '../../src/pipeline/batchLineageGraphSync.js';
 import type { GraphWriterIo } from '../../src/graph/graphWriter.js';
@@ -15,6 +16,7 @@ import type { GraphWriterIo } from '../../src/graph/graphWriter.js';
 function fakeIo() {
   const nodes = new Map<string, { kind: string; name: string; props: Record<string, unknown> }>();
   const edges = new Map<string, Record<string, unknown>>();
+  const staleContainsDeletions: Array<{ containerDocId: string; keepUnitDocIds: string[] }> = [];
   const io: GraphWriterIo = {
     createEntity: async ({ kind, name, props }) => {
       const key = `${kind}:${name}`;
@@ -29,8 +31,11 @@ function fakeIo() {
     mergeContainsEdge: async (i) => {
       edges.set(`${i.srcId}->${i.dstId}`, { ...i.props });
     },
+    deleteStaleContainsEdges: async (i) => {
+      staleContainsDeletions.push({ ...i });
+    },
   };
-  return { io, nodes, edges };
+  return { io, nodes, edges, staleContainsDeletions };
 }
 
 describe('syncBatchLineageGraph (P3)', () => {
@@ -119,6 +124,27 @@ describe('syncBatchLineageGraph (P3)', () => {
       expect(first).toBe('ok');
       expect(nodes.size).toBe(3);
       expect(edges.size).toBe(2);
+    } finally {
+      if (prev !== undefined) process.env.NEO4J_PASSWORD = prev;
+      else delete process.env.NEO4J_PASSWORD;
+    }
+  });
+
+  it('刷新时要求清理 stale CONTAINS 边(不删除 Document 节点)', async () => {
+    const prev = process.env.NEO4J_PASSWORD;
+    process.env.NEO4J_PASSWORD = 'batch-lineage-test';
+    try {
+      const containerId = await seedContainer();
+      const { io, staleContainsDeletions } = fakeIo();
+      await syncBatchLineageGraph(ctx, containerId, io);
+      expect(staleContainsDeletions).toHaveLength(1);
+      const units = await listDocumentUnitsByParent(ctx, containerId);
+      expect(staleContainsDeletions[0]).toEqual({
+        containerDocId: containerId,
+        keepUnitDocIds: units
+          .filter((u) => u.childDocumentId !== null)
+          .map((u) => u.childDocumentId!),
+      });
     } finally {
       if (prev !== undefined) process.env.NEO4J_PASSWORD = prev;
       else delete process.env.NEO4J_PASSWORD;

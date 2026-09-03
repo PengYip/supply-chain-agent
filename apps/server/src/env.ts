@@ -146,6 +146,7 @@ const EnvSchema = z.object({
   MINERU_API_KEY: z.string().optional(),
   MINERU_API_BASE_URL: z.string().url().default('https://mineru.net/api/v4'),
   MINERU_API_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
+  MINERU_API_UPLOAD_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
   MINERU_API_MODEL_VERSION: z.enum(['pipeline', 'vlm']).default('pipeline'),
   // 批量拆分器(spec 2026-09-01, Phase 1): 一个物理文件 ≠ 一份业务单据。
   // BATCH_SPLIT_ENABLED 是灰度总开关(默认关闭 = 完全走旧路径, 零行为变化)。

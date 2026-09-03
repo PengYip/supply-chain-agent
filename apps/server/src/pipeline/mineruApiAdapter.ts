@@ -42,6 +42,18 @@ interface ExtractEnvelope {
   data?: { extract_result?: ExtractEntry[] };
 }
 
+export interface IngestWithMinerUApiOptions {
+  /** Test seam. Defaults to global fetch. */
+  fetchImpl?: typeof fetch;
+  /** Test/DI seam. Defaults to MINERU_API_KEY. */
+  apiKey?: string;
+  /**
+   * Presigned-URL upload timeout. A 200MB upload can legitimately take much
+   * longer than the 30s JSON/poll timeout, so it is independently configurable.
+   */
+  uploadTimeoutMs?: number;
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 // data_id charset is [A-Za-z0-9_.-] (max 128 chars); replace anything else with
@@ -88,6 +100,7 @@ export async function ingestWithMinerUApi(
   sourceUri: string,
   docType: DocType,
   docId: string,
+  opts: IngestWithMinerUApiOptions = {},
 ): Promise<BlockModel> {
   const jsonPath = `${sourceUri}.mineru.json`;
   // Hermetic test path: pre-generated JSON wins, no network.
@@ -95,11 +108,14 @@ export async function ingestWithMinerUApi(
     const raw = JSON.parse(readFileSync(jsonPath, 'utf-8'));
     return normalizeMinerUOutput({ docId, docType, sourceUri, minerUOutput: raw });
   }
-  if (!env.MINERU_API_KEY) {
+  const apiKey = opts.apiKey ?? env.MINERU_API_KEY;
+  if (!apiKey) {
     throw new Error(
       'MinerU API: MINERU_API_KEY is not set. Set it in the project root .env (PARSE_BACKEND=mineru-api) or provide a <file>.mineru.json sidecar.',
     );
   }
+  const doFetch = opts.fetchImpl ?? fetch;
+  const uploadTimeoutMs = opts.uploadTimeoutMs ?? env.MINERU_API_UPLOAD_TIMEOUT_MS;
 
   const raw = readFileSync(sourceUri);
   // MinerU cloud limit: 200MB per file, enforced before any upload.
@@ -124,11 +140,11 @@ export async function ingestWithMinerUApi(
   });
   let batchResp: Response;
   try {
-    batchResp = await fetch(`${base}/file-urls/batch`, {
+    batchResp = await doFetch(`${base}/file-urls/batch`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${env.MINERU_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: batchBody,
       signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
@@ -136,6 +152,11 @@ export async function ingestWithMinerUApi(
   } catch (e) {
     console.warn(`[perf-mineru-api] failed docId=${docId} step=batch ${elapsed()}ms`);
     throw new Error(`MinerU API batch request failed: ${(e as Error).message}`);
+  }
+  if (!batchResp.ok) {
+    const batchText = await batchResp.text();
+    console.warn(`[perf-mineru-api] failed docId=${docId} step=batch-http-${batchResp.status} ${elapsed()}ms`);
+    throw new Error(`MinerU API batch request failed (HTTP ${batchResp.status}): ${batchText.slice(0, 300)}`);
   }
   const batchText = await batchResp.text();
   let batchJson: BatchEnvelope;
@@ -161,10 +182,10 @@ export async function ingestWithMinerUApi(
   // headers would break the signature.
   let putResp: Response;
   try {
-    putResp = await fetch(uploadUrl, {
+    putResp = await doFetch(uploadUrl, {
       method: 'PUT',
       body: raw,
-      signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+      signal: AbortSignal.timeout(uploadTimeoutMs),
     });
   } catch (e) {
     console.warn(`[perf-mineru-api] failed docId=${docId} step=upload ${elapsed()}ms`);
@@ -191,9 +212,9 @@ export async function ingestWithMinerUApi(
     const pollUrl = `${base}/extract-results/batch/${batchId}`;
     let pollResp: Response;
     try {
-      pollResp = await fetch(pollUrl, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${env.MINERU_API_KEY}` },
+    pollResp = await doFetch(pollUrl, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${apiKey}` },
         signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
       });
     } catch (e) {
@@ -233,7 +254,7 @@ export async function ingestWithMinerUApi(
       // Step 4: download the result zip (plain GET, no auth) and read layout.json.
       let zipResp: Response;
       try {
-        zipResp = await fetch(zipUrl, { signal: AbortSignal.timeout(ZIP_TIMEOUT_MS) });
+      zipResp = await doFetch(zipUrl, { signal: AbortSignal.timeout(ZIP_TIMEOUT_MS) });
       } catch (e) {
         console.warn(`[perf-mineru-api] failed docId=${docId} step=zip ${elapsed()}ms`);
         throw new Error(`MinerU API result download failed: ${(e as Error).message}`);

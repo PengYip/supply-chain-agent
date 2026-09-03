@@ -3412,6 +3412,19 @@ export async function deleteDocumentUnitsByIdsPg(
   await ctx.pool.query(`DELETE FROM document_units WHERE id IN (${placeholders})`, ids);
 }
 
+/** pg twin of failPendingUnitsByParent. */
+export async function failPendingUnitsByParentPg(
+  ctx: PostgresDbContext,
+  parentDocId: string,
+): Promise<number> {
+  const res = await ctx.pool.query(
+    "UPDATE document_units SET status = 'failed' " +
+      'WHERE parent_document_id = $1 AND status IN (\'pending\',\'processing\')',
+    [parentDocId],
+  );
+  return res.rowCount ?? 0;
+}
+
 /** pg twin of updateDocumentParseStage: 非 NULL 同时盖 stage_started_at(ISO)。 */
 export async function updateDocumentParseStagePg(
   ctx: PostgresDbContext,

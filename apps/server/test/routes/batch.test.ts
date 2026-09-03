@@ -41,10 +41,10 @@ vi.mock('../../src/pipeline/ingestModel.js', async (importOriginal) => {
 
 const { batchRoute } = await import('../../src/routes/batch.js');
 
-function appAs(userId: string) {
+function appAs(userId: string, role: string = 'admin') {
   const app = new Hono<AuthEnv>();
   app.use('*', async (c, next) => {
-    c.set('user', { id: userId, email: 't@t', role: 'admin' } as never);
+    c.set('user', { id: userId, email: 't@t', role } as never);
     await next();
   });
   app.route('/api/batch', batchRoute);
@@ -181,6 +181,21 @@ function docIds(): string[] {
 }
 
 describe('POST /api/batch/:docId/resplit', () => {
+  it('viewer 不能触发破坏性修正(403, 不到达资源守卫)', async () => {
+    const res = await appAs('u1', 'viewer').request('/api/batch/DOC-nope/resplit', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: string; yourRole: string };
+    expect(body.error).toBe('forbidden');
+    expect(body.yourRole).toBe('viewer');
+  });
+
+  // Full-suite runs share CPU with other workers; the resplit intentionally
+  // parses container + every unit twice (seed then correction), so allow more
+  // than Vitest's default 5s on slower Windows/self-hosted runners.
   it('重拆: 旧子单据级联删, 新 unit 行生成, unitCount 正确', async () => {
     const { containerId, childIds } = await seedSplitContainer('rs-ok.pdf');
     fakeVlmHolder.current = makeVlm(SPLIT_PLAN);
@@ -203,7 +218,7 @@ describe('POST /api/batch/:docId/resplit', () => {
     const units = await listDocumentUnitsByParent(ctx, containerId);
     expect(units).toHaveLength(2);
     expect(units.map((u) => u.childDocumentId).sort()).toEqual([...body.childDocIds].sort());
-  });
+  }, 20_000);
 
   it('任一 unit 已确认绑定且未 force -> 409 unit_bound + detail; force -> 200', async () => {
     const { containerId, childIds } = await seedSplitContainer('rs-bound.pdf');
