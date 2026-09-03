@@ -412,11 +412,22 @@ export function CandidatePanel({
                       </button>
                     </div>
                   </div>
-                ) : (
-                  <div className="rounded-md bg-surface px-3 py-2 text-[12px] leading-5 text-ink-soft">
-                    合同台账为空，请先上传合同类文档并完成抽取
-                  </div>
-                )
+                  ) : (
+                    isExecutionDoc ? (
+                      <div className="rounded-md bg-surface px-3 py-2 text-[12px] leading-5 text-ink-soft">
+                        合同台账为空，请先上传合同类文档并完成抽取
+                      </div>
+                    ) : (
+                      <TemplateBindingForm
+                        doc={doc}
+                        context={templateContext}
+                        establishedContracts={establishedContracts}
+                        pending={manualPending}
+                        onSubmit={onManualCreate}
+                        onCancel={() => setManualOpen(false)}
+                      />
+                    )
+                  )
               ) : (
                 <TemplateBindingForm
                   doc={doc}
