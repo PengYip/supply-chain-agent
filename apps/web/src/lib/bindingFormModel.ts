@@ -101,3 +101,16 @@ export function filterContracts(list: TemplateContractRef[], query: string): Tem
 export function needsFilter(contracts: TemplateContractRef[]): boolean {
   return contracts.length > FILTER_THRESHOLD;
 }
+
+/** 手动输入编号的首步校验: 只做提交值规范化。 */
+export function validateManualContractNo(
+  input: string,
+  opts: { isExecutionDoc: boolean; inLedger: boolean },
+): { contractNo: string; error: string | null } {
+  const contractNo = input.trim();
+  if (!contractNo) return { contractNo, error: '请输入合同编号' };
+  if (opts.isExecutionDoc && !opts.inLedger) {
+    return { contractNo, error: '合同台账暂无该合同，请先完成合同文件解析抽取入库' };
+  }
+  return { contractNo, error: null };
+}

@@ -88,3 +88,22 @@ describe('quickConfirmRelation(Tier-a 内联一键确认的关系派生)', () =>
     expect(quickConfirmRelation(null, 'DOC-1')).toBe('凭证');
   });
 });
+
+describe('validateManualContractNo(手动输入自定义合同编号)', () => {
+  it('合同文件可绑定台账外编号, 并规范化首尾空白', async () => {
+    const mod = await import('../src/lib/bindingFormModel');
+    expect(mod.validateManualContractNo).toBeTypeOf('function');
+  });
+
+  it('纯空白编号必须阻止提交', async () => {
+    const { validateManualContractNo } = await import('../src/lib/bindingFormModel');
+    expect(validateManualContractNo('   ', { isExecutionDoc: false, inLedger: false }).error)
+      .toBe('请输入合同编号');
+  });
+
+  it('执行类单据不能绑定台账外自定义编号', async () => {
+    const { validateManualContractNo } = await import('../src/lib/bindingFormModel');
+    expect(validateManualContractNo('CUSTOM-1', { isExecutionDoc: true, inLedger: false }))
+      .toEqual({ contractNo: 'CUSTOM-1', error: '合同台账暂无该合同，请先完成合同文件解析抽取入库' });
+  });
+});
