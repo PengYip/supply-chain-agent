@@ -3,14 +3,26 @@
 // onDropFiles 接管上传。仅认领 dataTransfer.types 含 'Files' 的拖拽 ——
 // 文件树内部排序/移动用自定义 MIME（无 'Files'），不会误触发遮罩。
 import { useEffect, useRef, useState } from 'react';
+import type { DropTarget } from './useFileDnd';
 
 /** 类型守卫：非空且携带 OS 文件（同时收窄掉 null）。 */
 function carriesOsFiles(dt: DataTransfer | null): dt is DataTransfer {
   return !!dt && Array.from(dt.types).includes('Files');
 }
 
+/** 从当前悬停点解析上传目标；null = 未进入声明过 target 的区域（主页面）。 */
+function uploadTargetFromEvent(e: DragEvent): DropTarget | null {
+  if (!(e.target instanceof Element)) return null;
+  const zone = e.target.closest<HTMLElement>('[data-upload-target-dir]');
+  return zone ? zone.dataset.uploadTargetDir ?? '' : null;
+}
+
 export function usePageFileDrop(opts: { onDropFiles: (dt: DataTransfer) => void }) {
   const [dragActive, setDragActive] = useState(false);
+  // 当前悬停的上传目录（''=根目录，null=主页面等通用投放区）。供遮罩
+  // 在「上传到主页面」和「上传到文件管理里的指定文件夹」间切换文案。
+  const [uploadTarget, setUploadTarget] = useState<DropTarget | null>(null);
+  const uploadTargetRef = useRef<DropTarget | null>(null);
   // dragenter/dragleave 在子元素间移动时成对触发，用计数器区分「窗口内
   // 移动」与「真正离开窗口」；drop / 取消时归零。
   const depthRef = useRef(0);
@@ -20,9 +32,17 @@ export function usePageFileDrop(opts: { onDropFiles: (dt: DataTransfer) => void 
     onDropFilesRef.current = opts.onDropFiles;
   });
 
+  const setUploadTargetSafe = (next: DropTarget | null) => {
+    if (uploadTargetRef.current === next) return;
+    uploadTargetRef.current = next;
+    setUploadTarget(next);
+  };
+
   useEffect(() => {
     const reset = () => {
       depthRef.current = 0;
+      uploadTargetRef.current = null;
+      setUploadTarget(null);
       setDragActive(false);
     };
 
@@ -43,6 +63,13 @@ export function usePageFileDrop(opts: { onDropFiles: (dt: DataTransfer) => void 
         depthRef.current = 1;
         setDragActive(true);
       }
+    };
+
+    // 文件夹行会 stopPropagation 阻止 dragover 冒泡到面板根区；捕获阶段
+    // 仍能先读取落点 data 属性，因此目标目录提示不会被这层截停丢掉。
+    const handleDragOverCapture = (e: DragEvent) => {
+      if (!carriesOsFiles(e.dataTransfer)) return;
+      setUploadTargetSafe(uploadTargetFromEvent(e));
     };
 
     const handleDragLeave = (e: DragEvent) => {
@@ -78,6 +105,7 @@ export function usePageFileDrop(opts: { onDropFiles: (dt: DataTransfer) => void 
 
     window.addEventListener('dragenter', handleDragEnter);
     window.addEventListener('dragover', handleDragOver);
+    window.addEventListener('dragover', handleDragOverCapture, true);
     window.addEventListener('dragleave', handleDragLeave);
     window.addEventListener('drop', handleDrop);
     window.addEventListener('drop', handleDropCapture, true);
@@ -85,6 +113,7 @@ export function usePageFileDrop(opts: { onDropFiles: (dt: DataTransfer) => void 
     return () => {
       window.removeEventListener('dragenter', handleDragEnter);
       window.removeEventListener('dragover', handleDragOver);
+      window.removeEventListener('dragover', handleDragOverCapture, true);
       window.removeEventListener('dragleave', handleDragLeave);
       window.removeEventListener('drop', handleDrop);
       window.removeEventListener('drop', handleDropCapture, true);
@@ -92,5 +121,5 @@ export function usePageFileDrop(opts: { onDropFiles: (dt: DataTransfer) => void 
     };
   }, []);
 
-  return { dragActive };
+  return { dragActive, dropTargetDir: uploadTarget };
 }

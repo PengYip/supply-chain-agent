@@ -899,11 +899,17 @@ function TreeFolder(props: TreeFolderProps) {
   const hasChildren = node.files.length > 0 || Object.keys(node.subdirs).length > 0;
   const creatingHere = cb.creatingInDir === fullPath;
   const renamingHere = cb.renamingPath === fullPath;
-  const highlighted =
-    !!cb.dnd.dragging && edgeZone === null && cb.dnd.dropTarget === fullPath && !isFolderSelfDrop(
+  // OS 外部文件没有 useFileDnd 的 dragging payload；此时目标态本身就是
+  // 「上传到当前文件夹」。内部文件夹拖拽则继续保持移动语义与自我/子树校验。
+  const externalUploadHighlighted = !cb.dnd.dragging && cb.dnd.dropTarget === fullPath;
+  const internalMoveHighlighted =
+    !!cb.dnd.dragging &&
+    cb.dnd.dropTarget === fullPath &&
+    !isFolderSelfDrop(
       cb.dnd.dragging.kind === 'folder' ? cb.dnd.dragging.path : '',
       fullPath,
     );
+  const highlighted = edgeZone === null && (externalUploadHighlighted || internalMoveHighlighted);
 
   const commitSubfolder = () => {
     const trimmed = subName.trim();
@@ -984,6 +990,7 @@ function TreeFolder(props: TreeFolderProps) {
     <div>
       <div
         onClick={() => { if (!renamingHere) toggle(fullPath); }}
+        data-upload-target-dir={fullPath}
         draggable={!renamingHere}
         onDragStart={cb.dnd.onDragStart({ kind: 'folder', path: fullPath })}
         onDragEnd={cb.dnd.clear}
@@ -1088,6 +1095,7 @@ function TreeFolder(props: TreeFolderProps) {
       </div>
       {isOpen && (
         <div
+          data-upload-target-dir={fullPath}
           className="ml-5 border-l border-line pl-2"
           onDragOver={handleRowDragOver}
           onDrop={handleRowDrop}
