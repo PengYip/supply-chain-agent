@@ -98,3 +98,30 @@ export async function fetchSessionShare(token: string): Promise<ShareSnapshot | 
   }
   return snap as ShareSnapshot
 }
+
+/** Fetch bytes for a file explicitly referenced by this share. Throws on
+ *  non-2xx so FilePreviewModal can offer its standard retry state. */
+export async function fetchSharedFileBlob(token: string, key: string): Promise<Blob> {
+  let res: Response
+  try {
+    res = await fetch(
+      `/api/share/${encodeURIComponent(token)}/file?key=${encodeURIComponent(key)}`,
+    )
+  } catch {
+    throw new Error('网络错误，请稍后重试')
+  }
+  if (!res.ok) throw new Error(`加载失败（${res.status}）`)
+  return res.blob()
+}
+
+/** Resolve a same-origin blob URL for a shared file. Shared deployments often
+ *  expose MinIO only on an internal endpoint, so downloads reuse the authorized
+ *  app stream instead of asking the server for a presigned browser URL. */
+export async function fetchSharedFileUrl(token: string, key: string): Promise<string | null> {
+  try {
+    const blob = await fetchSharedFileBlob(token, key)
+    return URL.createObjectURL(blob)
+  } catch {
+    return null
+  }
+}
