@@ -14,7 +14,7 @@
 import { Hono } from 'hono';
 import { existsSync } from 'node:fs';
 import { z } from 'zod';
-import type { AuthEnv } from '../lib/auth-middleware.js';
+import { requireRole, type AuthEnv } from '../lib/auth-middleware.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
 import type { DbContext } from '../pipeline/db/client.js';
 import {
@@ -44,6 +44,9 @@ import {
 import type { DocType, Modality } from '../pipeline/types.js';
 
 export const reviewRoute = new Hono<AuthEnv>();
+// Review mutation is a business write, not a read-only hydration endpoint.
+reviewRoute.post('/:docId/review', requireRole('admin', 'trader'));
+reviewRoute.post('/:docId/process', requireRole('admin', 'trader'));
 
 // Allowed docType hints (mirror of routes/files.ts). Used to validate the
 // optional docType on POST /api/documents/:docId/process.

@@ -1,4 +1,11 @@
-import { createEntity, mergeEdge, mergeContainsEdge, type ContainsEdgeProps, type GraphEntity } from './repo.js';
+import {
+  createEntity,
+  deleteStaleContainsEdges,
+  mergeEdge,
+  mergeContainsEdge,
+  type ContainsEdgeProps,
+  type GraphEntity,
+} from './repo.js';
 import { normalizeName } from './normalize.js';
 
 /**
@@ -38,12 +45,15 @@ export interface GraphWriterIo {
   /** P3 谱系: CONTAINS 边幂等 MERGE。可选槽位: 既有测试 fake 只实现前两者,
    *  writeBatchLineageEdges 的测试自带实现本槽位的 fake。 */
   mergeContainsEdge?(input: { srcId: string; dstId: string; props: ContainsEdgeProps }): Promise<void>;
+  /** P3 谱系刷新: 删除 container 上不再存在于 document_units 的旧 CONTAINS 边。 */
+  deleteStaleContainsEdges?(input: { containerDocId: string; keepUnitDocIds: string[] }): Promise<void>;
 }
 
 export const defaultGraphWriterIo: GraphWriterIo = {
   createEntity: (i) => createEntity(i),
   mergeEdge: (i) => mergeEdge(i) as Promise<unknown>,
   mergeContainsEdge: (i) => mergeContainsEdge(i.srcId, i.dstId, i.props),
+  deleteStaleContainsEdges: (i) => deleteStaleContainsEdges(i.containerDocId, i.keepUnitDocIds),
 };
 
 export interface WriteDocumentGraphInput {
@@ -212,4 +222,8 @@ export async function writeBatchLineageEdges(
       props: { unitIndex: unit.unitIndex, pages: unit.pages },
     });
   }
+  await io.deleteStaleContainsEdges?.({
+    containerDocId: input.containerDocId,
+    keepUnitDocIds: input.units.map((unit) => unit.unitDocId),
+  });
 }

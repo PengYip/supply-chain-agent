@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
@@ -50,5 +50,50 @@ describe('ingestWithMinerUApi — hermetic sidecar path', () => {
     await expect(ingestWithMinerUApi(noSidecar, '合同', 'DOC-NOKEY')).rejects.toThrowError(
       /MINERU_API_KEY/,
     );
+  });
+});
+
+describe('ingestWithMinerUApi — cloud HTTP failures', () => {
+  it('fails on a non-2xx presigned-URL response without polling', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mineru-api-http-'));
+    const pdfPath = join(dir, 'sample.pdf');
+    writeFileSync(pdfPath, '%PDF-1.4 fake');
+    const fetchImpl = vi.fn(async () => new Response('cloud unavailable', { status: 503 }));
+
+    await expect(
+      ingestWithMinerUApi(pdfPath, '合同', 'DOC-HTTP', {
+        apiKey: 'test-key',
+        fetchImpl,
+        uploadTimeoutMs: 1,
+      }),
+    ).rejects.toThrowError(/batch request failed \(HTTP 503\)/);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the independent upload timeout for the presigned PUT', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mineru-api-upload-'));
+    const pdfPath = join(dir, 'sample.pdf');
+    writeFileSync(pdfPath, '%PDF-1.4 fake');
+    const calls: Array<RequestInit | undefined> = [];
+    const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      calls.push(init);
+      if (calls.length === 1) {
+        return new Response(
+          JSON.stringify({ code: 0, data: { batch_id: 'B1', file_urls: ['https://example.test/upload'] } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('upload rejected', { status: 403 });
+    }) as typeof fetch;
+
+    await expect(
+      ingestWithMinerUApi(pdfPath, '合同', 'DOC-UPLOAD', {
+        apiKey: 'test-key',
+        fetchImpl,
+        uploadTimeoutMs: 12345,
+      }),
+    ).rejects.toThrowError(/upload failed \(HTTP 403\)/);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.signal).toBeInstanceOf(AbortSignal);
   });
 });

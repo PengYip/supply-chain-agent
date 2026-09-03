@@ -204,6 +204,33 @@ export async function mergeContainsEdge(
   });
 }
 
+/**
+ * Lineage is a projection of document_units, not an append-only history: after
+ * resplit/merge, remove only this container's outgoing CONTAINS edges whose
+ * target is no longer a unit. Document nodes and all business edges are kept.
+ */
+export async function deleteStaleContainsEdges(
+  containerDocId: string,
+  keepUnitDocIds: string[],
+): Promise<void> {
+  const session = getDriver().session();
+  try {
+    await session.executeWrite(async (txc) => {
+      await txc.run(
+        `
+        MATCH (container:Document {name: $containerDocId})
+        MATCH (container)-[rel:CONTAINS]->(unit:Document)
+        WHERE NOT unit.name IN $keepUnitDocIds
+        DELETE rel
+        `,
+        { containerDocId, keepUnitDocIds },
+      );
+    });
+  } finally {
+    await session.close();
+  }
+}
+
 export interface FindEntitiesInput {
   kind?: string;
   name: string;

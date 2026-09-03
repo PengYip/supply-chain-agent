@@ -28,12 +28,16 @@ export function useSessionMessages(
 ) {
   const [messages, setMessages] = useState<UIMessage[]>([])
   const pipelineRef = useRef<RunPipeline | null>(null)
+  // Authoritative snapshots are asynchronous. This monotonically increases
+  // whenever a new streaming pipeline starts; a snapshot response may only
+  // replace state while the same generation is still current.
+  const pipelineEpochRef = useRef(0)
+  const sessionIdRef = useRef(sessionId)
   // 是否见过 busy(快照或 run.started): 覆盖「run 被杀时连一个 chunk 都没
   // 到达(pipeline 尚未建立)」的窗口 —— 此时同样需要按服务端快照重同步,
   // 否则被杀 run 已持久化的部分文本永远不会出现。
   const sawBusyRef = useRef(false)
   const onSessionCreatedRef = useRef(opts?.onSessionCreated)
-  onSessionCreatedRef.current = opts?.onSessionCreated
 
   const closePipeline = useCallback(() => {
     const p = pipelineRef.current
@@ -47,6 +51,13 @@ export function useSessionMessages(
     }
   }, [])
 
+  useEffect(() => {
+    sessionIdRef.current = sessionId
+  }, [sessionId])
+  useEffect(() => {
+    onSessionCreatedRef.current = opts?.onSessionCreated
+  })
+
   /** Spin up a chunk stream + readUIMessageStream consumer for a new run.
    *  Each yielded UIMessage is a full snapshot — replace the matching
    *  assistant message (by id) or append it. */
@@ -54,6 +65,7 @@ export function useSessionMessages(
     // Close any prior pipeline first (defensive — run.started should precede
     // parts, but a rejoin after mid-run disconnect may double-fire).
     closePipeline()
+    pipelineEpochRef.current += 1
     const msgId = generateId()
     pipelineRef.current = { controller: null, msgId }
 
@@ -111,10 +123,16 @@ export function useSessionMessages(
    *  and re-syncing clears any transient assembly artifacts. */
   const refreshSnapshot = useCallback(() => {
     if (!sessionId) return
+    const requestedSessionId = sessionId
+    const requestedEpoch = pipelineEpochRef.current
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (!data) return
+        // Ignore two races: a response from the previous session after a switch,
+        // and a terminal-run snapshot arriving after the next run has started.
+        if (sessionIdRef.current !== requestedSessionId) return
+        if (pipelineEpochRef.current !== requestedEpoch) return
         const msgs = (data as { messages?: UIMessage[] }).messages
         setMessages(Array.isArray(msgs) ? msgs : [])
       })

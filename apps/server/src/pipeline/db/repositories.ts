@@ -132,6 +132,7 @@ import {
   getBatchLineageForDocumentsPg,
   clearDocumentUnitsPg,
   deleteDocumentUnitsByIdsPg,
+  failPendingUnitsByParentPg,
   updateDocumentParseStagePg,
   getDocumentParseStagesPg,
   failStaleParsingDocumentsPg,
@@ -1830,6 +1831,25 @@ export async function deleteDocumentUnitsByIds(ctx: DbContext, ids: string[]): P
   ctx.sqlite
     .prepare(`DELETE FROM document_units WHERE id IN (${placeholders})`)
     .run(...ids);
+}
+
+/**
+ * Fail in-flight unit rows when the container cannot provide a block model.
+ * This is the request-path counterpart of failStuckUnitsUnderTerminalDocuments:
+ * users see a terminal unit state immediately instead of waiting for a restart.
+ */
+export async function failPendingUnitsByParent(
+  ctx: DbContext,
+  parentDocId: string,
+): Promise<number> {
+  if (ctx.backend === 'postgres') return failPendingUnitsByParentPg(ctx, parentDocId);
+  const res = ctx.sqlite
+    .prepare(
+      "UPDATE document_units SET status = 'failed' " +
+        "WHERE parent_document_id = ? AND status IN ('pending','processing')",
+    )
+    .run(parentDocId);
+  return res.changes;
 }
 
 /** 宽松 JSON 解析(损坏行按空对象, 与 graphLinkFromPg 同取舍)。导出供 pg twin 复用。 */

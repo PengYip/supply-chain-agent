@@ -12,9 +12,11 @@
 //   资源不存在/非 container/非本人 -> 404; 破坏性守卫 -> 409; 参数 -> 400。
 //
 // requireAuth 由 index.ts 挂载点覆盖(app.use('/api/batch/*', requireAuth))。
+// 修正端点是破坏性写操作: viewer 只读, 与文件上传/移动/删除保持同一角色面。
+// per-container 串行锁防止同一单据组的 resplit/reextract/merge 并发交错。
 
-import { Hono } from 'hono';
-import type { AuthEnv } from '../lib/auth-middleware.js';
+import { Hono, type MiddlewareHandler } from 'hono';
+import { requireRole, type AuthEnv } from '../lib/auth-middleware.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
 import type { DbContext } from '../pipeline/db/client.js';
 import {
@@ -45,6 +47,7 @@ import { VOUCHER_SCHEMAS, type VoucherType } from '../pipeline/schemas/vouchers.
 import type { DocType, Modality } from '../pipeline/types.js';
 
 export const batchRoute = new Hono<AuthEnv>();
+batchRoute.use('*', requireRole('admin', 'trader'));
 
 // DbContext per call -- getDbContext is itself a singleton in dbBackend.
 // Per-call resolution keeps route modules testable against fresh per-test
@@ -52,6 +55,36 @@ export const batchRoute = new Hono<AuthEnv>();
 function ctx(): DbContext {
   return getDbContext();
 }
+
+/**
+ * Per-container async mutex (single Node process; PM2 runs one instance).
+ * Long-running model work is intentionally outside DB transactions, so route
+ * mutations must at least be serialized to avoid interleaved lineage rewrites.
+ */
+const containerLocks = new Map<string, Promise<unknown>>();
+async function withContainerLock<T>(docId: string, fn: () => Promise<T>): Promise<T> {
+  const previous = containerLocks.get(docId) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(fn);
+  // Keep an ignored branch in the map so an endpoint failure does not leave an
+  // unhandled rejection behind while later callers still queue behind it.
+  const queued = run.catch(() => undefined);
+  containerLocks.set(
+    docId,
+    queued,
+  );
+  try {
+    return await run;
+  } finally {
+    if (containerLocks.get(docId) === queued) containerLocks.delete(docId);
+  }
+}
+
+/** Hono adapter: serialize the complete handler by the `:docId` route param. */
+const withContainerParamLock: MiddlewareHandler<AuthEnv> = async (c, next) => {
+  // Hono's generic param lookup widens to string|undefined outside the route
+  // schema; all three mounted paths declare :docId, so '' is unreachable.
+  await withContainerLock(c.req.param('docId') ?? '', next);
+};
 
 interface BoundDetail {
   docId: string;
@@ -133,7 +166,7 @@ function detectedUnitOf(row: DocumentUnitRow): DetectedUnit {
  *   400 not_parsed / vlm_unconfigured; 404 not_found;
  *   409 unit_bound(detail); 500 resplit_failed
  */
-batchRoute.post('/:docId/resplit', async (c) => {
+batchRoute.post('/:docId/resplit', withContainerParamLock, async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const docId = c.req.param('docId');
@@ -203,7 +236,7 @@ batchRoute.post('/:docId/resplit', async (c) => {
  *   400 invalid_rotation / invalid_doc_type / no_child / block_model_missing
  *   404 not_found(unit 不属于该 container 一并 404); 409 unit_bound
  */
-batchRoute.post('/:docId/units/:unitId/reextract', async (c) => {
+batchRoute.post('/:docId/units/:unitId/reextract', withContainerParamLock, async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const docId = c.req.param('docId');
@@ -315,7 +348,7 @@ batchRoute.post('/:docId/units/:unitId/reextract', async (c) => {
  *   200 { ok: true, mergedUnitId, docId }   (docId = 重建的新子单据)
  *   400 invalid_unit_ids(<2 / 未知 / 跨 container); 404 not_found; 409 unit_bound
  */
-batchRoute.post('/:docId/units/merge', async (c) => {
+batchRoute.post('/:docId/units/merge', withContainerParamLock, async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const docId = c.req.param('docId');

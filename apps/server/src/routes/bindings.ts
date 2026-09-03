@@ -340,7 +340,7 @@ bindingsRoute.post('/reject', async (c) => {
 
 const createSchema = z.object({
   documentId: z.string().min(1),
-  contractNo: z.string().min(1),
+  contractNo: z.string().trim().min(1).max(128),
   relation: z.string().min(1),
   note: z.string().optional(),
   targetKind: z.enum(['Contract', 'Project']).optional(),

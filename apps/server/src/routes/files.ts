@@ -55,6 +55,12 @@ import { setModalityHint } from '../pipeline/modalityHints.js';
 
 export const filesRoute = new Hono<AuthEnv>();
 filesRoute.use('*', requireAuth);
+filesRoute.patch('/reorder', requireRole('admin', 'trader'));
+filesRoute.patch('/move', requireRole('admin', 'trader'));
+filesRoute.post('/mkdir', requireRole('admin', 'trader'));
+filesRoute.delete('/rmdir', requireRole('admin', 'trader'));
+filesRoute.patch('/folder-path', requireRole('admin', 'trader'));
+filesRoute.delete('/:key', requireRole('admin', 'trader'));
 
 // One DbContext per call -- getDbContext is itself a singleton in dbBackend
 // (same 'pipeline.db' / DB as the agent, so ingested docs are immediately

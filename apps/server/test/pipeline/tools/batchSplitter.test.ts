@@ -5,7 +5,7 @@
 //  - 开启 + 检测 N>1: container + N 个子单据独立走全链路, 子单据块模型按页
 //    区间切片, document_units 落库含 padding bbox 与 manifest;
 //  - 幂等: 已拆分文件重跑不重复生成子单据;
-//  - container 解析失败: unit 行保留 pending, 不生成子单据。
+//  - container 解析失败: unit 行立即失败(无 pending 假在途), 不生成子单据。
 //  - Phase 2(见文末 describe): formType 经注册表映射到 voucher 路由的 unit
 //    用 bbox 裁剪图走 VLM 凭证抽取(旋回双候选 + 两遍读数共识), OCR 块保留
 //    给 chunk/recall; 未映射 unit 维持 OCR 路径。
@@ -604,7 +604,7 @@ describe('processDocumentWithBatch (灰度入口)', () => {
     await expect(run).rejects.toThrow(/document_not_found/);
   });
 
-  it('开启 + container 解析失败: unit 行保留 pending, 不生成子单据', async () => {
+  it('开启 + container 解析失败: unit 行立即失败, 不生成子单据', async () => {
     const pdfPath = join(dir, 'ocr-fail.pdf');
     await makeTwoPagePdf(pdfPath);
     // 无 MinerU sidecar 且本机无 mineru CLI -> OCR 失败 -> needs_ocr。
@@ -624,7 +624,7 @@ describe('processDocumentWithBatch (灰度入口)', () => {
     expect(docRows()).toHaveLength(1);
     const units = await listDocumentUnitsByParent(ctx, docId);
     expect(units).toHaveLength(2);
-    expect(units.every((u) => u.status === 'pending' && u.childDocumentId === null)).toBe(true);
+    expect(units.every((u) => u.status === 'failed' && u.childDocumentId === null)).toBe(true);
   });
 
   it('页数超上限: 显式失败(reason 含实际页数与上限), 不回落整本 legacy', async () => {

@@ -5,6 +5,7 @@
 // in the local root .env turns "OCR fails fast" test paths into LIVE cloud
 // calls (observed: batchSplitter 'container 解析失败' timing out against the
 // real MinerU API). Mirrors CI, where no .env exists at all.
+process.env.OPENAI_API_KEY ??= 'ci-dummy-key'; // env.ts requires it; tests never call the API
 process.env.PARSE_BACKEND = 'mineru'; // local adapter: fails fast without the CLI binary
 process.env.MINERU_API_KEY = ''; // '' is falsy -> adapters take the missing-key error path
 process.env.QIANFAN_API_KEY = '';
