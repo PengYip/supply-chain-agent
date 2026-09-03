@@ -114,16 +114,13 @@ export async function fetchSharedFileBlob(token: string, key: string): Promise<B
   return res.blob()
 }
 
-/** Resolve a short-lived download URL for a shared file. Return null for
- *  transport/server errors so preview remains usable even when download fails. */
+/** Resolve a same-origin blob URL for a shared file. Shared deployments often
+ *  expose MinIO only on an internal endpoint, so downloads reuse the authorized
+ *  app stream instead of asking the server for a presigned browser URL. */
 export async function fetchSharedFileUrl(token: string, key: string): Promise<string | null> {
   try {
-    const res = await fetch(
-      `/api/share/${encodeURIComponent(token)}/file-url?key=${encodeURIComponent(key)}`,
-    )
-    if (!res.ok) return null
-    const data = (await res.json()) as { url?: unknown }
-    return typeof data.url === 'string' && data.url.length > 0 ? data.url : null
+    const blob = await fetchSharedFileBlob(token, key)
+    return URL.createObjectURL(blob)
   } catch {
     return null
   }

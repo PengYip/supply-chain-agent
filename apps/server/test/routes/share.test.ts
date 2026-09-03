@@ -23,7 +23,6 @@ vi.mock('../../src/pipeline/db/dbBackend.js', async (importOriginal) => {
 const { minioHolder } = vi.hoisted(() => ({
   minioHolder: {
     getObject: async () => { throw new Error('unexpected getObject') },
-    presignedGetObject: async () => { throw new Error('unexpected presign') },
   },
 }));
 vi.mock('../../src/lib/minio.js', () => ({
@@ -186,7 +185,6 @@ describe('GET /api/share/:token/file (public, object-level authz)', () => {
 
   beforeEach(() => {
     minioHolder.getObject = vi.fn(async () => Readable.from([Buffer.from('pdf-bytes')]));
-    minioHolder.presignedGetObject = vi.fn(async () => 'https://minio.example/signed');
   });
 
   async function shareAttachment(tokenOwner = 'u1') {
@@ -213,12 +211,5 @@ describe('GET /api/share/:token/file (public, object-level authz)', () => {
     );
     expect(res.status).toBe(404);
     expect(minioHolder.getObject).not.toHaveBeenCalled();
-  });
-
-  it('签发短期下载地址前同样校验快照成员资格', async () => {
-    const { token } = await shareAttachment();
-    const res = await publicApp().request(`/api/share/${token}/file-url?key=${encodeURIComponent(fileKey)}`);
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ url: 'https://minio.example/signed' });
   });
 });

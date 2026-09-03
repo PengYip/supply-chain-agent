@@ -85,7 +85,13 @@ export function FilePreviewModal({
   const handleDownload = useCallback(async () => {
     if (fetchDownloadUrl) {
       const url = await fetchDownloadUrl(file.key)
-      if (url) window.open(url, '_blank')
+      if (!url) return
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = file.name
+      anchor.rel = 'noopener'
+      anchor.click()
+      URL.revokeObjectURL(url)
       return
     }
     try {
@@ -95,7 +101,7 @@ export function FilePreviewModal({
         window.open(url, '_blank')
       }
     } catch { /* ignore */ }
-  }, [file.key, fetchDownloadUrl])
+  }, [file.key, file.name, fetchDownloadUrl])
 
   return (
     <div

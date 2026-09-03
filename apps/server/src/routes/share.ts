@@ -105,20 +105,3 @@ shareRoute.get('/:token/file', async (c) => {
     },
   });
 });
-
-// Browser preview needs only the stream; keep download as an explicit endpoint
-// so a blob fetch never has to parse a presigned URL from stream headers.
-shareRoute.get('/:token/file-url', async (c) => {
-  const token = c.req.param('token');
-  const key = c.req.query('key') ?? '';
-  const authorized = await authorizeSharedFile(token, key);
-  if (!authorized) return c.json({ error: 'not found' }, 404);
-
-  try {
-    const url = await minioClient.presignedGetObject(MINIO_BUCKET, key, 3600);
-    return c.json({ url });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return c.json({ error: 'presign failed', detail: msg }, 500);
-  }
-});
