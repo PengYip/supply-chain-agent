@@ -124,8 +124,31 @@ describe('compressByBudget - summary budget', () => {
   });
 });
 
-describe('compressByBudget - structured evidence summaries', () => {
-  it('keeps review-card fields available to the model while dropping bulky chunk text', () => {
+describe('compressByBudget - full-budget evidence outputs', () => {
+  it('passes declared full-budget evidence outputs through by contract', () => {
+    // Regression guard for the list_binding_proposals false-empty incident:
+    // the real contract lookup (not a custom summary lookup) must leave the
+    // proposals available to the model.
+    const value = {
+      matchCount: 2,
+      proposals: [
+        { bindingId: 'BD-1', documentId: 'DOC-1', contractNo: 'HT-1' },
+        { bindingId: 'BD-2', documentId: 'DOC-2', contractNo: 'HT-2' },
+      ],
+      noise: 'x'.repeat(5000),
+    };
+    const messages: ModelMessage[] = [
+      assistantToolCallMessage('list_binding_proposals'),
+      toolMessage('list_binding_proposals', { type: 'json', value }),
+    ];
+    const out = compressByBudget(messages);
+    expect(out).toBe(messages);
+    const o = firstOutput(out) as { value: typeof value };
+    expect(o.value.matchCount).toBe(2);
+    expect(o.value.proposals).toHaveLength(2);
+  });
+
+  it('keeps review-card fields and chunk evidence available to the model', () => {
     const review = {
       docId: 'DOC-lab',
       docType: '化验报告',
@@ -167,8 +190,8 @@ describe('compressByBudget - structured evidence summaries', () => {
     expect(JSON.stringify(o.value.fields)).toContain('4871');
     expect(JSON.stringify(o.value.fields)).toContain('0.81');
     expect(JSON.stringify(o.value.fields)).toContain('30.84');
-    expect(o.value.chunkTagDetails).toBeUndefined();
-    expect(o.value._summarized).toBe(true);
+    expect(o.value.chunkTagDetails).toEqual(review.chunkTagDetails);
+    expect(o.value._summarized).toBeUndefined();
   });
 
   it('keeps extract_fields evidence fields available to the model', () => {
@@ -207,7 +230,7 @@ describe('compressByBudget - structured evidence summaries', () => {
     const fields = o.value.fields as Array<{ name: string; value: string }>;
     expect(fields.find((f) => f.name === '指标1.低位发热量_千卡每kg')?.value).toContain('4871');
     expect(fields.find((f) => f.name === '指标2.全硫_百分比')?.value).toContain('0.81');
-    expect(o.value._summarized).toBe(true);
+    expect(o.value._summarized).toBeUndefined();
   });
 });
 

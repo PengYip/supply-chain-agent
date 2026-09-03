@@ -14,6 +14,7 @@ import clsx from 'clsx'
 import { FileAttachmentCard } from './FileAttachmentCard'
 import { MarkdownContent } from './chat/MarkdownContent'
 import { ToolGroupCard } from './chat/RealToolSteps'
+import { toolLabel } from '../lib/toolLabels'
 
 /** Write message text to the clipboard. Primary path is navigator.clipboard
  *  (secure context); the execCommand fallback is defensive for non-secure
@@ -66,7 +67,10 @@ const SoftGateCard: React.FC<{
           <ShieldAlert className="w-3.5 h-3.5 text-warning" />
         </div>
         <div className="min-w-0">
-          <div className="text-sm font-medium text-ink truncate">操作确认 · {toolName}</div>
+          <div className="text-sm font-medium text-ink truncate">
+            操作确认 · {toolLabel(toolName)}
+            <span className="ml-1 text-[10px] font-mono text-ink-soft/70">{toolName}</span>
+          </div>
           {formatArgs(args) && (
             <div className="text-[11px] font-mono text-primary-500 bg-white/50 rounded px-1.5 py-0.5 border border-line/50 inline-block mt-1 truncate max-w-full">
               {formatArgs(args)}

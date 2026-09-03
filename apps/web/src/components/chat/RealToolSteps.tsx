@@ -22,6 +22,7 @@ import clsx from 'clsx'
 import { DocumentReviewCard, type DocumentReviewPayload } from '../DocumentReviewCard'
 import { MarkdownContent } from './MarkdownContent'
 import { SettlementEvidenceCard, parseSettlementEvidence } from './SettlementEvidenceCard'
+import { toolLabel } from '../../lib/toolLabels'
 
 /** 工具调用渲染族（2026-08-31 从 RealMessageItem 原样抽取为共享组件）：
  *  主聊天与只读分享页共用，保证工具卡片的折叠行、展开详情、通用结果框、
@@ -77,7 +78,7 @@ const BlockedCard: React.FC<{ toolName: string; args: unknown; blocked: NonNulla
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-ink truncate">
-            {esc ? '人工复核工单' : '操作已阻断'} · {toolName}
+            {esc ? '人工复核工单' : '操作已阻断'} · {toolLabel(toolName)}
           </div>
           <div className="mt-1.5 flex items-center flex-wrap gap-1.5">
             <span className="text-[11px] font-mono text-primary-500 bg-surface rounded px-1.5 py-0.5 border border-line">
@@ -200,7 +201,12 @@ const RealToolStep: React.FC<{
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-medium text-ink">{step.toolName}</span>
+            <span className="text-sm font-medium text-ink shrink-0" title={step.toolName}>
+              {toolLabel(step.toolName)}
+            </span>
+            <span className="hidden sm:inline text-[10px] font-mono text-ink-soft/70 shrink-0">
+              {step.toolName}
+            </span>
             <span className="text-[11px] font-mono text-primary-500 bg-white/50 rounded px-1.5 py-0.5 border border-line/50 truncate max-w-full">
               {formatArgs(step.args)}
             </span>
@@ -250,7 +256,12 @@ const RealToolStep: React.FC<{
         className="w-full text-left flex items-center gap-2 rounded-md px-1 -mx-1 py-1 transition-colors hover:bg-white/60"
       >
         <span className="shrink-0 flex items-center">{statusIcon}</span>
-        <span className="text-sm font-medium text-ink shrink-0">{step.toolName}</span>
+        <span className="text-sm font-medium text-ink shrink-0" title={step.toolName}>
+          {toolLabel(step.toolName)}
+        </span>
+        <span className="hidden sm:inline text-[10px] font-mono text-ink-soft/70 shrink-0">
+          {step.toolName}
+        </span>
         <span className={clsx('text-[11px] shrink-0', statusLabelClass)}>{statusLabel}</span>
         <span className="text-[11px] text-ink-soft truncate min-w-0 flex-1">{summary}</span>
         <ChevronDown className={clsx('w-3.5 h-3.5 text-ink-soft transition-transform shrink-0', open && 'rotate-180')} />
