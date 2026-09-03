@@ -75,7 +75,7 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     persist: 'business', risk: { level: 'L1', injection: 'safe' },
   },
   query_orders: {
-    output: 'raw', budget: 'summary', signal: 'counter',
+    output: 'raw', budget: 'full', signal: 'counter',
     persist: 'business', risk: { level: 'L1', injection: 'safe' },
   },
   cross_check: {
@@ -95,7 +95,7 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     persist: 'session', risk: { level: 'L1', injection: 'safe' },
   },
   verify_document_fields: {
-    output: 'tagged', budget: 'summary', signal: 'counter',
+    output: 'tagged', budget: 'full', signal: 'counter',
     persist: 'session', risk: { level: 'L1', injection: 'external' },
   },
   ingest_document: {
@@ -103,16 +103,17 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     persist: 'business', risk: { level: 'L1', injection: 'external' },
   },
   extract_fields: {
-    output: 'tagged', budget: 'summary', signal: 'todo',
+    output: 'tagged', budget: 'full', signal: 'todo',
     persist: 'business', risk: { level: 'L1', injection: 'external' },
   },
   inspect_extraction: {
     // On-demand drill-down for ONE already-extracted field. Returns the field
     // value + recomputed citedText (both document-derived strings) wrapped via
     // tagExternal -> output 'tagged' / injection 'external'. Bounded to a single
-    // field -> budget 'summary'. Read-only lookup -> risk L1. Backed by the
+    // field -> budget 'full' so the evidence itself reaches the model.
+    // Read-only lookup -> risk L1. Backed by the
     // persisted extraction row (business data) -> persist 'business'.
-    output: 'tagged', budget: 'summary', signal: 'counter',
+    output: 'tagged', budget: 'full', signal: 'counter',
     persist: 'business', risk: { level: 'L1', injection: 'external' },
   },
   bind_document: {
@@ -164,42 +165,43 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
   graph_find_entity: {
     // Read-only kind+name lookup. Returns graph-stored names/ids (trusted
     // agent graph data, no document text) -> output 'raw' / injection 'safe'.
-    // Short bounded lists -> budget 'summary'. signal 'counter' (a read).
+    // The elementId list is the evidence needed for graph traversal / links;
+    // compressing it can leave only `{status:'ok'}` -> budget 'full'.
     // persist 'graph' marks the store it reads.
-    output: 'raw', budget: 'summary', signal: 'counter',
+    output: 'raw', budget: 'full', signal: 'counter',
     persist: 'graph', risk: { level: 'L1', injection: 'safe' },
   },
   recall_documents: {
     // Returns BM25 snippets of ingested document text -> external content, so
     // output is 'tagged' (injectionDefense wraps each snippet, like extract_fields).
-    // budget 'snippets': recall output is a matches array with NO key fields, so
-    // the 'summary' tier would drop the entire matches array (model saw only
-    // {contractNo, _summarized: true} and could not answer). 'snippets' keeps the
-    // first 10 matches' document_id/chunk_index/snippet(<=500)/source so the model
-    // can actually read the retrieved content. signal 'counter' (a read).
+    // budget 'full': matches are already bounded by the caller-supplied limit
+    // and fullText mode is bounded upstream. Additional snippet/match clipping
+    // made the model believe evidence was unavailable; do not compress again.
+    // signal 'counter' (a read).
     // fullText mode (2026-08-28 spec): short docs additionally carry
     // mode/documents[]/degradedDocIds -- compressSnippetsOutput preserves those
     // (the per-document texts are the evidence, bounded <=16K chars upstream).
     // persist 'vector' is CONCEPTUAL here: v1 stores the index in FTS5 (not
     // pgvector/sqlite-vec); the field marks the recall layer's logical target for
     // when the vector path lands.
-    output: 'tagged', budget: 'snippets', signal: 'counter',
+    output: 'tagged', budget: 'full', signal: 'counter',
     persist: 'vector', risk: { level: 'L1', injection: 'external' },
   },
   execute_code: {
     // Executes arbitrary Python in an isolated sandbox. stdout/stderr/results
     // may contain arbitrary text (user code can print anything, including
-    // prompt-injection payloads) -> output 'tagged'. budget 'summary': code
-    // output can be large (e.g. printing a big dataframe) and benefits from
-    // compression. signal 'counter' (a read-like computation). persist 'session'
+    // prompt-injection payloads) -> output 'tagged'. budget 'full': code output
+    // is bounded upstream, and dropping stdout/results can hide the exact
+    // computation the model just performed. signal 'counter' (a read-like
+    // computation). persist 'session'
     // (ephemeral: no business state is mutated). risk L1 (auto-execute: the
     // sandbox is isolated, no real-world side effects) but injection 'external'
     // (user-supplied code runs inside).
-    output: 'tagged', budget: 'summary', signal: 'counter',
+    output: 'tagged', budget: 'full', signal: 'counter',
     persist: 'session', risk: { level: 'L1', injection: 'external' },
   },
   present_document_review: {
-    output: 'tagged', budget: 'summary', signal: 'none',
+    output: 'tagged', budget: 'full', signal: 'none',
     persist: 'business', risk: { level: 'L1', injection: 'external' },
   },
   update_document_fields: {
@@ -209,16 +211,16 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
   list_binding_proposals: {
     // Phase B: 待确认的凭证-合同绑定建议(只读)。返回系统生成的 contractNo/score/
     // evidence(details 为人类可读的中文说明, 无文档原文) -> output 'raw' /
-    // injection 'safe'。条数有界 -> budget 'summary'。signal 'counter'(读)。
-    output: 'raw', budget: 'summary', signal: 'counter',
+    // injection 'safe'。proposals/elementId 是模型继续操作的必要证据 -> full。
+    output: 'raw', budget: 'full', signal: 'counter',
     persist: 'business', risk: { level: 'L1', injection: 'safe' },
   },
   // 2026-08-27 §15 结算引擎: gather_settlement_evidence 返回台账字段与化验/
   // 凭证抽取字段(文档原文回流, 可能携带注入话术) -> output 'tagged' /
-  // injection 'external'。单合同证据有界 -> budget 'summary'。只读 -> L1,
+  // injection 'external'。单合同证据有界 -> budget 'full'。只读 -> L1,
   // signal 'counter', persist 'business'。
   gather_settlement_evidence: {
-    output: 'tagged', budget: 'summary', signal: 'counter',
+    output: 'tagged', budget: 'full', signal: 'counter',
     persist: 'business', risk: { level: 'L1', injection: 'external' },
   },
   // confirm_settlement 是结算落台账的唯一写面(L2 软门控, 人工确认通道)。

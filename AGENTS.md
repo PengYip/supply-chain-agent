@@ -245,6 +245,21 @@ server.
 - Stage only the files relevant to the current change; do not sweep in
   unrelated untracked files (e.g. stray docs/plans).
 
+## ERP 附件直连下载（样本采集工具链）
+
+`样本收集/` 下的 PowerShell 脚本（`download-erp-samples.ps1` 采集、`sort-samples.ps1` 去重分拣；不入 CI）用 Orca 内置浏览器 + 页面内 JS 从 ERP（dtms.hbmall.com.cn）批量下载收货附件。已验证的链路与坑：
+
+- **认证**：token 不在 cookie，在 localStorage `DTMS_ADMIN__PRODUCTION__1.0.1__COMMON__LOCAL__KEY__` -> `value["ACCESS_TOKEN__"].value`。API 请求头必须 `Authorization: Bearer <token>`（少 `Bearer` 前缀报"未获取到Authorization"）。
+- **附件直链**：详情页加载时对每个附件调 `/commonApi/file/preview?voucher=<uuid>`（带 Bearer 头），响应含 `fileName`、`docPath`（带扩展名）、`authorization`（JWT）。下载直链 = `https://dtms-file.hbmall.com.cn/fileManagerController/readPartImage?authorization=<JWT>&fullfilename=<urlencode(fileName+ext)>`，签名内嵌 URL，无需会话即可 curl。
+- **抓 voucher**：在列表页给 fetch/XHR 装 hook（SPA 路由切换不换 JS realm，hook 跨页面存活），点"查看"进详情后从 `window.__urls` 正则提取 uuid。localStorage `VIEW__FILE__VOUCHERS__` 也映射 fileInfo->voucher。
+- **Orca 内置浏览器自动化**（`orca eval/click/tab/snapshot`）注意：
+  - eval 驱动的 JS 点击开新标签页会被 Chrome 弹窗拦截器累计封锁 -> 长流程不要依赖 window.open，改直链下载或 `orca tab create`；
+  - runtime 间歇断连（`runtime_unavailable`）-> 所有 orca 调用必须带 2-3 次重试；
+  - `snapshot`/`network` 在重 DOM 页面会挂死 -> 优先 `eval` 精准 DOM 操作；
+  - PowerShell 传参：orca 参数用单引号字符串，JS 内部全用双引号；`@e2` 元素引用必须加引号（防 PS splat）；
+  - 脚本必须用 pwsh 7 跑（`powershell` 5.1 把无 BOM UTF-8 当 ANSI，中文字符串会炸）。
+- **ERP 页面坑**：收货列表是 Element UI 表格 + 固定列克隆（每个"查看"渲染两次，按 tr 文本去重）；分页是 Ant Design（`.ant-pagination-next`，disabled 类判断末页）；详情页就绪判据 = body 出现 `GMPC` 批次号；附件区元素 `.file-view-text-item`；非 PDF 附件（xls/docx/jpg）预览链路不同，按 docPath 扩展名跳过。
+
 ## Tool design methodology
 
 Tools are governed by a verifiable methodology (2026-08-28, distilled from

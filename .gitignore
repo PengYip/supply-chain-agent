@@ -80,3 +80,6 @@ apps/server/eval/agent/datasets/user/
 apps/web/public/vendor/
 apps/web/public/flyfish-viewer-assets.json
 apps/web/dummy-non-existing-folder/
+
+# ERP 业务样本(含商业数据,禁止入库)
+样本收集/

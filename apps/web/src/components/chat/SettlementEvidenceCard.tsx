@@ -510,12 +510,15 @@ const ContributionRow: React.FC<{ c: SettlementContribution }> = ({ c }) => {
   )
 }
 
-const FlowListRow: React.FC<{ flow: SettlementFlowRow }> = ({ flow }) => {
+const FlowListRow: React.FC<{ flow: SettlementFlowRow; readOnly?: boolean }> = ({
+  flow,
+  readOnly = false,
+}) => {
   // 六向词汇映射复用 api/flows 的 SSOT(未知组合回落 原样拼接)
   const dirLabel = flowDirectionLabel(flow.flowType as FlowType, flow.direction as FlowDirection)
   const qtyValue = flow.quantityValue ?? flow.quantityTon
   const qtyUnit = flow.unit ?? (flow.quantityValue === null && flow.quantityTon !== null ? '吨' : null)
-  const canOpen = flow.documentId.length > 0
+  const canOpen = !readOnly && flow.documentId.length > 0
   return (
     <button
       type="button"
@@ -551,9 +554,11 @@ const FlowListRow: React.FC<{ flow: SettlementFlowRow }> = ({ flow }) => {
   )
 }
 
-export const SettlementEvidenceCard: React.FC<{ payload: SettlementEvidencePayload }> = ({
-  payload,
-}) => {
+export const SettlementEvidenceCard: React.FC<{
+  payload: SettlementEvidencePayload
+  /** 免登录分享宿主隐藏登录态复核入口，其余结构化内容照常展示。 */
+  readOnly?: boolean
+}> = ({ payload, readOnly = false }) => {
   const { contractNo, contract, flows, progress, qualityDocs, pendingQualityDocs, settlements, usage } =
     payload
   const [flowsExpanded, setFlowsExpanded] = useState(false)
@@ -749,7 +754,7 @@ export const SettlementEvidenceCard: React.FC<{ payload: SettlementEvidencePaylo
               )}
             >
               {(flowsExpanded ? flows : flows.slice(0, FLOW_COLLAPSE_THRESHOLD)).map((f) => (
-                <FlowListRow key={f.flowId} flow={f} />
+                <FlowListRow key={f.flowId} flow={f} readOnly={readOnly} />
               ))}
             </div>
             {flows.length > FLOW_COLLAPSE_THRESHOLD && (
@@ -778,14 +783,16 @@ export const SettlementEvidenceCard: React.FC<{ payload: SettlementEvidencePaylo
               <div key={q.documentId} className="rounded border border-line/50 bg-surface/50 px-2 py-1.5">
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-medium text-ink truncate">{q.docType}</span>
-                  <button
-                    type="button"
-                    onClick={() => requestOpenReview(q.documentId)}
-                    title="打开该质量凭证的复核卡"
-                    className="ml-auto shrink-0 cursor-pointer whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
-                  >
-                    复核
-                  </button>
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => requestOpenReview(q.documentId)}
+                      title="打开该质量凭证的复核卡"
+                      className="ml-auto shrink-0 cursor-pointer whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+                    >
+                      复核
+                    </button>
+                  )}
                 </div>
                 {q.fields.length > 0 ? (
                   <div className="mt-1 flex flex-wrap gap-1">
@@ -832,14 +839,16 @@ export const SettlementEvidenceCard: React.FC<{ payload: SettlementEvidencePaylo
                     置信度 {Math.round(d.confidence * 100)}%
                   </span>
                 )}
-                <button
-                  type="button"
-                  onClick={() => requestOpenReview(d.documentId)}
-                  title="打开该单据的复核卡核对内容"
-                  className="ml-auto shrink-0 cursor-pointer whitespace-nowrap text-primary hover:underline"
-                >
-                  复核单据
-                </button>
+                {!readOnly && (
+                  <button
+                    type="button"
+                    onClick={() => requestOpenReview(d.documentId)}
+                    title="打开该单据的复核卡核对内容"
+                    className="ml-auto shrink-0 cursor-pointer whitespace-nowrap text-primary hover:underline"
+                  >
+                    复核单据
+                  </button>
+                )}
               </div>
             ))}
           </div>

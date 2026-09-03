@@ -124,6 +124,116 @@ describe('compressByBudget - summary budget', () => {
   });
 });
 
+describe('compressByBudget - full-budget evidence outputs', () => {
+  it('passes declared full-budget evidence outputs through by contract', () => {
+    // Regression guard for the list_binding_proposals false-empty incident:
+    // the real contract lookup (not a custom summary lookup) must leave the
+    // proposals available to the model.
+    const value = {
+      matchCount: 2,
+      proposals: [
+        { bindingId: 'BD-1', documentId: 'DOC-1', contractNo: 'HT-1' },
+        { bindingId: 'BD-2', documentId: 'DOC-2', contractNo: 'HT-2' },
+      ],
+      noise: 'x'.repeat(5000),
+    };
+    const messages: ModelMessage[] = [
+      assistantToolCallMessage('list_binding_proposals'),
+      toolMessage('list_binding_proposals', { type: 'json', value }),
+    ];
+    const out = compressByBudget(messages);
+    expect(out).toBe(messages);
+    const o = firstOutput(out) as { value: typeof value };
+    expect(o.value.matchCount).toBe(2);
+    expect(o.value.proposals).toHaveLength(2);
+  });
+
+  it('keeps review-card fields and chunk evidence available to the model', () => {
+    const review = {
+      docId: 'DOC-lab',
+      docType: '化验报告',
+      classificationConfidence: 0.9,
+      fields: [
+        {
+          name: '指标',
+          value: JSON.stringify([
+            { 基准: 'ar', 全水_百分比: 18.2, 低位发热量_千卡每kg: 4871 },
+            { 基准: 'ad', 灰分_百分比: 14.63, 全硫_百分比: 0.81 },
+            { 基准: 'daf', 挥发分_百分比: 30.84 },
+          ]),
+          confidence: 0.9,
+          needsReview: false,
+        },
+        { name: '重量_吨', value: 5429.24, confidence: 0.9, needsReview: false },
+      ],
+      overallConfidence: 0.9,
+      proposedRelationships: [],
+      tags: ['化验报告'],
+      chunkTags: ['noise'],
+      chunkTagDetails: [
+        { tag: 'noise', chunks: [{ chunkIndex: 0, text: 'x'.repeat(3000) }] },
+      ],
+      vectorization: { status: 'skipped', mode: 'test', chunkCount: 1 },
+      reviewStatus: 'confirmed',
+      warnings: [],
+      batch: null,
+    };
+    const messages: ModelMessage[] = [
+      assistantToolCallMessage('present_document_review'),
+      toolMessage('present_document_review', { type: 'json', value: review }),
+    ];
+
+    const out = compressByBudget(messages);
+    const o = firstOutput(out) as { type: string; value: Record<string, unknown> };
+    expect(o.type).toBe('json');
+    expect(o.value.docType).toBe('化验报告');
+    expect(JSON.stringify(o.value.fields)).toContain('4871');
+    expect(JSON.stringify(o.value.fields)).toContain('0.81');
+    expect(JSON.stringify(o.value.fields)).toContain('30.84');
+    expect(o.value.chunkTagDetails).toEqual(review.chunkTagDetails);
+    expect(o.value._summarized).toBeUndefined();
+  });
+
+  it('keeps extract_fields evidence fields available to the model', () => {
+    const extraction = {
+      extractionId: 'EX-lab',
+      fields: [
+        {
+          name: '指标1.低位发热量_千卡每kg',
+          value: '<external_content source="document">\n4871\n</external_content>',
+          confidence: 0.6,
+          needsReview: true,
+          autoAccepted: false,
+        },
+        {
+          name: '指标2.全硫_百分比',
+          value: '<external_content source="document">\n0.81\n</external_content>',
+          confidence: 0.6,
+          needsReview: true,
+          autoAccepted: false,
+        },
+      ],
+      overallConfidence: 0.6,
+      needsReview: true,
+      missingRequired: [],
+      reason: 'large_serialization:' + 'x'.repeat(5000),
+    };
+    const messages: ModelMessage[] = [
+      assistantToolCallMessage('extract_fields'),
+      toolMessage('extract_fields', { type: 'json', value: extraction }),
+    ];
+
+    const out = compressByBudget(messages);
+    const o = firstOutput(out) as { type: string; value: Record<string, unknown> };
+    expect(o.type).toBe('json');
+    expect(o.value.extractionId).toBe('EX-lab');
+    const fields = o.value.fields as Array<{ name: string; value: string }>;
+    expect(fields.find((f) => f.name === '指标1.低位发热量_千卡每kg')?.value).toContain('4871');
+    expect(fields.find((f) => f.name === '指标2.全硫_百分比')?.value).toContain('0.81');
+    expect(o.value._summarized).toBeUndefined();
+  });
+});
+
 describe('compressByBudget - verdict budget', () => {
   it('reduces a JSON output to a one-line text status', () => {
     const lookup: ContractLookup = () => 'verdict';
