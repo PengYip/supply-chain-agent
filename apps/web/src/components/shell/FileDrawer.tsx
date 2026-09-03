@@ -521,15 +521,16 @@ export function FileDrawer(props: FileDrawerProps) {
 
         {/* 文件树（根区同时是拖拽回根的落点） */}
         <div
+          data-upload-target-dir=""
           className={`min-h-0 flex-1 overflow-y-auto overflow-x-hidden${dnd.dragging ? ' ring-1 ring-inset ring-primary/30' : ''}`}
           onClick={() => setSelectedKey(null)}
           onDragOver={dnd.onDragOver('')}
           onDragLeave={dnd.onDragLeave('')}
           onDrop={handleRootDrop}
         >
-          {dnd.dragging && dnd.dropTarget === '' && (
+          {dnd.dropTarget === '' && (
             <div className="sticky top-0 z-10 border-b border-primary/20 bg-primary/5 px-3 py-1.5 text-center text-[11px] text-primary">
-              拖放到此处移到根目录
+              {dnd.dragging ? '拖放到此处移到根目录' : '松开鼠标，上传到根目录'}
             </div>
           )}
           {loading ? (

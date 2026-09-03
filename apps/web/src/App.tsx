@@ -207,7 +207,7 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
     },
     [uploadQueue],
   );
-  const { dragActive } = usePageFileDrop({ onDropFiles: handlePageDrop });
+  const { dragActive, dropTargetDir } = usePageFileDrop({ onDropFiles: handlePageDrop });
   // Per-docId parse state for files referenced in the conversation, shown on
   // the context chips in RealChatView (解析中 -> 已解析 / 需OCR / 解析失败).
   const [docParseStates, setDocParseStates] = useState<Record<string, DocParseState>>({});
@@ -321,7 +321,7 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
         <AuditView />
       ) : null}
       {/* 全页面拖拽上传提示遮罩：fixed 定位，z-modal 高于文件抽屉 */}
-      <DragDropOverlay visible={dragActive} />
+      <DragDropOverlay visible={dragActive} targetDir={dropTargetDir} />
       {/* 全局复核弹窗单例：docId 作 key，切换目标即重挂载重拉快照。
           挂在 AppShell 内容区之后，z-modal 层级高于文件抽屉。 */}
       {reviewDocId && (
