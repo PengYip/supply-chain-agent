@@ -1,6 +1,12 @@
 import { Hono } from 'hono';
 import { randomUUID } from 'node:crypto';
-import { convertToModelMessages, type ModelMessage, type UIMessage } from 'ai';
+import {
+  convertToModelMessages,
+  type ModelMessage,
+  type TextPart,
+  type UIMessage,
+  type UserModelMessage,
+} from 'ai';
 import { z } from 'zod';
 import type { Role } from '../harness/roleToolRegistry.js';
 import {
@@ -31,9 +37,9 @@ function ctx(): DbContext {
   return _ctx;
 }
 
-function insertBeforeLastUserMessage(
+function attachTurnFileContext(
   messages: ModelMessage[],
-  message: ModelMessage,
+  contextText: string,
 ): ModelMessage[] {
   let lastUserIndex = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -42,12 +48,24 @@ function insertBeforeLastUserMessage(
       break;
     }
   }
-  if (lastUserIndex === -1) return [message, ...messages];
-  return [
-    ...messages.slice(0, lastUserIndex),
-    message,
-    ...messages.slice(lastUserIndex),
-  ];
+  if (lastUserIndex === -1) {
+    return [{ role: 'user', content: contextText }, ...messages];
+  }
+  const lastUser = messages[lastUserIndex] as UserModelMessage;
+  const contextPart: TextPart = { type: 'text', text: `${contextText}\n\n` };
+  const withContext: UserModelMessage =
+    typeof lastUser.content === 'string'
+      ? {
+          role: 'user',
+          content: [contextPart, { type: 'text', text: lastUser.content }],
+        }
+      : {
+          ...lastUser,
+          content: [contextPart, ...lastUser.content],
+        };
+  const next = messages.slice();
+  next[lastUserIndex] = withContext;
+  return next;
 }
 
 // AI SDK 6 `useChat` posts UIMessages in the `parts` format
@@ -55,9 +73,8 @@ function insertBeforeLastUserMessage(
 // Be permissive here and let `convertToModelMessages` do the real validation.
 //
 // contextFiles (Phase 3+): the client may attach the files the user "@-mentioned"
-// in this turn so the agent has their docIds up front. We surface them as a
-// leading system message that tells the model to use recall_documents to read
-// the actual content (the message carries metadata only, never file bytes).
+// in this turn so the agent has their docIds up front. The model-facing metadata
+// is embedded in this turn's user message (never file bytes).
 const BodySchema = z.object({
   messages: z.array(z.any()).min(1),
   role: z.enum(['trader']).default('trader'),
@@ -207,22 +224,19 @@ chatRoute.post('/chat', async (c) => {
             return `${i + 1}. ${f.filename} (docId: ${f.docId}, parseStatus: ${st})`;
           })
           .join('\n');
-        const contextMsg: ModelMessage = {
-          role: 'system',
-          content:
-            '用户在下面这条新消息中引用了以下文件。系统已自动解析并自动抽取这些文件(结构化字段/关系/标签/向量均已就绪), 无需再次录入。\n' +
+        const contextText =
+            '[系统注入·本轮引用文件] 用户在这条消息中引用了以下文件。系统已自动解析并自动抽取这些文件(结构化字段/关系/标签/向量均已就绪), 无需再次录入。后续回复必须处理这些文件, 不得要求用户重新提供。\n' +
             '规则:\n' +
             '- 已解析(parsed)的文件: 直接调用 present_document_review 向用户呈现复核卡。\n' +
             '- 仅当上下文明确说明抽取缺失/失败时, 才调用 extract_fields 重新抽取。\n' +
             '- 禁止对已上传文件调用 ingest_document(上传为仅存储, 且路径不在录入根目录, 会失败)。\n' +
             '- 若某文件为 needs_ocr, 如实告知用户该文件需 OCR 处理后才能使用。\n' +
-            '文件列表:\n' + fileList,
-        };
+            '文件列表:\n' + fileList;
         // Keep per-turn file context adjacent to the new user message. Placing
         // it before the entire history made a generic request such as "录入文件"
         // look like it referred to the most recently discussed old file after
         // history grew, even though this turn referenced a different document.
-        streamMessages = insertBeforeLastUserMessage(baseMessages, contextMsg);
+        streamMessages = attachTurnFileContext(baseMessages, contextText);
       }
       await runSession({
         sessionId,

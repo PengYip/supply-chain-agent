@@ -172,7 +172,7 @@ describe('POST /api/chat (background runtime)', () => {
     runResolve.current();
   });
 
-  it('places the current turn file context after prior history and before the new user message', async () => {
+  it('embeds the current turn file context in the new user message after prior history', async () => {
     const s = await createSession('trader', 'u-chat6');
     await appendMessages(s.id, [
       uiMsgWithId('prior-user', '上一轮文件: DOC-first-turn'),
@@ -200,14 +200,26 @@ describe('POST /api/chat (background runtime)', () => {
     const opts = calls[calls.length - 1]![0] as { messages: Array<Record<string, unknown>> };
     const serialized = opts.messages.map((message) => JSON.stringify(message));
     const priorIndex = serialized.findIndex((message) => message.includes('DOC-first-turn'));
-    const contextIndex = serialized.findIndex((message) => message.includes('DOC-current-turn'));
-    const currentUserIndex = serialized.findIndex(
-      (message) => message.includes('"role":"user"') && message.includes('录入文件'),
-    );
+    // Regression contract: the trusted, machine-generated file list must live in
+    // the SAME ModelMessage as this turn's user text. A separate adjacent
+    // system message was present in the provider prompt but DeepSeek ignored it
+    // for generic turns such as "录入单据" (2026-09-03), so the model asked the
+    // user to re-provide an already-referenced file.
+    const currentUser = opts.messages.find(
+      (message) => message.role === 'user' && JSON.stringify(message).includes('录入文件'),
+    ) as { role: string; content: Array<{ type: string; text?: string }> } | undefined;
 
     expect(priorIndex).toBeGreaterThanOrEqual(0);
-    expect(currentUserIndex).toBeGreaterThanOrEqual(0);
-    expect(contextIndex).toBeGreaterThan(priorIndex);
-    expect(contextIndex).toBeLessThan(currentUserIndex);
+    expect(currentUser).toBeTruthy();
+    expect(currentUser!.role).toBe('user');
+    expect(Array.isArray(currentUser!.content)).toBe(true);
+    const texts = currentUser!.content.map((part) => part.text ?? '');
+    const contextText = texts.find((text) => text.includes('DOC-current-turn')) ?? '';
+    const userText = texts.find((text) => text.includes('录入文件')) ?? '';
+    expect(contextText).toContain('本轮引用文件');
+    expect(contextText).toContain('parseStatus: parsed');
+    expect(userText).toBe('录入文件');
+    // The file instruction is the leading part of the same user message.
+    expect(currentUser!.content[0]!.text).toContain('DOC-current-turn');
   });
 });
