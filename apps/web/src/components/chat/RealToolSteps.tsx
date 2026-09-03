@@ -215,12 +215,12 @@ const RealToolStep: React.FC<{
   // present (and not an error shape), render the dedicated card instead of the
   // generic one-line result box. The error shape ({status:'error'}) and any
   // other output fall back to the generic box below.
-  const reviewPayload = readOnly ? null : isReviewResult(step.toolName, step.result)
+  const reviewPayload = isReviewResult(step.toolName, step.result)
   // load_skill 成功结果走专属 SkillCard(2026-08-28 Skill 化); 失败回落通用框。
   const skillPayload = isSkillPayload(step.toolName, step.result)
-  // gather_settlement_evidence 成功态走结算取证卡(结构化证据 + 溯源入口);
-  // error 形状与只读宿主(分享页, 无复核弹窗总线)回落通用框。
-  const settlementPayload = readOnly ? null : parseSettlementEvidence(step.toolName, step.result)
+  // gather_settlement_evidence 成功态走结算取证卡。分享页传 readOnly，
+  // 卡片保留结构化证据但隐藏登录态复核入口；error 形状回落通用框。
+  const settlementPayload = parseSettlementEvidence(step.toolName, step.result)
 
   // 折叠态状态图标与文案：运行中 / 完成 / 失败
   const statusIcon = isCompleted ? (
@@ -266,9 +266,9 @@ const RealToolStep: React.FC<{
             skillPayload ? (
               <SkillCard payload={skillPayload} />
             ) : reviewPayload ? (
-              <DocumentReviewCard payload={reviewPayload} onOpenBindings={onOpenBindings} />
+              <DocumentReviewCard payload={reviewPayload} onOpenBindings={onOpenBindings} readOnly={readOnly} />
             ) : settlementPayload ? (
-              <SettlementEvidenceCard payload={settlementPayload} />
+              <SettlementEvidenceCard payload={settlementPayload} readOnly={readOnly} />
             ) : (
               <ToolResultBox result={step.result} initiallyExpanded />
             )

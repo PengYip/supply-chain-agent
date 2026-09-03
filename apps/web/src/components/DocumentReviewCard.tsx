@@ -603,7 +603,9 @@ const ContainerUnitRow: React.FC<{
   mergeMode?: boolean
   selected?: boolean
   onToggleMerge?: () => void
-}> = ({ unit, mergeMode = false, selected = false, onToggleMerge }) => {
+  /** 免登录分享宿主隐藏登录态「复核」入口。 */
+  readOnly?: boolean
+}> = ({ unit, mergeMode = false, selected = false, onToggleMerge, readOnly = false }) => {
   const typeTag = businessTypeTag(unit.childDocType ?? unit.detectedFormType)
   const status = unitStatusBadge(unit.unitStatus)
   // 复核状态缺字段(旧版 /units 响应)时: 有子单据按「待复核」兜底(安全侧),
@@ -660,7 +662,7 @@ const ContainerUnitRow: React.FC<{
       </span>
       {unit.needsReview && <FlagBadge />}
       <span className="ml-auto shrink-0">
-        {!mergeMode &&
+        {!mergeMode && !readOnly &&
           (docId ? (
             <button
               type="button"
@@ -699,7 +701,12 @@ const BoundUnitList: React.FC<{ indexes: number[] }> = ({ indexes }) => (
  *  >=2 行确认合并）。units 清单自管： 初始来自快照，修正成功后就地重拉
  *  （弹窗/聊天两种宿主都能看到最新清单），并经 requestRefreshContainers
  *  通知文件树刷新。 */
-const ContainerSplitCard: React.FC<{ docId: string; batch: BatchLineage }> = ({ docId, batch }) => {
+const ContainerSplitCard: React.FC<{
+  docId: string
+  batch: BatchLineage
+  /** 免登录分享宿主只展示谱系清单，隐藏修正入口。 */
+  readOnly?: boolean
+}> = ({ docId, batch, readOnly = false }) => {
   const [units, setUnits] = useState<BatchUnitSummary[]>(() =>
     Array.isArray(batch.units) ? batch.units : [],
   )
@@ -904,14 +911,16 @@ const ContainerSplitCard: React.FC<{ docId: string; batch: BatchLineage }> = ({ 
               mergeMode={mergeMode}
               selected={selectedUnitIds.has(u.unitId)}
               onToggleMerge={() => toggleMergeSelect(u.unitId)}
+              readOnly={readOnly}
             />
           ))}
         </div>
       )}
 
       {/* 底部： 拆分修正入口（重新拆分 / 合并修正） */}
-      <div className="mt-3 pt-3 border-t border-line">
-        {mergeMode ? (
+      {!readOnly && (
+        <div className="mt-3 pt-3 border-t border-line">
+          {mergeMode ? (
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <span className="text-ink font-medium">合并修正</span>
@@ -1106,6 +1115,7 @@ const ContainerSplitCard: React.FC<{ docId: string; batch: BatchLineage }> = ({ 
           </>
         )}
       </div>
+      )}
     </div>
   )
 }
@@ -1172,7 +1182,10 @@ export const DocumentReviewCard: React.FC<{
    *  Provided only when the host can navigate (chat view wires it to App's
    *  openBindingsForDoc); omitted -> the button does not render. */
   onOpenBindings?: (docId: string) => void
-}> = ({ payload, onUpdated, onOpenBindings }) => {
+  /** 免登录分享宿主传入 true：完整展示快照内容，但不水合最新状态、
+   *  不调用登录态接口、不显示更正/确认/重拆/重抽等交互。 */
+  readOnly?: boolean
+}> = ({ payload, onUpdated, onOpenBindings, readOnly = false }) => {
   // The card owns its current state so it can optimistic-update after a POST
   // without needing the parent to re-render the tool result. Initialised once
   // from `payload` (tool results are immutable once the step completes).
@@ -1187,7 +1200,7 @@ export const DocumentReviewCard: React.FC<{
   // 时向服务端拉取一次当前快照, 状态已推进则采纳(404/网络失败静默保留原状)。
   // 依赖仅 docId/初始状态: 挂载后拉一次, 用户本地操作不受影响。
   useEffect(() => {
-    if (payload.reviewStatus !== 'pending') return
+    if (readOnly || payload.reviewStatus !== 'pending') return
     let cancelled = false
     fetchReviewSnapshot(payload.docId)
       .then((res) => {
@@ -1198,7 +1211,7 @@ export const DocumentReviewCard: React.FC<{
       })
       .catch(() => { /* 文档已删除或网络失败: 保留历史快照展示 */ })
     return () => { cancelled = true }
-  }, [payload.docId, payload.reviewStatus])
+  }, [payload.docId, payload.reviewStatus, readOnly])
   // Per-field edit buffer, keyed by field name. Holds raw input strings; values
   // are only present for fields the user has touched.
   const [edits, setEdits] = useState<Record<string, string>>({})
@@ -1240,7 +1253,7 @@ export const DocumentReviewCard: React.FC<{
     batch,
   } = snapshot || {}
 
-  const editable = reviewStatus === 'pending'
+  const editable = !readOnly && reviewStatus === 'pending'
   const busy = submitting !== 'none'
 
   const classificationLow =
@@ -1429,11 +1442,11 @@ export const DocumentReviewCard: React.FC<{
   //    复核; objectURL 在卸载时回收。 --
   const [unitPreview, setUnitPreview] = useState<
     { state: 'loading' } | { state: 'ok'; url: string } | { state: 'unavailable' }
-  >({ state: 'loading' })
+  >({ state: readOnly ? 'unavailable' : 'loading' })
   const [unitPreviewLarge, setUnitPreviewLarge] = useState(false)
   const isUnitDoc = batch?.role === 'unit'
   useEffect(() => {
-    if (!isUnitDoc) return
+    if (!isUnitDoc || readOnly) return
     let cancelled = false
     let objectUrl: string | null = null
     void fetchDocumentUnitPreview(payload.docId).then((blob) => {
@@ -1449,7 +1462,7 @@ export const DocumentReviewCard: React.FC<{
       cancelled = true
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [isUnitDoc, payload.docId])
+  }, [isUnitDoc, payload.docId, readOnly])
 
   // -- 单据组(container)变体： 整卡切「拆分清单」导航形态 --
   // container 无抽取（字段/关系/图/向量都在 unit 子单据上），业务类型固定
@@ -1457,7 +1470,7 @@ export const DocumentReviewCard: React.FC<{
   // 不渲染。谱系角色对同一 docId 不可变，条件分支挂在所有 hooks 之后，不
   // 违反 hooks 规则。
   if (batch?.role === 'container') {
-    return <ContainerSplitCard docId={snapshot.docId} batch={batch} />
+    return <ContainerSplitCard docId={snapshot.docId} batch={batch} readOnly={readOnly} />
   }
 
   const warningCount = warnings?.length ?? 0
@@ -1572,16 +1585,18 @@ export const DocumentReviewCard: React.FC<{
           ) : (
             <div className="flex items-center gap-2 flex-wrap text-xs">
               <span className="text-ink font-medium">{docType || '--'}</span>
-              <button
-                type="button"
-                onClick={() => void handleOpenTypeEdit()}
-                disabled={typePending}
-                title="修正文档类型（绑定建议与关联流水将自动刷新）"
-                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-primary hover:bg-primary/10 disabled:opacity-50 transition-colors"
-              >
-                <PenLine className="w-3 h-3" />
-                改类型
-              </button>
+              {!readOnly && (
+                <button
+                  type="button"
+                  onClick={() => void handleOpenTypeEdit()}
+                  disabled={typePending}
+                  title="修正文档类型（绑定建议与关联流水将自动刷新）"
+                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-primary hover:bg-primary/10 disabled:opacity-50 transition-colors"
+                >
+                  <PenLine className="w-3 h-3" />
+                  改类型
+                </button>
+              )}
               <span className="text-ink-soft">·</span>
               <span className="text-ink-soft">
                 分类置信度{' '}
@@ -1919,7 +1934,7 @@ export const DocumentReviewCard: React.FC<{
       {/* 拆分修正（单 unit 重抽）— 仅 unit 子单据渲染，与复核操作条并列；
           已确认/已更正的子单据同样可重抽（覆盖现读数走强制勾选）。普通
           文档（batch 缺失或非 unit）不渲染，与现状零差异。 */}
-      {batch?.role === 'unit' && (
+      {!readOnly && batch?.role === 'unit' && (
         <div className="mt-3 pt-3 border-t border-line">
           {reextractOpen ? (
             <div className="space-y-1.5 text-xs">

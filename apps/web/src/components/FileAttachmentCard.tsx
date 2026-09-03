@@ -30,11 +30,25 @@ const metaFor = (fileType: string): IconMeta => {
   return EXT_META[key] ?? DEFAULT_META
 }
 
-export const FileAttachmentCard: React.FC<{ attachment: AttachmentData }> = ({ attachment }) => {
+export const FileAttachmentCard: React.FC<{
+  attachment: AttachmentData
+  /** 传入后整卡可点击；由宿主决定打开在线预览（登录态或分享态）。 */
+  onOpen?: (attachment: AttachmentData) => void
+}> = ({ attachment, onOpen }) => {
   const meta = metaFor(attachment.fileType)
   const Icon = meta.icon
+  const clickable = typeof onOpen === 'function' && attachment.key.length > 0
   return (
-    <div className="flex items-center gap-3 w-56 rounded-lg bg-surface border border-line/60 px-3 py-2.5 select-none">
+    <button
+      type="button"
+      onClick={clickable ? () => onOpen(attachment) : undefined}
+      disabled={!clickable}
+      title={clickable ? `预览 ${attachment.filename}` : undefined}
+      className={clsx(
+        'flex items-center gap-3 w-56 rounded-lg bg-surface border border-line/60 px-3 py-2.5 select-none text-left transition-colors',
+        clickable && 'cursor-pointer hover:border-primary/40 hover:bg-primary-500/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary',
+      )}
+    >
       <div className={clsx('w-8 h-8 rounded flex items-center justify-center shrink-0', meta.classes)}>
         <Icon className="w-4 h-4" />
       </div>
@@ -44,6 +58,6 @@ export const FileAttachmentCard: React.FC<{ attachment: AttachmentData }> = ({ a
         </div>
         <div className="text-xs text-ink-soft">{attachment.fileType}</div>
       </div>
-    </div>
+    </button>
   )
 }

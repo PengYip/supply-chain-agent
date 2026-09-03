@@ -8,6 +8,11 @@ import { type FileEntry, fetchFileBlob } from '../hooks/useFiles'
 interface FilePreviewModalProps {
   file: FileEntry
   onClose: () => void
+  /** Optional read transport. The login app uses the default /api/files/stream;
+   *  the share page supplies a token-scoped endpoint instead. */
+  fetchBlob?: (key: string) => Promise<Blob>
+  /** Optional download transport; return null to disable the download action. */
+  fetchDownloadUrl?: (key: string) => Promise<string | null>
 }
 
 type LoadPhase = 'loading' | 'error' | 'ready'
@@ -32,9 +37,15 @@ const ViewerBody = memo(function ViewerBody({ fileObj, name }: { fileObj: File; 
   )
 })
 
-export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
+export function FilePreviewModal({
+  file,
+  onClose,
+  fetchBlob,
+  fetchDownloadUrl,
+}: FilePreviewModalProps) {
   const [phase, setPhase] = useState<LoadPhase>('loading')
   const [fileObj, setFileObj] = useState<File | null>(null)
+  const [fileSize, setFileSize] = useState<number | null>(null)
   const [attempt, setAttempt] = useState(0)
 
   // Fetch the file bytes on mount and on every retry.
@@ -42,10 +53,11 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
     let cancelled = false
     setPhase('loading')
     setFileObj(null)
-    fetchFileBlob(file.key)
+    ;(fetchBlob ?? fetchFileBlob)(file.key)
       .then((blob) => {
         if (cancelled) return
         setFileObj(new File([blob], file.name, { type: blob.type }))
+        setFileSize(blob.size)
         setPhase('ready')
       })
       .catch(() => {
@@ -54,7 +66,7 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
     return () => {
       cancelled = true
     }
-  }, [file.key, file.name, attempt])
+  }, [file.key, file.name, attempt, fetchBlob])
 
   // Close on Escape; lock background scroll while open.
   useEffect(() => {
@@ -71,6 +83,11 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
   }, [onClose])
 
   const handleDownload = useCallback(async () => {
+    if (fetchDownloadUrl) {
+      const url = await fetchDownloadUrl(file.key)
+      if (url) window.open(url, '_blank')
+      return
+    }
     try {
       const res = await fetch(`/api/files/presign?key=${encodeURIComponent(file.key)}`)
       if (res.ok) {
@@ -78,7 +95,7 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
         window.open(url, '_blank')
       }
     } catch { /* ignore */ }
-  }, [file.key])
+  }, [file.key, fetchDownloadUrl])
 
   return (
     <div
@@ -93,7 +110,9 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
           <span title={file.name} className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">
             {file.name}
           </span>
-          <span className="whitespace-nowrap text-xs text-ink-soft">{formatSize(file.size)}</span>
+          <span className="whitespace-nowrap text-xs text-ink-soft">
+            {formatSize(fileSize ?? file.size)}
+          </span>
           <span
             onClick={handleDownload}
             className="cursor-pointer whitespace-nowrap rounded px-1.5 py-0.5 text-xs text-primary transition-colors hover:bg-primary/10"

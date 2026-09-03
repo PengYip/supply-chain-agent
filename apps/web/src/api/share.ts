@@ -98,3 +98,33 @@ export async function fetchSessionShare(token: string): Promise<ShareSnapshot | 
   }
   return snap as ShareSnapshot
 }
+
+/** Fetch bytes for a file explicitly referenced by this share. Throws on
+ *  non-2xx so FilePreviewModal can offer its standard retry state. */
+export async function fetchSharedFileBlob(token: string, key: string): Promise<Blob> {
+  let res: Response
+  try {
+    res = await fetch(
+      `/api/share/${encodeURIComponent(token)}/file?key=${encodeURIComponent(key)}`,
+    )
+  } catch {
+    throw new Error('网络错误，请稍后重试')
+  }
+  if (!res.ok) throw new Error(`加载失败（${res.status}）`)
+  return res.blob()
+}
+
+/** Resolve a short-lived download URL for a shared file. Return null for
+ *  transport/server errors so preview remains usable even when download fails. */
+export async function fetchSharedFileUrl(token: string, key: string): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `/api/share/${encodeURIComponent(token)}/file-url?key=${encodeURIComponent(key)}`,
+    )
+    if (!res.ok) return null
+    const data = (await res.json()) as { url?: unknown }
+    return typeof data.url === 'string' && data.url.length > 0 ? data.url : null
+  } catch {
+    return null
+  }
+}
