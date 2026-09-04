@@ -28,6 +28,7 @@ export function ReviewWorkbench({ docId }: { docId?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [activeGroup, setActiveGroup] = useState(0);
   const [checkedRows, setCheckedRows] = useState<Set<string>>(() => new Set());
+  const [editedRows, setEditedRows] = useState<Set<string>>(() => new Set()); // 已编辑行计入可确认
   const [editedDocs, setEditedDocs] = useState<Set<string>>(() => new Set());
   const [rowEdits, setRowEdits] = useState<Record<string, WorkbenchRow[]>>({});
   const [selected, setSelected] = useState<{ docId: string; rowIndex: number } | null>(null);
@@ -44,8 +45,9 @@ export function ReviewWorkbench({ docId }: { docId?: string }) {
     try {
       const d = await fetchReviewWorkbench(id);
       setData(d);
-      // docId 切换: 清空行级客户端状态(已核勾选/编辑中行/选中行/操作错误)
+      // docId 切换: 清空行级客户端状态(已核勾选/已编辑行/编辑中行/选中行/操作错误)
       setCheckedRows(new Set());
+      setEditedRows(new Set());
       setEditedDocs(new Set());
       setRowEdits({});
       setSelected(null);
@@ -92,6 +94,7 @@ export function ReviewWorkbench({ docId }: { docId?: string }) {
     try {
       await submitRowCorrections(unit.docId, next);
       setEditedDocs((prev) => new Set(prev).add(unit.docId));
+      setEditedRows((prev) => new Set(prev).add(`${unit.docId}#${rowIndex}`));
       setActionError(null);
     } catch (e) {
       setRowEdits((prev) => ({ ...prev, [unit.docId]: before }));
@@ -156,18 +159,20 @@ export function ReviewWorkbench({ docId }: { docId?: string }) {
   const isProblemRow = (item: (typeof flatRows)[number]) =>
     checkRow(item.row, docTypeOfGroup ?? '汽运磅单').some((i) => i.severity === 'error') ||
     item.unit.needsReview ||
-    item.unit.warnings.length > 0;
+    item.unit.warnings.length > 0 ||
+    item.unit.totals?.失败页?.includes(Number(item.row['页码'])) === true;
 
   const confirmableUnits = useMemo(() => {
     if (!group) return [];
     return group.units.filter((u) => {
-      const rowCount = (rowEdits[u.docId] ?? u.rows ?? []).length;
-      const resolved = (rowEdits[u.docId] ?? u.rows ?? []).filter(
-        (_r, i) => checkedRows.has(`${u.docId}#${i}`),
+      const rows = rowEdits[u.docId] ?? u.rows ?? [];
+      const rowCount = rows.length;
+      const resolved = rows.filter(
+        (_r, i) => checkedRows.has(`${u.docId}#${i}`) || editedRows.has(`${u.docId}#${i}`),
       ).length;
       return isUnitConfirmable(u, resolved, rowCount);
     });
-  }, [group, checkedRows, rowEdits]);
+  }, [group, checkedRows, editedRows, rowEdits]);
 
   const releasableUnits = useMemo(
     () => (data?.groups.flatMap((g) => g.units) ?? []).filter((u) => u.releaseEligible),
@@ -228,14 +233,21 @@ export function ReviewWorkbench({ docId }: { docId?: string }) {
         setSelected({ docId: target.unit.docId, rowIndex: target.rowIndex });
       },
       onConfirmUnit: () => {
-        if (selected) void runBatch([{ docId: selected.docId, confirm: true, action: 'manual' }]);
+        if (!selected) return;
+        // Ctrl+Enter 闸门: 选中单据未全部核对(未在 confirmableUnits 内)时
+        // 提示而非盲发。
+        if (!confirmableUnits.some((u) => u.docId === selected.docId)) {
+          setActionError('当前单据未全部核对，无法确认');
+          return;
+        }
+        void runBatch([{ docId: selected.docId, confirm: true, action: 'manual' }]);
       },
       onReleaseAll: () => {
         if (releasableUnits.length > 0) setReleaseArmed(true);
       },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selected, flatRows, autoJump, releasableUnits, docId],
+    [selected, flatRows, autoJump, confirmableUnits, releasableUnits, docId],
   );
   useWorkbenchKeyboard(!!docId && !batchBusy, keyboardHandlers);
 
@@ -374,6 +386,7 @@ export function ReviewWorkbench({ docId }: { docId?: string }) {
               docType={group.docType as WorkbenchTableDocType}
               units={group.units}
               checkedRows={checkedRows}
+              editedRows={editedRows}
               editedDocs={editedDocs}
               onToggleRow={toggleRow}
               rowEdits={rowEdits}

@@ -320,6 +320,9 @@ api/reviewWorkbench.ts       // workbench / review-batch / page 预览 API clien
 4. 行级勾选服务端持久化（复核中断续传）。
 5. 工作台导航级入口与复核队列（待复核 container 列表）。
 6. 候选值下拉（ABBYY 建议值模式）与单元格拖拽复制（Rossum）。
+7. 方向键盘格间导航与格级 Enter（v1 降级为行粒度 Enter）。
+8. 一键放行二次确认列出单据清单（v1 仅显示数量）。
+9. 工作台进入时光标落首个问题行（v1 未做）。
 
 ## 13. 风险与开放问题
 

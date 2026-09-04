@@ -32,6 +32,14 @@ export function OriginalPane({
   const current = manualPage ?? selectedPage ?? pages[0] ?? null;
   const imgUrl = unit && current != null ? unitPreviewPageUrl(unit.docId, current) : null;
 
+  // 大图加载失败兜底(spec §10 承诺): 失败回退整 unit 纵拼图(无 page 参数);
+  // state 记录已回退, 避免 onError 死循环; imgUrl 变化时重置重新尝试单页。
+  const [imgFailed, setImgFailed] = useState(false);
+  useEffect(() => {
+    setImgFailed(false);
+  }, [imgUrl]);
+  const displayUrl = imgUrl && imgFailed && unit ? unitPreviewPageUrl(unit.docId) : imgUrl;
+
   if (!unit || current == null) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-xs text-ink-soft">
@@ -47,14 +55,15 @@ export function OriginalPane({
         <span className="truncate font-medium text-ink">{unit.title}</span>
         <span>第 {current} 页{unit.pageEnd != null && unit.pageEnd > (unit.pageStart ?? 1) ? ` / 共 ${unit.pageEnd - (unit.pageStart ?? 1) + 1} 页` : ''}</span>
       </div>
-      {/* 大图: object-contain 适配, 加载失败显示占位 */}
+      {/* 大图: object-contain 适配, 加载失败回退整 unit 图 */}
       <div className="min-h-0 flex-1 overflow-auto bg-surface p-3">
-        {imgUrl && (
+        {displayUrl && (
           <img
-            key={imgUrl}
-            src={imgUrl}
+            key={displayUrl}
+            src={displayUrl}
             alt={`${unit.title} 第 ${current} 页原片`}
             loading="lazy"
+            onError={() => setImgFailed(true)}
             className="mx-auto max-w-full rounded border border-line bg-white shadow-sm"
           />
         )}

@@ -6,7 +6,7 @@ import { useRef, useState } from 'react';
 import clsx from 'clsx';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { WorkbenchRow, WorkbenchUnit } from '../../api/reviewWorkbench';
-import { TABLE_COLUMNS, cellTone, checkRow, type WorkbenchTableDocType } from './workbenchModel';
+import { TABLE_COLUMNS, cellTone, checkRow, isUnitConfirmable, type WorkbenchTableDocType } from './workbenchModel';
 import { UnitGroupHeader } from './UnitGroupHeader';
 
 const NUMERIC_COLUMNS = new Set(['毛重_吨', '皮重_吨', '净重_吨', '票重_吨', '盈亏_吨']);
@@ -26,6 +26,7 @@ export function VoucherTable(props: {
   docType: WorkbenchTableDocType;
   units: WorkbenchUnit[];
   checkedRows: Set<string>;
+  editedRows: Set<string>;
   editedDocs: Set<string>;
   onToggleRow: (key: string) => void;
   rowEdits: Record<string, WorkbenchRow[]>;
@@ -33,7 +34,7 @@ export function VoucherTable(props: {
   selected: { docId: string; rowIndex: number } | null;
   onSelect: (sel: { docId: string; rowIndex: number }) => void;
 }) {
-  const { docType, units, checkedRows, editedDocs, onToggleRow, rowEdits, onCellCommit, selected, onSelect } = props;
+  const { docType, units, checkedRows, editedRows, editedDocs, onToggleRow, rowEdits, onCellCommit, selected, onSelect } = props;
   const columns = TABLE_COLUMNS[docType];
   const scrollRef = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState<{ docId: string; rowIndex: number; column: string } | null>(null);
@@ -57,29 +58,35 @@ export function VoucherTable(props: {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* sticky 表头 */}
-      <div className="shrink-0 overflow-x-auto border-b border-line bg-panel">
-        <div className="grid min-w-max" style={{ gridTemplateColumns: gridTemplate }}>
-          <div className="px-2 py-1.5 text-[11px] font-medium text-ink-soft">已核</div>
-          <div className="px-2 py-1.5 text-[11px] font-medium text-ink-soft">页码</div>
-          {columns.map((c) => (
-            <div key={c} className="px-2 py-1.5 text-[11px] font-medium text-ink-soft">{c}</div>
-          ))}
-          <div className="px-2 py-1.5 text-[11px] font-medium text-ink-soft">勾稽</div>
-        </div>
-      </div>
-      {/* 虚拟滚动体 */}
+      {/* 单一共享滚动容器: 表头 sticky top-0 与虚拟表体同轴滚动, 横/纵对齐 */}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
-        <div style={{ height: virtualizer.getTotalSize(), position: 'relative', minWidth: 'max-content' }}>
+        <div className="min-w-max">
+          {/* sticky 表头 */}
+          <div className="sticky top-0 z-10 border-b border-line bg-panel">
+            <div className="grid" style={{ gridTemplateColumns: gridTemplate }}>
+              <div className="px-2 py-1.5 text-[11px] font-medium text-ink-soft">已核</div>
+              <div className="px-2 py-1.5 text-[11px] font-medium text-ink-soft">页码</div>
+              {columns.map((c) => (
+                <div key={c} className="px-2 py-1.5 text-[11px] font-medium text-ink-soft">{c}</div>
+              ))}
+              <div className="px-2 py-1.5 text-[11px] font-medium text-ink-soft">勾稽</div>
+            </div>
+          </div>
+          {/* 虚拟滚动体 */}
+          <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
           {virtualizer.getVirtualItems().map((vi) => {
             const item = items[vi.index]!;
             if (item.kind === 'group') {
               const u = item.unit;
               const rs = rowsOf(u);
-              const confirmable =
-                rs.length > 0 &&
-                (u.reviewStatus === 'pending' || u.reviewStatus === 'corrected') &&
-                rs.every((_r, i) => checkedRows.has(`${u.docId}#${i}`));
+              const confirmable = isUnitConfirmable(
+                u,
+                rs.filter(
+                  (_r, i) =>
+                    checkedRows.has(`${u.docId}#${i}`) || editedRows.has(`${u.docId}#${i}`),
+                ).length,
+                rs.length,
+              );
               return (
                 <div
                   key={`g-${u.docId}`}
@@ -96,9 +103,11 @@ export function VoucherTable(props: {
             }
             const { unit: u, rowIndex } = item;
             const row = rowsOf(u)[rowIndex]!;
-            // 客户端镜像勾稽(编辑后即时反馈) + 服务端结果合并去重
+            // 客户端镜像勾稽(编辑后即时反馈): 编辑过的 unit 整体忽略服务端
+            // rowChecks(客户端镜像是权威, 规则双实现同源, 修好后不再残留旧红);
+            // 未编辑时服务端 rowChecks 兜底合并去重。
             const clientIssues = checkRow(row, docType);
-            const serverIssues = u.rowChecks?.[rowIndex]?.issues ?? [];
+            const serverIssues = rowEdits[u.docId] ? [] : (u.rowChecks?.[rowIndex]?.issues ?? []);
             const allIssues = [
               ...clientIssues,
               ...serverIssues.filter((s) => !clientIssues.some((i) => i.rule === s.rule)),
@@ -110,7 +119,14 @@ export function VoucherTable(props: {
             return (
               <div
                 key={`r-${u.docId}-${rowIndex}`}
-                style={{ position: 'absolute', top: vi.start, left: 0, right: 0, height: vi.size }}
+                style={{
+                  position: 'absolute',
+                  top: vi.start,
+                  left: 0,
+                  right: 0,
+                  height: vi.size,
+                  gridTemplateColumns: gridTemplate,
+                }}
                 onClick={() => onSelect({ docId: u.docId, rowIndex })}
                 className={clsx(
                   'grid cursor-pointer items-stretch border-b border-line/30 text-xs',
@@ -195,6 +211,7 @@ export function VoucherTable(props: {
               </div>
             );
           })}
+        </div>
         </div>
       </div>
     </div>
