@@ -1,6 +1,7 @@
 import {
   BookOpen,
   Building2,
+  ClipboardCheck,
   FlaskConical,
   FolderKanban,
   History,
@@ -18,6 +19,7 @@ export type ViewId =
   | 'ledger'
   | 'graph'
   | 'bindings'
+  | 'review'
   | 'eval'
   | 'audit'
   | 'favorites'
@@ -45,6 +47,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'ledger', label: '项目台账', description: '按项目归集合同的凭证齐套率', icon: BookOpen, group: 'work', enabled: true },
   { id: 'graph', label: '图谱', description: '实体关系可视化', icon: Network, group: 'work', enabled: true },
   { id: 'bindings', label: '绑定', description: '文档与合同绑定工作台', icon: Link2, group: 'work', enabled: true },
+  { id: 'review', label: '集中复核', description: '多页票据表格化批量核对', icon: ClipboardCheck, group: 'work', enabled: true },
   { id: 'eval', label: '评估', description: '评估数据集与结果分析', icon: FlaskConical, group: 'admin', enabled: true },
   { id: 'audit', label: '用量审计', description: 'LLM 与 OCR 调用统计及明细', icon: History, group: 'admin', enabled: true },
   { id: 'favorites', label: '收藏反馈', description: '对话收藏与用户反馈', icon: Star, group: 'admin', enabled: true },

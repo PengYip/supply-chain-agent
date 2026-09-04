@@ -20,6 +20,7 @@ import { FavoritesView } from './components/favorites/FavoritesView';
 import { AuditView } from './components/audit/AuditView';
 import { ProjectsView } from './components/projects/ProjectsView';
 import { ProjectLedgerView } from './components/ledger/ProjectLedgerView';
+import { ReviewWorkbench } from './components/review-workbench/ReviewWorkbench';
 import { SharePage } from './components/share/SharePage';
 import { ReviewModal } from './components/ReviewModal';
 import { subscribeContainerRefreshes, subscribeReviewRequests } from './lib/reviewModal';
@@ -319,6 +320,8 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
         <EvalWorkbenchView />
       ) : view === 'audit' ? (
         <AuditView />
+      ) : view === 'review' ? (
+        <ReviewWorkbench docId={route.params.docId} />
       ) : null}
       {/* 全页面拖拽上传提示遮罩：fixed 定位，z-modal 高于文件抽屉 */}
       <DragDropOverlay visible={dragActive} targetDir={dropTargetDir} />
