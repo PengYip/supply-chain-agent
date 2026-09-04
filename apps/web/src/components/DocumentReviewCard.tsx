@@ -1199,7 +1199,11 @@ export const DocumentReviewCard: React.FC<{
   /** 免登录分享宿主传入 true：完整展示快照内容，但不水合最新状态、
    *  不调用登录态接口、不显示更正/确认/重拆/重抽等交互。 */
   readOnly?: boolean
-}> = ({ payload, onUpdated, onOpenBindings, readOnly = false }) => {
+  /** 可选: 单 unit 重抽成功且生成新子单据(docId 更换)后的回调。弹窗宿主
+   *  (ReviewModal)传入以把队列中旧 docId 项替换为新 docId 并导航过去;
+   *  缺省(聊天宿主等)回落 requestOpenReview 打开新单据复核弹窗。 */
+  onReextracted?: (newDocId: string) => void
+}> = ({ payload, onUpdated, onOpenBindings, readOnly = false, onReextracted }) => {
   // The card owns its current state so it can optimistic-update after a POST
   // without needing the parent to re-render the tool result. Initialised once
   // from `payload` (tool results are immutable once the step completes).
@@ -1242,6 +1246,10 @@ export const DocumentReviewCard: React.FC<{
   const [typePending, setTypePending] = useState(false)
   const [typeResult, setTypeResult] = useState<{ ok: boolean; text: string; detail?: string } | null>(null)
   const typeResultTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** 改类型成功且类型实际变化后的行内引导条: 字段仍是旧类型提取结果, 引导
+   *  按新类型重抽(unit)或降级提示(普通文档)。再次改类型成功时被新值替换,
+   *  重抽成功/卡片关闭(卸载)时清除。 */
+  const [staleType, setStaleType] = useState<{ newType: string; oldType: string } | null>(null)
 
   // 卸载时清掉结果自动消失的定时器。
   useEffect(() => {
@@ -1350,6 +1358,7 @@ export const DocumentReviewCard: React.FC<{
    *  失败不改本地状态, 下拉自动回显原值。 */
   const handleChangeType = async (nextType: string) => {
     if (typePending || !nextType || nextType === docType) return
+    const oldType = docType
     setTypePending(true)
     setTypeResult(null)
     try {
@@ -1361,6 +1370,12 @@ export const DocumentReviewCard: React.FC<{
         docType: applied,
         ...(res.vectorization ? { vectorization: res.vectorization } : {}),
       }))
+      // 类型实际变化 -> 字段仍是旧类型提取结果(updateDocumentType 只改标签不
+      // 重抽), 行内引导按新类型重抽(unit)或降级提示(普通文档)。再次改类型
+      // 成功时被新值替换, 即「再次改类型清除」。
+      if (applied !== oldType) {
+        setStaleType({ newType: applied, oldType: oldType || '未识别' })
+      }
       const skipNote =
         res.skipped.length > 0
           ? `（${res.skipped.length} 项流水未生成）`
@@ -1410,7 +1425,7 @@ export const DocumentReviewCard: React.FC<{
   const unitFlagged =
     (warnings?.length ?? 0) > 0 || fields.some((f) => f.needsReview)
 
-  const runReextract = async () => {
+  const runReextract = async (docTypeOverride?: string) => {
     if (reextractBusy || !batch || batch.role !== 'unit') return
     const parentDocId = batch.parentDocumentId
     if (!parentDocId) {
@@ -1424,17 +1439,24 @@ export const DocumentReviewCard: React.FC<{
       const row = containerUnits.find((u) => u.unitIndex === batch.unitIndex)
       if (!row) throw new Error('未在单据组中找到该子单据（可能已被合并或重新拆分）')
       const rot = REEXTRACT_ROTATIONS.find((r) => String(r) === reextractRotation)
+      const effectiveDocType = docTypeOverride ?? reextractDocType
       const body: ReextractUnitBody = {
-        ...(reextractDocType ? { docType: reextractDocType } : {}),
+        ...(effectiveDocType ? { docType: effectiveDocType } : {}),
         ...(rot !== undefined ? { rotationDeg: rot } : {}),
         ...(reextractForce ? { force: true } : {}),
       }
       const res = await reextractUnit(parentDocId, row.unitId, body)
       requestRefreshContainers()
+      // 重抽成功: 字段已按新类型重建, 引导条使命完成。
+      setStaleType(null)
       if (res.docId) {
-        // 弹窗宿主: 切到新子单据快照(key 化重挂载自动重拉); 聊天宿主:
-        // 打开弹窗查看重抽结果。
-        requestOpenReview(res.docId)
+        // 弹窗宿主: 经 onReextracted 把队列中旧 docId 替换为新 docId 并导航
+        // (key 化重挂载自动重拉); 聊天宿主: 打开弹窗查看重抽结果。
+        if (onReextracted) {
+          onReextracted(res.docId)
+        } else {
+          requestOpenReview(res.docId)
+        }
       } else {
         setReextractError('重抽已完成，但未返回新单据编号，请从文件树重新打开')
       }
@@ -1442,6 +1464,9 @@ export const DocumentReviewCard: React.FC<{
       if (e instanceof BatchApiError && e.code === 'unit_bound') {
         setReextractBound(parseBoundUnitIndexes(e.detail))
         setReextractError(e.message || '该子单据已挂合同绑定')
+        // 引导条路径(重抽面板未展开)触发 409 时展开面板, 让绑定警示与
+        // 「强制重抽」勾选可见; 面板内路径本已展开, 此调用为 no-op。
+        setReextractOpen(true)
       } else {
         setReextractError(e instanceof Error && e.message ? e.message : '重新抽取失败，请重试')
       }
@@ -1637,6 +1662,46 @@ export const DocumentReviewCard: React.FC<{
                 <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               )}
               <span className="leading-relaxed">{typeResult.text}</span>
+            </div>
+          )}
+          {/* 改类型成功后的行内引导条: 字段仍是旧类型提取结果。unit 子单据可
+              一键按新类型重抽(复用现有重抽逻辑, 不传旋回=保持默认); 普通文档
+              降级提示不支持按类型重抽。再次改类型成功时被新值替换。 */}
+          {staleType && !readOnly && (
+            <div className="mt-1.5 flex items-start gap-1.5 text-[11px] rounded px-2 py-1.5 border border-warning/30 bg-warning/5 text-warning">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <div className="min-w-0 flex-1 leading-relaxed">
+                {batch?.role === 'unit' ? (
+                  <span>
+                    业务类型已改为「{staleType.newType}」，当前字段仍是旧类型（
+                    {staleType.oldType}）的提取结果
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // 预置面板类型为改后新类型并展开(409 绑定警示/强制勾选
+                        // 可见), 随后立即按新类型重抽。
+                        setReextractDocType(staleType.newType)
+                        setReextractOpen(true)
+                        void runReextract(staleType.newType)
+                      }}
+                      disabled={reextractBusy}
+                      title="删除该子单据现有抽取与复核结果，按新业务类型重新抽取"
+                      className="ml-2 inline-flex items-center gap-1 rounded border border-warning/40 bg-white px-2 py-0.5 font-medium text-warning transition-colors hover:bg-warning/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {reextractBusy ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <RefreshCw className="w-3 h-3" />
+                      )}
+                      {reextractBusy ? '重新抽取中...' : '按新类型重新提取'}
+                    </button>
+                  </span>
+                ) : (
+                  <span>
+                    当前字段仍为旧类型提取结果；此类文档暂不支持按类型重抽
+                  </span>
+                )}
+              </div>
             </div>
           )}
         </div>

@@ -169,6 +169,24 @@ export function ReviewModal({
   // (hasPager 为 false 的完成条)。
   const showQueueFooter = hasPager || finishNote !== null
 
+  // 单 unit 重抽成功(docId 更换): 把队列中旧 docId 项替换为新 docId(状态置
+  // pending —— 新子单据待复核), 再导航到新 docId(key 化重挂载重拉快照)。
+  // 队列外(单文档模式)仅导航, 队列保持原状; 替换后 pager 的 i/N 与自动
+  // 前进逻辑仍以新队列为准, 不回归。
+  const handleReextracted = useCallback(
+    (newDocId: string) => {
+      const idx = queueItems.findIndex((q) => q.docId === docId)
+      if (idx >= 0) {
+        const nextItems = queueItems.map((q, i) =>
+          i === idx ? { docId: newDocId, reviewStatus: 'pending' as const } : q,
+        )
+        onQueueChange?.(nextItems)
+      }
+      onNavigate?.(newDocId)
+    },
+    [queueItems, docId, onQueueChange, onNavigate],
+  )
+
   return (
     <div
       onClick={onClose}
@@ -220,6 +238,7 @@ export function ReviewModal({
               payload={snapshot}
               onUpdated={handleUpdated}
               onOpenBindings={onOpenBindings ? handleOpenBindings : undefined}
+              onReextracted={handleReextracted}
             />
           )}
         </div>
