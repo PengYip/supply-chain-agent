@@ -4,14 +4,27 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { RotateCw } from 'lucide-react';
-import { fetchReviewWorkbench, type WorkbenchData } from '../../api/reviewWorkbench';
+import {
+  fetchReviewWorkbench,
+  submitRowCorrections,
+  type WorkbenchData,
+  type WorkbenchRow,
+  type WorkbenchUnit,
+} from '../../api/reviewWorkbench';
 import { UnitListGroup } from './UnitListGroup';
+import { VoucherTable } from './VoucherTable';
+import type { WorkbenchTableDocType } from './workbenchModel';
 
 export function ReviewWorkbench({ docId }: { docId?: string }) {
   const [data, setData] = useState<WorkbenchData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeGroup, setActiveGroup] = useState(0);
+  const [checkedRows, setCheckedRows] = useState<Set<string>>(() => new Set());
+  const [editedDocs, setEditedDocs] = useState<Set<string>>(() => new Set());
+  const [rowEdits, setRowEdits] = useState<Record<string, WorkbenchRow[]>>({});
+  const [selected, setSelected] = useState<{ docId: string; rowIndex: number } | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const load = useCallback(async (id: string) => {
     setLoading(true);
@@ -19,6 +32,12 @@ export function ReviewWorkbench({ docId }: { docId?: string }) {
     try {
       const d = await fetchReviewWorkbench(id);
       setData(d);
+      // docId 切换: 清空行级客户端状态(已核勾选/编辑中行/选中行/操作错误)
+      setCheckedRows(new Set());
+      setEditedDocs(new Set());
+      setRowEdits({});
+      setSelected(null);
+      setActionError(null);
       const idx = d.groups.findIndex((g) => g.kind === 'voucher-table');
       setActiveGroup(idx >= 0 ? idx : 0);
     } catch (e) {
@@ -28,6 +47,38 @@ export function ReviewWorkbench({ docId }: { docId?: string }) {
       setLoading(false);
     }
   }, []);
+
+  const toggleRow = (key: string) => {
+    setCheckedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  // 单元格提交: 更新 working copy -> 整数组 corrections 提交 -> 成功标记已改;
+  // 失败回退编辑前值并提示。
+  const handleCellCommit = async (
+    unit: WorkbenchUnit,
+    rowIndex: number,
+    column: string,
+    raw: string,
+  ) => {
+    const before = rowEdits[unit.docId] ?? unit.rows ?? [];
+    const numeric = ['毛重_吨', '皮重_吨', '净重_吨', '票重_吨', '盈亏_吨'].includes(column);
+    const parsed: string | number = numeric ? (raw.trim() === '' ? '' : Number(raw)) : raw;
+    const next = before.map((r, i) => (i === rowIndex ? { ...r, [column]: parsed } : r));
+    setRowEdits((prev) => ({ ...prev, [unit.docId]: next }));
+    try {
+      await submitRowCorrections(unit.docId, next);
+      setEditedDocs((prev) => new Set(prev).add(unit.docId));
+      setActionError(null);
+    } catch (e) {
+      setRowEdits((prev) => ({ ...prev, [unit.docId]: before }));
+      setActionError(`更正失败(${unit.title} 第 ${rowIndex + 1} 行): ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
 
   useEffect(() => {
     if (docId) void load(docId);
@@ -102,6 +153,7 @@ export function ReviewWorkbench({ docId }: { docId?: string }) {
         <span className="ml-auto whitespace-nowrap text-xs text-ink-soft">
           待复核 {progress.pending} / 已放行 {progress.released} / 已确认 {progress.confirmed} / 共 {progress.total}
         </span>
+        {actionError && <span className="whitespace-nowrap text-xs text-danger">{actionError}</span>}
       </div>
 
       {/* 两栏主体: 左原文(Task 9) + 右表格(Task 8) */}
@@ -115,10 +167,17 @@ export function ReviewWorkbench({ docId }: { docId?: string }) {
               <UnitListGroup units={group.units} />
             </div>
           ) : group ? (
-            <div className="flex h-full items-center justify-center p-6 text-center text-sm text-ink-soft">
-              {/* Task 8: VoucherTable */}
-              {group.units.reduce((s, u) => s + (u.rows?.length ?? 0), 0)} 行明细，表格组件待接入
-            </div>
+            <VoucherTable
+              docType={group.docType as WorkbenchTableDocType}
+              units={group.units}
+              checkedRows={checkedRows}
+              editedDocs={editedDocs}
+              onToggleRow={toggleRow}
+              rowEdits={rowEdits}
+              onCellCommit={(u, i, c, v) => void handleCellCommit(u, i, c, v)}
+              selected={selected}
+              onSelect={setSelected}
+            />
           ) : null}
         </div>
       </div>
