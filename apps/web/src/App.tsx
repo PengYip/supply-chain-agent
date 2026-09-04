@@ -282,6 +282,7 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
           filesApi={filesApi}
           uploadQueue={uploadQueue}
           onOpenBindings={openBindingsForDoc}
+          onOpenWorkbench={(docId) => navigate('review', { docId })}
           batchRefreshToken={batchRefreshToken}
         />
       }

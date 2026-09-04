@@ -25,6 +25,8 @@ interface FileDrawerProps {
   uploadQueue: UploadQueueApi;
   /** 「未挂合同」徽标跳转绑定工作台的通道（App 分配 nonce 并导航）。 */
   onOpenBindings?: (docId: string) => void;
+  /** 单据组行「集中复核」入口：跳全页复核工作台（#/review?docId=）。 */
+  onOpenWorkbench?: (docId: string) => void;
   /** 复核弹窗关闭后的刷新令牌： App 递增时重拉已展开单据组的子单据清单
    *  （复核确认/更正后，unit 行的复核状态徽标需要跟上）。 */
   batchRefreshToken?: number;
@@ -33,7 +35,7 @@ interface FileDrawerProps {
 export function FileDrawer(props: FileDrawerProps) {
   const {
     open, onClose, onAddToConversation, contextFileKeys, filesApi, uploadQueue,
-    onOpenBindings, batchRefreshToken = 0,
+    onOpenBindings, onOpenWorkbench, batchRefreshToken = 0,
   } = props;
   const {
     files, folders, loading, downloadFile, moveFile, createFolder,
@@ -402,6 +404,7 @@ export function FileDrawer(props: FileDrawerProps) {
     setDeletingFolderPath,
     setDeletingFilePath,
     onOpenBindings,
+    onOpenWorkbench,
     onTriggerParse: triggerParse,
     toggleContainerUnits,
     reloadContainerUnits,

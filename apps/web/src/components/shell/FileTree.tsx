@@ -275,6 +275,8 @@ export interface TreeCallbacks {
   setDeletingFolderPath: (path: string | null) => void;
   setDeletingFilePath: (key: string | null) => void;
   onOpenBindings?: (docId: string) => void;
+  /** 单据组行「集中复核」入口: 跳全页复核工作台(#/review?docId=)。 */
+  onOpenWorkbench?: (docId: string) => void;
   /** 触发解析: parsed 状态的重新处理需带 {force:true}(服务端终态短路放行)。 */
   onTriggerParse?: (docId: string, opts?: { force?: boolean }) => void;
   // 单据组(container)子单据层级
@@ -730,6 +732,19 @@ function FileRow(props: {
       <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 pl-[26px]">
         <div className="flex min-w-0 flex-wrap items-center gap-1">
           {batchBadgeNode}
+          {containerDocId && cb.onOpenWorkbench && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                cb.onOpenWorkbench!(containerDocId);
+              }}
+              title="打开集中复核工作台（按类型分组表格化批量核对）"
+              className="cursor-pointer whitespace-nowrap rounded border border-[#A9BCCD] bg-[#F2F6FA] px-1.5 py-px text-[10px] text-[#35719C] transition-colors hover:border-[#5D8FB5] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+            >
+              集中复核
+            </button>
+          )}
           {containerProgress && (
             <span
               className="flex shrink-0 items-center gap-1"
