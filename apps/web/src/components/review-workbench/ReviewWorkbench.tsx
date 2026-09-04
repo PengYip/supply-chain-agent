@@ -11,6 +11,7 @@ import {
   type WorkbenchRow,
   type WorkbenchUnit,
 } from '../../api/reviewWorkbench';
+import { OriginalPane } from './OriginalPane';
 import { UnitListGroup } from './UnitListGroup';
 import { VoucherTable } from './VoucherTable';
 import type { WorkbenchTableDocType } from './workbenchModel';
@@ -97,6 +98,23 @@ export function ReviewWorkbench({ docId }: { docId?: string }) {
     return { total: units.length, pending, released, confirmed };
   }, [data]);
 
+  // 左栏派生值: 选中行所属 unit + 选中行 页码(行->页锚定, Task 9)
+  const selectedUnit = useMemo(() => {
+    if (!selected || !data) return null;
+    for (const g of data.groups) {
+      const u = g.units.find((x) => x.docId === selected.docId);
+      if (u) return u;
+    }
+    return null;
+  }, [data, selected]);
+
+  const selectedPage = useMemo(() => {
+    if (!selectedUnit || !selected) return null;
+    const rows = rowEdits[selectedUnit.docId] ?? selectedUnit.rows ?? [];
+    const page = rows[selected.rowIndex]?.['页码'];
+    return typeof page === 'number' ? page : null;
+  }, [selectedUnit, selected, rowEdits]);
+
   if (!docId) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-10 text-sm text-ink-soft">
@@ -159,7 +177,7 @@ export function ReviewWorkbench({ docId }: { docId?: string }) {
       {/* 两栏主体: 左原文(Task 9) + 右表格(Task 8) */}
       <div className="flex min-h-0 flex-1">
         <div className="hidden w-[38%] shrink-0 border-r border-line lg:block" data-original-pane>
-          {/* Task 9: OriginalPane */}
+          <OriginalPane unit={selectedUnit} selectedPage={selectedPage} />
         </div>
         <div className="min-w-0 flex-1" data-voucher-table>
           {group?.kind === 'unit-list' ? (
