@@ -12,6 +12,19 @@ describe('classifyForm', () => {
     const prompt = call.mock.calls[0]![0] as string;
     expect(prompt).toContain('汽车过磅单票据');
     expect(prompt).toContain('JSON');
+    // 判别特征: 化验报告=检验机构单批次报告; 质检汇总表=每行一个批次+合计行;
+    // 汽运磅单=汽车衡/车牌号单车结构(照片也算), 严禁标轨道衡。
+    expect(prompt).toContain('检验机构出具的单批次检验结果');
+    expect(prompt).toContain('收货方编制的二次汇总');
+    expect(prompt).toContain('每一行是一个批次(或一车)的指标');
+    expect(prompt).toContain('汽车衡/地磅/车牌号');
+    expect(prompt).toContain('严禁标轨道衡称重记录');
+    // 标题陷阱: 标题含"化验"但版面为多行批次+合计行 -> 收货质检汇总表。
+    expect(prompt).toContain('严禁仅凭标题"化验"二字判成化验报告');
+    expect(prompt).toContain('CMA 标志');
+    // 磅单标题变体: 计量单/过磅单/汽车衡计量单 + 省份汉字车牌最强判据。
+    expect(prompt).toContain('计量单/过磅单/汽车衡计量单');
+    expect(prompt).toContain('冀EB6666');
   });
 
   it('retries once with the error appended, then succeeds', async () => {

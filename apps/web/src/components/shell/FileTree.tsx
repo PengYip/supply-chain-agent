@@ -27,7 +27,7 @@ import {
   unitStatusBadge,
   type BatchUnitSummary,
 } from '../../api/documents';
-import { requestOpenReview } from '../../lib/reviewModal';
+import { buildReviewQueueFromUnits, requestOpenReview } from '../../lib/reviewModal';
 import {
   isFolderSelfDrop,
   readPayload,
@@ -339,9 +339,14 @@ function moveItem<T>(list: T[], fromIndex: number, toIndex: number, zone: 'above
 /** 单据组下的子单据行（缩进一层，depth 为所属 container 文件的层级）：
  *  序号 + 类型徽标（优先子单据落库业务类型，兜底检测词表标签）+ 解析/
  *  复核状态 + 待复核标记。整行与右侧「复核」按钮都打开该子单据的全局
- *  复核弹窗；子单据与 container 共享物理文件，「添加到对话」等文件级
+ *  复核弹窗（携带同 container 的完整 units 队列，弹窗内可翻页、确认后
+ *  自动前进）；子单据与 container 共享物理文件，「添加到对话」等文件级
  *  操作留在 container 行。不可拖拽。 */
-function UnitRow({ unit, depth }: { unit: BatchUnitSummary; depth: number }) {
+function UnitRow({
+  unit,
+  units,
+  depth,
+}: { unit: BatchUnitSummary; units: BatchUnitSummary[]; depth: number }) {
   const typeTag = businessTypeTag(unit.childDocType ?? unit.detectedFormType);
   const status = unitStatusBadge(unit.unitStatus);
   // 复核状态缺字段(旧版 /units 响应)时: 有子单据按「待复核」兜底(安全侧),
@@ -352,7 +357,7 @@ function UnitRow({ unit, depth }: { unit: BatchUnitSummary; depth: number }) {
   );
   const canReview = typeof unit.docId === 'string' && unit.docId.length > 0;
   const openReview = () => {
-    if (unit.docId) requestOpenReview(unit.docId);
+    if (unit.docId) requestOpenReview(unit.docId, buildReviewQueueFromUnits(units));
   };
   return (
     <div
@@ -844,7 +849,12 @@ function FileRow(props: {
         onClick={(e) => e.stopPropagation()}
       >
         {(unitsState?.units ?? []).map((u) => (
-          <UnitRow key={u.unitId} unit={u} depth={depth} />
+          <UnitRow
+            key={u.unitId}
+            unit={u}
+            units={unitsState?.units ?? []}
+            depth={depth}
+          />
         ))}
         {unitsState?.status === 'loading' &&
           (unitsState.units.length > 0 ? (

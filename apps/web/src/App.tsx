@@ -23,7 +23,7 @@ import { ProjectLedgerView } from './components/ledger/ProjectLedgerView';
 import { ReviewWorkbench } from './components/review-workbench/ReviewWorkbench';
 import { SharePage } from './components/share/SharePage';
 import { ReviewModal } from './components/ReviewModal';
-import { subscribeContainerRefreshes, subscribeReviewRequests } from './lib/reviewModal';
+import { subscribeContainerRefreshes, subscribeReviewRequests, type ReviewQueueItem } from './lib/reviewModal';
 import type { GraphFocus, GraphFocusTarget } from './components/graph/focus';
 
 /** 免登录分享路由：pathname 匹配 /share/<token> 时在认证网关之前分流，
@@ -145,14 +145,27 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
   // 全局复核弹窗（App 层单例）： 文件树子单据行/复核卡拆分清单经
   // lib/reviewModal 通道请求打开；弹窗已开时切换目标（key 化重挂载）。
   const [reviewDocId, setReviewDocId] = useState<string | null>(null);
+  // 复核队列（container 入口传入的同组子单据清单）： 由 App 持有可变副本，
+  // 弹窗确认/更正后经 onQueueChange 回写单项 reviewStatus —— 跨 key 化重挂载
+  // 保留，连续自动前进多份后队列口径仍是最新。无队列入口打开 = null，弹窗
+  // 退化为单文档模式（无翻页器）。
+  const [reviewQueue, setReviewQueue] = useState<ReviewQueueItem[] | null>(null);
   // 复核弹窗关闭后递增，驱动文件抽屉重拉已展开单据组的子单据清单。
   const [batchRefreshToken, setBatchRefreshToken] = useState(0);
-  useEffect(() => subscribeReviewRequests((docId) => setReviewDocId(docId)), []);
+  useEffect(
+    () =>
+      subscribeReviewRequests((docId, queue) => {
+        setReviewDocId(docId);
+        setReviewQueue(queue);
+      }),
+    [],
+  );
   // 批量拆分修正(重拆/单 unit 重抽/合并)成功后: 递增令牌让文件抽屉重拉
   // 已展开单据组的子单据清单(复核卡自身会就地刷新,不依赖本通道)。
   useEffect(() => subscribeContainerRefreshes(() => setBatchRefreshToken((t) => t + 1)), []);
   const closeReview = useCallback(() => {
     setReviewDocId(null);
+    setReviewQueue(null);
     setBatchRefreshToken((t) => t + 1);
   }, []);
   // 导航入口的统一跳转：手动进入图谱/绑定页时清掉旧的外部定位，避免残留
@@ -332,6 +345,9 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
         <ReviewModal
           key={reviewDocId}
           docId={reviewDocId}
+          queue={reviewQueue}
+          onNavigate={setReviewDocId}
+          onQueueChange={setReviewQueue}
           onClose={closeReview}
           onOpenBindings={openBindingsForDoc}
         />

@@ -25,6 +25,15 @@ export interface ReadingConsensus {
 /** 两遍读数分歧时 overall_confidence 的强制上限(压低至人工审核优先级)。 */
 export const CONSENSUS_MISMATCH_CONFIDENCE_CAP = 0.5;
 
+/**
+ * 检测方向先验(2026-09-04 宣威事故): 共识 mismatch 对数字型单据是噪声——
+ * 磅单字段全是数字, VLM 倒置旋转不变地读对, 打分退化为硬币翻转, 0.01 分差
+ * 曾把正确检测方向翻成 180° 颠倒。给"旋转方向 = 检测报出方向"的候选加
+ * +2.5: 大于非共识项最大差值(~1.2), 噪声翻不动; 但真强证据(共识命中差距
+ * 2.0+ 且置信差 >0.5)仍可推翻检测。
+ */
+export const DETECTION_DIRECTION_PRIOR = 2.5;
+
 /** 单号/编号类字段名(车号/卡号/账号等非单据标识字段刻意不匹配)。 */
 const IDENT_FIELD_RE = /(单号|编号|号码|票号|报告号|凭证号)/;
 /** 重量标签的精确集合(2026-09-01 下游收货证明实测: 子串匹配会把 毛重时间/
@@ -172,12 +181,18 @@ export function compareReadings(
  *  - 两遍共识命中占大头(+2): 方向旋反的图常仍能读出字段, 但读数与检测遍
  *    对不上, 这比 VLM 自报置信度更可靠;
  *  - 字段置信度均值作次级信号(自报, 无置信度时按 0.5 中性);
- *  - 非空字段数作微量 tie-break(旋反图通常读出的字段更少)。
+ *  - 非空字段数作微量 tie-break(旋反图通常读出的字段更少);
+ *  - 检测方向先验(+DETECTION_DIRECTION_PRIOR): 与检测报出方向一致的候选
+ *    加分, 防共识噪声(数字型单据上 mismatch 是噪声)把正确方向翻成 180° 颠倒。
  */
 export function unitCandidateScore(input: {
   fields: Record<string, unknown>;
   fieldConfidences: Record<string, number>;
   mismatchCount: number;
+  /** 该候选的旋回方向(逐 region 顺时针度数, 与 images 一一对应)。 */
+  rotations?: number[];
+  /** 检测报出的方向(先验锚点); 与检测方向一致的候选 +DETECTION_DIRECTION_PRIOR。 */
+  detectedRotation?: number | null;
 }): number {
   const leaves = readingLeaves(input.fields);
   const filled = leaves.filter(
@@ -187,5 +202,11 @@ export function unitCandidateScore(input: {
     (c) => typeof c === 'number' && Number.isFinite(c) && c > 0,
   );
   const meanConf = confs.length > 0 ? confs.reduce((s, c) => s + c, 0) / confs.length : 0.5;
-  return (input.mismatchCount > 0 ? 0 : 2) + meanConf + Math.min(filled, 20) * 0.01;
+  const prior =
+    input.detectedRotation != null &&
+    input.rotations != null &&
+    input.rotations[0] === input.detectedRotation
+      ? DETECTION_DIRECTION_PRIOR
+      : 0;
+  return (input.mismatchCount > 0 ? 0 : 2) + meanConf + Math.min(filled, 20) * 0.01 + prior;
 }

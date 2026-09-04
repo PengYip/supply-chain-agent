@@ -315,6 +315,7 @@ import {
   轨道衡称重单Schema,
   水尺计重单Schema,
   VOUCHER_SCHEMAS,
+  VOUCHER_DOC_PROMPTS,
   WEIGHT_AGGREGATE_DOCTYPES,
 } from '../../src/pipeline/schemas/vouchers.js';
 
@@ -395,5 +396,15 @@ describe('VOUCHER_SCHEMAS 注册表与聚合模式集合', () => {
       expect(WEIGHT_AGGREGATE_DOCTYPES.has(t)).toBe(true);
     }
     expect(WEIGHT_AGGREGATE_DOCTYPES.has('货转单')).toBe(false);
+  });
+});
+
+describe('VOUCHER_DOC_PROMPTS 质检汇总表提取 prompt', () => {
+  it('明确 每行明细=一个批次/一车, 逐行严禁漏行, 合计行单独填合计字段', () => {
+    const prompt = VOUCHER_DOC_PROMPTS['质检汇总表']!;
+    expect(prompt).toContain('每一行明细 = 一个批次(或一车)的指标');
+    expect(prompt).toContain('逐行提取严禁漏行');
+    expect(prompt).toContain('合计/汇总行单独填入合计字段');
+    expect(prompt).toContain('不得混入明细行');
   });
 });

@@ -179,4 +179,57 @@ describe('unitCandidateScore(旋回双候选择优)', () => {
     });
     expect(rich).toBeGreaterThan(poor);
   });
+
+  it('检测方向先验: 与检测方向一致的候选 +2.5(共识噪声 mismatch 翻不动)', () => {
+    // 宣威事故形态: 检测候选 mismatch(数字噪声)但方向正确, 反向候选共识命中。
+    const detected = unitCandidateScore({
+      fields: { 报告编号: 'HX-B', 检测日期: '2026-08-28' },
+      fieldConfidences: { 报告编号: 0.99, 检测日期: 0.99 },
+      mismatchCount: 1,
+      rotations: [90],
+      detectedRotation: 90,
+    });
+    const reverse = unitCandidateScore({
+      fields: { 报告编号: 'HX-A', 检测日期: '2026-08-28' },
+      fieldConfidences: { 报告编号: 0.87, 检测日期: 0.9 },
+      mismatchCount: 0,
+      rotations: [270],
+      detectedRotation: 90,
+    });
+    expect(detected).toBeGreaterThan(reverse);
+  });
+
+  it('检测方向先验可被强证据推翻(共识命中 + 高置信)', () => {
+    const detected = unitCandidateScore({
+      fields: { 报告编号: 'HX-B', 检测日期: '2026-08-28' },
+      fieldConfidences: { 报告编号: 0.1, 检测日期: 0.1 },
+      mismatchCount: 1,
+      rotations: [90],
+      detectedRotation: 90,
+    });
+    const reverse = unitCandidateScore({
+      fields: { 报告编号: 'HX-A', 检测日期: '2026-08-28' },
+      fieldConfidences: { 报告编号: 0.99, 检测日期: 0.99 },
+      mismatchCount: 0,
+      rotations: [270],
+      detectedRotation: 90,
+    });
+    expect(reverse).toBeGreaterThan(detected);
+  });
+
+  it('未传旋转参数时先验为 0(向后兼容, 行为与旧版一致)', () => {
+    const a = unitCandidateScore({
+      fields: { 报告编号: 'HX-A' },
+      fieldConfidences: { 报告编号: 0.9 },
+      mismatchCount: 0,
+    });
+    const b = unitCandidateScore({
+      fields: { 报告编号: 'HX-A' },
+      fieldConfidences: { 报告编号: 0.9 },
+      mismatchCount: 0,
+      rotations: [90],
+      detectedRotation: 90,
+    });
+    expect(b - a).toBeCloseTo(2.5, 5);
+  });
 });

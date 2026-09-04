@@ -163,6 +163,17 @@ const EnvSchema = z.object({
   // 集中复核工作台(spec 2026-09-04 §7.6): 一键放行的置信度阈值。
   // 语义 = 目标准确率(对齐 Rossum 默认 0.975); 只影响 releaseEligible 计算。
   REVIEW_AUTO_RELEASE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.975),
+  // 方向分类探针(2026-09-04): 本地 PaddleOCR 文档方向分类 sidecar。设置
+  // ORIENTATION_API_URL 且分类置信达标时, 用分类器纠正角替代跳动的 VLM 检测
+  // 方向并坍缩 90/270 双候选; 未设置 = 禁用探针, 行为与旧版一致。
+  ORIENTATION_API_URL: z.string().url().optional().or(z.literal('')),
+  ORIENTATION_MIN_SCORE: z.coerce.number().min(0).max(1).default(0.8),
+  // 锚定模式阈值(2026-09-04 事故: 分类器 0.76 置信也大概率正确, 弃用落回检测
+  // 先验是错误边界)。低于此值才完全弃用分类器(回落检测先验);
+  // [ORIENTATION_ANCHOR_SCORE, ORIENTATION_MIN_SCORE) 区间走锚定模式(双候选,
+  // plan0=分类器方向, 择优先验自动锚到分类器方向)。需 <= ORIENTATION_MIN_SCORE
+  // (boot 不强制校验, 配置时注意)。
+  ORIENTATION_ANCHOR_SCORE: z.coerce.number().min(0).max(1).default(0.6),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
