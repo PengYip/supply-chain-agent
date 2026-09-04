@@ -160,6 +160,9 @@ const EnvSchema = z.object({
   // 参与拆分检测的最大 PDF 页数上限: 超过则跳过拆分走旧路径(保护延迟与
   // VLM 用量; 现实多单据拼版远小于该值)。
   BATCH_SPLIT_MAX_PAGES: z.coerce.number().int().min(1).default(50),
+  // 集中复核工作台(spec 2026-09-04 §7.6): 一键放行的置信度阈值。
+  // 语义 = 目标准确率(对齐 Rossum 默认 0.975); 只影响 releaseEligible 计算。
+  REVIEW_AUTO_RELEASE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.975),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

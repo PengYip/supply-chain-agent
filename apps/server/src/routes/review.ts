@@ -25,9 +25,18 @@ import {
   listTemplateTypes,
   getBatchRolesForDocuments,
   listContainerUnitSummaries,
+  listLatestExtractionsByDocIds,
   getDocumentUnitByChild,
   getDocumentSourceUri,
 } from '../pipeline/db/repositories.js';
+import {
+  checkWeighRow,
+  checkWeighTotal,
+  WORKBENCH_TABLE_DOCTYPES,
+  type RowIssue,
+  type TotalCheck,
+} from '../pipeline/reviewChecks.js';
+import { env } from '../env.js';
 import { ensureDocumentExtracted } from '../pipeline/tools/documentEntry.js';
 import { refreshExecutionFlowsForDocument } from '../pipeline/executionFlow.js';
 import { commitDocumentGraph, syncDocumentTypeToGraph } from '../pipeline/graphCommit.js';
@@ -475,6 +484,166 @@ reviewRoute.patch('/:docId/type', async (c) => {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[review] docType change failed:', msg);
+    return c.json({ ok: false, error: msg }, 500);
+  }
+});
+
+// ---- 集中复核工作台(spec 2026-09-04) ---------------------------------------
+
+interface WorkbenchUnitOut {
+  docId: string;
+  title: string;
+  unitIndex: number;
+  reviewStatus: 'pending' | 'confirmed' | 'corrected' | null;
+  reviewAction: 'manual' | 'auto-release' | null;
+  overallConfidence: number;
+  needsReview: boolean;
+  warnings: string[];
+  pageStart: number | null;
+  pageEnd: number | null;
+  releaseEligible: boolean;
+  rows?: Array<Record<string, string | number | null>>;
+  rowChecks?: Array<{ issues: RowIssue[] }>;
+  totals?: { 总净重_吨?: number | null; 页数?: number | null; 失败页?: number[] };
+  totalCheck?: TotalCheck;
+}
+
+/** fields['明细行'] 是 JSON 字符串(表格型字段存储格式); 解析失败按无行处理。 */
+function parseDetailRows(
+  fields: Record<string, { value: string | number }>,
+): Array<Record<string, string | number | null>> {
+  const f = fields['明细行'];
+  if (!f) return [];
+  try {
+    const parsed = typeof f.value === 'string' ? JSON.parse(f.value) : f.value;
+    return Array.isArray(parsed) ? (parsed as Array<Record<string, string | number | null>>) : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseNumberField(
+  fields: Record<string, { value: string | number }>,
+  name: string,
+): number | null {
+  const v = fields[name]?.value;
+  return typeof v === 'number' ? v : null;
+}
+
+/**
+ * GET /api/documents/:docId/review-workbench
+ *
+ * 集中复核工作台聚合快照: container 子单据按类型分组; WORKBENCH_TABLE_DOCTYPES
+ * 组摊平明细行为 rows(带页码) + 服务端勾稽 rowChecks, 其余类型给 unit 摘要。
+ * releaseEligible 服务端计算: overall_confidence >= 阈值 且 !needs_review 且
+ * 无 _warnings 且全行无 error 级 issue 且 reviewStatus='pending'。
+ *
+ * Responses:
+ *   200 { ok: true, data: ReviewWorkbenchResponse }
+ *   401 / 404(非 container/他人/不存在) / 500
+ */
+reviewRoute.get('/:docId/review-workbench', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const docId = c.req.param('docId');
+  try {
+    const roles = await getBatchRolesForDocuments(ctx(), [docId], user.id);
+    if (roles.get(docId)?.batchRole !== 'container') {
+      return c.json({ ok: false, error: 'document_or_extraction_not_found' }, 404);
+    }
+    const units = await listContainerUnitSummaries(ctx(), docId);
+    const childIds = units.map((u) => u.docId).filter((d): d is string => !!d);
+    const extractions = await listLatestExtractionsByDocIds(ctx(), childIds, user.id);
+    const sourceUri = await getDocumentSourceUri(ctx(), docId, user.id);
+    const containerTitle = sourceUri
+      ? (sourceUri.split(/[\\/]/).filter(Boolean).pop() ?? sourceUri)
+      : docId;
+
+    const groupOrder: string[] = [];
+    const groupsByType = new Map<string, WorkbenchUnitOut[]>();
+    for (const u of units) {
+      // 分组键 = 检测词表标签(detectedFormType)优先, 业务类型兜底: 工作台的
+      // voucher-table 判定(WORKBENCH_TABLE_DOCTYPES)是检测标签域, 子单据
+      // doc_type 可能尚未落库(未分类存根='其他')或与检测标签不同域。
+      const docType = u.detectedFormType ?? u.childDocType ?? '未分类';
+      if (!groupsByType.has(docType)) {
+        groupsByType.set(docType, []);
+        groupOrder.push(docType);
+      }
+      const ex = u.docId ? (extractions.get(u.docId) ?? null) : null;
+      // field_meta 顶层 _warnings(getReviewSnapshot 同源口径): 老数据/无抽取恒 []。
+      const metaWarnings = (ex?.fieldMeta as Record<string, unknown> | undefined)?.['_warnings'];
+      const warnings = Array.isArray(metaWarnings)
+        ? metaWarnings.filter((w): w is string => typeof w === 'string')
+        : [];
+
+      const unitOut: WorkbenchUnitOut = {
+        docId: u.docId ?? '',
+        title: `第 ${u.unitIndex} 份`,
+        unitIndex: u.unitIndex,
+        reviewStatus: u.reviewStatus,
+        reviewAction: (u.reviewAction as 'manual' | 'auto-release' | null) ?? null,
+        overallConfidence: ex ? ex.overallConfidence : 0,
+        needsReview: ex ? ex.needsReview : true,
+        warnings,
+        pageStart: u.pageStart,
+        pageEnd: u.pageEnd,
+        releaseEligible: false,
+      };
+
+      let noErrorRows = true;
+      if (ex && WORKBENCH_TABLE_DOCTYPES.has(docType)) {
+        const rows = parseDetailRows(ex.fields);
+        const failedRaw = ex.fields['失败页']?.value;
+        let failedPages: number[] = [];
+        try {
+          const p = typeof failedRaw === 'string' ? JSON.parse(failedRaw) : failedRaw;
+          if (Array.isArray(p)) failedPages = p.filter((n): n is number => typeof n === 'number');
+        } catch { /* 损坏按无失败页 */ }
+        const weighType = docType === '轨道衡称重单' ? '轨道衡称重单' as const : '汽运磅单' as const;
+        const rowChecks = rows.map((r) => {
+          const issues = checkWeighRow(r, weighType);
+          if (issues.some((i) => i.severity === 'error')) noErrorRows = false;
+          return { issues };
+        });
+        unitOut.rows = rows;
+        unitOut.rowChecks = rowChecks;
+        unitOut.totals = {
+          总净重_吨: parseNumberField(ex.fields, '总净重_吨'),
+          页数: parseNumberField(ex.fields, '页数'),
+          失败页: failedPages,
+        };
+        unitOut.totalCheck = checkWeighTotal(rows, unitOut.totals.总净重_吨);
+        if (!unitOut.totalCheck.pass) noErrorRows = false;
+      }
+
+      unitOut.releaseEligible =
+        u.reviewStatus === 'pending' &&
+        ex !== null &&
+        ex.overallConfidence >= env.REVIEW_AUTO_RELEASE_THRESHOLD &&
+        !ex.needsReview &&
+        warnings.length === 0 &&
+        noErrorRows;
+      groupsByType.get(docType)!.push(unitOut);
+    }
+
+    return c.json({
+      ok: true,
+      data: {
+        containerDocId: docId,
+        containerTitle,
+        groups: groupOrder.map((docType) => ({
+          docType,
+          kind: WORKBENCH_TABLE_DOCTYPES.has(docType)
+            ? ('voucher-table' as const)
+            : ('unit-list' as const),
+          units: groupsByType.get(docType)!,
+        })),
+      },
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[review] workbench fetch failed:', msg);
     return c.json({ ok: false, error: msg }, 500);
   }
 });
