@@ -44,6 +44,7 @@ import type {
   DocumentTagSource,
   DocumentTagRow,
   ReviewStatus,
+  ReviewOutcomeAction,
   ProposedRelationship,
   ReviewSnapshot,
   DocumentVectorization,
@@ -1589,6 +1590,20 @@ export async function setReviewStatusPg(
   await ctx.pool.query(
     'UPDATE documents SET review_status = $1, reviewed_at = NOW(), reviewed_by = $2 WHERE id = $3',
     [status, effectiveUserId(userId), docId],
+  );
+}
+
+/** pg twin of setReviewOutcome: 确认时连写 review_action 审计列。 */
+export async function setReviewOutcomePg(
+  ctx: PostgresDbContext,
+  docId: string,
+  status: ReviewStatus,
+  action: ReviewOutcomeAction,
+  userId?: string,
+): Promise<void> {
+  await ctx.pool.query(
+    'UPDATE documents SET review_status = $1, review_action = $2, reviewed_at = now(), reviewed_by = $3 WHERE id = $4',
+    [status, action, effectiveUserId(userId), docId],
   );
 }
 

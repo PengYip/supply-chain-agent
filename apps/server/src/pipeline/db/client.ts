@@ -540,6 +540,11 @@ export function migrate(sqlite: Database.Database): void {
     if (!have.has('reviewed_by')) {
       try { sqlite.exec('ALTER TABLE documents ADD COLUMN reviewed_by TEXT'); } catch { /* concurrent */ }
     }
+    // 集中复核(spec 2026-09-04 §7.5): 确认动作审计列 — manual=人工确认,
+    // auto-release=置信度阈值批量放行。同一 guarded ALTER 模式。
+    if (!have.has('review_action')) {
+      try { sqlite.exec('ALTER TABLE documents ADD COLUMN review_action TEXT'); } catch { /* concurrent */ }
+    }
     // Persisted vectorization outcome (Bug fix: was previously an in-memory Map
     // in documentEntry.ts, so it showed 'unknown' after upload or restart). Same
     // guarded ALTER pattern as the review_status block above.
@@ -776,6 +781,8 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     `ALTER TABLE documents ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'pending'`,
     `ALTER TABLE documents ADD COLUMN IF NOT EXISTS reviewed_at timestamptz`,
     `ALTER TABLE documents ADD COLUMN IF NOT EXISTS reviewed_by TEXT`,
+    // 集中复核(spec 2026-09-04 §7.5): 确认动作审计列(manual/auto-release)。
+    `ALTER TABLE documents ADD COLUMN IF NOT EXISTS review_action TEXT`,
     // Persisted vectorization outcome (Bug fix: previously an in-memory Map, lost
     // on restart and never written by the /api/files upload path).
     `ALTER TABLE documents ADD COLUMN IF NOT EXISTS vectorization_meta jsonb`,

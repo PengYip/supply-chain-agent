@@ -52,6 +52,7 @@ import {
   // post-ingest review (Task 3): pg twins for review snapshot + status + extraction update.
   getReviewSnapshotPg,
   setReviewStatusPg,
+  setReviewOutcomePg,
   updateExtractionFieldsPg,
   // persisted vectorization outcome (Bug fix): pg twin for setDocumentVectorization.
   setDocumentVectorizationPg,
@@ -2384,6 +2385,27 @@ export async function setReviewStatus(
       "UPDATE documents SET review_status = ?, reviewed_at = datetime('now'), reviewed_by = ? WHERE id = ?",
     )
     .run(status, effectiveUserId(userId), docId);
+}
+
+/** 确认动作类型(集中复核, spec 2026-09-04 §7.5): manual=人工确认,
+ *  auto-release=置信度阈值批量放行。写 documents.review_action 审计列。 */
+export type ReviewOutcomeAction = 'manual' | 'auto-release';
+
+/** setReviewStatus 的增强版: 连带写 review_action。集中复核批量确认与单文档
+ *  确认共用, 保持审计口径一致。 */
+export async function setReviewOutcome(
+  ctx: DbContext,
+  docId: string,
+  status: ReviewStatus,
+  action: ReviewOutcomeAction,
+  userId?: string,
+): Promise<void> {
+  if (ctx.backend === 'postgres') return setReviewOutcomePg(ctx, docId, status, action, userId);
+  ctx.sqlite
+    .prepare(
+      "UPDATE documents SET review_status = ?, review_action = ?, reviewed_at = datetime('now'), reviewed_by = ? WHERE id = ?",
+    )
+    .run(status, action, effectiveUserId(userId), docId);
 }
 
 /**

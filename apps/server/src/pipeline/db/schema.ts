@@ -27,6 +27,8 @@ export const documents = sqliteTable(
     reviewStatus: text('review_status').notNull().default('pending'),
     reviewedAt: text('reviewed_at'),
     reviewedBy: text('reviewed_by'),
+    /** 确认动作审计列(spec 2026-09-04 §7.5): 'manual' | 'auto-release' | null。 */
+    reviewAction: text('review_action'),
   },
   (t) => ({ userIdx: index('idx_documents_user').on(t.userId) }),
 );

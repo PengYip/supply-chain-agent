@@ -20,7 +20,7 @@ import type { DbContext } from '../pipeline/db/client.js';
 import {
   applyDocumentCorrections,
   getReviewSnapshot,
-  setReviewStatus,
+  setReviewOutcome,
   updateDocumentType,
   listTemplateTypes,
   getBatchRolesForDocuments,
@@ -150,7 +150,7 @@ reviewRoute.post('/:docId/review', async (c) => {
       // edges to Neo4j (design 2026-08-17 §4). Graph commit is
       // fault-isolated: it NEVER blocks/fails the confirmation — the outcome
       // is persisted as documents.graph_status and surfaced on the snapshot.
-      await setReviewStatus(ctx(), docId, 'confirmed', user.id);
+      await setReviewOutcome(ctx(), docId, 'confirmed', 'manual', user.id);
       await commitDocumentGraph(ctx(), docId, user.id);
       snapshot = await getReviewSnapshot(ctx(), docId, user.id);
       if (!snapshot) {

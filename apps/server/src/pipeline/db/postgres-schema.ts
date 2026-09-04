@@ -93,6 +93,8 @@ export const documents = pgTable(
     reviewStatus: text('review_status').notNull().default('pending'),
     reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
     reviewedBy: text('reviewed_by'),
+    // 集中复核(spec 2026-09-04 §7.5): 确认动作审计列(manual/auto-release)。
+    reviewAction: text('review_action'),
     // Lane A (2a): auto-extraction lifecycle status. NULL = 'pending' (opt-in).
     extractionStatus: text('extraction_status'),
     // Model B parse lifecycle: 'uploaded' stub -> 'parsing' -> 'parsed' |
