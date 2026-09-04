@@ -278,9 +278,12 @@ function previewCacheSet(key: string, buf: Buffer): void {
  * 用 document_units 存量行(页区间/bbox/manifest.regions)经 renderUnitImages
  * 裁剪 + 旋回(有效旋回 = manifest.chosenRotation ?? rotation_deg), 返回的
  * 就是抽取/VLM 所见的那张裁剪图。跨页合并 unit 的多区域纵向拼为一张。
+ * 可选 ?page=N: 只返回该页单区域裁切(集中复核工作台行->页锚定, 2026-09-04);
+ * N 非法/越界 -> 400(与 404 的"单据不存在"区分)。LRU 键含 page 维度。
  *
  * 响应:
  *   200 image/png(原始字节)
+ *   400 { ok: false, error: '<中文原因>' }   page 非正整数 / 不在单元页区间
  *   404 { ok: false, error: '<中文原因>' }   非unit / 无unit行 / 原文件缺失 /
  *                                            渲染失败
  *   401 { error: 'unauthorized' }            (requireAuth, applied in index.ts)
@@ -290,6 +293,17 @@ reviewRoute.get('/:docId/unit-preview', async (c) => {
   if (!user) return c.json({ error: 'unauthorized' }, 401);
   const docId = c.req.param('docId');
   try {
+    // 集中复核工作台(spec 2026-09-04 §7.2): 可选 page 参数只裁该页(行->页
+    // 锚定的原文视图)。非法/越界 -> 400(与 404 的"单据不存在"区分)。
+    const pageParam = c.req.query('page');
+    let page: number | null = null;
+    if (pageParam !== undefined) {
+      const n = Number(pageParam);
+      if (!Number.isInteger(n) || n < 1) {
+        return c.json({ ok: false, error: 'page 参数必须是正整数' }, 400);
+      }
+      page = n;
+    }
     // 与 units 端点同款三态守卫(不存在/他人文档/角色不符 -> 404), unit 侧。
     const roles = await getBatchRolesForDocuments(ctx(), [docId], user.id);
     if (roles.get(docId)?.batchRole !== 'unit') {
@@ -306,16 +320,30 @@ reviewRoute.get('/:docId/unit-preview', async (c) => {
     // 逐区域旋回(与抽取/VLM 所见一致): chosenRotations -> 检测期逐区域 ->
     // 标量 chosenRotation ?? rotation_deg。跨页混合旋回 unit 不再被单标量覆盖。
     const rotations = effectiveRotationsOf(unit);
-    const cacheKey = `${docId}:${rotations.join(',')}`;
+    const cacheKey = `${docId}:${rotations.join(',')}:${page ?? 'all'}`;
     const cached = previewCacheGet(cacheKey);
     if (cached) {
       return c.body(new Uint8Array(cached), 200, { 'Content-Type': 'image/png' });
     }
-    // 只渲染到 unit 末页(renderPdfPages 支持 first N), 裁剪按页号取图。
     const pages = await renderPdfPages(sourceUri, { first: unit.pageEnd ?? unit.pageStart ?? 1 });
     const detected = unitFromStoredRow(unit);
-    const images = await renderUnitImages(pages, detected, rotations);
-    const png = await stackImagesVertically(images);
+    let png: Buffer;
+    if (page !== null) {
+      // 单页视图: regions 与 rotations 按 manifest 顺序一一对应, 过滤到目标页。
+      const idx = detected.regions.findIndex((r) => r.page === page);
+      if (idx === -1) {
+        return c.json({ ok: false, error: `页 ${page} 不在该单元页区间` }, 400);
+      }
+      const images = await renderUnitImages(
+        pages,
+        { ...detected, regions: [detected.regions[idx]!] },
+        [rotations[idx] ?? 0],
+      );
+      png = images[0]!.buffer;
+    } else {
+      const images = await renderUnitImages(pages, detected, rotations);
+      png = await stackImagesVertically(images);
+    }
     previewCacheSet(cacheKey, png);
     return c.body(new Uint8Array(png), 200, { 'Content-Type': 'image/png' });
   } catch (e) {
