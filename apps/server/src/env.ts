@@ -165,6 +165,12 @@ const EnvSchema = z.object({
   // 方向并坍缩 90/270 双候选; 未设置 = 禁用探针, 行为与旧版一致。
   ORIENTATION_API_URL: z.string().url().optional().or(z.literal('')),
   ORIENTATION_MIN_SCORE: z.coerce.number().min(0).max(1).default(0.8),
+  // 锚定模式阈值(2026-09-04 事故: 分类器 0.76 置信也大概率正确, 弃用落回检测
+  // 先验是错误边界)。低于此值才完全弃用分类器(回落检测先验);
+  // [ORIENTATION_ANCHOR_SCORE, ORIENTATION_MIN_SCORE) 区间走锚定模式(双候选,
+  // plan0=分类器方向, 择优先验自动锚到分类器方向)。需 <= ORIENTATION_MIN_SCORE
+  // (boot 不强制校验, 配置时注意)。
+  ORIENTATION_ANCHOR_SCORE: z.coerce.number().min(0).max(1).default(0.6),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

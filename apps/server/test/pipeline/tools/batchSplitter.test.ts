@@ -1101,7 +1101,7 @@ describe('processDocumentWithBatch Phase 2 (抽取层)', () => {
         return { fields: { 出具机构: '华新水泥质检中心', 报告编号: 'HX-2026-081A', 检测日期: '2026-08-28' }, 字段置信度: {} };
       },
     };
-    const orientationClassifier = vi.fn().mockResolvedValue({ rotationDeg: 270, score: 0.5 }); // < 0.8
+    const orientationClassifier = vi.fn().mockResolvedValue({ rotationDeg: 270, score: 0.5 }); // < 0.6 锚定阈值
 
     const res = await ensureDocumentParsed(ctx, docId, { modality: 'scanned', userId: 'u1', vlm, orientationClassifier });
 
@@ -1109,6 +1109,114 @@ describe('processDocumentWithBatch Phase 2 (抽取层)', () => {
     expect(extractCalls).toBe(3); // unit1 双候选 2 次 + unit2 1 次
     const [c1] = res.batchSplit!.childDocIds;
     expect(unitManifestOf(c1!).rotationSource).toBeUndefined();
+  });
+
+  it('探针锚定模式(score=0.7): 双候选保留, plan0=分类器方向, manifest 记 classifier-anchor', async () => {
+    await ensureTemplateSeed(ctx);
+    env.BATCH_SPLIT_CONCURRENCY = 1;
+    env.ORIENTATION_API_URL = 'http://sidecar.invalid';
+    const pdfPath = join(dir, 'p2-orient-anchor.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A', 'REPORT-B']);
+    const docId = await stubFor(pdfPath);
+
+    let extractCalls = 0;
+    const vlm: VlmDeps = {
+      ...fakeDetect([
+        { regions: [region({ identifierOrNull: 'HX-2026-081A', rotationDeg: 90, bbox: { x: 0.05, y: 0.05, w: 0.4, h: 0.9 } })] },
+        { regions: [region({ identifierOrNull: 'HX-2026-082B' })] },
+      ]),
+      extractTyped: async (images, docType) => {
+        expect(docType).toBe('化验报告');
+        extractCalls += 1;
+        return { fields: { 出具机构: '华新水泥质检中心', 报告编号: 'HX-2026-081A', 检测日期: '2026-08-28' }, 字段置信度: {} };
+      },
+    };
+    // 分类器方向 270 与检测方向 90 相反, score=0.7 走锚定区间 [0.6, 0.8)。
+    const orientationClassifier = vi.fn().mockResolvedValue({ rotationDeg: 270, score: 0.7 });
+
+    const res = await ensureDocumentParsed(ctx, docId, { modality: 'scanned', userId: 'u1', vlm, orientationClassifier });
+
+    // unit1: 锚定模式双候选(270 在前 + 90) -> 抽取 2 次; unit2: 1 次。
+    expect(orientationClassifier).toHaveBeenCalledTimes(1);
+    expect(extractCalls).toBe(3);
+    const [c1] = res.batchSplit!.childDocIds;
+    expect(extractionRow(c1!)).toBeDefined();
+    const manifest = unitManifestOf(c1!);
+    expect(manifest.rotationSource).toBe('classifier-anchor');
+    expect(manifest.classifierScore).toBe(0.7);
+    // 择优先验锚在分类器方向: plan0=270 胜出。
+    const scores = manifest.candidateScores as Array<{ rot: number; score: number; mismatch: number }>;
+    expect(scores[0]!.rot).toBe(270);
+    expect(manifest.chosenRotation).toBe(270);
+  });
+
+  it('事故回归(score=0.76): 分类器方向与检测相反时, 锚定模式择优胜出=分类器方向', async () => {
+    await ensureTemplateSeed(ctx);
+    env.BATCH_SPLIT_CONCURRENCY = 1;
+    env.ORIENTATION_API_URL = 'http://sidecar.invalid';
+    const pdfPath = join(dir, 'p2-orient-accident.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A', 'REPORT-B']);
+    const docId = await stubFor(pdfPath);
+
+    let extractCalls = 0;
+    const vlm: VlmDeps = {
+      ...fakeDetect([
+        { regions: [region({ identifierOrNull: 'HX-2026-081A', rotationDeg: 90, bbox: { x: 0.05, y: 0.05, w: 0.4, h: 0.9 } })] },
+        { regions: [region({ identifierOrNull: 'HX-2026-082B' })] },
+      ]),
+      extractTyped: async () => {
+        extractCalls += 1;
+        return { fields: { 出具机构: '华新水泥质检中心', 报告编号: 'HX-2026-081A', 检测日期: '2026-08-28' }, 字段置信度: {} };
+      },
+    };
+    // 事故形态: 检测报 90(错), 分类器 270 score=0.76(锚定区间)——旧逻辑 score<0.8
+    // 弃用分类器落回检测先验 -> 180° 颠倒; 新逻辑锚定模式 plan0=270 胜出。
+    const orientationClassifier = vi.fn().mockResolvedValue({ rotationDeg: 270, score: 0.76 });
+
+    const res = await ensureDocumentParsed(ctx, docId, { modality: 'scanned', userId: 'u1', vlm, orientationClassifier });
+
+    expect(extractCalls).toBe(3);
+    const [c1] = res.batchSplit!.childDocIds;
+    const manifest = unitManifestOf(c1!);
+    expect(manifest.rotationSource).toBe('classifier-anchor');
+    expect(manifest.classifierScore).toBe(0.76);
+    expect(manifest.chosenRotation).toBe(270); // 分类器方向胜出, 不再 180° 颠倒
+  });
+
+  it('探针 score=0.5: 现状回落, plan0=检测方向, 无 rotationSource', async () => {
+    await ensureTemplateSeed(ctx);
+    env.BATCH_SPLIT_CONCURRENCY = 1;
+    env.ORIENTATION_API_URL = 'http://sidecar.invalid';
+    const pdfPath = join(dir, 'p2-orient-fallback.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A', 'REPORT-B']);
+    const docId = await stubFor(pdfPath);
+
+    let extractCalls = 0;
+    const vlm: VlmDeps = {
+      ...fakeDetect([
+        { regions: [region({ identifierOrNull: 'HX-2026-081A', rotationDeg: 90, bbox: { x: 0.05, y: 0.05, w: 0.4, h: 0.9 } })] },
+        { regions: [region({ identifierOrNull: 'HX-2026-082B' })] },
+      ]),
+      extractTyped: async () => {
+        extractCalls += 1;
+        return { fields: { 出具机构: '华新水泥质检中心', 报告编号: 'HX-2026-081A', 检测日期: '2026-08-28' }, 字段置信度: {} };
+      },
+    };
+    const orientationClassifier = vi.fn().mockResolvedValue({ rotationDeg: 270, score: 0.5 });
+
+    const res = await ensureDocumentParsed(ctx, docId, { modality: 'scanned', userId: 'u1', vlm, orientationClassifier });
+
+    expect(extractCalls).toBe(3);
+    const [c1] = res.batchSplit!.childDocIds;
+    const manifest = unitManifestOf(c1!);
+    expect(manifest.rotationSource).toBeUndefined();
+    // plan0=检测方向(90): 先验锚在检测方向, 择优胜出。
+    const scores = manifest.candidateScores as Array<{ rot: number; score: number; mismatch: number }>;
+    expect(scores[0]!.rot).toBe(90);
+    expect(manifest.chosenRotation).toBe(90);
   });
 
   it('探针抛错/超时: 回落双候选, 抽取 2 次, 无 rotationSource', async () => {
