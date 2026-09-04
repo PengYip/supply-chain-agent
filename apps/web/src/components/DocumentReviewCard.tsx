@@ -43,7 +43,7 @@ import {
   type ReextractUnitBody,
 } from '../api/documents'
 import { businessTypeTag } from '../lib/businessTypeTag'
-import { requestOpenReview, requestRefreshContainers } from '../lib/reviewModal'
+import { buildReviewQueueFromUnits, requestOpenReview, requestRefreshContainers } from '../lib/reviewModal'
 
 /** One chunk classified under a semantic tag. `text` is server-capped (800
  *  chars + '...'); the card renders it verbatim, never truncated client-side. */
@@ -605,7 +605,10 @@ const ContainerUnitRow: React.FC<{
   onToggleMerge?: () => void
   /** 免登录分享宿主隐藏登录态「复核」入口。 */
   readOnly?: boolean
-}> = ({ unit, mergeMode = false, selected = false, onToggleMerge, readOnly = false }) => {
+  /** 打开子单据复核的回调(容器清单宿主传入以携带同组队列,启用弹窗翻页
+   *  与确认后自动前进;缺省回落无队列的全局通道)。 */
+  onOpenReview?: (docId: string) => void
+}> = ({ unit, mergeMode = false, selected = false, onToggleMerge, readOnly = false, onOpenReview }) => {
   const typeTag = businessTypeTag(unit.childDocType ?? unit.detectedFormType)
   const status = unitStatusBadge(unit.unitStatus)
   // 复核状态缺字段(旧版 /units 响应)时: 有子单据按「待复核」兜底(安全侧),
@@ -666,7 +669,7 @@ const ContainerUnitRow: React.FC<{
           (docId ? (
             <button
               type="button"
-              onClick={() => requestOpenReview(docId)}
+              onClick={() => (onOpenReview ?? requestOpenReview)(docId)}
               title="打开该子单据的复核卡"
               className="cursor-pointer whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
             >
@@ -736,6 +739,16 @@ const ContainerSplitCard: React.FC<{
       /* 保留旧清单 */
     }
   }, [docId])
+
+  /** 打开子单据复核并携带同组完整队列(按当前清单序): 弹窗进入翻页模式,
+   *  确认/更正后自动前进到下一个待复核。依赖 units —— 重拆/合并后就地
+   *  重拉的清单会即时反映到后续打开的队列里。 */
+  const openUnitReview = useCallback(
+    (unitDocId: string) => {
+      requestOpenReview(unitDocId, buildReviewQueueFromUnits(units))
+    },
+    [units],
+  )
 
   // -- 重新拆分 --
   const [resplitOpen, setResplitOpen] = useState(false)
@@ -912,6 +925,7 @@ const ContainerSplitCard: React.FC<{
               selected={selectedUnitIds.has(u.unitId)}
               onToggleMerge={() => toggleMergeSelect(u.unitId)}
               readOnly={readOnly}
+              onOpenReview={openUnitReview}
             />
           ))}
         </div>
