@@ -839,7 +839,7 @@ describe('processDocumentWithBatch Phase 2 (抽取层)', () => {
     expect(text).not.toContain('REPORT-B');
   });
 
-  it('rotationDeg=90: 双候选各抽一次, 两遍共识命中者胜出(即使其自报置信度更低)', async () => {
+  it('rotationDeg=90: 分数接近时检测方向胜出(共识噪声不翻盘)', async () => {
     await ensureTemplateSeed(ctx);
     env.BATCH_SPLIT_CONCURRENCY = 1; // 候选次序确定性(fake 按调用序回灌)
     const pdfPath = join(dir, 'p2-rot.pdf');
@@ -858,8 +858,8 @@ describe('processDocumentWithBatch Phase 2 (抽取层)', () => {
         expect(docType).toBe('化验报告');
         widths.push((await sizeOf(images[0]!.buffer)).width);
         call += 1;
-        // 候选1(检测方向 90): 读数与检测遍不一致且置信度高;
-        // 候选2(反向 270): 读数一致但自报置信度略低——共识必须压过自报置信度。
+        // 候选1(检测方向 90): 读数与检测遍不一致(数字噪声)但置信度略高;
+        // 候选2(反向 270): 读数一致但置信度略低——共识噪声不得翻盘检测方向。
         const matched = call === 2;
         return {
           fields: {
@@ -880,8 +880,9 @@ describe('processDocumentWithBatch Phase 2 (抽取层)', () => {
     const [c1] = res.batchSplit!.childDocIds;
     const ext = extractionRow(c1!);
     const fields = JSON.parse(ext!.fields) as Record<string, { value: unknown }>;
-    expect(fields['报告编号']!.value).toBe('HX-2026-081A'); // 取共识命中的候选
-    expect(ext!.needs_review).toBe(0);
+    // 检测方向(90)胜出: 即使其读数与检测遍不一致(共识噪声), 先验压过反向候选。
+    expect(fields['报告编号']!.value).toBe('HX-2026-999Z');
+    expect(ext!.needs_review).toBe(1); // 检测候选有共识分歧 -> 强制复核
   });
 
   it('两遍读数分歧(编号+净重): 压低 overall_confidence 并强制 needs_review', async () => {
@@ -921,7 +922,7 @@ describe('processDocumentWithBatch Phase 2 (抽取层)', () => {
     expect(JSON.parse(String(fields['明细行']!.value)) as unknown[]).toHaveLength(1);
   });
 
-  it('重量组双候选择优: 反向候选读数与检测遍一致时胜出且不入复核', async () => {
+  it('重量组双候选择优: 分数接近时检测方向胜出(共识噪声不翻盘)', async () => {
     await ensureTemplateSeed(ctx);
     env.BATCH_SPLIT_CONCURRENCY = 1; // 候选次序确定性(fake 按调用序回灌)
     const pdfPath = join(dir, 'p2-weight-rot.pdf');
@@ -937,7 +938,7 @@ describe('processDocumentWithBatch Phase 2 (抽取层)', () => {
       ]),
       extractOne: async () => {
         call += 1;
-        // unit1 候选1(检测方向 270)读反; 候选2(90)读正; unit2 单候选读正。
+        // unit1 候选1(检测方向 270)读反(数字噪声); 候选2(90)读正——先验压过共识。
         const id = call === 1 ? '10394417' : call === 2 ? '10384417' : '10384418';
         return { fields: { 编号: id, 毛重_吨: 49.8, 皮重_吨: 15.55, 净重_吨: 34.25 } };
       },
@@ -949,9 +950,54 @@ describe('processDocumentWithBatch Phase 2 (抽取层)', () => {
     const fields1 = JSON.parse(e1!.fields) as Record<string, { value: unknown }>;
     expect(fields1['明细行']).toBeDefined();
     const rows = JSON.parse(String(fields1['明细行']!.value)) as Array<{ 编号: string }>;
-    expect(rows[0]!.编号).toBe('10384417');
-    expect(e1!.needs_review).toBe(0); // 共识命中的候选, 无分歧
+    // 检测方向(270)胜出: 编号取检测候选的读数(与检测遍不一致)。
+    expect(rows[0]!.编号).toBe('10394417');
+    expect(e1!.needs_review).toBe(1); // 检测候选有共识分歧 -> 强制复核
     expect(extractionRow(c2!)).toBeDefined();
+  });
+
+  it('反向候选强证据(共识命中+高置信)仍可推翻检测方向先验', async () => {
+    await ensureTemplateSeed(ctx);
+    env.BATCH_SPLIT_CONCURRENCY = 1; // 候选次序确定性(fake 按调用序回灌)
+    const pdfPath = join(dir, 'p2-rot-strong.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A', 'REPORT-B']);
+    const docId = await stubFor(pdfPath);
+
+    let call = 0;
+    const vlm: VlmDeps = {
+      ...fakeDetect([
+        { regions: [region({ identifierOrNull: 'HX-2026-081A', rotationDeg: 90, bbox: { x: 0.05, y: 0.05, w: 0.4, h: 0.9 } })] },
+        { regions: [region({ identifierOrNull: 'HX-2026-082B' })] },
+      ]),
+      extractTyped: async (images, docType) => {
+        expect(docType).toBe('化验报告');
+        call += 1;
+        // 候选1(检测方向 90): 读数与检测遍不一致且置信度极低;
+        // 候选2(反向 270): 读数一致且置信度极高——强证据必须压过 2.5 先验。
+        const matched = call === 2;
+        return {
+          fields: {
+            出具机构: '华新水泥质检中心',
+            报告编号: matched ? 'HX-2026-081A' : 'HX-2026-999Z',
+            检测日期: '2026-08-28',
+          },
+          字段置信度: {
+            出具机构: matched ? 0.99 : 0.1,
+            报告编号: matched ? 0.99 : 0.1,
+            检测日期: matched ? 0.99 : 0.1,
+          },
+        };
+      },
+    };
+
+    const res = await ensureDocumentParsed(ctx, docId, { modality: 'scanned', userId: 'u1', vlm });
+    const [c1] = res.batchSplit!.childDocIds;
+    const ext = extractionRow(c1!);
+    const fields = JSON.parse(ext!.fields) as Record<string, { value: unknown }>;
+    // 反向候选(270)强证据胜出: 共识命中 + 高置信, 压过检测方向先验。
+    expect(fields['报告编号']!.value).toBe('HX-2026-081A');
+    expect(ext!.needs_review).toBe(0);
   });
 
   it('未映射 formType(微信聊天记录): 不走 VLM 抽取, 维持 OCR 块路径', async () => {

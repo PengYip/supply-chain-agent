@@ -140,6 +140,12 @@ describe('buildUnitDetectPrompt', () => {
     // 竖版纸面横躺表格/截屏/票据是常见形态, 不得报 0。
     expect(prompt).toContain('横躺的表格/截屏/票据照片');
     expect(prompt).toContain('不得报 0');
+    // 90/270 判别锚: 内容顶部朝左 -> 90, 顶部朝右 -> 270, 看文字行走向交叉验证。
+    expect(prompt).toContain('内容顶部朝左');
+    expect(prompt).toContain('报 90');
+    expect(prompt).toContain('内容顶部朝右');
+    expect(prompt).toContain('报 270');
+    expect(prompt).toContain('横排文字行的走向');
   });
 });
 

@@ -466,6 +466,10 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
         throw new Error(`全部旋回候选提取失败: ${failures.join('; ')}`);
       }
       // 择优: 两遍共识命中 > 字段置信度均值 > 字段覆盖(unitCandidateScore)。
+      // 检测方向先验(2026-09-04 宣威事故): 候选计划 0 = 检测方向(unitRotationPlans
+      // 保证), 给与检测方向一致的候选 +DETECTION_DIRECTION_PRIOR, 防共识噪声
+      // (数字型单据上 mismatch 是噪声)把正确方向翻成 180° 颠倒。
+      const detectedRotation = unitVoucher.candidates[0]!.rotations[0] ?? null;
       const scored = attempts
         .map((a) => ({
           a,
@@ -473,6 +477,8 @@ async function runVoucherPipeline(input: VoucherIngestInput): Promise<VoucherPip
             fields: a.result.fields,
             fieldConfidences: a.result.字段置信度,
             mismatchCount: a.consensus.mismatches.length,
+            rotations: a.rotations,
+            detectedRotation,
           }),
         }))
         .sort((x, y) => y.score - x.score);
