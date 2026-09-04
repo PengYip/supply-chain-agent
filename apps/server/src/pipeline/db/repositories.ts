@@ -63,6 +63,8 @@ import {
   getExtractionStatusPg,
   // post-ingest review (Task 7): pg twin for latest-extraction-by-doc lookup.
   loadLatestExtractionByDocIdPg,
+  // 集中复核工作台(spec 2026-09-04): pg twin for 批量最新抽取查询。
+  listLatestExtractionsByDocIdsPg,
   // Model B (decouple upload from parse): pg twins for stub + parse lifecycle.
   createDocumentStubPg,
   updateDocumentMetaPg,
@@ -438,6 +440,11 @@ export interface BatchUnitSummary {
   /** 子单据解析状态(2026-09-01 复核 UX 补充); 无子单据 -> null。 */
   parseStatus: string | null;
   needsReview: boolean;           // 最新 extraction needs_review=1
+  /** 集中复核工作台增补(spec 2026-09-04): unit 页区间与确认动作(可空,
+   *  additive, 旧消费方不受影响)。 */
+  pageStart: number | null;
+  pageEnd: number | null;
+  reviewAction: string | null;
 }
 
 export interface BatchLineage {
@@ -590,6 +597,47 @@ export async function loadLatestExtractionByDocId(
     overallConfidence: row.overallConfidence,
     needsReview: !!row.needsReview,
   };
+}
+
+/**
+ * 批量版 loadLatestExtractionByDocId(集中复核工作台): 一次 IN 查询取每个
+ * 文档的最新 extraction。user 过滤口径与单文档版一致(uid 非空才过滤,
+ * user_id=''/NULL 老数据对任何调用方可见)。返回 Map<docId, ExtractionRow>。
+ */
+export async function listLatestExtractionsByDocIds(
+  ctx: DbContext,
+  docIds: string[],
+  userId?: string,
+): Promise<Map<string, ExtractionRow>> {
+  if (ctx.backend === 'postgres') return listLatestExtractionsByDocIdsPg(ctx, docIds, userId);
+  const ids = [...new Set(docIds.filter(Boolean))];
+  const out = new Map<string, ExtractionRow>();
+  if (ids.length === 0) return out;
+  const uid = effectiveUserId(userId);
+  const placeholders = ids.map(() => '?').join(', ');
+  const newest = '(SELECT MAX(e2.rowid) FROM extractions e2 WHERE e2.document_id = e.document_id)';
+  const base = `SELECT e.id, e.document_id, e.doc_type, e.fields, e.field_meta,
+                       e.overall_confidence, e.needs_review
+                FROM extractions e
+                WHERE e.document_id IN (${placeholders}) AND e.rowid = ${newest}`;
+  const sql = uid
+    ? `${base} AND (e.user_id = ? OR e.user_id = '' OR e.user_id IS NULL)`
+    : base;
+  const rows = (uid
+    ? ctx.sqlite.prepare(sql).all(...ids, uid)
+    : ctx.sqlite.prepare(sql).all(...ids)) as Array<Record<string, unknown>>;
+  for (const r of rows) {
+    out.set(String(r.document_id), {
+      id: String(r.id),
+      documentId: String(r.document_id),
+      docType: String(r.doc_type) as DocType,
+      fields: JSON.parse(String(r.fields)),
+      fieldMeta: JSON.parse(String(r.field_meta)),
+      overallConfidence: Number(r.overall_confidence ?? 0),
+      needsReview: !!r.needs_review,
+    });
+  }
+  return out;
 }
 
 export interface ClassificationInput {
@@ -1570,6 +1618,9 @@ export function batchUnitSummaryFromRow(r: Record<string, unknown>): BatchUnitSu
       review === 'pending' || review === 'confirmed' || review === 'corrected' ? review : null,
     parseStatus: r.child_parse_status == null ? null : String(r.child_parse_status),
     needsReview: Number(r.needs_review ?? 0) === 1,
+    pageStart: r.page_start == null ? null : Number(r.page_start),
+    pageEnd: r.page_end == null ? null : Number(r.page_end),
+    reviewAction: r.review_action == null ? null : String(r.review_action),
   };
 }
 
@@ -1617,7 +1668,9 @@ export async function listContainerUnitSummaries(
     .prepare(
       `SELECT u.id AS unit_id, u.child_document_id, u.unit_index,
               u.doc_type AS detected_form_type, u.status AS unit_status,
+              u.page_start, u.page_end,
               d.doc_type AS child_doc_type, d.review_status, d.parse_status AS child_parse_status,
+              d.review_action,
               COALESCE(e.needs_review, 0) AS needs_review
        FROM document_units u
        LEFT JOIN documents d ON d.id = u.child_document_id

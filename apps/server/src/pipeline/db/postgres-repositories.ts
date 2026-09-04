@@ -901,6 +901,43 @@ export async function loadLatestExtractionByDocIdPg(
   };
 }
 
+/** pg twin of listLatestExtractionsByDocIds: DISTINCT ON 取每文档最新一条。 */
+export async function listLatestExtractionsByDocIdsPg(
+  ctx: PostgresDbContext,
+  docIds: string[],
+  userId?: string,
+): Promise<Map<string, ExtractionRow>> {
+  const ids = [...new Set(docIds.filter(Boolean))];
+  const out = new Map<string, ExtractionRow>();
+  if (ids.length === 0) return out;
+  const uid = effectiveUserId(userId);
+  const params: string[] = uid ? [uid] : [];
+  const placeholders = ids.map((_, i) => `$${i + params.length + 1}`).join(', ');
+  const userFilter = uid ? "AND (e.user_id = $1 OR e.user_id = '' OR e.user_id IS NULL)" : '';
+  const res = await ctx.pool.query(
+    `SELECT DISTINCT ON (e.document_id) e.id, e.document_id, e.doc_type, e.fields, e.field_meta,
+            e.overall_confidence, e.needs_review
+     FROM extractions e
+     WHERE e.document_id IN (${placeholders}) ${userFilter}
+     ORDER BY e.document_id, e.created_at DESC`,
+    [...params, ...ids],
+  );
+  for (const r of res.rows as Array<Record<string, unknown>>) {
+    out.set(String(r.document_id), {
+      id: String(r.id),
+      documentId: String(r.document_id),
+      docType: String(r.doc_type) as DocType,
+      // fields/field_meta 为 jsonb -> node-postgres 已解析为对象, 不 JSON.parse
+      // (同 loadLatestExtractionByDocIdPg 惯例)。
+      fields: r.fields as ExtractionRow['fields'],
+      fieldMeta: r.field_meta as ExtractionRow['fieldMeta'],
+      overallConfidence: Number(r.overall_confidence ?? 0),
+      needsReview: !!r.needs_review,
+    });
+  }
+  return out;
+}
+
 export async function saveClassificationPg(
   ctx: PostgresDbContext,
   input: ClassificationInput,
@@ -3299,7 +3336,9 @@ export async function listContainerUnitSummariesPg(
   const res = await ctx.pool.query(
     `SELECT u.id AS unit_id, u.child_document_id, u.unit_index,
             u.doc_type AS detected_form_type, u.status AS unit_status,
+            u.page_start, u.page_end,
             d.doc_type AS child_doc_type, d.review_status, d.parse_status AS child_parse_status,
+            d.review_action,
             COALESCE(e.needs_review, false) AS needs_review
      FROM document_units u
      LEFT JOIN documents d ON d.id = u.child_document_id
