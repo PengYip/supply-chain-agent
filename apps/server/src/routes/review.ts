@@ -15,6 +15,7 @@ import { Hono } from 'hono';
 import { existsSync } from 'node:fs';
 import { z } from 'zod';
 import { requireRole, type AuthEnv } from '../lib/auth-middleware.js';
+import { withContainerLock } from '../lib/containerLock.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
 import type { DbContext } from '../pipeline/db/client.js';
 import {
@@ -56,6 +57,7 @@ export const reviewRoute = new Hono<AuthEnv>();
 // Review mutation is a business write, not a read-only hydration endpoint.
 reviewRoute.post('/:docId/review', requireRole('admin', 'trader'));
 reviewRoute.post('/:docId/process', requireRole('admin', 'trader'));
+reviewRoute.post('/:docId/review-batch', requireRole('admin', 'trader'));
 
 // Allowed docType hints (mirror of routes/files.ts). Used to validate the
 // optional docType on POST /api/documents/:docId/process.
@@ -644,6 +646,91 @@ reviewRoute.get('/:docId/review-workbench', async (c) => {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[review] workbench fetch failed:', msg);
+    return c.json({ ok: false, error: msg }, 500);
+  }
+});
+
+/**
+ * POST /api/documents/:docId/review-batch
+ *
+ * 集中复核批量确认(spec 2026-09-04 §7.3): 整体包 withContainerLock, 逐单据
+ * setReviewOutcome + commitDocumentGraph(per-doc 故障隔离, 图失败只告警不
+ * 阻断)。部分失败不回滚 —— 逐条返回 ok/error, 前端标红重试(confirm 幂等)。
+ * 只允许确认本 container 的子单据, 跨容器 docId 逐条拒绝。
+ *
+ * Request:  { actions: Array<{ docId, confirm: true, action: 'manual'|'auto-release' }> }
+ * Responses:
+ *   200 { ok: true, results: Array<{ docId, ok, error? }> }
+ *   400 { ok: false, error }   空/畸形 actions
+ *   401 / 403(requireRole) / 404(非 container/他人) / 500
+ */
+reviewRoute.post('/:docId/review-batch', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const containerDocId = c.req.param('docId');
+
+  let body: { actions?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ ok: false, error: 'invalid JSON body' }, 400);
+  }
+  const actionsRaw = Array.isArray(body.actions) ? body.actions : null;
+  if (!actionsRaw || actionsRaw.length === 0) {
+    return c.json({ ok: false, error: 'actions 不能为空' }, 400);
+  }
+  const actions: Array<{ docId: string; action: 'manual' | 'auto-release' }> = [];
+  for (const item of actionsRaw) {
+    if (!item || typeof item !== 'object') {
+      return c.json({ ok: false, error: 'actions[] 条目必须是 { docId, confirm: true, action } 对象' }, 400);
+    }
+    const obj = item as Record<string, unknown>;
+    if (obj.confirm !== true || typeof obj.docId !== 'string' || obj.docId.length === 0) {
+      return c.json({ ok: false, error: 'actions[] 条目必须是 { docId, confirm: true, action } 对象' }, 400);
+    }
+    if (obj.action !== 'manual' && obj.action !== 'auto-release') {
+      return c.json({ ok: false, error: "action 必须是 'manual' 或 'auto-release'" }, 400);
+    }
+    actions.push({ docId: obj.docId, action: obj.action });
+  }
+
+  try {
+    const roles = await getBatchRolesForDocuments(ctx(), [containerDocId], user.id);
+    if (roles.get(containerDocId)?.batchRole !== 'container') {
+      return c.json({ ok: false, error: 'document_or_extraction_not_found' }, 404);
+    }
+    const units = await listContainerUnitSummaries(ctx(), containerDocId);
+    const childIds = new Set(units.map((u) => u.docId).filter((d): d is string => !!d));
+
+    const results = await withContainerLock(containerDocId, async () => {
+      const out: Array<{ docId: string; ok: boolean; error?: string }> = [];
+      for (const a of actions) {
+        if (!childIds.has(a.docId)) {
+          out.push({ docId: a.docId, ok: false, error: '不属于该单据组' });
+          continue;
+        }
+        try {
+          await setReviewOutcome(ctx(), a.docId, 'confirmed', a.action, user.id);
+          // 图提交 per-doc 故障隔离: 失败只告警, 不影响确认状态与整批。
+          try {
+            await commitDocumentGraph(ctx(), a.docId, user.id);
+          } catch (ge) {
+            console.warn(
+              '[review-batch] 图提交失败(不影响确认):', a.docId,
+              ge instanceof Error ? ge.message : String(ge),
+            );
+          }
+          out.push({ docId: a.docId, ok: true });
+        } catch (e) {
+          out.push({ docId: a.docId, ok: false, error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+      return out;
+    });
+    return c.json({ ok: true, results });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[review] review-batch failed:', msg);
     return c.json({ ok: false, error: msg }, 500);
   }
 });

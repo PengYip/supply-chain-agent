@@ -17,6 +17,7 @@
 
 import { Hono, type MiddlewareHandler } from 'hono';
 import { requireRole, type AuthEnv } from '../lib/auth-middleware.js';
+import { withContainerLock } from '../lib/containerLock.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
 import type { DbContext } from '../pipeline/db/client.js';
 import {
@@ -57,29 +58,9 @@ function ctx(): DbContext {
 }
 
 /**
- * Per-container async mutex (single Node process; PM2 runs one instance).
- * Long-running model work is intentionally outside DB transactions, so route
- * mutations must at least be serialized to avoid interleaved lineage rewrites.
+ * Hono adapter: serialize the complete handler by the `:docId` route param
+ * (per-container async mutex lives in lib/containerLock.ts).
  */
-const containerLocks = new Map<string, Promise<unknown>>();
-async function withContainerLock<T>(docId: string, fn: () => Promise<T>): Promise<T> {
-  const previous = containerLocks.get(docId) ?? Promise.resolve();
-  const run = previous.catch(() => undefined).then(fn);
-  // Keep an ignored branch in the map so an endpoint failure does not leave an
-  // unhandled rejection behind while later callers still queue behind it.
-  const queued = run.catch(() => undefined);
-  containerLocks.set(
-    docId,
-    queued,
-  );
-  try {
-    return await run;
-  } finally {
-    if (containerLocks.get(docId) === queued) containerLocks.delete(docId);
-  }
-}
-
-/** Hono adapter: serialize the complete handler by the `:docId` route param. */
 const withContainerParamLock: MiddlewareHandler<AuthEnv> = async (c, next) => {
   // Hono's generic param lookup widens to string|undefined outside the route
   // schema; all three mounted paths declare :docId, so '' is unreachable.
