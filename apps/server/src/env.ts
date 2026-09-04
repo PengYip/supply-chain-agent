@@ -160,6 +160,11 @@ const EnvSchema = z.object({
   // 参与拆分检测的最大 PDF 页数上限: 超过则跳过拆分走旧路径(保护延迟与
   // VLM 用量; 现实多单据拼版远小于该值)。
   BATCH_SPLIT_MAX_PAGES: z.coerce.number().int().min(1).default(50),
+  // 方向分类探针(2026-09-04): 本地 PaddleOCR 文档方向分类 sidecar。设置
+  // ORIENTATION_API_URL 且分类置信达标时, 用分类器纠正角替代跳动的 VLM 检测
+  // 方向并坍缩 90/270 双候选; 未设置 = 禁用探针, 行为与旧版一致。
+  ORIENTATION_API_URL: z.string().url().optional().or(z.literal('')),
+  ORIENTATION_MIN_SCORE: z.coerce.number().min(0).max(1).default(0.8),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

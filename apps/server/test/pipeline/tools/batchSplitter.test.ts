@@ -25,8 +25,9 @@ import {
   loadDocument,
   listDocumentUnitsByParent,
 } from '../../../src/pipeline/db/repositories.js';
-import { ensureDocumentParsed } from '../../../src/pipeline/tools/documentEntry.js';
+import { ensureDocumentParsed, processUnitChild, probeUnitRotation } from '../../../src/pipeline/tools/documentEntry.js';
 import type { VlmDeps } from '../../../src/pipeline/tools/documentEntry.js';
+import type { DetectedUnit } from '../../../src/pipeline/batchSplit.js';
 import { ensureTemplateSeed } from '../../../src/pipeline/templateSeed.js';
 import { buildPng } from '../fixtures/png.js';
 
@@ -39,6 +40,8 @@ const SAVED_ENV = {
   vlmKey: env.VLM_API_KEY,
   concurrency: env.BATCH_SPLIT_CONCURRENCY,
   maxPages: env.BATCH_SPLIT_MAX_PAGES,
+  orientationUrl: env.ORIENTATION_API_URL,
+  orientationMinScore: env.ORIENTATION_MIN_SCORE,
 };
 
 beforeEach(() => {
@@ -58,6 +61,8 @@ afterEach(() => {
   env.VLM_API_KEY = SAVED_ENV.vlmKey;
   env.BATCH_SPLIT_CONCURRENCY = SAVED_ENV.concurrency;
   env.BATCH_SPLIT_MAX_PAGES = SAVED_ENV.maxPages;
+  env.ORIENTATION_API_URL = SAVED_ENV.orientationUrl;
+  env.ORIENTATION_MIN_SCORE = SAVED_ENV.orientationMinScore;
 });
 
 const CONTENT_PNG = buildPng(64, 64, (_x, y) => (y < 32 ? [0, 0, 0, 255] : [255, 255, 255, 255]));
@@ -777,6 +782,14 @@ function chunkTexts(docId: string): string[] {
     .all(docId) as Array<{ chunk_text: string }>).map((r) => r.chunk_text);
 }
 
+/** unit 行 manifest(择优/分类器写回后读取)。 */
+function unitManifestOf(childId: string): Record<string, unknown> {
+  const row = ctx.sqlite
+    .prepare('SELECT manifest_json FROM document_units WHERE child_document_id = ?')
+    .get(childId) as { manifest_json: string } | undefined;
+  return row ? (JSON.parse(row.manifest_json) as Record<string, unknown>) : {};
+}
+
 describe('processDocumentWithBatch Phase 2 (抽取层)', () => {
   it('voucher 路由 unit: bbox 裁剪图走 VLM 抽取, OCR 块保留给 chunk/recall, 编号一致不入复核', async () => {
     await ensureTemplateSeed(ctx);
@@ -1029,6 +1042,237 @@ describe('processDocumentWithBatch Phase 2 (抽取层)', () => {
     const [c1] = res.batchSplit!.childDocIds;
     expect(chunkTexts(c1!).join('\n')).toContain('WECHAT-A');
     expect(extractionRow(c1!)).toBeUndefined(); // OCR 路径的抽取由后台 auto-extract 负责(未注入)
+  });
+
+  // ---- 方向分类探针(2026-09-04): 90/270 歧义 region 用分类器纠正角坍缩双候选 ----
+
+  it('探针命中: voucher unit 坍缩单候选, 抽取 1 次, manifest 记 rotationSource=classifier', async () => {
+    await ensureTemplateSeed(ctx);
+    env.BATCH_SPLIT_CONCURRENCY = 1;
+    env.ORIENTATION_API_URL = 'http://sidecar.invalid';
+    const pdfPath = join(dir, 'p2-orient-hit.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A', 'REPORT-B']);
+    const docId = await stubFor(pdfPath);
+
+    let extractCalls = 0;
+    const vlm: VlmDeps = {
+      ...fakeDetect([
+        { regions: [region({ identifierOrNull: 'HX-2026-081A', rotationDeg: 90, bbox: { x: 0.05, y: 0.05, w: 0.4, h: 0.9 } })] },
+        { regions: [region({ identifierOrNull: 'HX-2026-082B' })] },
+      ]),
+      extractTyped: async (images, docType) => {
+        expect(docType).toBe('化验报告');
+        extractCalls += 1;
+        return { fields: { 出具机构: '华新水泥质检中心', 报告编号: 'HX-2026-081A', 检测日期: '2026-08-28' }, 字段置信度: {} };
+      },
+    };
+    const orientationClassifier = vi.fn().mockResolvedValue({ rotationDeg: 270, score: 0.98 });
+
+    const res = await ensureDocumentParsed(ctx, docId, { modality: 'scanned', userId: 'u1', vlm, orientationClassifier });
+
+    // unit1(90 歧义): 探针命中 -> 单候选(270)只抽 1 次; unit2(0 度)不触发探针。
+    expect(orientationClassifier).toHaveBeenCalledTimes(1);
+    expect(extractCalls).toBe(2);
+    const [c1] = res.batchSplit!.childDocIds;
+    expect(extractionRow(c1!)).toBeDefined();
+    const manifest = unitManifestOf(c1!);
+    expect(manifest.rotationSource).toBe('classifier');
+    expect(manifest.chosenRotation).toBe(270);
+  });
+
+  it('探针低置信: 回落双候选, 抽取 2 次, 无 rotationSource', async () => {
+    await ensureTemplateSeed(ctx);
+    env.BATCH_SPLIT_CONCURRENCY = 1;
+    env.ORIENTATION_API_URL = 'http://sidecar.invalid';
+    const pdfPath = join(dir, 'p2-orient-low.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A', 'REPORT-B']);
+    const docId = await stubFor(pdfPath);
+
+    let extractCalls = 0;
+    const vlm: VlmDeps = {
+      ...fakeDetect([
+        { regions: [region({ identifierOrNull: 'HX-2026-081A', rotationDeg: 90, bbox: { x: 0.05, y: 0.05, w: 0.4, h: 0.9 } })] },
+        { regions: [region({ identifierOrNull: 'HX-2026-082B' })] },
+      ]),
+      extractTyped: async () => {
+        extractCalls += 1;
+        return { fields: { 出具机构: '华新水泥质检中心', 报告编号: 'HX-2026-081A', 检测日期: '2026-08-28' }, 字段置信度: {} };
+      },
+    };
+    const orientationClassifier = vi.fn().mockResolvedValue({ rotationDeg: 270, score: 0.5 }); // < 0.8
+
+    const res = await ensureDocumentParsed(ctx, docId, { modality: 'scanned', userId: 'u1', vlm, orientationClassifier });
+
+    expect(orientationClassifier).toHaveBeenCalledTimes(1);
+    expect(extractCalls).toBe(3); // unit1 双候选 2 次 + unit2 1 次
+    const [c1] = res.batchSplit!.childDocIds;
+    expect(unitManifestOf(c1!).rotationSource).toBeUndefined();
+  });
+
+  it('探针抛错/超时: 回落双候选, 抽取 2 次, 无 rotationSource', async () => {
+    await ensureTemplateSeed(ctx);
+    env.BATCH_SPLIT_CONCURRENCY = 1;
+    env.ORIENTATION_API_URL = 'http://sidecar.invalid';
+    const pdfPath = join(dir, 'p2-orient-err.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A', 'REPORT-B']);
+    const docId = await stubFor(pdfPath);
+
+    let extractCalls = 0;
+    const vlm: VlmDeps = {
+      ...fakeDetect([
+        { regions: [region({ identifierOrNull: 'HX-2026-081A', rotationDeg: 90, bbox: { x: 0.05, y: 0.05, w: 0.4, h: 0.9 } })] },
+        { regions: [region({ identifierOrNull: 'HX-2026-082B' })] },
+      ]),
+      extractTyped: async () => {
+        extractCalls += 1;
+        return { fields: { 出具机构: '华新水泥质检中心', 报告编号: 'HX-2026-081A', 检测日期: '2026-08-28' }, 字段置信度: {} };
+      },
+    };
+    const orientationClassifier = vi.fn().mockRejectedValue(new Error('timeout'));
+
+    const res = await ensureDocumentParsed(ctx, docId, { modality: 'scanned', userId: 'u1', vlm, orientationClassifier });
+
+    expect(orientationClassifier).toHaveBeenCalledTimes(1);
+    expect(extractCalls).toBe(3);
+    const [c1] = res.batchSplit!.childDocIds;
+    expect(unitManifestOf(c1!).rotationSource).toBeUndefined();
+  });
+
+  it('探针命中但抽取抛错: 补跑反方向一次, manifest 记补跑方向', async () => {
+    await ensureTemplateSeed(ctx);
+    env.BATCH_SPLIT_CONCURRENCY = 1;
+    env.ORIENTATION_API_URL = 'http://sidecar.invalid';
+    const pdfPath = join(dir, 'p2-orient-retry.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A', 'REPORT-B']);
+    const docId = await stubFor(pdfPath);
+
+    let extractCalls = 0;
+    const vlm: VlmDeps = {
+      ...fakeDetect([
+        { regions: [region({ identifierOrNull: 'HX-2026-081A', rotationDeg: 90, bbox: { x: 0.05, y: 0.05, w: 0.4, h: 0.9 } })] },
+        { regions: [region({ identifierOrNull: 'HX-2026-082B' })] },
+      ]),
+      extractTyped: async () => {
+        extractCalls += 1;
+        // 分类器方向(270)抽取抛错 -> 补跑反方向(90)成功; unit2 正常。
+        if (extractCalls === 1) throw new Error('VLM 抽取失败 rot=270');
+        return { fields: { 出具机构: '华新水泥质检中心', 报告编号: 'HX-2026-081A', 检测日期: '2026-08-28' }, 字段置信度: {} };
+      },
+    };
+    const orientationClassifier = vi.fn().mockResolvedValue({ rotationDeg: 270, score: 0.98 });
+
+    const res = await ensureDocumentParsed(ctx, docId, { modality: 'scanned', userId: 'u1', vlm, orientationClassifier });
+
+    // unit1: 270 失败 -> 补跑 90 成功(2 次); unit2: 1 次。
+    expect(extractCalls).toBe(3);
+    const [c1] = res.batchSplit!.childDocIds;
+    expect(extractionRow(c1!)).toBeDefined();
+    const manifest = unitManifestOf(c1!);
+    expect(manifest.rotationSource).toBe('classifier');
+    expect(manifest.chosenRotation).toBe(90); // 补跑方向
+  });
+
+  it('探针命中且两方向抽取都抛错: 错误消息含两方向', async () => {
+    await ensureTemplateSeed(ctx);
+    env.BATCH_SPLIT_CONCURRENCY = 1;
+    env.ORIENTATION_API_URL = 'http://sidecar.invalid';
+    const pdfPath = join(dir, 'p2-orient-bothfail.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A', 'REPORT-B']);
+    const docId = await stubFor(pdfPath);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const vlm: VlmDeps = {
+        ...fakeDetect([
+          { regions: [region({ identifierOrNull: 'HX-2026-081A', rotationDeg: 90, bbox: { x: 0.05, y: 0.05, w: 0.4, h: 0.9 } })] },
+          { regions: [region({ identifierOrNull: 'HX-2026-082B' })] },
+        ]),
+        extractTyped: async () => {
+          throw new Error('VLM 抽取失败');
+        },
+      };
+      const orientationClassifier = vi.fn().mockResolvedValue({ rotationDeg: 270, score: 0.98 });
+
+      await ensureDocumentParsed(ctx, docId, { modality: 'scanned', userId: 'u1', vlm, orientationClassifier });
+
+      // 两方向都败: unit1 子单据处理失败(warn 含两方向), 不阻断 unit2。
+      const warns = warnSpy.mock.calls.map((c) => c.join(' '));
+      expect(warns.some((w) => w.includes('全部旋回候选提取失败') && w.includes('270') && w.includes('90'))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('region 全 0/180: 不调探针', async () => {
+    await ensureTemplateSeed(ctx);
+    env.BATCH_SPLIT_CONCURRENCY = 1;
+    env.ORIENTATION_API_URL = 'http://sidecar.invalid';
+    const pdfPath = join(dir, 'p2-orient-none.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A', 'REPORT-B']);
+    const docId = await stubFor(pdfPath);
+
+    const vlm: VlmDeps = {
+      ...fakeDetect([
+        { regions: [region({ identifierOrNull: 'HX-2026-081A', rotationDeg: 0 })] },
+        { regions: [region({ identifierOrNull: 'HX-2026-082B', rotationDeg: 180 })] },
+      ]),
+      extractTyped: async () => ({ fields: { 出具机构: '华新水泥质检中心', 报告编号: 'HX-2026-081A', 检测日期: '2026-08-28' }, 字段置信度: {} }),
+    };
+    const orientationClassifier = vi.fn().mockResolvedValue({ rotationDeg: 90, score: 0.98 });
+
+    await ensureDocumentParsed(ctx, docId, { modality: 'scanned', userId: 'u1', vlm, orientationClassifier });
+
+    expect(orientationClassifier).not.toHaveBeenCalled();
+  });
+
+  it('ORIENTATION_API_URL 未设置: 不调探针, 双候选照旧', async () => {
+    await ensureTemplateSeed(ctx);
+    env.BATCH_SPLIT_CONCURRENCY = 1;
+    env.ORIENTATION_API_URL = ''; // 未设置
+    const pdfPath = join(dir, 'p2-orient-unset.pdf');
+    await makeTwoPagePdf(pdfPath);
+    writeMineruSidecar(pdfPath, ['REPORT-A', 'REPORT-B']);
+    const docId = await stubFor(pdfPath);
+
+    let extractCalls = 0;
+    const vlm: VlmDeps = {
+      ...fakeDetect([
+        { regions: [region({ identifierOrNull: 'HX-2026-081A', rotationDeg: 90, bbox: { x: 0.05, y: 0.05, w: 0.4, h: 0.9 } })] },
+        { regions: [region({ identifierOrNull: 'HX-2026-082B' })] },
+      ]),
+      extractTyped: async () => {
+        extractCalls += 1;
+        return { fields: { 出具机构: '华新水泥质检中心', 报告编号: 'HX-2026-081A', 检测日期: '2026-08-28' }, 字段置信度: {} };
+      },
+    };
+    const orientationClassifier = vi.fn().mockResolvedValue({ rotationDeg: 270, score: 0.98 });
+
+    const res = await ensureDocumentParsed(ctx, docId, { modality: 'scanned', userId: 'u1', vlm, orientationClassifier });
+
+    expect(orientationClassifier).not.toHaveBeenCalled();
+    expect(extractCalls).toBe(3); // 双候选照旧
+    const [c1] = res.batchSplit!.childDocIds;
+    expect(unitManifestOf(c1!).rotationSource).toBeUndefined();
+  });
+
+  it('rotationOverride 存在: 探针不触发(人工指定优先级最高)', async () => {
+    env.ORIENTATION_API_URL = 'http://sidecar.invalid';
+    const classify = vi.fn();
+    const unit = {
+      unitIndex: 1, formType: '质检报告', confidence: 0.9, identifier: null, evidence: '',
+      pageStart: 1, pageEnd: 1, bbox: null, rotationDeg: 90,
+      regions: [{ page: 1, bbox: { x: 0.05, y: 0.05, w: 0.4, h: 0.9 }, rotationDeg: 90 }],
+    } as DetectedUnit;
+    const pages = [{ page: 1, mime: 'image/png' as const, buffer: CONTENT_PNG }];
+    const r = await probeUnitRotation(unit, pages, { rotationOverride: 90 }, classify);
+    expect(r).toBeNull();
+    expect(classify).not.toHaveBeenCalled();
   });
 });
 

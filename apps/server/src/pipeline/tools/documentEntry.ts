@@ -43,6 +43,7 @@ import {
   type ReadingConsensus,
 } from '../batchConsensus.js';
 import { renderUnitImages, unitRotationPlans } from '../unitImages.js';
+import { classifyOrientation, type OrientationImage, type OrientationResult } from '../orientationClassifier.js';
 import { mapLimit } from '../pageRecords.js';
 import { syncBatchLineageGraph } from '../batchLineageGraphSync.js';
 import { parseDocument } from '../parseDocument.js';
@@ -1081,6 +1082,9 @@ export interface ProcessDocumentOptions {
   userId?: string;
   /** Phase A: 图片凭证 VLM 解析依赖(同 ToolDeps.vlm)。缺省用真实 extractVoucher。 */
   vlm?: VlmDeps;
+  /** 方向分类探针注入(缺省真实 classifyOrientation, 需 ORIENTATION_API_URL 配置;
+   *  测试注入 fake 以离线验证探针坍缩/回落路径)。 */
+  orientationClassifier?: (image: OrientationImage) => Promise<OrientationResult | null>;
   /** ensureDocumentExtracted only. Default true: await the parse-stage
    *  background extraction (chat backstop needs fields ready). false (/process
    *  fast path): return as soon as parsing settles, reporting extractionStatus
@@ -1611,6 +1615,61 @@ export interface ProcessUnitChildArgs {
 }
 
 /**
+ * 方向分类探针(2026-09-04): 90/270 歧义 region 且探针配置时, 渲染该 region
+ * 的原始裁剪图(旋转 0)送分类器, 返回分类器纠正角(直接透传, 与仓库 rotationDeg
+ * 同语义)。任何失败(未配置/无歧义 region/网络/低置信/非法角)返回 null, 调用方
+ * 回落现状路径。rotationOverride(人工重抽)优先级最高, 不触发探针。
+ */
+export async function probeUnitRotation(
+  unit: DetectedUnit,
+  unitPages: RenderedPage[] | null,
+  overrides: ProcessUnitChildOverrides | undefined,
+  classify: (image: OrientationImage) => Promise<OrientationResult | null>,
+): Promise<number | null> {
+  if (overrides?.rotationOverride != null) return null;
+  if (!env.ORIENTATION_API_URL) return null;
+  if (!unitPages) return null;
+  const target = unit.regions.find((r) => r.rotationDeg === 90 || r.rotationDeg === 270);
+  if (!target) return null;
+  try {
+    // 渲染该 region 的原始裁剪图(旋转 0)送分类器; rotation_deg 即纠正角。
+    const [img] = await renderUnitImages(unitPages, { ...unit, regions: [target] }, [0]);
+    if (!img) return null;
+    const res = await classify({ base64: img.buffer.toString('base64'), mime: img.mime });
+    if (!res) return null;
+    if (res.score < env.ORIENTATION_MIN_SCORE) {
+      console.warn(
+        `[batch-split] 方向分类探针低置信 score=${res.score.toFixed(2)} < ${env.ORIENTATION_MIN_SCORE}, 回落现状路径`,
+      );
+      return null;
+    }
+    return res.rotationDeg;
+  } catch (e) {
+    console.warn('[batch-split] 方向分类探针失败, 回落现状路径:', e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+/** 分类器坍缩路径的 manifest 写回(rotationSource='classifier', 非分类器路径不写)。 */
+function writeClassifierManifest(
+  ctx: DbContext,
+  unitRowId: string,
+  baseManifest: Record<string, unknown> | undefined,
+  rotations: number[],
+): void {
+  const rotation = rotations[0] ?? 0;
+  void updateDocumentUnitManifest(ctx, unitRowId, {
+    rotationDeg: rotation,
+    manifest: {
+      ...baseManifest,
+      chosenRotation: rotation,
+      chosenRotations: rotations,
+      rotationSource: 'classifier',
+    },
+  }).catch(() => {});
+}
+
+/**
  * 处理一个 unit -> 子单据。由 processDocumentWithBatch 的 mapLimit 循环体提取
  * (初始拆分与 Task 9 重抽/合并重建共用): 存根 -> unit 行回填 -> 凭证路由命中
  * 则裁图旋回候选走 VLM 凭证管线, 否则页区间 OCR 块路径。单个 unit 失败不抛出
@@ -1637,6 +1696,12 @@ export async function processUnitChild(args: ProcessUnitChildArgs): Promise<stri
   await setDocumentBatchRole(ctx, childId, 'unit', opts.userId);
   await updateDocumentUnitChild(ctx, unitRowId, childId, 'processing');
   try {
+    // 方向分类探针(2026-09-04): 90/270 歧义 region 且探针配置时, 用分类器
+    // 纠正角替代跳动的 VLM 检测方向; 失败/低置信返回 null(回落现状路径)。
+    // rotationOverride(人工重抽)优先级最高, 不触发探针。
+    const classify = opts.orientationClassifier ?? classifyOrientation;
+    const classifierRotation = await probeUnitRotation(unit, unitPages, overrides, classify);
+
     // 裁剪图生成(本地 CPU): 失败回落 OCR 块路径, 不让 unit 失败。
     let candidates: Array<{ rotations: number[]; images: RenderedPage[] }> | null = null;
     if (routedDocType && unitPages) {
@@ -1645,7 +1710,9 @@ export async function processUnitChild(args: ProcessUnitChildArgs): Promise<stri
         const plans =
           overrides?.rotationOverride != null
             ? [unit.regions.map(() => overrides.rotationOverride!)]
-            : unitRotationPlans(unit);
+            : classifierRotation != null
+              ? [unit.regions.map(() => classifierRotation)]
+              : unitRotationPlans(unit);
         for (const rotations of plans) {
           candidates.push({ rotations, images: await renderUnitImages(unitPages, unit, rotations) });
         }
@@ -1656,25 +1723,62 @@ export async function processUnitChild(args: ProcessUnitChildArgs): Promise<stri
     }
     if (routedDocType && candidates) {
       // 图像型 unit + voucher 路由: padded bbox 裁图 + 旋回候选(90/270 双
-      // 候选, 0/180 单候选) -> 现有 VLM 凭证抽取管线; OCR 块(页区间切片)
-      // 仍保留给 chunk/recall。
+      // 候选, 0/180 单候选; 分类器命中时坍缩为单候选) -> 现有 VLM 凭证抽取
+      // 管线; OCR 块(页区间切片)仍保留给 chunk/recall。
       const ocrBlockModel = sliceBlockModelForUnit(parentModel, childId, unit);
       await setDocumentParseStatus(ctx, childId, 'parsing', opts.userId);
-      await runVoucherPipeline({
-        ctx, sourcePath: sourceUri, docId: childId,
-        embedder: opts.embedder, userId: opts.userId, vlm: opts.vlm,
-        unitVoucher: {
-          docType: routedDocType as DocType,
-          candidates,
-          detection: { identifier: unit.identifier, evidence: unit.evidence },
-          ocrBlockModel,
-          // P3 择优旋回落库: 双候选择优胜出后写回 unit 行(fire-and-forget)。
-          unitId: unitRowId,
-          unitManifest: args.unitManifest,
-        },
-      });
+      const unitVoucherInput = {
+        docType: routedDocType as DocType,
+        candidates,
+        detection: { identifier: unit.identifier, evidence: unit.evidence },
+        ocrBlockModel,
+        // P3 择优旋回落库: 双候选择优胜出后写回 unit 行(fire-and-forget)。
+        unitId: unitRowId,
+        unitManifest: args.unitManifest,
+      };
+      let usedRotations = candidates[0]!.rotations;
+      try {
+        await runVoucherPipeline({
+          ctx, sourcePath: sourceUri, docId: childId,
+          embedder: opts.embedder, userId: opts.userId, vlm: opts.vlm,
+          unitVoucher: unitVoucherInput,
+        });
+      } catch (e) {
+        // 分类器坍缩单候选(90/270)抽取失败: 补跑反方向一次(两方向都败才抛,
+        // 消息含两方向, 等价现状"全部候选失败才抛"契约)。
+        if (classifierRotation != null && (classifierRotation === 90 || classifierRotation === 270)) {
+          const opposite = classifierRotation === 90 ? 270 : 90;
+          const retryRotations = unit.regions.map(() => opposite);
+          usedRotations = retryRotations;
+          try {
+            await runVoucherPipeline({
+              ctx, sourcePath: sourceUri, docId: childId,
+              embedder: opts.embedder, userId: opts.userId, vlm: opts.vlm,
+              unitVoucher: {
+                ...unitVoucherInput,
+                // candidates 非空即 unitPages 非空(候选生成门控同一条件)。
+                candidates: [{ rotations: retryRotations, images: await renderUnitImages(unitPages!, unit, retryRotations) }],
+              },
+            });
+          } catch (e2) {
+            const first = e instanceof Error ? e.message : String(e);
+            const second = e2 instanceof Error ? e2.message : String(e2);
+            throw new Error(`全部旋回候选提取失败: rot=[${classifierRotation}] ${first}; rot=[${opposite}] ${second}`);
+          }
+        } else {
+          throw e;
+        }
+      }
+      // 分类器坍缩路径: 写回 manifest(rotationSource='classifier')。
+      if (classifierRotation != null && unitRowId) {
+        writeClassifierManifest(ctx, unitRowId, args.unitManifest, usedRotations);
+      }
       await updateDocumentUnitChild(ctx, unitRowId, childId, 'processed');
       return childId;
+    }
+    // 非 voucher unit: OCR 块路径(无自愈); 分类器命中时用纠正角覆盖检测角。
+    if (classifierRotation != null && unitRowId) {
+      writeClassifierManifest(ctx, unitRowId, args.unitManifest, unit.regions.map(() => classifierRotation));
     }
     const res = await processDocument(ctx, childId, {
       ...opts,
