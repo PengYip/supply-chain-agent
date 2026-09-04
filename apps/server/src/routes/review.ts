@@ -601,11 +601,12 @@ reviewRoute.get('/:docId/review-workbench', async (c) => {
         groupOrder.push(docType);
       }
       const ex = u.docId ? (extractions.get(u.docId) ?? null) : null;
-      // field_meta 顶层 _warnings(getReviewSnapshot 同源口径): 老数据/无抽取恒 []。
+      // field_meta 顶层 _warnings 是 { strength, confidence, warnings: string[] }
+      // 对象(documentEntry.ts 写入; getReviewSnapshot/repositories.ts 同源口径),
+      // 老数据/无抽取恒 []。
       const metaWarnings = (ex?.fieldMeta as Record<string, unknown> | undefined)?.['_warnings'];
-      const warnings = Array.isArray(metaWarnings)
-        ? metaWarnings.filter((w): w is string => typeof w === 'string')
-        : [];
+      const w = metaWarnings as { warnings?: unknown } | undefined;
+      const warnings = Array.isArray(w?.warnings) ? w.warnings.filter((s): s is string => typeof s === 'string') : [];
 
       const unitOut: WorkbenchUnitOut = {
         docId: u.docId ?? '',
@@ -634,6 +635,16 @@ reviewRoute.get('/:docId/review-workbench', async (c) => {
         const rowChecks = rows.map((r) => {
           const issues = checkWeighRow(r, weighType);
           if (issues.some((i) => i.severity === 'error')) noErrorRows = false;
+          // failed_page 行级规则(spec §7.4): 页码在失败页集合内的行追加 warning,
+          // 数据可能不完整; warning 级不影响 releaseEligible 的 noErrorRows。
+          if (failedPages.includes(Number(r['页码'])) && !issues.some((x) => x.rule === 'failed_page')) {
+            issues.push({
+              rule: 'failed_page',
+              severity: 'warning',
+              columns: ['页码'],
+              message: '该页提取失败，数据可能不完整',
+            });
+          }
           return { issues };
         });
         unitOut.rows = rows;
@@ -729,12 +740,20 @@ reviewRoute.post('/:docId/review-batch', async (c) => {
     }
     const units = await listContainerUnitSummaries(ctx(), containerDocId);
     const childIds = new Set(units.map((u) => u.docId).filter((d): d is string => !!d));
+    // auto-release 闸门: 只允许 pending 状态的子单据放行(manual 保持幂等,
+    // 重复确认已 confirmed 单据仍然 ok)。
+    const statusByDoc = new Map<string, string | null>();
+    for (const u of units) if (u.docId) statusByDoc.set(u.docId, u.reviewStatus ?? null);
 
     const results = await withContainerLock(containerDocId, async () => {
       const out: Array<{ docId: string; ok: boolean; error?: string }> = [];
       for (const a of actions) {
         if (!childIds.has(a.docId)) {
           out.push({ docId: a.docId, ok: false, error: '不属于该单据组' });
+          continue;
+        }
+        if (a.action === 'auto-release' && statusByDoc.get(a.docId) !== 'pending') {
+          out.push({ docId: a.docId, ok: false, error: '单据已不是待复核状态' });
           continue;
         }
         try {

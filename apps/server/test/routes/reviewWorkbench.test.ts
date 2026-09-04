@@ -73,7 +73,7 @@ async function seedMixed(userId: string): Promise<string> {
       页数: { value: 1, sourceSpans: [] },
       失败页: { value: '[]', sourceSpans: [] },
     },
-    fieldMeta: { _warnings: ['两遍读数分歧'] } as never,
+    fieldMeta: { _warnings: { warnings: ['两遍读数分歧'] } } as never,
     overallConfidence: 0.6, needsReview: true,
   });
   await saveExtraction(ctxHolder.current!, {
@@ -133,5 +133,79 @@ describe('GET /api/documents/:docId/review-workbench', () => {
     expect((await appAs('u1').request(`/api/documents/${plain}/review-workbench`)).status).toBe(404);
     expect((await appAs('u2').request(`/api/documents/${container}/review-workbench`)).status).toBe(404);
     expect((await appAs('u1').request('/api/documents/DOC-nope/review-workbench')).status).toBe(404);
+  });
+
+  it('releaseEligible 因子隔离: 高置信无勾稽 error 但有 _warnings -> 不可放行且 warnings 可见', async () => {
+    const src = 'file:///iso.pdf';
+    const mk = async (role: 'unit' | 'container') => {
+      const { docId } = await createDocumentStub(ctxHolder.current!, { sourceUri: src, userId: 'u1' });
+      await setDocumentBatchRole(ctxHolder.current!, docId, role);
+      return docId;
+    };
+    const [u, container] = [await mk('unit'), await mk('container')];
+    await saveDocumentUnits(ctxHolder.current!, [
+      { parentDocumentId: container, childDocumentId: u, unitIndex: 1, docType: '汽运磅单', pageStart: 1, pageEnd: 1 },
+    ]);
+    const rows = [
+      { 编号: 'C1', 车号: '皖C444', 毛重_吨: 40.5, 皮重_吨: 15.2, 净重_吨: 25.3, 页码: 1 },
+    ];
+    await saveExtraction(ctxHolder.current!, {
+      documentId: u, docType: '汽运磅单',
+      fields: {
+        明细行: { value: JSON.stringify(rows), sourceSpans: [] },
+        总净重_吨: { value: 25.3, sourceSpans: [] },
+        页数: { value: 1, sourceSpans: [] },
+        失败页: { value: '[]', sourceSpans: [] },
+      },
+      fieldMeta: { _warnings: { warnings: ['两遍读数分歧'] } } as never,
+      overallConfidence: 0.99, needsReview: false,
+    });
+    const res = await appAs('u1').request(`/api/documents/${container}/review-workbench`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      data: { groups: Array<{ docType: string; units: Array<{ releaseEligible: boolean; warnings: string[] }> }> };
+    };
+    const uOut = body.data.groups.find((g) => g.docType === '汽运磅单')!.units[0]!;
+    expect(uOut.releaseEligible).toBe(false);
+    expect(uOut.warnings).toContain('两遍读数分歧');
+  });
+
+  it('failed_page 行级规则: 页码在失败页集合的行带 failed_page warning', async () => {
+    const src = 'file:///failpage.pdf';
+    const mk = async (role: 'unit' | 'container') => {
+      const { docId } = await createDocumentStub(ctxHolder.current!, { sourceUri: src, userId: 'u1' });
+      await setDocumentBatchRole(ctxHolder.current!, docId, role);
+      return docId;
+    };
+    const [u, container] = [await mk('unit'), await mk('container')];
+    await saveDocumentUnits(ctxHolder.current!, [
+      { parentDocumentId: container, childDocumentId: u, unitIndex: 1, docType: '汽运磅单', pageStart: 1, pageEnd: 2 },
+    ]);
+    const rows = [
+      { 编号: 'D1', 车号: '皖D111', 毛重_吨: 30.0, 皮重_吨: 10.0, 净重_吨: 20.0, 页码: 1 },
+      { 编号: 'D2', 车号: '皖D222', 毛重_吨: 31.0, 皮重_吨: 10.0, 净重_吨: 21.0, 页码: 2 },
+    ];
+    await saveExtraction(ctxHolder.current!, {
+      documentId: u, docType: '汽运磅单',
+      fields: {
+        明细行: { value: JSON.stringify(rows), sourceSpans: [] },
+        总净重_吨: { value: 41.0, sourceSpans: [] },
+        页数: { value: 2, sourceSpans: [] },
+        失败页: { value: '[2]', sourceSpans: [] },
+      },
+      fieldMeta: {}, overallConfidence: 0.99, needsReview: false,
+    });
+    const res = await appAs('u1').request(`/api/documents/${container}/review-workbench`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      data: { groups: Array<{ docType: string; units: Array<{ rowChecks?: Array<{ issues: Array<{ rule: string; severity: string }> }> }> }> };
+    };
+    const rowChecks = body.data.groups.find((g) => g.docType === '汽运磅单')!.units[0]!.rowChecks!;
+    expect(rowChecks[0]!.issues).toEqual([]);
+    expect(
+      rowChecks[1]!.issues.some((i) => i.rule === 'failed_page' && i.severity === 'warning'),
+    ).toBe(true);
   });
 });

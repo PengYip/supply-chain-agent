@@ -109,6 +109,24 @@ describe('POST /api/documents/:docId/review-batch', () => {
     expect(((await second.json()) as { results: Array<{ ok: boolean }> }).results[0]!.ok).toBe(true);
   });
 
+  it('auto-release 闸门: 非 pending 状态的子单据拒绝放行(manual 幂等不受影响)', async () => {
+    const { container, children } = await seedContainer('u1');
+    await post(appAs('u1'), `/api/documents/${container}/review-batch`, {
+      actions: [{ docId: children[0], confirm: true, action: 'manual' }],
+    });
+    const res = await post(appAs('u1'), `/api/documents/${container}/review-batch`, {
+      actions: [{ docId: children[0], confirm: true, action: 'auto-release' }],
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      results: Array<{ docId: string; ok: boolean; error?: string }>;
+    };
+    const r = body.results.find((x) => x.docId === children[0])!;
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('不是待复核');
+    expect(rawStatus(children[0]!)).toEqual({ review_status: 'confirmed', review_action: 'manual' });
+  });
+
   it('参数校验: 空 actions / 非法 action -> 400', async () => {
     const { container } = await seedContainer('u1');
     expect(
