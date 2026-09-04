@@ -9,6 +9,7 @@ import {
   BatchSplitPageLimitError,
   BLANK_NON_WHITE_RATIO,
   BBOX_PADDING,
+  UNIT_FORM_TYPE_ALIASES,
   type DetectUnitsDeps,
 } from '../../src/pipeline/batchSplit.js';
 import type { RenderedPage } from '../../src/pipeline/pdfRender.js';
@@ -91,7 +92,7 @@ describe('pngNonWhiteRatio (空白页像素预判)', () => {
 describe('buildUnitDetectPrompt', () => {
   it('包含受控 formType 词表与 strict JSON 输出契约', () => {
     const prompt = buildUnitDetectPrompt();
-    for (const t of ['汽运磅单', '质检报告', '微信聊天记录', '空白页']) {
+    for (const t of ['汽运磅单', '质检报告', '质检汇总表', '微信聊天记录', '空白页']) {
       expect(prompt).toContain(t);
     }
     expect(prompt).toContain('rotationDeg');
@@ -106,6 +107,45 @@ describe('buildUnitDetectPrompt', () => {
     expect(prompt).toContain('formType=合同');
     expect(prompt).toContain('条款续页');
     expect(prompt).toContain('合同正文内的表格');
+  });
+
+  it('包含 化验报告 vs 质检汇总表 判别特征', () => {
+    const prompt = buildUnitDetectPrompt();
+    // 化验报告 = 检验机构单批次报告; 质检汇总表 = 每行一个批次 + 合计行。
+    expect(prompt).toContain('检验机构出具的单批次检验结果');
+    expect(prompt).toContain('收货方编制的二次汇总');
+    expect(prompt).toContain('不要标成质检报告');
+    expect(prompt).toContain('整页质检汇总表 = 1 个单据');
+    // 标题陷阱: 标题含"化验"但版面为多行批次+合计行 -> 质检汇总表。
+    expect(prompt).toContain('严禁仅凭标题"化验"二字判成化验报告/质检报告');
+    expect(prompt).toContain('CMA 标志');
+  });
+
+  it('包含 汽运磅单 vs 轨道衡称重单 判别特征', () => {
+    const prompt = buildUnitDetectPrompt();
+    expect(prompt).toContain('汽车衡/地磅/车牌号');
+    expect(prompt).toContain('轨道衡/火车/车皮/车厢');
+    expect(prompt).toContain('严禁标轨道衡');
+    // 标题变体: 计量单/过磅单/汽车衡计量单 + 省份汉字车牌最强判据。
+    expect(prompt).toContain('计量单/过磅单/汽车衡计量单');
+    expect(prompt).toContain('冀EB6666');
+  });
+
+  it('rotationDeg 指示: 横放必报 90/270, 倒立必报 180, 0 仅表示确认正立', () => {
+    const prompt = buildUnitDetectPrompt();
+    expect(prompt).toContain('必须报 90 或 270');
+    expect(prompt).toContain('必须报 180');
+    expect(prompt).toContain('不允许因为"拿不准"而默认 0');
+    expect(prompt).not.toContain('拿不准给 0');
+    // 竖版纸面横躺表格/截屏/票据是常见形态, 不得报 0。
+    expect(prompt).toContain('横躺的表格/截屏/票据照片');
+    expect(prompt).toContain('不得报 0');
+  });
+});
+
+describe('UNIT_FORM_TYPE_ALIASES 别名桥', () => {
+  it('质检汇总表 桥接到注册表 formType 收货质检汇总表(模板质检汇总表类型)', () => {
+    expect(UNIT_FORM_TYPE_ALIASES['质检汇总表']).toBe('收货质检汇总表');
   });
 });
 
