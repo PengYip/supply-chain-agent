@@ -11,6 +11,8 @@ import { getTradeFactById, listOntologyEdgesAsOf } from './repo.js';
 import {
   factToEntity, findContractRowById, findDocRowById, type ProjectedEntity,
 } from './projection.js';
+import { findEntities, graphQuery, type GraphEntity } from '../graph/repo.js';
+import { normalizeName } from '../graph/normalize.js';
 
 export interface NeighborRef {
   type: string;
@@ -139,4 +141,124 @@ export async function getOntologyNeighbors(
 
   const anchorNode = await resolveBrief(ctx, anchor, uid);
   return { anchor, anchorNode, nodes, edges: edgeOut, truncated };
+}
+
+// ---------------------------------------------------------------------------
+// 文档血缘(Neo4j)锚点层融合(D7)：
+//   TradeContract 锚点 -> Contract 图节点(name=normalizeName(contractNo))，
+//     graphQuery 不限 edgeKinds(取 executes/references 等文档邻域，承载主链可穿)；
+//   收/发单据锚点 -> Document 图节点(name=docId)，edgeKinds=['CONTAINS'](批拆血缘)。
+//   事件实体(TF id)无图节点，不融合。跨空间逐跳展开 deferred(需稳定桥表)。
+// 降级(D5)：NEO4J_PASSWORD 未设或图故障 -> lineage.available=false，本体部分照常；
+//   图锚点不存在 -> subjectFound=false(正常态，如演示合同无上传文档)。
+// ---------------------------------------------------------------------------
+
+export interface LineageStatus {
+  /** Neo4j 可达且查询已执行(密码未设/连接失败 = false)。 */
+  available: boolean;
+  /** 锚点在图中找到对应节点。 */
+  subjectFound: boolean;
+}
+
+export interface NeighborsResult extends OntologyNeighbors {
+  lineage: LineageStatus;
+}
+
+async function lineageSubjectElementId(
+  ctx: DbContext, type: OntologyEntityName, id: string, uid: string,
+): Promise<{ elementId: string; edgeKinds?: string[] } | null> {
+  if (type === 'TradeContract') {
+    const contract = await findContractRowById(ctx, id, uid);
+    const contractNo = String(contract?.fields['contractNo'] ?? '');
+    if (!contract || !contractNo) return null;
+    const hits = await findEntities({ kind: 'Contract', name: normalizeName(contractNo), exact: true });
+    return hits[0] ? { elementId: hits[0].elementId } : null;   // 不限 edgeKinds
+  }
+  if (type === 'GoodsReceiptEvent' || type === 'GoodsDeliveryEvent') {
+    const doc = await findDocRowById(ctx, id, type, uid);
+    if (!doc) return null;
+    const hits = await findEntities({ kind: 'Document', name: doc.id, exact: true });
+    return hits[0] ? { elementId: hits[0].elementId, edgeKinds: ['CONTAINS'] } : null;
+  }
+  return null;
+}
+
+function docIdOfGraphNode(n: GraphEntity): string {
+  const p = n.props?.['docId'];
+  return typeof p === 'string' && p ? p : n.name;
+}
+
+function docLabel(n: GraphEntity): string {
+  const dt = n.props?.['docType'];
+  if (typeof dt === 'string' && dt) return dt;
+  const role = n.props?.['batchRole'];
+  if (role === 'container') return '单据组';
+  if (role === 'unit') return '拆单单元';
+  return n.name.slice(0, 12);
+}
+
+/** 邻接总入口(路由唯一消费方)：本体 BFS + 血缘锚点层融合。 */
+export async function getNeighbors(
+  ctx: DbContext,
+  input: { type: OntologyEntityName; id: string; depth: number },
+  userId?: string,
+  opts: { maxNodes?: number; maxEdges?: number } = {},
+): Promise<NeighborsResult> {
+  const uid = effectiveUserId(userId);
+  const result = await getOntologyNeighbors(ctx, input, uid, opts);
+  const lineage: LineageStatus = { available: false, subjectFound: false };
+
+  if (process.env.NEO4J_PASSWORD) {
+    try {
+      const subject = await lineageSubjectElementId(ctx, input.type, input.id, uid);
+      if (subject) {
+        const res = await graphQuery({
+          subjectId: subject.elementId,
+          depth: Math.min(Math.max(Math.trunc(input.depth) || 1, 1), MAX_NEIGHBOR_DEPTH),
+          direction: 'both',
+          ...(subject.edgeKinds ? { edgeKinds: subject.edgeKinds } : {}),
+        });
+        // elementId -> 业务 id 映射(合同锚点侧 = 台账 id, 文档侧 = docId)
+        const infoByElementId = new Map<string, { id: string; type: string }>([
+          [subject.elementId, { id: input.id, type: input.type }],
+        ]);
+        for (const n of res.nodes) {
+          infoByElementId.set(n.elementId, { id: docIdOfGraphNode(n), type: 'Document' });
+          result.nodes.push({
+            id: docIdOfGraphNode(n),
+            entityType: 'Document',
+            label: docLabel(n),
+            source: 'neo4j',
+            props: {
+              docType: n.props?.['docType'] ?? null,
+              batchRole: n.props?.['batchRole'] ?? null,
+            },
+          });
+        }
+        for (const e of res.edges) {
+          const from = infoByElementId.get(e.srcId);
+          const to = infoByElementId.get(e.dstId);
+          if (!from || !to) continue;   // 端点不在结果集(截断/异类)则弃边
+          result.edges.push({
+            id: `lineage ${e.elementId}`,
+            relation: e.type,
+            origin: 'lineage',
+            fromType: from.type,
+            fromId: from.id,
+            toType: to.type,
+            toId: to.id,
+            params: e.props ?? {},
+            validAt: null,
+          });
+        }
+        lineage.subjectFound = true;
+      }
+      lineage.available = true;
+    } catch (e) {
+      // 血缘层故障不拖垮本体邻接(D5)：合并端点的部分可用是有意义的。
+      console.warn('[ontology/neighbors] lineage merge skipped:',
+        e instanceof Error ? e.message : e);
+    }
+  }
+  return { ...result, lineage };
 }
