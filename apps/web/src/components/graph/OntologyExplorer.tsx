@@ -25,6 +25,9 @@ interface Props {
 
 const nodeKey = (type: string, id: string) => `${type}:${id}`;
 
+/** 穿透模式不过滤类型：模块级空集，避免每次渲染 new Set() 触发 GraphCanvas 全量重排。 */
+const NO_HIDDEN_KINDS: ReadonlySet<string> = new Set();
+
 function toGraphNode(n: NeighborNodeDTO): GraphNode {
   return {
     elementId: nodeKey(n.entityType, n.id),
@@ -273,7 +276,7 @@ export function OntologyExplorer({ initialAnchor }: Props) {
             key={anchorKey ?? 'ontology'}
             subgraph={subgraph}
             centerElementId={anchorKey}
-            hiddenKinds={new Set<string>()}
+            hiddenKinds={NO_HIDDEN_KINDS}
             showPlainEdges
             onHover={(t) => {
               if (t && t.type === 'edge') setHoverEdge(t.edge);
