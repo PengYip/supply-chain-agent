@@ -20,6 +20,7 @@ import { FavoritesView } from './components/favorites/FavoritesView';
 import { AuditView } from './components/audit/AuditView';
 import { ProjectsView } from './components/projects/ProjectsView';
 import { ProjectLedgerView } from './components/ledger/ProjectLedgerView';
+import { EntitiesView } from './components/entities/EntitiesView';
 import { ReviewWorkbench } from './components/review-workbench/ReviewWorkbench';
 import { ApprovalCenterView } from './components/approval/ApprovalCenterView';
 import { SharePage } from './components/share/SharePage';
@@ -333,6 +334,8 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
         <ProjectsView />
       ) : view === 'ledger' ? (
         <ProjectLedgerView onOpenProjects={() => navigate('projects')} onOpenParties={openParties} />
+      ) : view === 'entities' ? (
+        <EntitiesView />
       ) : view === 'eval' ? (
         <EvalWorkbenchView />
       ) : view === 'audit' ? (

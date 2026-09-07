@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  Boxes,
   Building2,
   ClipboardCheck,
   FlaskConical,
@@ -18,6 +19,7 @@ export type ViewId =
   | 'approvals'
   | 'projects'
   | 'ledger'
+  | 'entities'
   | 'graph'
   | 'bindings'
   | 'review'
@@ -47,6 +49,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'approvals', label: '审批中心', description: 'L2/L3 审批待办与历史', icon: ClipboardCheck, group: 'work', enabled: true },
   { id: 'projects', label: '项目', description: '项目维度汇总（合同面 + 执行面）', icon: FolderKanban, group: 'work', enabled: true },
   { id: 'ledger', label: '项目台账', description: '按项目归集合同的凭证齐套率', icon: BookOpen, group: 'work', enabled: true },
+  { id: 'entities', label: '实体台账', description: '本体实体浏览（合同 / 收发依据 / 事件，as-of 时间切片）', icon: Boxes, group: 'work', enabled: true },
   { id: 'graph', label: '图谱', description: '实体关系可视化', icon: Network, group: 'work', enabled: true },
   { id: 'bindings', label: '绑定', description: '文档与合同绑定工作台', icon: Link2, group: 'work', enabled: true },
   { id: 'review', label: '集中复核', description: '多页票据表格化批量核对', icon: ClipboardCheck, group: 'work', enabled: true },
