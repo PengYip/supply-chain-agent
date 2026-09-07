@@ -96,7 +96,8 @@ async function listContracts(ctx: DbContext, uid: string): Promise<ProjectedEnti
 // 收发依据 <- documents。doc_type 白名单与 pipeline bindingProposal.GOODS_FIELD_DOCS
 // (收货单/发货单)对齐；本地声明避免 ontology -> pipeline 的反向依赖。
 // ---------------------------------------------------------------------------
-const DOC_TYPE_BY_EVENT: Record<'GoodsReceiptEvent' | 'GoodsDeliveryEvent', string> = {
+/** Item 4 起邻接穿透复用：收发事件 -> documents.doc_type 白名单。 */
+export const DOC_TYPE_BY_EVENT: Record<'GoodsReceiptEvent' | 'GoodsDeliveryEvent', string> = {
   GoodsReceiptEvent: '收货单',
   GoodsDeliveryEvent: '发货单',
 };
@@ -158,7 +159,8 @@ function businessKeyOf(p: Record<string, unknown>): string | null {
   return null;
 }
 
-function factToEntity(row: TradeFactRow): ProjectedEntity {
+/** Item 4 起邻接穿透复用：trade_facts 行 -> 展示实体。 */
+export function factToEntity(row: TradeFactRow): ProjectedEntity {
   return {
     id: row.id,
     entityType: row.entityType as OntologyEntityName,
@@ -248,7 +250,8 @@ async function reverseOriginCluster(
   return facts.filter((f) => seen.has(f.id));
 }
 
-async function findContractRowById(
+/** Item 4 起邻接穿透复用：合同锚点单行解析(台账口径, 用户隔离)。 */
+export async function findContractRowById(
   ctx: DbContext, id: string, uid: string,
 ): Promise<ProjectedEntity | null> {
   const sql = `SELECT id, contract_no, title, contract_type, fields, created_at
@@ -262,17 +265,20 @@ async function findContractRowById(
   return row ? mapContractRow(row) : null;
 }
 
-async function findDocRowById(
+/** Item 4 起邻接穿透复用：收发依据单据行解析(D8: 强制 doc_type 匹配)。 */
+export async function findDocRowById(
   ctx: DbContext, id: string, type: 'GoodsReceiptEvent' | 'GoodsDeliveryEvent', uid: string,
 ): Promise<ProjectedEntity | null> {
   const sql = `SELECT id, doc_type, source_uri, review_status, created_at
-                 FROM documents WHERE id = ? AND ${USER_SCOPE_LEGACY}`;
+                 FROM documents WHERE id = ? AND doc_type = ? AND ${USER_SCOPE_LEGACY}`;
   if (ctx.backend === 'postgres') {
-    const res = await (ctx as PostgresDbContext).pool.query(numberPlaceholders(sql), [id, uid]);
+    const res = await (ctx as PostgresDbContext).pool.query(
+      numberPlaceholders(sql), [id, DOC_TYPE_BY_EVENT[type], uid]);
     const row = (res.rows as Array<Record<string, unknown>>)[0];
     return row ? mapDocRow(type, row) : null;
   }
-  const row = ctx.sqlite.prepare(sql).get(id, uid) as Record<string, unknown> | undefined;
+  const row = ctx.sqlite.prepare(sql)
+    .get(id, DOC_TYPE_BY_EVENT[type], uid) as Record<string, unknown> | undefined;
   return row ? mapDocRow(type, row) : null;
 }
 
