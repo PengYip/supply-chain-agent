@@ -95,6 +95,8 @@ const EnvSchema = z.object({
   // Comma-separated list of additional trusted origins for Better Auth.
   // Needed when the app is accessed from a different host/IP than BETTER_AUTH_URL.
   TRUSTED_ORIGINS: z.string().optional(),
+  /** 审批通知通道：local（默认，仅日志）| lark（预留，未实现时回退 local） */
+  APPROVAL_CHANNEL: z.string().optional(),
   // 本公司主体名单(逗号分隔): 四流方向判定基准。资金流按付款人/收款人、货物流
   // 按买方/卖方、发票流按开票方/受票方, 锚点命中名单一侧即判定 收/付(进/销)。
   // 消费端 split(',') 后交给 domain/flowDirection.parseSelfPartyNames。

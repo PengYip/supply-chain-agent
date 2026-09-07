@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { findDocument, type OcrField } from '../data/seed.js';
 import { tagExternal } from '../harness/injectionDefense.js';
-import { recordPendingApproval } from '../harness/sessionStore.js';
+import { recordPendingApproval, getPending } from '../harness/sessionStore.js';
+import { notifyApprovalCreated } from '../harness/approvalChannel.js';
 import { getSessionId } from '../harness/sessionContext.js';
 
 // HITL tools (T3 + T4). Both L1 (auto-execute, no approval gate).
@@ -55,6 +56,8 @@ export const escalateToHuman = tool({
         input: { issue, category, severity, context: context ?? {} },
         ticketId,
       });
+      const createdRow = await getPending(ticketId);
+      if (createdRow) void notifyApprovalCreated(createdRow);
     }
     const result = {
       ok: false as const,

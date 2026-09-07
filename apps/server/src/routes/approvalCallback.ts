@@ -15,6 +15,7 @@ import {
 import type { SideEffect } from '../harness/sessionStore.js';
 import { startSessionRun, isRunning } from '../harness/runManager.js';
 import { runSession } from '../harness/runSession.js';
+import { notifyApprovalResolved } from '../harness/approvalChannel.js';
 import { buildHistoryModelMessages } from '../harness/historyCompaction.js';
 import type { Role } from '../harness/roleToolRegistry.js';
 import type { AuthEnv } from '../lib/auth-middleware.js';
@@ -168,6 +169,7 @@ approvalCallback.post('/approval/callback', async (c) => {
     decidedBy: user.id,
     reason: reason ?? null,
   });
+  void notifyApprovalResolved({ ...pending, status: approved ? 'approved' : 'denied' });
 
   console.log(
     JSON.stringify({

@@ -4,7 +4,8 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import { env } from '../env.js';
 import { getToolsForRole, type Role, type HarnessDeps } from './roleToolRegistry.js';
 import { getPermission } from './permissionGate.js';
-import { recordPendingApproval, countPendingApprovals } from './sessionStore.js';
+import { recordPendingApproval, countPendingApprovals, getPending } from './sessionStore.js';
+import { notifyApprovalCreated } from './approvalChannel.js';
 import { auditRecorder, type ToolCallRecord } from './auditRecorder.js';
 import { classifyToolError } from './errorClassification.js';
 import { assertAllToolsContracted } from './contextContract.js';
@@ -326,6 +327,8 @@ export async function recordL2PendingFromResponse(
         approvalId,
         input: info?.input ?? {},
       });
+      const createdRow = await getPending(approvalId);
+      if (createdRow) void notifyApprovalCreated(createdRow);
     }
   }
 }
