@@ -231,6 +231,17 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
   },
+  // 2026-09-07 Item 5 核销工作台: 工作台结构化输入(可信数字, 非文档派生文本) ->
+  // output 'raw' / injection 'safe'; 返回短 handle 列表 -> budget 'full'。
+  // 落 ontology_edges SSOT -> signal 'env', persist 'business'。L2 软门控。
+  create_writeoff: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'business', risk: { level: 'L2', injection: 'safe' },
+  },
+  create_offset: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'business', risk: { level: 'L2', injection: 'safe' },
+  },
 };
 
 /** True iff a contract exists for the given tool name. */

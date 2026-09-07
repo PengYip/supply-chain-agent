@@ -260,6 +260,26 @@
       "whenToUse": "结算结果经人工确认后落 settlement_records 台账（金额锚点）。",
       "boundary": "L2 需用户同意；只落已确认结果，不做金额计算。",
       "rationale": "金额锚点写入，必须独立审计。"
+    },
+    {
+      "name": "create_writeoff",
+      "layer": "执行",
+      "level": "L2",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "票款核销工作台提交后执行：收付资金与发票之间建立 WRITE_OFF 带参边（多对多/部分金额/分批），一次调用携带整单分配计划。",
+      "boundary": "L2 需审批中心批准后才落边；items 必须逐字来自工作台提交，禁止模型自行改数；服务端整单守恒校验失败即拒绝落库；不做自动核销建议、不跨币种。",
+      "rationale": "自由数字输入不适合对话承载（roadmap Item 5），工作台结构化输入 + L2 工具审计写入是核销唯一入口；整单提交保证守恒校验原子性。"
+    },
+    {
+      "name": "create_offset",
+      "layer": "执行",
+      "level": "L2",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "预付冲抵工作台提交后执行：付款/收款与结算之间建立 OFFSET_SETTLE 带参边，一次调用携带整单分配计划。",
+      "boundary": "L2 需审批中心批准后才落边；冲抵额不超结算余额（服务端校验）；items 逐字来自工作台提交，禁止模型改数。",
+      "rationale": "与 create_writeoff 同族（冲抵语义），独立工具保持关系语义显式、审计单据可读。"
     }
   ],
   "removed": [

@@ -12,8 +12,9 @@ beforeEach(() => {
 });
 
 describe('toolOntologyMap vocabulary gate', () => {
-  it('maps exactly the three L2 demo tools from the roadmap', () => {
-    expect(Object.keys(toolOntologyMap).sort()).toEqual(['bind_document', 'create_entity', 'link_entities']);
+  it('maps exactly the five L2 tools (3 roadmap demo + 2 writeoff workbench)', () => {
+    expect(Object.keys(toolOntologyMap).sort()).toEqual(
+      ['bind_document', 'create_entity', 'create_offset', 'create_writeoff', 'link_entities']);
   });
 
   it('mapped tools are actually mounted for trader', () => {
