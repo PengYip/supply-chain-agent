@@ -24,6 +24,7 @@ import { ProjectLedgerView } from './components/ledger/ProjectLedgerView';
 import { EntitiesView } from './components/entities/EntitiesView';
 import { ReviewWorkbench } from './components/review-workbench/ReviewWorkbench';
 import { ApprovalCenterView } from './components/approval/ApprovalCenterView';
+import { GovernanceView } from './components/governance/GovernanceView';
 import { SharePage } from './components/share/SharePage';
 import { ReviewModal } from './components/ReviewModal';
 import { subscribeContainerRefreshes, subscribeReviewRequests, type ReviewQueueItem } from './lib/reviewModal';
@@ -342,6 +343,8 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
         <ProjectLedgerView onOpenProjects={() => navigate('projects')} onOpenParties={openParties} />
       ) : view === 'entities' ? (
         <EntitiesView onOpenInGraph={openInGraph} />
+      ) : view === 'governance' ? (
+        <GovernanceView />
       ) : view === 'eval' ? (
         <EvalWorkbenchView />
       ) : view === 'audit' ? (

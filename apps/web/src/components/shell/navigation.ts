@@ -10,6 +10,7 @@ import {
   Link2,
   MessageSquare,
   Network,
+  Shield,
   Star,
   type LucideIcon,
 } from 'lucide-react';
@@ -24,6 +25,7 @@ export type ViewId =
   | 'graph'
   | 'bindings'
   | 'writeoff'
+  | 'governance'
   | 'review'
   | 'eval'
   | 'audit'
@@ -55,6 +57,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'graph', label: '图谱', description: '实体关系可视化', icon: Network, group: 'work', enabled: true },
   { id: 'bindings', label: '绑定', description: '文档与合同绑定工作台', icon: Link2, group: 'work', enabled: true },
   { id: 'writeoff', label: '核销', description: '票款核销与预付冲抵（多对多 / 部分金额 / 分批）', icon: ArrowLeftRight, group: 'work', enabled: true },
+  { id: 'governance', label: '治理后台', description: '本体 / 工具面 / 权限 / 审批审计 只读治理视图', icon: Shield, group: 'admin', enabled: true },
   { id: 'review', label: '集中复核', description: '多页票据表格化批量核对', icon: ClipboardCheck, group: 'work', enabled: true },
   { id: 'eval', label: '评估', description: '评估数据集与结果分析', icon: FlaskConical, group: 'admin', enabled: true },
   { id: 'audit', label: '用量审计', description: 'LLM 与 OCR 调用统计及明细', icon: History, group: 'admin', enabled: true },
