@@ -68,8 +68,9 @@ const parseJson = (raw: unknown): Record<string, unknown> => {
 export async function insertTradeFact(
   ctx: DbContext, input: TradeFactInput, userId?: string,
 ): Promise<string> {
-  // 写入边界: 注册表词汇 + 语义规则(entitySchema 含事件金额方向 refinement)
-  entitySchema(input.entityType).parse(input.payload);
+  // 写入边界: 注册表词汇 + 语义规则(entitySchema 含事件金额方向 refinement)。
+  // M-1: 持久化 parse 后的规范值(strict 下非法键已 throw，不会走到静默剥离)。
+  const canonical = entitySchema(input.entityType).parse(input.payload);
   const id = rid('TF');
   const validAt = normalizeIsoUtc(input.validAt);
   const invalidAt = input.invalidAt == null ? null : normalizeIsoUtc(input.invalidAt);
@@ -81,7 +82,7 @@ export async function insertTradeFact(
     await pg.pool.query(
       `INSERT INTO trade_facts (${FACT_COLS})
        VALUES ($1,$2,$3,$4,$5,COALESCE($6, NOW()),$7,$8)`,
-      [id, input.entityType, JSON.stringify(input.payload), validAt, invalidAt,
+      [id, input.entityType, JSON.stringify(canonical), validAt, invalidAt,
        ingestedAt, input.createdBy, uid],
     );
     return id;
@@ -89,7 +90,7 @@ export async function insertTradeFact(
   ctx.sqlite.prepare(
     `INSERT INTO trade_facts (id, entity_type, payload, valid_at, invalid_at, ingested_at, created_by, user_id)
      VALUES (?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now')), ?, ?)`,
-  ).run(id, input.entityType, JSON.stringify(input.payload), validAt, invalidAt,
+  ).run(id, input.entityType, JSON.stringify(canonical), validAt, invalidAt,
     ingestedAt, input.createdBy, uid);
   return id;
 }
@@ -149,7 +150,7 @@ export async function insertOntologyEdge(
       `ontology: relation "${input.relation}" does not allow ${input.fromType} -> ${input.toType}` +
       ` (allowed: ${def.pairs.map((p) => `${p.from}->${p.to}`).join(', ')})`);
   }
-  def.params.parse(input.params ?? {});
+  const canonicalParams = def.params.parse(input.params ?? {});
   const id = rid('OE');
   const validAt = normalizeIsoUtc(input.validAt);
   const invalidAt = input.invalidAt == null ? null : normalizeIsoUtc(input.invalidAt);
@@ -162,7 +163,7 @@ export async function insertOntologyEdge(
       `INSERT INTO ontology_edges (${EDGE_COLS})
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10, NOW()),$11,$12)`,
       [id, input.relation, input.fromType, input.fromId, input.toType, input.toId,
-       JSON.stringify(input.params ?? {}), validAt, invalidAt,
+       JSON.stringify(canonicalParams), validAt, invalidAt,
        ingestedAt, input.createdBy, uid],
     );
     return id;
@@ -172,7 +173,7 @@ export async function insertOntologyEdge(
         valid_at, invalid_at, ingested_at, created_by, user_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now')), ?, ?)`,
   ).run(id, input.relation, input.fromType, input.fromId, input.toType, input.toId,
-    JSON.stringify(input.params ?? {}), validAt, invalidAt,
+    JSON.stringify(canonicalParams), validAt, invalidAt,
     ingestedAt, input.createdBy, uid);
   return id;
 }

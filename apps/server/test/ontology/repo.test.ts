@@ -134,3 +134,36 @@ describe('ontology edges as-of', () => {
     expect(filtered).toEqual([]);
   });
 });
+
+describe('M-1 canonical persistence (strict write boundary)', () => {
+  it('rejects payload fields outside the registry vocabulary (strict, no silent strip)', async () => {
+    await expect(insertTradeFact(ctx, {
+      entityType: 'InvoiceEvent',
+      payload: { ...INVOICE(100, '正向'), bogus: 'x' },
+      validAt: '2026-06-15', createdBy: 'test',
+    })).rejects.toThrow();
+  });
+
+  it('persists exactly the parsed canonical payload (DB fields ⊆ registry vocabulary)', async () => {
+    const id = await insertTradeFact(ctx, {
+      entityType: 'InvoiceEvent', payload: INVOICE(100, '正向'),
+      validAt: '2026-06-15', createdBy: 'test',
+    });
+    const rows = await listTradeFactsAsOf(ctx, asOfBusinessTime('2026-09-07T00:00:00.000Z'), {});
+    const row = rows.find((r) => r.id === id)!;
+    expect(row).toBeTruthy();
+    expect(Object.keys(row.payload).sort())
+      .toEqual(['amount', 'currency', 'eventBizType', 'invoiceNo', 'invoiceType']);
+  });
+
+  it('edges persist canonical params', async () => {
+    await insertOntologyEdge(ctx, {
+      relation: 'WRITE_OFF', fromType: 'PaymentEvent', fromId: 'TF-P1',
+      toType: 'InvoiceEvent', toId: 'TF-I1', params: { amount: 500, batch: 'B1' },
+      validAt: '2026-06-20', createdBy: 'test',
+    });
+    const edges = await listOntologyEdgesAsOf(ctx, asOfBusinessTime('2026-09-07T00:00:00.000Z'), {});
+    expect(edges).toHaveLength(1);
+    expect(edges[0]!.params).toEqual({ amount: 500, batch: 'B1' });
+  });
+});

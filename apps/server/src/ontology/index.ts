@@ -157,9 +157,11 @@ const eventAmountRule = (v: Record<string, unknown>, ctx: z.RefinementCtx) => {
   }
 };
 
-/** 写入边界用的完整 schema：词汇 + 语义规则。静态实体直接返回原 schema。 */
+/** 写入边界用的完整 schema：词汇 + 语义规则。静态实体直接返回原 schema。
+ *  M-1 裁决(2026-09-07)：strict——注册表外字段快速失败(不静默剥离)；
+ *  仓储持久化 parse 后的规范值，DB 内 payload 字段恒 ⊆ 注册表词汇。 */
 export function entitySchema(name: OntologyEntityName): z.ZodTypeAny {
-  const base = ONTOLOGY_ENTITIES[name];
+  const base = ONTOLOGY_ENTITIES[name].strict();
   return EVENT_ENTITY_NAMES.includes(name) ? base.superRefine(eventAmountRule) : base;
 }
 
