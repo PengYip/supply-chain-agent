@@ -75,6 +75,7 @@ boot). Required and notable vars:
 - Langfuse (OTel): `LANGFUSE_BASE_URL/PUBLIC_KEY/SECRET_KEY`.
 - Postgres path: `DATABASE_URL`, `DB_BACKEND=postgres` (also enables the 11
   Postgres integration tests, which otherwise skip).
+- `APPROVAL_CHANNEL` — 审批通知通道（default `local` 仅结构化日志；`lark` 预留未实现，回退 local）。
 
 Switching DeepSeek → Qwen is env-only; do not change code.
 
@@ -139,6 +140,12 @@ Access cheat-sheet (verify before trusting local files):
   `attachSession` runs on every request; `requireAuth` guards `/api/chat`,
   `/api/sessions`, `/api/approval`. `/api/health` stays public. Add new
   protected routes under those mounts or wire `requireAuth` explicitly.
+- **Approval center (v1).** `/api/approval` serves `GET /list` and `GET /:id`
+  (cross-session approval workbench, ownership-filtered) beside the existing
+  `POST /callback`; callback resolutions persist `decided_by`/`reason` on
+  `pending_approvals`, and approved L2 tool executions auto-append
+  `side_effect_results` audit rows. External-approval seam:
+  `src/harness/approvalChannel.ts` + env `APPROVAL_CHANNEL`.
 - **Batch splitter lineage (Phase 3).** `/api/batch` (resplit / unit
   reextract / merge) is auth-guarded like `/api/documents`. `documents.batch_role`
   + `document_units` are the lineage SSOT; containers carry docType「单据组」and
