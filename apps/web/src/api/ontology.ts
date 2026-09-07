@@ -90,3 +90,39 @@ export function getEntityDetail(
   return request<EntityDetailResult>(
     `/api/ontology/entities/${encodeURIComponent(type)}/${encodeURIComponent(id)}${qs ? `?${qs}` : ''}`);
 }
+
+export interface NeighborNodeDTO {
+  id: string;
+  entityType: string;
+  label: string;
+  source: 'contract_ledger' | 'documents' | 'trade_facts' | 'neo4j' | 'unresolved';
+  props?: Record<string, unknown>;
+}
+
+export interface NeighborEdgeDTO {
+  id: string;
+  relation: string;
+  origin: 'ontology' | 'lineage';
+  fromType: string;
+  fromId: string;
+  toType: string;
+  toId: string;
+  params: Record<string, unknown>;
+  validAt: string | null;
+}
+
+export interface NeighborsResultDTO {
+  anchor: { type: string; id: string };
+  anchorNode: NeighborNodeDTO;
+  nodes: NeighborNodeDTO[];
+  edges: NeighborEdgeDTO[];
+  lineage: { available: boolean; subjectFound: boolean };
+  truncated: boolean;
+}
+
+export function fetchOntologyNeighbors(
+  type: string, id: string, depth = 1,
+): Promise<NeighborsResultDTO> {
+  const params = new URLSearchParams({ type, id, depth: String(depth) });
+  return request<NeighborsResultDTO>(`/api/ontology/graph/neighbors?${params.toString()}`);
+}

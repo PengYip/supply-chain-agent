@@ -28,6 +28,18 @@ export const KIND_STYLES: Record<string, KindStyle> = {
   Commodity: { color: '#D97706', softBg: '#FBF0DE', softBorder: '#F0D9B0', label: '商品' },
   Contract: { color: '#15803D', softBg: '#E9F4EC', softBorder: '#CBE5D3', label: '合同' },
   Project: { color: '#6D5FC3', softBg: '#EEEBF8', softBorder: '#D8D0F0', label: '项目' },
+  // 本体实体节点(Item 4 穿透模式)——kind=注册表实体名, 未知 kind 的 FALLBACK 兜底不变
+  TradeContract: { color: '#15803D', softBg: '#E9F4EC', softBorder: '#CBE5D3', label: '贸易合同' },
+  TradeGoods: { color: '#D97706', softBg: '#FBF0DE', softBorder: '#F0D9B0', label: '商品' },
+  Counterparty: { color: '#4A6D8C', softBg: '#EBF1F5', softBorder: '#CFDCE6', label: '交易对手' },
+  OrgUnit: { color: '#64748B', softBg: '#F1F5F9', softBorder: '#E2E8F0', label: '内部组织' },
+  GoodsReceiptEvent: { color: '#0E7490', softBg: '#F2FAFC', softBorder: '#B8DCE4', label: '收货事件' },
+  GoodsDeliveryEvent: { color: '#0369A1', softBg: '#F3F9FD', softBorder: '#BAD9EE', label: '发货事件' },
+  SettlementEvent: { color: '#6D5FC3', softBg: '#EEEBF8', softBorder: '#D8D0F0', label: '结算事件' },
+  InvoiceEvent: { color: '#1D4ED8', softBg: '#F5F8FF', softBorder: '#C7D6E3', label: '发票事件' },
+  PaymentEvent: { color: '#B45309', softBg: '#FFFBF3', softBorder: '#F0D9B0', label: '付款事件' },
+  CollectionEvent: { color: '#15803D', softBg: '#F4FAF5', softBorder: '#CBE5D3', label: '收款事件' },
+  ServiceCostEvent: { color: '#7C3AED', softBg: '#FAF7FF', softBorder: '#DDD0F0', label: '服务费事件' },
 };
 
 const FALLBACK_STYLE: KindStyle = { color: '#6B7280', softBg: '#F3F4F6', softBorder: '#E5E7EB', label: '节点' };
@@ -53,11 +65,31 @@ export const EDGE_LABELS: Record<string, string> = {
   part_of: '归属',
   counterparty: '对手方',
   participates: '参与',
+  ALLOCATE_TO: '分摊',
+  OFFSET_SETTLE: '冲抵结算',
+  WRITE_OFF: '核销',
+  REVERSE_ORIGIN: '红冲溯源',
+  FEEDS_INTO: '结算依据',
+  CORRESPONDS_TO: '开票对应',
+  TRIGGERS: '触发付款',
+  PROVIDE: '提供服务',
+  CONTAINS: '文档血缘',
 };
 
 /** 边样式覆盖: binds(人工确认的绑定)与抽取级提及边视觉区分。 */
 export const EDGE_STYLE_OVERRIDES: Record<string, { color: string; dashed: boolean }> = {
   binds: { color: '#15803D', dashed: true },
+  // 本体关系边(roadmap Item 4, wb4 语义色)：分摊蓝/冲抵绿/核销橙/红冲红实色；
+  // 辅助关系灰虚线(与普通抽取边 #CBD5E1 实线区分)；CONTAINS 文档血缘沿层级灰+虚线。
+  ALLOCATE_TO: { color: '#2563EB', dashed: false },
+  OFFSET_SETTLE: { color: '#16A34A', dashed: false },
+  WRITE_OFF: { color: '#EA580C', dashed: false },
+  REVERSE_ORIGIN: { color: '#DC2626', dashed: false },
+  FEEDS_INTO: { color: '#94A3B8', dashed: true },
+  CORRESPONDS_TO: { color: '#94A3B8', dashed: true },
+  TRIGGERS: { color: '#94A3B8', dashed: true },
+  PROVIDE: { color: '#94A3B8', dashed: true },
+  CONTAINS: { color: '#64748B', dashed: true },
 };
 
 export function edgeLabel(type: string): string {
@@ -246,3 +278,16 @@ export function contractTypeStyle(
   }
   return BASE_CONTRACT_STYLE;
 }
+
+/** 穿透模式边图例(roadmap Item 4)：色值/虚线与 EDGE_STYLE_OVERRIDES 严格一致。 */
+export const ONTOLOGY_EDGE_LEGEND: ReadonlyArray<{ relation: string; color: string; dashed: boolean }> = [
+  { relation: 'ALLOCATE_TO', color: '#2563EB', dashed: false },
+  { relation: 'OFFSET_SETTLE', color: '#16A34A', dashed: false },
+  { relation: 'WRITE_OFF', color: '#EA580C', dashed: false },
+  { relation: 'REVERSE_ORIGIN', color: '#DC2626', dashed: false },
+  { relation: 'FEEDS_INTO', color: '#94A3B8', dashed: true },
+  { relation: 'CORRESPONDS_TO', color: '#94A3B8', dashed: true },
+  { relation: 'TRIGGERS', color: '#94A3B8', dashed: true },
+  { relation: 'PROVIDE', color: '#94A3B8', dashed: true },
+  { relation: 'CONTAINS', color: '#64748B', dashed: true },
+];
