@@ -15,6 +15,7 @@ import {
 /** 视图唯一标识，同时是 hash 路由的一级路径（`#/chat` 等）。 */
 export type ViewId =
   | 'chat'
+  | 'approvals'
   | 'projects'
   | 'ledger'
   | 'graph'
@@ -43,6 +44,7 @@ export interface NavItem {
  *  分组语义：work = 日常业务高频入口；admin = 低频的配置/质量工具。 */
 export const NAV_ITEMS: NavItem[] = [
   { id: 'chat', label: '对话', description: 'DeepSeek + 真实工具调用', icon: MessageSquare, group: 'work', enabled: true },
+  { id: 'approvals', label: '审批中心', description: 'L2/L3 审批待办与历史', icon: ClipboardCheck, group: 'work', enabled: true },
   { id: 'projects', label: '项目', description: '项目维度汇总（合同面 + 执行面）', icon: FolderKanban, group: 'work', enabled: true },
   { id: 'ledger', label: '项目台账', description: '按项目归集合同的凭证齐套率', icon: BookOpen, group: 'work', enabled: true },
   { id: 'graph', label: '图谱', description: '实体关系可视化', icon: Network, group: 'work', enabled: true },

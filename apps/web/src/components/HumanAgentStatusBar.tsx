@@ -103,7 +103,8 @@ export const HumanAgentStatusBar: React.FC<HumanAgentStatusBarProps> = ({ sessio
           </span>
 
           <span className="ml-auto flex items-center gap-1 shrink-0">
-            <span
+            <a
+              href="#/approvals"
               className={clsx(
                 'flex items-center gap-1 px-2 py-0.5 rounded-full border',
                 pending > 0
@@ -115,7 +116,7 @@ export const HumanAgentStatusBar: React.FC<HumanAgentStatusBarProps> = ({ sessio
               <ShieldAlert className={clsx('w-3 h-3', pending > 0 && 'animate-pulse')} />
               待审批
               <span className="font-semibold">{pending}</span>
-            </span>
+            </a>
           </span>
         </>
       ) : null}

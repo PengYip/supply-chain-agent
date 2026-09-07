@@ -21,6 +21,7 @@ import { AuditView } from './components/audit/AuditView';
 import { ProjectsView } from './components/projects/ProjectsView';
 import { ProjectLedgerView } from './components/ledger/ProjectLedgerView';
 import { ReviewWorkbench } from './components/review-workbench/ReviewWorkbench';
+import { ApprovalCenterView } from './components/approval/ApprovalCenterView';
 import { SharePage } from './components/share/SharePage';
 import { ReviewModal } from './components/ReviewModal';
 import { subscribeContainerRefreshes, subscribeReviewRequests, type ReviewQueueItem } from './lib/reviewModal';
@@ -324,6 +325,8 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
         <SelfPartyPanel />
       ) : view === 'favorites' ? (
         <FavoritesView onOpenSession={(id) => navigate('chat', { session: id })} />
+      ) : view === 'approvals' ? (
+        <ApprovalCenterView />
       ) : view === 'graph' ? (
         <GraphView focus={graphFocus} onOpenInBindings={openInBindings} />
       ) : view === 'projects' ? (
