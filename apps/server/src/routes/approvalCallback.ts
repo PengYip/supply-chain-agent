@@ -164,7 +164,10 @@ approvalCallback.post('/approval/callback', async (c) => {
 
   // DB state first: the decision is durable even if the run fails to start
   // or errors later.
-  await resolveApproval(pending.id, approved ? 'approved' : 'denied');
+  await resolveApproval(pending.id, approved ? 'approved' : 'denied', {
+    decidedBy: user.id,
+    reason: reason ?? null,
+  });
 
   console.log(
     JSON.stringify({
