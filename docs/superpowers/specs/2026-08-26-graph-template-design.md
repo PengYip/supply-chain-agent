@@ -284,3 +284,15 @@ validateEdge(docType, contractType, edgeType, relation?)
 7. [Sensible Validating Extractions](https://docs.sensible.so/docs/validate-extractions)
 8. [Azure Document Intelligence Custom Models](https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/train/custom-model)
 9. [UN/CEFACT Web Vocabulary](https://vocab-bsp-a246f0.opensource.unicc.org/docs/ontology/)
+
+---
+
+## 11. 与本体基座的关系（2026-09-08 补记）
+
+本 spec 的「类型本体层」（template_types/template_edge_rules/template_versions）与本体基座（`apps/server/src/ontology/index.ts`，见 `plans/2026-09-07-ontology-foundation.md`）**不是同一轴，正交并存**：
+
+- template_types = 单据形态分类树（doc_type/contract_type），约束「每类单据连什么 Neo4j 边」；本体注册表 = 业务语义类（11 实体 / 8 关系 14 连接对），约束「工具与写入边界能用什么业务词汇」。
+- 值域不冲突：模板边词表（binds/settles/...）与本体关系名（ALLOCATE_TO/...）是两个命名空间。
+- 校验分工：templateGuard 拦 docType→contractType→边词表（写 Neo4j 前）；本体写入边界（`ontology/repo.ts`）拦关系名/连接对/params（写 ontology_edges/trade_facts 前）。两条守卫管线独立保留。
+
+**预留对齐项**：《本体建模技术备忘》§6 定「抽取目标从自由 JSON 升级为 11 类实体实例」后，template_types.props 的字段 schema 需与本体 entitySchema 词汇对齐；届时应把「模板 props 字段纳入 toolOntologyMap 同款词汇门禁」列入任务（当前 CI 门禁只拦工具 inputSchema，不拦模板 props）。

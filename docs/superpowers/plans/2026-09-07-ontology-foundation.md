@@ -49,9 +49,10 @@
 3. **CommodityCode v1 开放词汇**。备忘 §7 明示 TradeGoods 分层待业务确认；强造闭枚举有编造风险。v1 `commodityCode: z.string().min(1)` + 注册表导出 `COMMODITY_CODES` 词汇表常量（起步为空数组），业务确认后转闭枚举只改注册表单文件（符合验收 1 精神）。PayType/EventBizType/AllocateMethod 三枚举在 docx §6 有闭集定义，直接落 z.enum。
 4. **meaning URI 只建机制不挂条目**。roadmap OUT 边界明确「meaning 只挂已确认的 OEO/FIBO 条目」；v1 导出 `MEANING_URIS` 空映射 + URI 格式校验（测试断言所有已挂值匹配 URI 模式），词汇精选属后续任务（备忘落地路线第 4 步）。
 5. **实体词汇与语义规则分层**。`ONTOLOGY_ENTITIES` 存纯 `z.object`（保证 `.shape` 可直接取字段，供 CI 门禁与 Item 3 列生成）；「逆向=负数金额」等语义规则（docx §6.2）放独立 refinement，经 `entitySchema(name)` 在**写入边界**叠加。对应 docx 第三层（实体）与第四层（语义规则）的分层。
-6. **invalid_at 的写入模式**：v1 只提供 insert + as-of 读，不提供事后 update。红冲场景由调用方在创建逆向事实时一并提交被冲销事实的 invalid_at（幂等、免二次写）；真正的事务性「冲销原单」动作留给 Item 5 的 L2/L3 工具。as-of 系统时间查询只看 ingested_at，与 invalid_at 的写入时点无关，月报复现语义不受影响。
+6. **invalid_at 的写入模式**：v1 只提供 insert + as-of 读，不提供事后 update。invalid_at 仅用于非红冲的主动失效（如作废错录事实）；红冲不走 invalid_at 失效——见决策 #9 的净额轧差模型。as-of 系统时间查询只看 ingested_at，与 invalid_at 的写入时点无关，月报复现语义不受影响。
 7. **时间列格式**：SQLite 全部 TEXT 存 UTC ISO（`strftime('%Y-%m-%dT%H:%M:%fZ','now')`，projects 表先例），字典序即时间序；仓储写入统一经 `normalizeIsoUtc()` 归一，杜绝 `datetime('now')` 空格格式混入破坏比较。PG 用 timestamptz。
 8. **仓储放新模块 `src/ontology/repo.ts`**（双后端实现都在里面），不往 4697 行的 repositories.ts 塞——本体自包含，Item 3/4/5 复用时不牵连 pipeline 仓储。
+9. **红冲 = 逆向负数净额轧差，原票不失效（2026-09-07 实施期勘误，commit 77f8298/df9ef10）**。本计划初版决策 #6 设想「红冲时由调用方写回被冲销事实的 invalid_at」，实施时改为 docx §6.2 的净额轧差模型：红冲即插入一条金额为负的逆向事实（validAt 回溯至原票业务时间），原票保持有效，as-of 业务时间口径自动轧差。理由：(a) 原票失效会让「当时口径」在失效时点后丢失原票记录，与财务对账直觉相悖；(b) 负数轧差同时满足三问三答（repo.test.ts 红冲场景 Q1/Q2/Q3 断言不变）；(c) 与「逆向=负数金额」语义规则（决策 #5）同源，无需额外失效联动。Task 3 的 fixture 已按此模型修订。
 
 ---
 
@@ -514,7 +515,7 @@ Expected: PASS（全部用例）
 
 ```bash
 git add apps/server/src/ontology/index.ts apps/server/test/ontology/registry.test.ts
-git commit -m "feat(ontology): 领域本体注册表(11实体/8关系13对/枚举/双时间轴字段/meaning机制)"
+git commit -m "feat(ontology): 领域本体注册表(11实体/8关系14连接对/枚举/双时间轴字段/meaning机制)"
 ```
 
 ---
@@ -890,11 +891,11 @@ describe('ontology repo write boundary', () => {
 });
 
 describe('red-invoice as-of scenario (memo section 4: three questions, three answers)', () => {
-  // 6/15 收发票 100 万; 8/5 红冲重开 80 万(追溯 6/15 生效)。原票失效点=红冲生效点。
+  // 6/15 收发票 100 万; 8/5 红冲 -100 万 + 重开 80 万(均追溯 6/15 生效)。红冲不失效原票, 逆向负数自动轧差(docx 6.2, 决策 #9)。
   beforeEach(async () => {
     await insertTradeFact(ctx, {
       entityType: 'InvoiceEvent', payload: INVOICE(1_000_000, '正向'),
-      validAt: '2026-06-15', invalidAt: '2026-06-15', ingestedAt: '2026-06-16',
+      validAt: '2026-06-15', ingestedAt: '2026-06-16',
       createdBy: 'scenario',
     });
     await insertTradeFact(ctx, {

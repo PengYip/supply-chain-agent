@@ -1,7 +1,7 @@
 # 集中复核工作台（Centralized Review Workbench）设计
 
 日期：2026-09-04
-状态：已与需求方对齐，待实施
+状态：已实施并合并 main（2026-09-07，CI/CD 绿）
 分支：PengYip/UI-UX优化
 
 ## 1. 背景与问题

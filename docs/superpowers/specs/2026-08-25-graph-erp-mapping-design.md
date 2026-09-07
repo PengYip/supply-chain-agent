@@ -171,3 +171,14 @@ RETURN p.name, q.limitAmount, q.used, q.limitAmount - q.used AS remaining;
 ## 实施记录
 
 2026-08-26 完成全部 Phase 1-3(T1-T12)。Phase 1: 48d919b..5635af5(词汇/settles/trades 投影/graph_links 存储/关联边同步/工作台 REST/L2 工具); Phase 2: a84bdbe..9e96f51(quotas 存储+granted 边+PG 迁移/对账桥/额度与对账路由/quota 工具); Phase 3: b6d1680..T12(分摊入参/报表 API)。前端看板页消费 /api/reconcile/report 与 /api/graph/links，属后续 UI 任务。
+
+## 10. 与本体基座的关系（2026-09-08 补记）
+
+本 spec 的关系语义层（Neo4j 文档图 + settles 六向词表）与本体基座（`plans/2026-09-07-ontology-foundation.md`）**同源异表**：
+
+- settles 六向词表（收款/付款/收货/发货/收票/开票，`domain/tradeSemantics.ts` GRAPH_TRADE_EDGES）↔ 本体 7 事件实体（Payment/Collection/GoodsReceipt/GoodsDelivery/Invoice/Settlement/ServiceCostEvent），本体侧方向改用 正向/逆向 + 金额正负号（逆向=负数）。
+- settles/correlates 边上的 allocatedAmount/allocatedQuantity（Phase 3）↔ 本体 ALLOCATE_TO 带参关系（params: amount/ratio/method/batch）。
+- 架构演进：本 spec §2「关系拓扑 = Neo4j」是当时口径；《本体建模技术备忘》§3.2 现行为「PG 唯一真值（实体表 + 统一带参边表）+ Neo4j 只读旁路（穿透/可视化/多跳）」。二者经既有「SSOT → 投影」铁律兼容，图层角色收敛为文档捕获/拓扑投影。
+- 本体 8 关系**不覆盖**的纯拓扑边（背靠背 correlates、项目 relates、part_of、granted/Quota）继续由图/关系库原生承载（graph_links / graph_links_quota 为其 SSOT），by-design 无需迁移。
+
+当前 trade_facts/ontology_edges 无生产写方，两套表达并存无冲突；关系语义权威是否迁移留待备忘落地路线后续步骤裁决。

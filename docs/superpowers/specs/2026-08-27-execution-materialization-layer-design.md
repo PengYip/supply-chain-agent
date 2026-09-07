@@ -246,3 +246,19 @@ confirm_settlement（L2 软门控） -> settlement_records 台账落账`。
 ### 15.3 工具集计数
 trader 工具 28 -> 30（gather_settlement_evidence / confirm_settlement）；
 contextContract EXPECTED_TOOLS、e2e/integration-recall 工具计数断言同步。
+
+---
+
+## 16. 与本体基座的关系（2026-09-08 补记）
+
+本 spec 的六向流水（execution_flows）与本体基座的事件事实表（trade_facts，见 `plans/2026-09-07-ontology-foundation.md`）是**同一业务事实的两层表达**，当前无生产双写（trade_facts 零业务写入方，仅测试与 demo seed 使用）：
+
+| execution_flows (flowType) | 本体事件实体（trade_facts.entity_type） |
+|---|---|
+| 资金流 | PaymentEvent / CollectionEvent |
+| 货物流 | GoodsReceiptEvent / GoodsDeliveryEvent |
+| 发票流 | InvoiceEvent |
+
+口径差异（by-design，暂不统一）：execution_flows 用 in/out 列编码方向、无业务时间轴，仍是单据物化数值流水的 SSOT；trade_facts 用事件实体 + eventBizType 正/逆向 + 金额正负号编码方向（逆向=负数），带双时间轴（validAt/invalidAt/ingestedAt）。单位语义共用 `domain/units.ts`，不另建第二套单位注册表。
+
+**未决决策（须在抽取目标升级为 11 类实体实例之前裁决，见《本体建模技术备忘》§6）**：发货/发票/付款等流水是否以及如何落 trade_facts——由 execution_flows 派生回放，还是由新抽取链路直接落事实。裁决前两层各自独立，防止双写漂移。本体侧字段同源声明见注册表（`SettlementEvent.settledQuantity` ↔ `settlement_records.settled_quantity`；`TradeContract.contractNo` ↔ `contract_ledger.contract_no`）。

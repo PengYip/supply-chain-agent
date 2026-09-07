@@ -70,7 +70,7 @@ Item 1（审批中心）与 Item 2（本体基座）均已合并 main。定向 r
 
 **Interfaces:** 无。
 
-- [ ] **Step 1: 基线同步**
+- [x] **Step 1: 基线同步**
 
 Run:
 ```bash
@@ -80,13 +80,13 @@ git status
 ```
 Expected: HEAD 在 `df9ef10` 或其后人（Item 2 本体基座 + Item 1 审批中心已含）。若落后 origin/main，先 `git merge origin/main` 再继续；有冲突则停下人工处理。
 
-- [ ] **Step 2: 建 feature 分支**
+- [x] **Step 2: 建 feature 分支**
 
 ```bash
 git checkout -b PengYip/trade-ledger origin/main
 ```
 
-- [ ] **Step 3: 前置检查（写码前暴露不确定签名）**
+- [x] **Step 3: 前置检查（写码前暴露不确定签名）**
 
 Run 并逐条确认（与下述预期不符时，以实际代码为准修订后续任务的贴码）：
 ```bash
@@ -98,7 +98,7 @@ grep -n "sendMessage" apps/web/src/hooks/useSessionMessages.ts | head -5   # 确
 grep -rn "export function ApprovalDetailDrawer" apps/web/src/components/approval/  # Task 12 抽屉类名惯例参照
 ```
 
-- [ ] **Step 4: 空跑验证基线绿**
+- [x] **Step 4: 空跑验证基线绿**
 
 Run: `npm run build && npm run lint && npm test`
 Expected: 全绿（不绿先修基线，不属本计划）。
@@ -114,7 +114,7 @@ Expected: 全绿（不绿先修基线，不属本计划）。
 **Interfaces:**
 - Produces: `ENTITY_LABELS: Record<OntologyEntityName, string>`；schema JSON 实体项 `{name, label, ownFields, fields, meaning}`（`fields` 语义不变仍为全集并集；`ownFields` = 实体自有字段，台账列表列生成用）。
 
-- [ ] **Step 1: 写失败测试（registry.test.ts 既有 describe 内追加用例；文件顶部 import 花括号补 `ENTITY_LABELS`）**
+- [x] **Step 1: 写失败测试（registry.test.ts 既有 describe 内追加用例；文件顶部 import 花括号补 `ENTITY_LABELS`）**
 
 ```ts
 it('entity labels + ownFields for the Item 3 ledger UI', () => {
@@ -131,12 +131,12 @@ it('entity labels + ownFields for the Item 3 ledger UI', () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `npm test --workspace apps/server -- test/ontology/registry.test.ts`
 Expected: FAIL（ENTITY_LABELS 未导出）
 
-- [ ] **Step 3: 实现（index.ts）**
+- [x] **Step 3: 实现（index.ts）**
 
 ```ts
 // ONTOLOGY_ENTITIES / ENTITY_NAMES（L104）之后新增（保持只 import zod 的约束）：
@@ -168,7 +168,7 @@ export const ENTITY_LABELS: Record<OntologyEntityName, string> = {
     })),
 ```
 
-- [ ] **Step 4: 跑测试确认通过 + 全量回归 + commit**
+- [x] **Step 4: 跑测试确认通过 + 全量回归 + commit**
 
 Run: `npm test --workspace apps/server -- test/ontology/registry.test.ts && npm run build && npm run lint && npm test`
 Expected: PASS + 全绿（既有 `ontologySchemaJson` 断言不受影响——只加键不改旧键）
@@ -190,7 +190,7 @@ git commit -m "feat(ontology): entity labels + ownFields in registry schema proj
 **Interfaces:**
 - Produces: `entitySchema(name)` 语义变更为 strict（注册表外字段抛 ZodError）；DB 不变量 `payload/params 字段 ⊆ 注册表词汇`。消费方签名不变。
 
-- [ ] **Step 1: 写失败测试（repo.test.ts 末尾追加 describe）**
+- [x] **Step 1: 写失败测试（repo.test.ts 末尾追加 describe）**
 
 ```ts
 describe('M-1 canonical persistence (strict write boundary)', () => {
@@ -227,12 +227,12 @@ describe('M-1 canonical persistence (strict write boundary)', () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `npm test --workspace apps/server -- test/ontology/repo.test.ts`
 Expected: 第 1 个用例 FAIL（extra 字段目前被静默接受）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `index.ts` 的 `entitySchema`（L146-149）替换为：
 
@@ -264,7 +264,7 @@ export function entitySchema(name: OntologyEntityName): z.ZodTypeAny {
 
 两个分支的 `JSON.stringify(input.params ?? {})`（L166/L174）均改为 `JSON.stringify(canonicalParams)`（两处）。
 
-- [ ] **Step 4: 跑测试确认通过 + 全量回归（重点：Item 2 既有红冲/边测试不回归）**
+- [x] **Step 4: 跑测试确认通过 + 全量回归（重点：Item 2 既有红冲/边测试不回归）**
 
 Run: `npm test --workspace apps/server -- test/ontology/repo.test.ts && npm run build && npm run lint && npm test`
 Expected: PASS + 全绿（repo.test.ts 既有 fixture 均传精确字段，不受 strict 影响）
@@ -287,7 +287,7 @@ git commit -m "feat(ontology): M-1 strict write boundary + canonical payload per
 - Consumes: `ontologySchemaJson()`（Task 2 已含 label/ownFields）。
 - Produces: `ontologyRoute: Hono<AuthEnv>`；`GET /api/ontology/schema` → 200 `{version, enums, entities, relations}`；后续 Task 7/8 在同一 route 文件追加 `/entities` 两端点。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```ts
 // apps/server/test/routes/ontologySchema.test.ts
@@ -326,12 +326,12 @@ describe('GET /api/ontology/schema', () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `npm test --workspace apps/server -- test/routes/ontologySchema.test.ts`
 Expected: FAIL（模块不存在）
 
-- [ ] **Step 3: 实现路由文件 + 挂载**
+- [x] **Step 3: 实现路由文件 + 挂载**
 
 ```ts
 // apps/server/src/routes/ontology.ts
@@ -367,7 +367,7 @@ app.use('/api/ontology/*', requireAuth);
 app.route('/api/ontology', ontologyRoute);
 ```
 
-- [ ] **Step 4: 跑测试确认通过 + commit**
+- [x] **Step 4: 跑测试确认通过 + commit**
 
 Run: `npm test --workspace apps/server -- test/routes/ontologySchema.test.ts && npm run build && npm run lint`
 Expected: PASS + 构建/静态检查绿
@@ -390,7 +390,7 @@ git commit -m "feat(ontology): GET /api/ontology/schema registry projection rout
 - Consumes: `effectiveUserId`（pipeline/db/repositories.js）、`numberPlaceholders`（asof.js）。
 - Produces: `ProjectedEntity`、`EntityListResult`、`listProjectedEntities(ctx, type, {page?, pageSize?, q?}, userId?)`（Task 6 扩展事件源后签名不变）。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```ts
 // apps/server/test/ontology/projection.test.ts
@@ -466,12 +466,12 @@ describe('projection: TradeContract <- contract_ledger (read-only)', () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `npm test --workspace apps/server -- test/ontology/projection.test.ts`
 Expected: FAIL（模块不存在）
 
-- [ ] **Step 3: 实现 projection.ts（首版：类型骨架 + 合同源）**
+- [x] **Step 3: 实现 projection.ts（首版：类型骨架 + 合同源）**
 
 ```ts
 // apps/server/src/ontology/projection.ts
@@ -598,12 +598,12 @@ export async function listProjectedEntities(
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `npm test --workspace apps/server -- test/ontology/projection.test.ts`
 Expected: PASS（5 用例全绿）
 
-- [ ] **Step 5: PG 集成 lane（可选步骤，无 PG 环境时 CI 自动 skip）**
+- [x] **Step 5: PG 集成 lane（可选步骤，无 PG 环境时 CI 自动 skip）**
 
 前置检查：打开 `apps/server/test/pipeline/postgres.integration.test.ts` L1-40 与 L570-595（Item 2 本体 lane），记录 describe/skip 变量名、ctx/夹具命名与 beforeEach TRUNCATE 清单。在该文件本体 lane 后追加（变量/夹具名以文件实际为准等价嵌入；TRUNCATE 清单若未含 `contract_ledger` 则补进 beforeEach 防测试间污染）：
 
@@ -629,7 +629,7 @@ Expected: PASS（5 用例全绿）
 Run: `DB_BACKEND=postgres DATABASE_URL=<指向独立 sca_test 库，绝不可指向共享 dev 库> npm test --workspace apps/server -- test/pipeline/postgres.integration.test.ts`
 Expected: PASS
 
-- [ ] **Step 6: 全量回归 + commit**
+- [x] **Step 6: 全量回归 + commit**
 
 Run: `npm run build && npm run lint && npm test`
 Expected: 全绿
@@ -651,7 +651,7 @@ git commit -m "feat(ontology): read-only projection layer - TradeContract from c
 - Consumes: `listTradeFactsAsOf`、`TradeFactRow`（repo.js）。
 - Produces: `listProjectedEntities` 行为扩展——7 事件类型可列出（收发两类含 documents 源），静态实体保持空态。签名不变。
 
-- [ ] **Step 1: 写失败测试（projection.test.ts 追加；import 行补 `insertTradeFact`）**
+- [x] **Step 1: 写失败测试（projection.test.ts 追加；import 行补 `insertTradeFact`）**
 
 ```ts
 const insertDoc = (id: string, docType: string) => {
@@ -721,12 +721,12 @@ describe('projection: events <- trade_facts + receipt/delivery docs', () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `npm test --workspace apps/server -- test/ontology/projection.test.ts`
 Expected: 新用例 FAIL（collectEntities 尚无事件分支）
 
-- [ ] **Step 3: 实现（projection.ts）**
+- [x] **Step 3: 实现（projection.ts）**
 
 import 区补：
 
@@ -839,7 +839,7 @@ async function collectEntities(ctx: DbContext, type: OntologyEntityName, uid: st
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过 + 全量回归 + commit**
+- [x] **Step 4: 跑测试确认通过 + 全量回归 + commit**
 
 Run: `npm test --workspace apps/server -- test/ontology/projection.test.ts && npm run build && npm run lint && npm test`
 Expected: PASS + 全绿
@@ -861,7 +861,7 @@ git commit -m "feat(ontology): project events from trade_facts + receipt/deliver
 - Consumes: `listProjectedEntities`（Task 5/6）、`OntologyEntityNameSchema`（注册表）。
 - Produces: `GET /api/ontology/entities/:type?page=&pageSize=&q=` → 200 `EntityListResult`；非注册表 type → 400 `{error:'unknown entity type'}`；未认证 401。
 
-- [ ] **Step 1: 写失败测试（ctxHolder 模式照抄 contractsSearch.test.ts）**
+- [x] **Step 1: 写失败测试（ctxHolder 模式照抄 contractsSearch.test.ts）**
 
 ```ts
 // apps/server/test/routes/ontologyEntities.test.ts
@@ -939,12 +939,12 @@ describe('GET /api/ontology/entities/:type', () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `npm test --workspace apps/server -- test/routes/ontologyEntities.test.ts`
 Expected: FAIL（路由不存在，404）
 
-- [ ] **Step 3: 实现（routes/ontology.ts 追加）**
+- [x] **Step 3: 实现（routes/ontology.ts 追加）**
 
 import 区补：
 
@@ -992,7 +992,7 @@ ontologyRoute.get('/entities/:type', async (c) => {
 });
 ```
 
-- [ ] **Step 4: 跑测试确认通过 + commit**
+- [x] **Step 4: 跑测试确认通过 + commit**
 
 Run: `npm test --workspace apps/server -- test/routes/ontologyEntities.test.ts && npm run build && npm run lint`
 Expected: PASS
@@ -1019,7 +1019,7 @@ git commit -m "feat(ontology): GET /api/ontology/entities/:type list route"
   - `getProjectedEntityDetail(ctx, type, id, { mode?, at? }, userId?): Promise<EntityDetail | null>`（projection.ts）
   - 路由：`GET /api/ontology/entities/:type/:id?asOf=business|system&at=<ISO>`；默认 `business@now`；at 非法 → 400；不存在/他人数据 → 404。
 
-- [ ] **Step 1: 写失败测试（repo 层，repo.test.ts 追加；import 补 `getTradeFactById`）**
+- [x] **Step 1: 写失败测试（repo 层，repo.test.ts 追加；import 补 `getTradeFactById`）**
 
 ```ts
 describe('getTradeFactById', () => {
@@ -1035,12 +1035,12 @@ describe('getTradeFactById', () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `npm test --workspace apps/server -- test/ontology/repo.test.ts`
 Expected: FAIL（未导出）
 
-- [ ] **Step 3: 实现 repo.ts——行映射提纯 + getTradeFactById**
+- [x] **Step 3: 实现 repo.ts——行映射提纯 + getTradeFactById**
 
 在 `listTradeFactsAsOf` 之前新增共享映射函数，并把 `listTradeFactsAsOf` 内 PG/SQLite 两处内联映射改为调用它（结构不变，改完跑既有测试防回归）：
 
@@ -1082,12 +1082,12 @@ export async function getTradeFactById(
 }
 ```
 
-- [ ] **Step 4: 跑 repo 测试确认通过**
+- [x] **Step 4: 跑 repo 测试确认通过**
 
 Run: `npm test --workspace apps/server -- test/ontology/repo.test.ts`
 Expected: PASS（含既有用例——映射提纯无回归）
 
-- [ ] **Step 5: 写失败测试（projection 层 detail + 红冲两答案，projection.test.ts 追加；import 补 `getProjectedEntityDetail`、`insertOntologyEdge`）**
+- [x] **Step 5: 写失败测试（projection 层 detail + 红冲两答案，projection.test.ts 追加；import 补 `getProjectedEntityDetail`、`insertOntologyEdge`）**
 
 ```ts
 describe('projection: entity detail as-of + REVERSE_ORIGIN netting', () => {
@@ -1143,12 +1143,12 @@ describe('projection: entity detail as-of + REVERSE_ORIGIN netting', () => {
 });
 ```
 
-- [ ] **Step 6: 跑测试确认失败**
+- [x] **Step 6: 跑测试确认失败**
 
 Run: `npm test --workspace apps/server -- test/ontology/projection.test.ts`
 Expected: 新用例 FAIL（getProjectedEntityDetail 未实现）
 
-- [ ] **Step 7: 实现 projection.ts 详情（文件末尾追加）**
+- [x] **Step 7: 实现 projection.ts 详情（文件末尾追加）**
 
 import 区补（`listTradeFactsAsOf/type TradeFactRow` Task 6 已引入，不重复）：
 
@@ -1266,7 +1266,7 @@ export async function getProjectedEntityDetail(
 }
 ```
 
-- [ ] **Step 8: 写失败测试（路由级，ontologyEntities.test.ts 追加；import 补 `insertOntologyEdge`）**
+- [x] **Step 8: 写失败测试（路由级，ontologyEntities.test.ts 追加；import 补 `insertOntologyEdge`）**
 
 ```ts
 describe('GET /api/ontology/entities/:type/:id (as-of detail)', () => {
@@ -1317,7 +1317,7 @@ describe('GET /api/ontology/entities/:type/:id (as-of detail)', () => {
 
 （第二个用例先插一条 InvoiceEvent 再取列表首个 id；seed 逻辑与第一用例相同，可抽局部 helper。）
 
-- [ ] **Step 9: 跑测试确认失败 → 实现路由（routes/ontology.ts 追加；import 补 `getProjectedEntityDetail`）**
+- [x] **Step 9: 跑测试确认失败 → 实现路由（routes/ontology.ts 追加；import 补 `getProjectedEntityDetail`）**
 
 ```ts
 const detailQuerySchema = z.object({
@@ -1357,7 +1357,7 @@ ontologyRoute.get('/entities/:type/:id', async (c) => {
 });
 ```
 
-- [ ] **Step 10: 跑测试确认通过 + 全量回归 + commit**
+- [x] **Step 10: 跑测试确认通过 + 全量回归 + commit**
 
 Run: `npm test --workspace apps/server -- test/ontology/projection.test.ts test/routes/ontologyEntities.test.ts && npm run build && npm run lint && npm test`
 Expected: PASS + 全绿
@@ -1384,7 +1384,7 @@ git commit -m "feat(ontology): entity detail API with as-of slice + REVERSE_ORIG
 
 （web 无单测设施——与审批中心计划一致：以 `npm run build` 的 tsc + 手动 dev 验证为准。）
 
-- [ ] **Step 1: navigation.ts 改动**
+- [x] **Step 1: navigation.ts 改动**
 
 ```ts
 // lucide-react import 增加 Boxes:
@@ -1394,7 +1394,7 @@ git commit -m "feat(ontology): entity detail API with as-of slice + REVERSE_ORIG
   { id: 'entities', label: '实体台账', description: '本体实体浏览（合同 / 收发依据 / 事件，as-of 时间切片）', icon: Boxes, group: 'work', enabled: true },
 ```
 
-- [ ] **Step 2: api/ontology.ts（schema 拉取，request 助手形态对齐 api/projects.ts）**
+- [x] **Step 2: api/ontology.ts（schema 拉取，request 助手形态对齐 api/projects.ts）**
 
 ```ts
 // apps/web/src/api/ontology.ts
@@ -1442,7 +1442,7 @@ export function fetchOntologySchema(): Promise<OntologySchemaDTO> {
 }
 ```
 
-- [ ] **Step 3: EntitiesView.tsx 骨架（左类型列表 + 右空态；布局参照 ProjectLedgerView 的 master-detail）**
+- [x] **Step 3: EntitiesView.tsx 骨架（左类型列表 + 右空态；布局参照 ProjectLedgerView 的 master-detail）**
 
 ```tsx
 // apps/web/src/components/entities/EntitiesView.tsx
@@ -1504,7 +1504,7 @@ export function EntitiesView() {
 }
 ```
 
-- [ ] **Step 4: App.tsx 分发（三元链 'ledger' 分支之后插入）**
+- [x] **Step 4: App.tsx 分发（三元链 'ledger' 分支之后插入）**
 
 ```tsx
 ) : view === 'entities' ? (
@@ -1513,7 +1513,7 @@ export function EntitiesView() {
 
 顶部 import 补 `import { EntitiesView } from './components/entities/EntitiesView';`（跟随既有视图 import 排列）。
 
-- [ ] **Step 5: 验证 + commit**
+- [x] **Step 5: 验证 + commit**
 
 Run: `npm run build && npm run lint`
 Expected: 绿（tsc 过）
@@ -1537,7 +1537,7 @@ git commit -m "feat(web): entities ledger view skeleton with registry-driven typ
 - Consumes: `GET /api/ontology/entities/:type`（Task 7）；`useHashRoute` 的 `navigate`（hooks/useHashRoute.ts）。
 - Produces: `listEntities(type, {page?, pageSize?, q?}): Promise<EntityListResult>`；行内「问 Agent」→ `navigate('chat', { session: 'new', ask })`（消费端 Task 11 落地）。
 
-- [ ] **Step 1: api/ontology.ts 追加**
+- [x] **Step 1: api/ontology.ts 追加**
 
 ```ts
 export interface ProjectedEntity {
@@ -1571,7 +1571,7 @@ export function listEntities(
 }
 ```
 
-- [ ] **Step 2: EntitiesView 接入列表数据**
+- [x] **Step 2: EntitiesView 接入列表数据**
 
 import 区补：
 
@@ -1629,7 +1629,7 @@ const PAGE_SIZE = 20; // 模块级常量
   };
 ```
 
-- [ ] **Step 3: 右栏列表渲染（列 = ownFields 动态生成——注册表加字段自动多列，前端零改动 = 验收 1）**
+- [x] **Step 3: 右栏列表渲染（列 = ownFields 动态生成——注册表加字段自动多列，前端零改动 = 验收 1）**
 
 替换 Task 9 的占位卡片 `{active ? (...) : (...)}` 为：
 
@@ -1727,7 +1727,7 @@ const PAGE_SIZE = 20; // 模块级常量
         )}
 ```
 
-- [ ] **Step 4: 验证 + commit**
+- [x] **Step 4: 验证 + commit**
 
 Run: `npm run build && npm run lint`
 Expected: 绿
@@ -1752,11 +1752,11 @@ git commit -m "feat(web): registry-driven entity list with pagination and ask-ag
 - Consumes: `useSessionMessages.sendMessage(text)`（sessionId 为 null 时自动建会话并发送，`useSessionMessages.ts:242-259`）。
 - Produces: `#/chat?session=new&ask=<urlencoded>` 打开 chat 即以 ask 文本为首条消息创建新会话；`session=new` 归一为「无活动会话」。
 
-- [ ] **Step 1: 前置检查**
+- [x] **Step 1: 前置检查**
 
 Run: 打开 `apps/web/src/App.tsx` L300-320 记录 ChatWorkspace 的真实 props 传参与 `onSessionCreated` 接线；打开 `ChatWorkspace.tsx` props interface 与 `RealChatView.tsx` props interface（L232-249 附近），确认 prop 追加点。下述代码以实际 interface 名/位置为准等价嵌入。
 
-- [ ] **Step 2: App.tsx——`session=new` 归一（L115 替换）**
+- [x] **Step 2: App.tsx——`session=new` 归一（L115 替换）**
 
 ```tsx
   // 'new' 是「从台账/外部跳入待新建」哨兵：归一为无活动会话，首条消息由 ask 注入。
@@ -1776,7 +1776,7 @@ ChatWorkspace 调用处追加 prop：
     />
 ```
 
-- [ ] **Step 3: ChatWorkspace.tsx——props 透传**
+- [x] **Step 3: ChatWorkspace.tsx——props 透传**
 
 props interface 追加 `initialAsk?: string | null;`，解构后传入：
 
@@ -1786,7 +1786,7 @@ props interface 追加 `initialAsk?: string | null;`，解构后传入：
 
 （L208 原行 `<RealChatView sessionId={activeSessionId} {...chat} />` 替换。）
 
-- [ ] **Step 4: RealChatView.tsx——一次性注入 effect**
+- [x] **Step 4: RealChatView.tsx——一次性注入 effect**
 
 props interface 追加 `initialAsk?: string | null;` 并解构。组件内（`sendMessage` 来自 `useSessionMessages`，L370-372 附近解构处之后）：
 
@@ -1805,7 +1805,7 @@ props interface 追加 `initialAsk?: string | null;` 并解构。组件内（`se
 
 （`useRef` 已在该文件 import 列表内——若无需补。）
 
-- [ ] **Step 5: 验证 + commit**
+- [x] **Step 5: 验证 + commit**
 
 Run: `npm run build && npm run lint`
 Expected: 绿
@@ -1830,11 +1830,11 @@ git commit -m "feat(web): ask param injects first message into a new chat sessio
 - Consumes: `GET /api/ontology/entities/:type/:id`（Task 8）。
 - Produces: `getEntityDetail(type, id, { asOf?, at? }): Promise<EntityDetailResult>`；`EntityDetailDrawer`（props：`{ type, typeLabel, ownFields, entityId, onClose }`）。
 
-- [ ] **Step 1: 前置检查**
+- [x] **Step 1: 前置检查**
 
 Run: 打开 `apps/web/src/components/approval/ApprovalDetailDrawer.tsx` 记录抽屉容器的类名惯例（遮罩/右侧面板宽度/滚动），下述容器类名以其为准微调。
 
-- [ ] **Step 2: api/ontology.ts 追加**
+- [x] **Step 2: api/ontology.ts 追加**
 
 ```ts
 export interface EntityDetailResult {
@@ -1858,7 +1858,7 @@ export function getEntityDetail(
 }
 ```
 
-- [ ] **Step 3: EntityDetailDrawer.tsx**
+- [x] **Step 3: EntityDetailDrawer.tsx**
 
 ```tsx
 // apps/web/src/components/entities/EntityDetailDrawer.tsx
@@ -2032,7 +2032,7 @@ export function EntityDetailDrawer({ type, typeLabel, ownFields, entityId, onClo
 }
 ```
 
-- [ ] **Step 4: EntitiesView 行点击开抽屉**
+- [x] **Step 4: EntitiesView 行点击开抽屉**
 
 import 补 `EntityDetailDrawer`；组件内加 `const [detailId, setDetailId] = useState<string | null>(null);`；列表行 `<tr ... onClick={() => setDetailId(row.id)} className={clsx('cursor-pointer', ...)}`（「问 Agent」按钮加 `onClick={(e) => { e.stopPropagation(); askAgent(row); }}` 防穿透）；组件 return 末尾条件渲染：
 
@@ -2048,7 +2048,7 @@ import 补 `EntityDetailDrawer`；组件内加 `const [detailId, setDetailId] = 
       )}
 ```
 
-- [ ] **Step 5: 验证 + commit**
+- [x] **Step 5: 验证 + commit**
 
 Run: `npm run build && npm run lint && npm test`
 Expected: 绿
@@ -2071,7 +2071,7 @@ git commit -m "feat(web): entity detail drawer with as-of toggle and red-flush t
 - Consumes: `insertTradeFact/insertOntologyEdge`（repo.js）、`getDbContext`（dbBackend.js）。
 - Produces: 验收 2 的演示数据（幂等，createdBy 标记探测）。
 
-- [ ] **Step 1: 种子脚本**
+- [x] **Step 1: 种子脚本**
 
 ```ts
 // apps/server/scripts/seedTradeLedgerDemo.ts
@@ -2135,7 +2135,7 @@ void main().catch((e) => { console.error(e); process.exit(1); });
 
 （脚本以严格 TS 过 `tsc -p tsconfig.scripts.json`；`ctx` 联合类型的窄化写法若报错，按 `repo.ts` 的 `if (ctx.backend === 'postgres')` 早返回模式改写——两种形态任选其一，以编译过为准。）
 
-- [ ] **Step 2: 手动验收 runbook（四条验收逐一）**
+- [x] **Step 2: 手动验收 runbook（四条验收逐一）**
 
 Run（dev 环境）：
 1. **验收 1（零改动多列）**：临时在 `ONTOLOGY_ENTITIES.TradeContract` 加一个字段（如 `memo: z.string().optional()`）→ `npm run dev:server` 重启 → 实体台账选「贸易合同」→ 列表自动多出 `memo` 列（值为 —）→ **还原该临时改动**。
@@ -2144,12 +2144,12 @@ Run（dev 环境）：
 4. **验收 4（空态）**：选「商品 / 交易对手 / 内部组织」→ 空态文案「待本体基座灌数」，无报错（网络面板 200）。
 5. **双向打通**：任一行「问 Agent」→ chat 新会话首条消息为实体摘要。
 
-- [ ] **Step 3: 终验**
+- [x] **Step 3: 终验**
 
 Run: `npm run build && npm run lint && npm test`
 Expected: 全绿
 
-- [ ] **Step 4: commit + 合并 main**
+- [x] **Step 4: commit + 合并 main**
 
 ```bash
 git add apps/server/scripts/seedTradeLedgerDemo.ts
@@ -2170,4 +2170,10 @@ git push origin HEAD:main   # 触发 CI + CD 到 10.10.0.2
 1. **Spec 覆盖**：IN 逐条→ schema 端点（Task 4，复用 ontologySchemaJson）；两实体 API（Task 7/8）；只读投影三源（Task 5/6，映射表见摸底结论）；前端新 ViewId/类型列表/动态列/as-of 切换（Task 9/10/12）；问 Agent 双向打通（Task 10/11）；红冲红标（Task 12 + 列表负数红标 Task 10）。OUT 边界：无实体编辑/表单（仅只读+跳对话）、无复杂检索（仅 q 模糊）、无导出——均未越界。验收 1-4 分别落 Task 13 runbook 步骤 1-4。
 2. **占位符扫描**：无 TBD/TODO；两处显式「以实际代码为准」的前置检查（Task 8 Step 5 的 PG 集成文件夹具名、Task 11/12 Step 1 的组件 props/抽屉类名）与 Task 13 脚本的联合类型窄化备注——均为审批中心计划同款的「既有签名适配」写法，非占位。
 3. **类型一致性**：`ProjectedEntity/EntityListResult/EntityDetail` 在 server（projection.ts）与 web（api/ontology.ts）字段一致（web 侧 entityType 放宽为 string，DTO 边界合理）；`getTradeFactById` 签名在 Task 8 Interfaces 与实现一致；`listEntities/getEntityDetail` 请求参数与服务端 zod schema（page/pageSize≤100/q≤100、asOf/at）对齐；`session=new` 与 `ask` 参数名在 Task 10（发起）与 Task 11（消费）一致。
+
+---
+
+## 实施状态（2026-09-08 补记）
+
+全部 13 个 Task 已完成并合并 main（commit `56a29aa..d6940c9`，CI/CD 绿，已部署 10.10.0.2）。M-1 裁决（strict + 规范值持久化）与红冲两答案（净额轧差模型）均按计划落地，无实质偏差。
 

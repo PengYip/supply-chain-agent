@@ -1,7 +1,7 @@
 # 审批中心 v1 — 设计规格（Spec）
 
 日期：2026-09-07
-状态：定稿，待实施（实施计划见 docs/superpowers/plans/2026-09-07-approval-center-v1.md）
+状态：定稿，已实施并合并 main（2026-09-07，CI/CD 绿；实施计划见 docs/superpowers/plans/2026-09-07-approval-center-v1.md）
 适用仓库：D:\Users\yepeng\supply-chain-agent-prototype（npm workspaces）
 
 ## 1. 背景与目标

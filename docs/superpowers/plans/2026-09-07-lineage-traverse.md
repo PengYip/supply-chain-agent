@@ -1921,3 +1921,9 @@ git push origin HEAD:main   # 触发 CI + CD 到 10.10.0.2
 2. **占位符扫描**：无 TBD/TODO。显式「以实际代码为准」的前置检查 4 处（Task 1 Step 3 / Task 7 Step 1 / Task 8 Step 1 / GraphCanvas 边事件提取写法），均为审批中心计划同款的「既有签名适配」写法，非占位。
 3. **类型一致性**：`NeighborNode/NeighborEdge/OntologyNeighbors/NeighborsResult` 在 Task 2/3（定义）、Task 4（路由）、Task 6（DTO 镜像，字段一一对应，web 侧放宽为 string 联合）三处一致；`source` 联合含 `'neo4j'` 一次到位（Task 2 类型、Task 3 产出、Task 6 DTO）；`getOntologyNeighbors`/`getNeighbors` 签名在 Interfaces 与实现一致；`fetchOntologyNeighbors`/`toGraphNode`/`toGraphEdge`/`formatEdgeParams` 在 Task 6/7/8 间命名一致；GraphFocus 判别联合在 Task 7 Step 4c（消费 `focus.target`）与 Task 8 Step 2（定义）一致，且已注明两任务实施顺序可调换。
 
+---
+
+## 实施状态（2026-09-08 补记）
+
+全部 9 个 Task 已完成并合并 main（分支 `PengYip/lineage-traverse`，最终经 merge commit `969ba0e` 推送 main，CI/CD 绿，已部署 10.10.0.2）。实施期要点：终审（ora-2 fresh session）曾判 NOT_READY——B1 Critical（`e352e97` 的 Set 提升 + filter effect 短路导致双击展开死路径）与 B2 Important（Document 节点双击 400 + expandedRef 不可重试）已经 fix wave `f3dbc7a` 修复（GraphCanvas subgraph 变更 effect 增量渲染方案，保留相机/拖拽位置）并 scoped re-review 通过。人工验收清单（P95 实测 / UI 走查 / doc 模式 fast-follow 三小项）已交接用户。
+
