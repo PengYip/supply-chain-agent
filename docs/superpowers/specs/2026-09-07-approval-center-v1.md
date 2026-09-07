@@ -122,3 +122,10 @@ export interface ApprovalChannel {
 - 飞书审批字段映射（approvalCode ↔ ticketId、回调验签）
 - L3 副作用自动捕获（Temporal 或 runSession 钩子）
 - sessions.user_id IS NULL（legacy）会话票据在 list 可见（3-way OR），但详情走 `sessionBelongsTo` owner-only 校验可能 404——两端不一致，v2 决定是否统一（收紧 list 或放宽 detail）
+
+v1 实施终审移交（2026-09-07，defer-with-ledger）：
+
+- resolveApproval 两参重调会清空 decided_by/decided_at/reason——生产调用方已恒传 decision，v2 加写一次守卫或条件更新
+- L2 工具 execute 抛错不留副作用痕迹（append 仅在 resolve 后，ok:false 不可达）——v2 加 catch-path append（ok:false + 错误摘要）
+- notifyApprovalResolved 收到的是 resolve 前的合成行（decided_* 为 null）——接入 LarkChannel 前需改为 resolve 后回读新行
+- 前端 tab 缺「全部」（API 已支持 status=all）；drawer 404 错误文案前缀重复（"加载失败： 加载失败"）；tab 切换无 AbortController（10s 轮询自愈）
