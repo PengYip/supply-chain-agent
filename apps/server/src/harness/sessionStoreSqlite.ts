@@ -35,6 +35,8 @@ import type {
   MessageRow,
   FavoriteRow,
   SideEffect,
+  ApprovalListFilter,
+  ApprovalListItem,
 } from './sessionStore.js';
 import { normalizeToUIMessage, parseTitle, parseMetadata } from './sessionStore.js';
 
@@ -542,6 +544,32 @@ async function getPending(id: string): Promise<PendingApprovalRow | null> {
   return row ?? null;
 }
 
+async function listApprovals({
+  userId,
+  status = 'all',
+  limit = 50,
+}: ApprovalListFilter): Promise<ApprovalListItem[]> {
+  const rows = db
+    .prepare(
+      `SELECT pa.*, s.user_id AS session_user_id
+         FROM pending_approvals pa
+         JOIN sessions s ON s.id = pa.session_id
+        WHERE (s.user_id = ? OR s.user_id IS NULL)
+          AND (? = 'all' OR pa.status = ?)
+        ORDER BY pa.created_at DESC
+        LIMIT ?`,
+    )
+    .all(userId, status, status, limit);
+  return rows as ApprovalListItem[];
+}
+
+async function getApprovalById(id: string): Promise<PendingApprovalRow | null> {
+  const row = db
+    .prepare('SELECT * FROM pending_approvals WHERE id = ?')
+    .get(id) as PendingApprovalRow | undefined;
+  return row ?? null;
+}
+
 async function appendSideEffect(toolCallId: string, effect: SideEffect): Promise<void> {
   const row = db
     .prepare('SELECT id, side_effect_results FROM pending_approvals WHERE tool_call_id = ?')
@@ -592,6 +620,8 @@ export const sqliteSessionStore: SessionStoreBackend = {
   resolveApproval,
   getPending,
   appendSideEffect,
+  listApprovals,
+  getApprovalById,
   listPending,
   countPendingApprovals,
 };

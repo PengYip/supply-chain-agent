@@ -156,6 +156,16 @@ export interface SideEffect {
   at: string;
 }
 
+/** pending_approvals row joined with the owning session's user_id (NULL for
+ *  legacy pre-Phase-2 sessions). Returned by listApprovals. */
+export type ApprovalListItem = PendingApprovalRow & { session_user_id: string | null };
+
+export type ApprovalListFilter = {
+  userId: string;
+  status?: 'pending' | 'approved' | 'denied' | 'all';
+  limit?: number;
+};
+
 /** List-facing per-session row (GET /api/sessions). */
 export interface SessionListItem {
   id: string;
@@ -224,6 +234,10 @@ export interface SessionStoreBackend {
   /** Append one SideEffect to the approval row identified by tool_call_id
    *  (read-modify-write of side_effect_results). No-op when no row matches. */
   appendSideEffect(toolCallId: string, effect: SideEffect): Promise<void>;
+  /** Cross-session approval list (approval center): rows whose owning session
+   *  belongs to userId OR is legacy (user_id NULL), newest first. */
+  listApprovals(filter: ApprovalListFilter): Promise<ApprovalListItem[]>;
+  getApprovalById(id: string): Promise<PendingApprovalRow | null>;
   getPending(id: string): Promise<PendingApprovalRow | null>;
   listPending(sessionId: string): Promise<PendingApprovalRow[]>;
   countPendingApprovals(sessionId: string): Promise<number>;
@@ -501,6 +515,14 @@ export async function getPending(id: string): Promise<PendingApprovalRow | null>
 
 export async function appendSideEffect(toolCallId: string, effect: SideEffect): Promise<void> {
   return (await getBackend()).appendSideEffect(toolCallId, effect);
+}
+
+export async function listApprovals(filter: ApprovalListFilter): Promise<ApprovalListItem[]> {
+  return (await getBackend()).listApprovals(filter);
+}
+
+export async function getApprovalById(id: string): Promise<PendingApprovalRow | null> {
+  return (await getBackend()).getApprovalById(id);
 }
 
 export async function listPending(sessionId: string): Promise<PendingApprovalRow[]> {

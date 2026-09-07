@@ -44,6 +44,8 @@ import type {
   MessageRow,
   FavoriteRow,
   SideEffect,
+  ApprovalListFilter,
+  ApprovalListItem,
 } from './sessionStore.js';
 import { normalizeToUIMessage, parseTitle, parseMetadata } from './sessionStore.js';
 
@@ -587,6 +589,34 @@ export function createAgentSessionStore(pool: Pool): SessionStoreBackend {
         'UPDATE pending_approvals SET side_effect_results = $1 WHERE id = $2',
         [JSON.stringify(arr), row.id],
       );
+    },
+
+    async listApprovals({
+      userId,
+      status = 'all',
+      limit = 50,
+    }: ApprovalListFilter): Promise<ApprovalListItem[]> {
+      await ensure();
+      const { rows } = await pool.query<ApprovalListItem>(
+        `SELECT pa.*, s.user_id AS session_user_id
+           FROM pending_approvals pa
+           JOIN sessions s ON s.id = pa.session_id
+          WHERE (s.user_id = $1 OR s.user_id IS NULL)
+            AND ($2 = 'all' OR pa.status = $3)
+          ORDER BY pa.created_at DESC
+          LIMIT $4`,
+        [userId, status, status, limit],
+      );
+      return rows;
+    },
+
+    async getApprovalById(id: string): Promise<PendingApprovalRow | null> {
+      await ensure();
+      const { rows } = await pool.query<PendingApprovalRow>(
+        'SELECT * FROM pending_approvals WHERE id = $1',
+        [id],
+      );
+      return rows[0] ?? null;
     },
 
     async listPending(sessionId: string): Promise<PendingApprovalRow[]> {
