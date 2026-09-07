@@ -42,6 +42,7 @@ import {
 import { saveChunkVectors, vectorKnn, isVecReady } from '../../src/pipeline/db/vecStore.js';
 import { buildIngestDocumentTool } from '../../src/pipeline/tools/documentEntry.js';
 import { buildRecallDocumentsTool } from '../../src/pipeline/tools/recall.js';
+import { listProjectedEntities } from '../../src/ontology/projection.js';
 import { DeterministicEmbedder } from '../../src/pipeline/embedder.js';
 import type { BlockModel } from '../../src/pipeline/types.js';
 
@@ -146,7 +147,7 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
   // Isolation: wipe pipeline tables between tests (dev container only).
   beforeEach(async () => {
     await ctx.pool.query(
-      'TRUNCATE doc_chunk, extractions, bindings, documents, document_units, execution_flows, self_parties RESTART IDENTITY CASCADE',
+      'TRUNCATE doc_chunk, extractions, bindings, documents, document_units, execution_flows, self_parties, contract_ledger RESTART IDENTITY CASCADE',
     );
   });
 
@@ -589,6 +590,23 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
         'to_type', 'to_id', 'params', 'valid_at', 'invalid_at', 'ingested_at', 'created_by', 'user_id']);
       expect(byTable['trade_facts']).toEqual(['id', 'entity_type', 'payload', 'valid_at',
         'invalid_at', 'ingested_at', 'created_by', 'user_id']);
+    });
+  });
+
+  // ---- 台账投影(2026-09-07 Item 3)：只读投影 PG lane ------------------------
+  describe.skipIf(!RUN_PG)('ontology projection (PG lane)', () => {
+    it('projection maps contract_ledger on postgres', async () => {
+      await ctx.pool.query(
+        `INSERT INTO contract_ledger (id, contract_no, display_contract_no, doc_type, document_id,
+            title, fields, field_meta, overall_confidence, needs_review, user_id, contract_type)
+         VALUES ('PGC1', 'HT-PG-001', 'HT-PG-001', '合同', 'doc-pg', 't',
+             '{"币种":"CNY"}'::jsonb, '{}'::jsonb, 1, false, $1, '采购')`,
+        ['u1'],
+      );
+      const res = await listProjectedEntities(ctx, 'TradeContract', {}, 'u1');
+      expect(res.total).toBe(1);
+      expect(res.items[0]!.fields['contractNo']).toBe('HT-PG-001');
+      expect(res.items[0]!.fields['currency']).toBe('CNY');
     });
   });
 });
