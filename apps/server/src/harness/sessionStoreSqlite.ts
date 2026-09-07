@@ -44,7 +44,11 @@ import { normalizeToUIMessage, parseTitle, parseMetadata } from './sessionStore.
 // Production swaps this for Postgres (sessionStorePostgres.ts) -- the facade
 // API in sessionStore.ts is the abstraction boundary.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.resolve(__dirname, '../../data');
+// SCA_DATA_DIR: 测试隔离缝(vitest setup-env 按文件注入临时目录), 生产不设即走
+// apps/server/data 原路径, 行为不变。
+const DATA_DIR = process.env.SCA_DATA_DIR
+  ? path.resolve(process.env.SCA_DATA_DIR)
+  : path.resolve(__dirname, '../../data');
 const DB_PATH = path.join(DATA_DIR, 'agent.db');
 
 fs.mkdirSync(DATA_DIR, { recursive: true });

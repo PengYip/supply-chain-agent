@@ -110,8 +110,11 @@ Access cheat-sheet (verify before trusting local files):
   same switch (`sessionStore.ts` facade), and a Postgres deployment never
   opens agent.db.
 - **Never debug business data against agent.db files.** Local
-  `apps/server/data/agent.db` is vitest/local-run scratch (shared-file test
-  pattern); the remote copy is stale since 2026-09-03. Real dev data is
+  `apps/server/data/agent.db` is non-vitest local-run scratch only (since
+  2026-09-07 vitest gives each test file its own temp data dir via
+  `SCA_DATA_DIR`/`SCA_PIPELINE_DB`/`INGEST_ROOT` in `test/setup-env.ts`, so
+  test files run in parallel forks with no shared db); the remote copy is stale
+  since 2026-09-03. Real dev data is
   always in `sca-pgvector` (2026-09-07: approval-center data was briefly
   misjudged as missing because of this).
 - **MinIO** in container `minio_docker`, bucket `sca-files`, objects keyed
