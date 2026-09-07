@@ -77,12 +77,12 @@ describe('red-invoice as-of scenario (memo section 4: three questions, three ans
   beforeEach(async () => {
     await insertTradeFact(ctx, {
       entityType: 'InvoiceEvent', payload: INVOICE(1_000_000, '正向'),
-      validAt: '2026-06-15', invalidAt: '2026-06-15', ingestedAt: '2026-06-16',
+      validAt: '2026-06-15', ingestedAt: '2026-06-16',
       createdBy: 'scenario',
     });
     await insertTradeFact(ctx, {
       entityType: 'InvoiceEvent', payload: INVOICE(-1_000_000, '逆向'),
-      validAt: '2026-06-15', invalidAt: '2026-06-15', ingestedAt: '2026-08-05', createdBy: 'scenario',
+      validAt: '2026-06-15', ingestedAt: '2026-08-05', createdBy: 'scenario',
     });
     await insertTradeFact(ctx, {
       entityType: 'InvoiceEvent', payload: { ...INVOICE(800_000, '正向'), invoiceNo: 'INV-2' },
