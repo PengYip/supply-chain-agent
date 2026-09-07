@@ -1,6 +1,8 @@
 // apps/web/src/components/governance/GovernanceView.tsx
 import { useState } from 'react';
 import { OntologyTab } from './OntologyTab';
+import { ToolsTab } from './ToolsTab';
+import { PermissionsTab } from './PermissionsTab';
 
 export type GovernanceTabId = 'ontology' | 'tools' | 'permissions' | 'approvals';
 
@@ -28,8 +30,8 @@ export function GovernanceView() {
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {tab === 'ontology' && <OntologyTab />}
-        {tab === 'tools' && null}
-        {tab === 'permissions' && null}
+        {tab === 'tools' && <ToolsTab />}
+        {tab === 'permissions' && <PermissionsTab />}
         {tab === 'approvals' && null}
       </div>
     </div>
