@@ -7,6 +7,7 @@ import type { AuthEnv } from '../lib/auth-middleware.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
 import { ontologySchemaJson, OntologyEntityNameSchema } from '../ontology/index.js';
 import { listProjectedEntities, getProjectedEntityDetail } from '../ontology/projection.js';
+import { getNeighbors } from '../ontology/neighbors.js';
 
 export const ontologyRoute = new Hono<AuthEnv>();
 
@@ -84,5 +85,36 @@ ontologyRoute.get('/entities/:type/:id', async (c) => {
     }
     console.error('[ontology] entity detail failed:', errDetail(e));
     return c.json({ error: 'detail failed', detail: errDetail(e) }, 500);
+  }
+});
+
+const neighborsQuerySchema = z.object({
+  type: OntologyEntityNameSchema,
+  id: z.string().trim().min(1).max(200),
+  depth: z.coerce.number().int().min(1).max(3).default(1),
+});
+
+/** GET /graph/neighbors — 链路穿透(roadmap Item 4)：本体边 BFS + 文档血缘锚点层融合。
+ *  depth 上限 3 + 节点/边截断(防全图爆炸)；血缘不可用时优雅降级(D5)。
+ *  truncated 仅反映本体侧截断；血缘部分由 graphQuery 深度独立限界。 */
+ontologyRoute.get('/graph/neighbors', async (c) => {
+  const user = c.get('user')!;
+  const parsed = neighborsQuerySchema.safeParse(c.req.query());
+  if (!parsed.success) {
+    return c.json(
+      { error: 'invalid query params', detail: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) },
+      400,
+    );
+  }
+  try {
+    const res = await getNeighbors(getDbContext(), parsed.data, user.id);
+    // 锚点未解析且零邻接 -> 404；悬空锚点但有边(如 Counterparty + PROVIDE)仍返回(D8)
+    if (res.anchorNode.source === 'unresolved' && res.edges.length === 0 && !res.lineage.subjectFound) {
+      return c.json({ error: 'not found' }, 404);
+    }
+    return c.json(res);
+  } catch (e) {
+    console.error('[ontology] neighbors failed:', errDetail(e));
+    return c.json({ error: 'neighbors failed', detail: errDetail(e) }, 500);
   }
 });
