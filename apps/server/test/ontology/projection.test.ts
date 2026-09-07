@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.js';
 import { listProjectedEntities } from '../../src/ontology/projection.js';
+import { insertTradeFact } from '../../src/ontology/repo.js';
 
 let ctx: DbContext;
 beforeEach(() => {
@@ -67,5 +68,71 @@ describe('projection: TradeContract <- contract_ledger (read-only)', () => {
   it('types without a source return an empty page, not error (acceptance 4)', async () => {
     const res = await listProjectedEntities(ctx, 'TradeGoods', {}, 'u1');
     expect(res).toEqual({ items: [], total: 0, page: 1, pageSize: 20 });
+  });
+});
+
+const insertDoc = (id: string, docType: string) => {
+  ctx.sqlite.prepare(
+    `INSERT INTO documents (id, doc_type, modality, source_uri, block_model, user_id, review_status, parse_status)
+     VALUES (?, ?, 'text', '/ingest/x.pdf', 'raw', 'u1', 'pending', 'uploaded')`,
+  ).run(id, docType);
+};
+
+describe('projection: events <- trade_facts + receipt/delivery docs', () => {
+  it('InvoiceEvent rows come from trade_facts with payload as fields, business key as label', async () => {
+    await insertTradeFact(ctx, {
+      entityType: 'InvoiceEvent',
+      payload: { invoiceNo: 'INV-9', invoiceType: '销项', eventBizType: '正向', amount: 1000, currency: 'CNY' },
+      validAt: '2026-06-15', createdBy: 'test',
+    }, 'u1');
+    const res = await listProjectedEntities(ctx, 'InvoiceEvent', {}, 'u1');
+    expect(res.total).toBe(1);
+    expect(res.items[0]!.label).toBe('INV-9');
+    expect(res.items[0]!.fields['amount']).toBe(1000);
+    expect(res.items[0]!.source).toBe('trade_facts');
+    expect(res.items[0]!.validAt).toBeTruthy();
+  });
+
+  it('GoodsReceiptEvent unions documents(收货单) + trade_facts rows', async () => {
+    insertDoc('D1', '收货单');
+    insertDoc('D2', '发货单'); // 发货单不属于收货事件的源
+    insertDoc('D3', '发票');   // 非收发白名单
+    await insertTradeFact(ctx, {
+      entityType: 'GoodsReceiptEvent',
+      payload: { eventBizType: '正向', amount: 500, currency: 'CNY' },
+      validAt: '2026-06-15', createdBy: 'test',
+    }, 'u1');
+    const res = await listProjectedEntities(ctx, 'GoodsReceiptEvent', {}, 'u1');
+    expect(res.total).toBe(2);
+    const docRow = res.items.find((e) => e.id === 'D1')!;
+    expect(docRow.source).toBe('documents');
+    expect(docRow.meta?.['sourceUri']).toBe('/ingest/x.pdf');
+    expect(docRow.fields).toEqual({}); // documents 无事件字段 -> 留空渲染
+    expect(res.items.some((e) => e.id === 'D2')).toBe(false);
+    expect(res.items.some((e) => e.id === 'D3')).toBe(false);
+  });
+
+  it('list uses latest-business view: facts not yet valid or already invalidated are hidden', async () => {
+    await insertTradeFact(ctx, {
+      entityType: 'PaymentEvent',
+      payload: { eventBizType: '正向', amount: 100, currency: 'CNY', payType: '预付' },
+      validAt: '2099-01-01', createdBy: 'test',
+    }, 'u1');
+    await insertTradeFact(ctx, {
+      entityType: 'CollectionEvent',
+      payload: { eventBizType: '正向', amount: 200, currency: 'CNY' },
+      validAt: '2026-06-01', invalidAt: '2026-06-02', createdBy: 'test',
+    }, 'u1');
+    expect((await listProjectedEntities(ctx, 'PaymentEvent', {}, 'u1')).total).toBe(0);
+    expect((await listProjectedEntities(ctx, 'CollectionEvent', {}, 'u1')).total).toBe(0);
+  });
+
+  it('fact rows respect user scoping', async () => {
+    await insertTradeFact(ctx, {
+      entityType: 'InvoiceEvent',
+      payload: { invoiceNo: 'INV-10', invoiceType: '销项', eventBizType: '正向', amount: 1, currency: 'CNY' },
+      validAt: '2026-06-15', createdBy: 'test',
+    }, 'u2');
+    expect((await listProjectedEntities(ctx, 'InvoiceEvent', {}, 'u1')).total).toBe(0);
   });
 });

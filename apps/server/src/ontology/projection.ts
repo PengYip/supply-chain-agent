@@ -10,6 +10,7 @@ import type { DbContext, PostgresDbContext } from '../pipeline/db/client.js';
 import { effectiveUserId } from '../pipeline/db/repositories.js';
 import { asOfBusinessTime, numberPlaceholders } from './asof.js';
 import type { OntologyEntityName } from './index.js';
+import { listTradeFactsAsOf, type TradeFactRow } from './repo.js';
 
 export type ProjectionSource = 'contract_ledger' | 'documents' | 'trade_facts';
 
@@ -92,13 +93,104 @@ async function listContracts(ctx: DbContext, uid: string): Promise<ProjectedEnti
 }
 
 // ---------------------------------------------------------------------------
+// 收发依据 <- documents。doc_type 白名单与 pipeline bindingProposal.GOODS_FIELD_DOCS
+// (收货单/发货单)对齐；本地声明避免 ontology -> pipeline 的反向依赖。
+// ---------------------------------------------------------------------------
+const DOC_TYPE_BY_EVENT: Record<'GoodsReceiptEvent' | 'GoodsDeliveryEvent', string> = {
+  GoodsReceiptEvent: '收货单',
+  GoodsDeliveryEvent: '发货单',
+};
+
+function mapDocRow(
+  entityType: 'GoodsReceiptEvent' | 'GoodsDeliveryEvent',
+  r: Record<string, unknown>,
+): ProjectedEntity {
+  const docType = String(r['doc_type'] ?? '');
+  const id = String(r['id']);
+  // documents 表无金额/数量列：事件自有字段源缺失 -> 不出现，列表列渲染空。
+  return {
+    id,
+    entityType,
+    label: `${docType} ${id.slice(0, 8)}`,
+    fields: {},
+    meta: {
+      sourceUri: r['source_uri'] == null ? null : String(r['source_uri']),
+      reviewStatus: r['review_status'] == null ? null : String(r['review_status']),
+    },
+    source: 'documents',
+    validAt: null,
+    ingestedAt: normalizeLegacyDt(r['created_at']),
+  };
+}
+
+async function listReceiptDeliveryDocs(
+  ctx: DbContext, type: 'GoodsReceiptEvent' | 'GoodsDeliveryEvent', uid: string,
+): Promise<ProjectedEntity[]> {
+  const sql = `SELECT id, doc_type, source_uri, review_status, created_at
+                 FROM documents WHERE doc_type = ? AND ${USER_SCOPE_LEGACY}
+                ORDER BY created_at DESC, id LIMIT ${SOURCE_ROW_CAP}`;
+  if (ctx.backend === 'postgres') {
+    const res = await (ctx as PostgresDbContext).pool.query(
+      numberPlaceholders(sql), [DOC_TYPE_BY_EVENT[type], uid]);
+    return (res.rows as Array<Record<string, unknown>>).map((r) => mapDocRow(type, r));
+  }
+  const rows = ctx.sqlite.prepare(sql)
+    .all(DOC_TYPE_BY_EVENT[type], uid) as Array<Record<string, unknown>>;
+  return rows.map((r) => mapDocRow(type, r));
+}
+
+// ---------------------------------------------------------------------------
+// 事件 <- trade_facts(列表口径 = 最新口径：asOfBusinessTime(now))
+// ---------------------------------------------------------------------------
+
+const EVENT_TYPES: readonly OntologyEntityName[] = [
+  'GoodsReceiptEvent', 'GoodsDeliveryEvent', 'SettlementEvent', 'InvoiceEvent',
+  'PaymentEvent', 'CollectionEvent', 'ServiceCostEvent',
+];
+
+const BUSINESS_KEY_FIELDS = ['invoiceNo', 'contractNo', 'name', 'costType'] as const;
+
+function businessKeyOf(p: Record<string, unknown>): string | null {
+  for (const k of BUSINESS_KEY_FIELDS) {
+    const v = p[k];
+    if (typeof v === 'string' && v !== '') return v;
+  }
+  return null;
+}
+
+function factToEntity(row: TradeFactRow): ProjectedEntity {
+  return {
+    id: row.id,
+    entityType: row.entityType as OntologyEntityName,
+    label: businessKeyOf(row.payload) ?? row.id,
+    fields: row.payload,
+    source: 'trade_facts',
+    validAt: row.validAt,
+    ingestedAt: row.ingestedAt,
+  };
+}
+
+async function listFacts(ctx: DbContext, type: OntologyEntityName, uid: string): Promise<ProjectedEntity[]> {
+  const rows = await listTradeFactsAsOf(
+    ctx, asOfBusinessTime(new Date().toISOString()), { entityType: type }, uid);
+  return rows.map(factToEntity);
+}
+
+// ---------------------------------------------------------------------------
 // 统一入口：源收集 -> q 过滤 -> 排序 -> 内存分页
 // ---------------------------------------------------------------------------
 
 async function collectEntities(ctx: DbContext, type: OntologyEntityName, uid: string): Promise<ProjectedEntity[]> {
   if (type === 'TradeContract') return listContracts(ctx, uid);
-  // Task 6 扩展：收发 ∪ documents、事件 <- trade_facts
-  return [];
+  if (type === 'GoodsReceiptEvent' || type === 'GoodsDeliveryEvent') {
+    const [docs, facts] = await Promise.all([
+      listReceiptDeliveryDocs(ctx, type, uid),
+      listFacts(ctx, type, uid),
+    ]);
+    return [...docs, ...facts];
+  }
+  if ((EVENT_TYPES as readonly string[]).includes(type)) return listFacts(ctx, type, uid);
+  return []; // TradeGoods/Counterparty/OrgUnit：无源空态(待本体基座灌数)
 }
 
 export async function listProjectedEntities(
