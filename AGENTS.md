@@ -314,7 +314,7 @@ then run the inventory test.
 ## 本体基座 ontology foundation
 
 - 注册表 SSOT：`apps/server/src/ontology/index.ts`——纯 zod 单文件（只 import zod，无 node 内建，前端可消费；Item 3 经 `GET /api/ontology/schema` 返回 `ontologySchemaJson()`）。11 实体（4 静态 + 7 事件）+ 8 关系类型/14 连接对（docx 方案 §5 定稿；roadmap 的"9 关系"= 4 核心 + 5 辅助连接语义口径）+ 闭枚举 PayType/EventBizType/AllocateMethod（商品码 v1 开放词汇 `COMMODITY_CODES`，待业务确认后转闭枚举）+ 双时间轴字段（validAt/invalidAt/ingestedAt）+ meaning URI 机制（`MEANING_URIS` 只挂已确认条目）。领域变更上游 SSOT：`本体建模技术备忘.md` §3（其上游为 docs/ 下 docx 方案）。
-- 数据表：`ontology_edges`（带参关系边）与 `trade_facts`（事件事实通用表，entity_type 判别 + payload zod 校验；spec 决策理由见 plans/2026-09-07-ontology-foundation.md），双后端列对列镜像（SQLite raw DDL 在 `pipeline/db/client.ts migrate()`；PG raw DDL 在 `migratePostgres()` + drizzle twin 在 `postgres-schema.ts`）。时间列 UTC ISO（SQLite TEXT 字典序=时间序）。
+- 数据表：`ontology_edges`（带参关系边）与 `trade_facts`（事件事实通用表，entity_type 判别 + payload zod 校验；spec 决策理由见 docs/superpowers/plans/2026-09-07-ontology-foundation.md），双后端列对列镜像（SQLite raw DDL 在 `pipeline/db/client.ts migrate()`；PG raw DDL 在 `migratePostgres()` + drizzle twin 在 `postgres-schema.ts`）。时间列 UTC ISO（SQLite TEXT 字典序=时间序）。
 - as-of 查询：`asOfBusinessTime(t)` / `asOfSystemTime(t)`（`src/ontology/asof.ts`，语义=技术备忘 §4：业务时间=当时为真，系统时间=当时知道什么，月报复现走后者）。
 - 写入边界：`insertTradeFact` / `insertOntologyEdge`（`src/ontology/repo.ts`）——payload/params 走注册表 zod 校验（含"逆向=负数金额"语义规则），关系连接对白名单校验；不要绕过直写 SQL。
 - 工具词汇门禁：`toolOntologyMap`（`src/ontology/toolOntologyMap.ts`）——已映射工具的 inputSchema 字段必须 ∈ 实体字段 ∪ `SHARED_TOOL_FIELD_NAMES`，CI 断言在 `test/harness/toolInventory.test.ts`。
