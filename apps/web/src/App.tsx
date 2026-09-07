@@ -123,7 +123,7 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
   const graphFocusNonceRef = useRef(0);
   const openInGraph = useCallback((target: GraphFocusTarget) => {
     graphFocusNonceRef.current += 1;
-    setGraphFocus({ ...target, nonce: graphFocusNonceRef.current });
+    setGraphFocus({ nonce: graphFocusNonceRef.current, target });
     navigate('graph');
   }, [navigate]);
   // 跨视图定位 -> 绑定工作台：图谱 Inspector「去审核」(spec 2026-08-26 §4.4)
@@ -338,7 +338,7 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
       ) : view === 'ledger' ? (
         <ProjectLedgerView onOpenProjects={() => navigate('projects')} onOpenParties={openParties} />
       ) : view === 'entities' ? (
-        <EntitiesView />
+        <EntitiesView onOpenInGraph={openInGraph} />
       ) : view === 'eval' ? (
         <EvalWorkbenchView />
       ) : view === 'audit' ? (

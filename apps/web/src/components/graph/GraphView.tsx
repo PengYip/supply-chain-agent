@@ -12,6 +12,7 @@ import { DetailPanel } from './DetailPanel';
 import { BUSINESS_TYPES, nodeDisplayName, prettyDocName } from './businessTypes';
 import { DocMetaProvider, buildDocMetaResolver } from './docMeta';
 import type { GraphFocus } from './focus';
+import { OntologyExplorer, type OntologyAnchorJump } from './OntologyExplorer';
 
 interface CenterState {
   id: string;
@@ -23,6 +24,10 @@ interface CenterState {
 /** 分层探索固定查询参数(spec 2026-08-27 §6): 深度3/双向覆盖 项目→合同→单据 的完整链条。 */
 const FIXED_DEPTH = 3;
 const FIXED_DIRECTION: GraphDirection = 'both';
+
+/** 文档图谱模式的 5 个规范 kind：Task 6 后 BUSINESS_TYPES 含本体实体键(16 项)，
+ *  类型过滤行只迭代图原生的 5 类，避免本体实体键产生恒零计数死筛选。 */
+const DOC_MODE_KIND_LABELS = ['Document', 'Party', 'Commodity', 'Contract', 'Project'] as const;
 
 export function GraphView({
   focus = null,
@@ -64,6 +69,9 @@ export function GraphView({
   const bindingCountsLoadedRef = useRef(false);
   // 绑定计数加载失败标记: 详情面板据此显示失败而非一直「加载中」。
   const [bindingCountsFailed, setBindingCountsFailed] = useState(false);
+  // 本体穿透模式(roadmap Item 4, D1)：与文档图谱模式互斥的独立数据源/身份体系。
+  const [mode, setMode] = useState<'doc' | 'ontology'>('doc');
+  const [ontologyJump, setOntologyJump] = useState<OntologyAnchorJump | null>(null);
 
   const toggleKind = useCallback((kind: string) => {
     setHiddenKinds((prev) => {
@@ -152,14 +160,24 @@ export function GraphView({
     [query],
   );
 
-  // 外部定位（绑定工作台跳入）：以合同节点为中心重新查询，替换原有中心。
-  // nonce 保证重复跳转同一节点也会触发；页内切换深度/方向不会误触发。
+  // 外部定位(绑定工作台/台账抽屉跳入)：文档模式以合同节点为中心重新查询；
+  // 穿透模式(Item 4)切本体视图并以业务 type+id 锚定。nonce 保证重复跳转也触发。
   const handledFocusNonceRef = useRef(-1);
   useEffect(() => {
     if (!focus || focus.nonce === handledFocusNonceRef.current) return;
     handledFocusNonceRef.current = focus.nonce;
+    if ('entityType' in focus.target) {
+      // 台账抽屉跳入：切本体穿透模式并以业务 type+id 锚定
+      setMode('ontology');
+      setOntologyJump({
+        type: focus.target.entityType, id: focus.target.entityId,
+        label: focus.target.label, nonce: focus.nonce,
+      });
+      return;
+    }
+    setMode('doc');
     setSelectedDoc(null);
-    query(focus.elementId, focus.label, false);
+    query(focus.target.elementId, focus.target.label, false);
   }, [focus, query]);
 
   // 左侧树面板选中(项目/合同/单据任意层级): 以该节点为中心展开。
@@ -315,6 +333,22 @@ export function GraphView({
         )}
 
         <div className="ml-auto flex items-center gap-3">
+          <div className="flex items-center gap-1 rounded border border-line bg-white p-0.5 text-xs">
+            <button
+              type="button"
+              onClick={() => setMode('doc')}
+              className={clsx('rounded px-2 py-1', mode === 'doc' ? 'bg-surface font-medium text-ink' : 'text-ink-soft')}
+            >
+              文档图谱
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('ontology')}
+              className={clsx('rounded px-2 py-1', mode === 'ontology' ? 'bg-surface font-medium text-ink' : 'text-ink-soft')}
+            >
+              本体穿透
+            </button>
+          </div>
           <button
             type="button"
             onClick={handleRefresh}
@@ -325,7 +359,8 @@ export function GraphView({
           </button>
 
           <div className="hidden items-center gap-2.5 border-l border-line pl-3 xl:flex">
-            {Object.values(BUSINESS_TYPES).map((bt) => {
+            {DOC_MODE_KIND_LABELS.map((k) => {
+              const bt = BUSINESS_TYPES[k]!;
               const hidden = hiddenKinds.has(bt.label);
               const count = labelCounts.find((x) => x.label === bt.label)?.count;
               return (
@@ -366,6 +401,9 @@ export function GraphView({
       </div>
 
       {/* 三栏主体：左右面板可折叠，宽度过渡期间内容溢出裁剪 */}
+      {mode === 'ontology' ? (
+        <OntologyExplorer initialAnchor={ontologyJump} />
+      ) : (
       <div className="flex min-h-0 flex-1">
         <div
           className={clsx(
@@ -491,6 +529,7 @@ export function GraphView({
           />
         </div>
       </div>
+      )}
     </div>
     </DocMetaProvider>
   );

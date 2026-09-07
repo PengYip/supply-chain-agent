@@ -8,10 +8,12 @@ interface Props {
   ownFields: string[];
   entityId: string;
   onClose: () => void;
+  /** 「在图中查看」回调(Item 4 穿透跳入)；入参为展示名(抽屉自己持有 detail 数据)。 */
+  onViewInGraph?: (label: string) => void;
 }
 
 /** 实体详情：字段表 + as-of 时间线(红冲负数红标) + 净额轧差。仅事件实体有时间线。 */
-export function EntityDetailDrawer({ type, typeLabel, ownFields, entityId, onClose }: Props) {
+export function EntityDetailDrawer({ type, typeLabel, ownFields, entityId, onClose, onViewInGraph }: Props) {
   // asOf 语义(技术备忘 §4)：最新口径=business@now；当时口径=system@<日期>(月报复现)。
   const [mode, setMode] = useState<'business' | 'system'>('business');
   const [at, setAt] = useState('');
@@ -45,6 +47,15 @@ export function EntityDetailDrawer({ type, typeLabel, ownFields, entityId, onClo
             <div className="text-sm font-medium text-ink">{typeLabel}详情</div>
             <div className="mt-0.5 text-xs text-ink-soft">{detail?.entity.label ?? entityId}</div>
           </div>
+          {onViewInGraph && (
+            <button
+              type="button"
+              onClick={() => onViewInGraph(detail?.entity.label ?? entityId)}
+              className="rounded border border-line px-2 py-1 text-xs text-ink-soft transition-colors hover:border-primary/40 hover:text-primary"
+            >
+              在图中查看
+            </button>
+          )}
           <button
             type="button"
             onClick={onClose}

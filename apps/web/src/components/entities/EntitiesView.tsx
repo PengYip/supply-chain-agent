@@ -3,11 +3,12 @@ import { clsx } from 'clsx';
 import { useHashRoute } from '../../hooks/useHashRoute';
 import { fetchOntologySchema, listEntities, type OntologyEntitySchemaDTO, type ProjectedEntity } from '../../api/ontology';
 import { EntityDetailDrawer } from './EntityDetailDrawer';
+import type { GraphFocusTarget } from '../graph/focus';
 
 /** 实体台账(roadmap Item 3)：类型列表由注册表 schema 驱动，空源类型显示空态不报错。 */
 const PAGE_SIZE = 20; // 模块级常量
 
-export function EntitiesView() {
+export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocusTarget) => void }) {
   const [schema, setSchema] = useState<OntologyEntitySchemaDTO[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -183,6 +184,11 @@ export function EntitiesView() {
           ownFields={active.ownFields}
           entityId={detailId}
           onClose={() => setDetailId(null)}
+          onViewInGraph={
+            onOpenInGraph && active
+              ? (label) => onOpenInGraph({ entityType: active.name, entityId: detailId, label })
+              : undefined
+          }
         />
       )}
     </div>
