@@ -40,7 +40,7 @@ describe('ontology registry', () => {
       { ...base, eventBizType: '逆向', amount: -100 }).success).toBe(true);
   });
 
-  it('8 relation types / 13 pairs, endpoints all valid entity names', () => {
+  it('8 relation types / 14 pairs, endpoints all valid entity names', () => {
     expect(ONTOLOGY_RELATIONS).toHaveLength(8);
     const names = ONTOLOGY_RELATIONS.map((r) => r.name);
     expect(new Set(names).size).toBe(8);

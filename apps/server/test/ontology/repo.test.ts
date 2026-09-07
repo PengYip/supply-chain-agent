@@ -73,7 +73,7 @@ describe('ontology repo write boundary', () => {
 });
 
 describe('red-invoice as-of scenario (memo section 4: three questions, three answers)', () => {
-  // 6/15 收发票 100 万; 8/5 红冲重开 80 万(追溯 6/15 生效)。原票失效点=红冲生效点。
+  // 6/15 收发票 100 万; 8/5 红冲重开 80 万(追溯 6/15 生效)。红冲不失效原票: 逆向负数自动轧差(docx 6.2), fixture 无 invalidAt。
   beforeEach(async () => {
     await insertTradeFact(ctx, {
       entityType: 'InvoiceEvent', payload: INVOICE(1_000_000, '正向'),
