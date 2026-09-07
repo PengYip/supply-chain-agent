@@ -17,6 +17,7 @@ import { startSessionRun, isRunning } from '../harness/runManager.js';
 import { runSession } from '../harness/runSession.js';
 import { notifyApprovalResolved } from '../harness/approvalChannel.js';
 import { buildHistoryModelMessages } from '../harness/historyCompaction.js';
+import { normalizeIsoUtc } from '../ontology/asof.js';
 import type { Role } from '../harness/roleToolRegistry.js';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 
@@ -237,9 +238,27 @@ approvalCallback.post('/approval/callback', async (c) => {
 // ---- Approval center read endpoints (requireAuth covers /api/approval/* in
 // index.ts; the defensive c.get('user') re-check is for direct-mount tests) ----
 
+const isoTimeParam = z
+  .string()
+  .max(40)
+  .refine((v) => {
+    try {
+      normalizeIsoUtc(v);
+      return true;
+    } catch {
+      return false;
+    }
+  }, { message: '必须是可解析的时间（归一为 UTC ISO）' })
+  .transform((v) => normalizeIsoUtc(v));
+
 const ListQuerySchema = z.object({
   status: z.enum(['pending', 'approved', 'denied', 'all']).default('all'),
   limit: z.coerce.number().int().min(1).max(200).default(50),
+  // 审批审计过滤（roadmap Item 6, 2026-09-08）：时间/决策人/工具/状态。
+  toolName: z.string().trim().min(1).max(100).optional(),
+  decidedBy: z.string().trim().min(1).max(200).optional(),
+  createdFrom: isoTimeParam.optional(),
+  createdTo: isoTimeParam.optional(),
 });
 
 function parseSideEffects(raw: string | null | undefined): SideEffect[] | null {

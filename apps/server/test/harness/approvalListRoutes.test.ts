@@ -53,6 +53,26 @@ describe('GET /api/approval/list', () => {
     const res = await get(appAs('u1'), '/approval/list?limit=abc');
     expect(res.status).toBe(400);
   });
+
+  it('toolName/decidedBy 过滤生效（roadmap Item 6）', async () => {
+    const s = await createSession('trader', 'u1');
+    await recordPendingApproval({ sessionId: s.id, level: 'L2', toolName: 'bind_document',
+      toolCallId: `call_${uid('c')}`, input: {}, approvalId: `ap_${uid('a')}` });
+    await recordPendingApproval({ sessionId: s.id, level: 'L3', toolName: 'escalate_to_human',
+      toolCallId: `call_${uid('c')}`, input: {}, ticketId: `ESC-${uid('t')}` });
+    const res = await get(appAs('u1'), '/approval/list?toolName=bind_document');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.items.length).toBeGreaterThan(0);
+    expect(body.items.every((i: { tool_name: string }) => i.tool_name === 'bind_document')).toBe(true);
+  });
+
+  it('createdFrom 接受可解析时间并归一；非法时间 400（roadmap Item 6）', async () => {
+    const res = await get(appAs('u1'), `/approval/list?createdFrom=${encodeURIComponent('2026-09-08 00:00:00')}`);
+    expect(res.status).toBe(200);
+    const bad = await get(appAs('u1'), `/approval/list?createdFrom=${encodeURIComponent('not-a-time')}`);
+    expect(bad.status).toBe(400);
+  });
 });
 
 describe('GET /api/approval/:id', () => {
