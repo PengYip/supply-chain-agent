@@ -4,7 +4,7 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import { env } from '../env.js';
 import { getToolsForRole, type Role, type HarnessDeps } from './roleToolRegistry.js';
 import { getPermission } from './permissionGate.js';
-import { recordPendingApproval, countPendingApprovals, getPending } from './sessionStore.js';
+import { recordPendingApproval, countPendingApprovals, getPending, appendSideEffect } from './sessionStore.js';
 import { notifyApprovalCreated } from './approvalChannel.js';
 import { auditRecorder, type ToolCallRecord } from './auditRecorder.js';
 import { classifyToolError } from './errorClassification.js';
@@ -173,7 +173,29 @@ export function buildGatedTools(role: Role, deps?: HarnessDeps, failures?: Failu
     // needsApproval stamped at registration (e.g. bind_document). `=== true`
     // avoids matching Tool's needsApproval-function form.
     if (getPermission(name) === 'L2' || t.needsApproval === true) {
-      gated[name] = { ...audited, needsApproval: true };
+      // needsApproval 工具仅批准后才会进 execute（deny 走 execution-denied），
+      // 故此处 execute 即"已批准执行"审计点：执行后按 options.toolCallId 自动
+      // 落一条 SideEffect。wrapper 透传原返回值；审计失败不影响业务执行。
+      const origExecute = audited.execute;
+      if (!origExecute) {
+        gated[name] = { ...audited, needsApproval: true };
+      } else {
+        const gatedExecute: Tool['execute'] = async (input, options) => {
+          const output = await origExecute(input, options);
+          const callId = options?.toolCallId;
+          if (callId) {
+            let detail = '';
+            try { detail = JSON.stringify(output).slice(0, 500); }
+            catch { detail = String(output).slice(0, 500); }
+            void appendSideEffect(callId, {
+              target: `toolCall:${callId}`, action: name, ok: true,
+              detail, at: new Date().toISOString(),
+            }).catch(() => { /* 审计失败不影响业务执行 */ });
+          }
+          return output;
+        };
+        gated[name] = { ...audited, execute: gatedExecute, needsApproval: true };
+      }
     } else {
       gated[name] = audited;
     }
