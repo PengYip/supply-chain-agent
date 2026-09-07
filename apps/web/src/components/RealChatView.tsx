@@ -505,6 +505,13 @@ export const RealChatView: React.FC<{
     refreshPendingApprovals()
   }, [isBusy, refreshPendingApprovals])
 
+  // 本地已解决审批键集合(L2 approvalId + L3 ticketId): 回调成功或服务端
+  // 409 告知已解决即加入。已解决审批的 part 终态留在消息历史且服务端不
+  // 回写, 名单刷新前的流式窗口(resume run 继续写同一条消息)以此集合压制
+  // 交互卡复活 —— 确认/驳回一次, 不再重复弹出。键为全局唯一 id, 跨会话
+  // 切换无需复位。
+  const [resolvedApprovals, setResolvedApprovals] = useState<Set<string>>(new Set())
+
   // 复核卡的选项与补充意见（choice + note 作为一条人工判断原子提交）。
   const [reviewChoice, setReviewChoice] = useState<'approve' | 'deny' | null>(null)
   const [reviewNote, setReviewNote] = useState('')
@@ -535,11 +542,19 @@ export const RealChatView: React.FC<{
     }
   }, [pendingKey])
 
-  // 切换会话：忽略集合复位（回到会话时重新提供复核入口）。同一会话内忽略
-  // 按 ticketId 持续记忆，不随工单流转丢失。
+  // 待处理键首次出现即刷新名单: 运行中的新工单 parts 到达时主动拉取服务端
+  // 权威名单, 使 L3 门禁可以去掉「运行中一律放行」旁路(见 pendingL3 注释)。
+  // 历史回扫产生的重复键不重复打点。
+  const seenApprovalKeysRef = useRef<Set<string>>(new Set())
   useEffect(() => {
-    setDismissedTickets(new Set())
-  }, [sessionId])
+    if (!pendingKey || seenApprovalKeysRef.current.has(pendingKey)) return
+    seenApprovalKeysRef.current.add(pendingKey)
+    refreshPendingApprovals()
+  }, [pendingKey, refreshPendingApprovals])
+
+  // 忽略（暂不处理）按 ticketId 持续记忆且不随会话切换复位：ticketId 全局
+  // 唯一，跨会话保留不会误伤其他会话；被忽略的工单不再自动重复弹出
+  // （「重新打开」仍是显式恢复入口）。
 
   const postApproval = async (
     body: { approvalId?: string; ticketId?: string; approved: boolean },
@@ -569,6 +584,13 @@ export const RealChatView: React.FC<{
           approvalResolved = json.approvalResolved === true
         } catch {}
         if (res.status === 409) {
+          // approvalResolved: 工单在服务端已被解决(重复提交/别的入口已处理),
+          // 只是 resume 未能启动。同样记入本地已解决集合, 防止卡片在后续
+          // 流式窗口内复活。
+          if (approvalResolved) {
+            const resolvedKey = body.ticketId ?? body.approvalId ?? null
+            if (resolvedKey) setResolvedApprovals((prev) => new Set(prev).add(resolvedKey))
+          }
           throw new Error(
             approvalResolved
               ? '复核结果已记录，但会话正忙，稍后重发消息即可恢复'
@@ -583,7 +605,12 @@ export const RealChatView: React.FC<{
       // output-available. No local stream merge is needed anymore.
       setLastApprovalApproved(body.approved)
       setLastApprovalKind(body.ticketId ? 'L3' : 'L2')
-      lastResolvedKeyRef.current = body.ticketId ?? body.approvalId ?? null
+      const resolvedKey = body.ticketId ?? body.approvalId ?? null
+      lastResolvedKeyRef.current = resolvedKey
+      // 记入本地已解决集合: 已确认/驳回的审批 part 终态留在消息历史且不
+      // 回写, resume run 的流式窗口内名单尚未刷新, 以此集合先行压制,
+      // 交互卡一经处理不再复活。
+      if (resolvedKey) setResolvedApprovals((prev) => new Set(prev).add(resolvedKey))
       setCallbackState('success')
     } catch (err) {
       console.error('[approval callback] failed:', err)
@@ -603,12 +630,18 @@ export const RealChatView: React.FC<{
   // 复核卡展示数据：escalate 入参优先（issue 是抛给人的问题），缺失时回退
   // 到工具返回的 blocked.message。
   const pendingL3Raw = pendingApproval && pendingApproval.kind === 'L3' ? pendingApproval : null
-  // 恢复防重放门: 运行中放行(实时升级的工单尚未进名单); 空闲时以名单为准 —
-  // 名单已加载且不含该工单 => 服务端已解决, 不再弹卡; 名单未加载 => 暂不出卡
-  // (避免已解决卡片闪现)。真实待办只延迟一个请求往返。
+  // 恢复防重放门: 任何时刻都以服务端名单为准 —— 名单不含该工单 => 服务端
+  // 已解决, 不再弹卡; 名单未加载 => 暂不出卡(避免已解决卡片闪现后再消失)。
+  // 运行中产生的新工单由 seenApprovalKeysRef 效应在键首次出现时刷新名单
+  // (L3 工单在工具 execute 内先落库再流出 blocked part, 名单查询必然已含
+  // 新工单), 真实待办只延迟一个请求往返; 本地已解决集合再兜一层, 覆盖名单
+  // 刷新前的流式窗口(旧版「运行中一律放行」的旁路正是已确认卡片在继续
+  // 对话时重复弹出的根因)。
   const pendingL3 =
     pendingL3Raw &&
-    (isBusy || (approvalsPendingIds !== null && approvalsPendingIds.has(pendingL3Raw.ticketId)))
+    !resolvedApprovals.has(pendingL3Raw.ticketId) &&
+    approvalsPendingIds !== null &&
+    approvalsPendingIds.has(pendingL3Raw.ticketId)
       ? pendingL3Raw
       : null
   const escalateInfo = pendingL3 ? parseEscalateArgs(pendingL3.args) : null
@@ -894,6 +927,7 @@ export const RealChatView: React.FC<{
                 item={item}
                 isStreaming={isStreaming && item.role === 'assistant' && item.id === renderItems[renderItems.length - 1]?.id}
                 approvalsPendingIds={approvalsPendingIds}
+                resolvedApprovalIds={resolvedApprovals}
                 onApprove={handleApprove}
                 onDeny={handleDeny}
                 onOpenBindings={onOpenBindings}

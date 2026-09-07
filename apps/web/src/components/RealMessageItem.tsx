@@ -134,7 +134,11 @@ export const RealMessageItem: React.FC<{
    *  null = 尚未加载。持久化消息的 approval-requested part 在审批解决后
    *  不回写, 恢复会话时以此名单防已确认卡片重放。 */
   approvalsPendingIds?: Set<string> | null
-}> = ({ item, isStreaming, onApprove, onDeny, onOpenBindings, approvalsPendingIds }) => {
+  /** 本地已解决(确认/驳回回调成功)的审批 id 集合。流式期间(resume run
+   *  继续写同一条 assistant 消息)名单尚未刷新, 以此集合保证交互卡一经
+   *  处理不再复活为可再次点击的卡片。 */
+  resolvedApprovalIds?: Set<string>
+}> = ({ item, isStreaming, onApprove, onDeny, onOpenBindings, approvalsPendingIds, resolvedApprovalIds }) => {
   const isUser = item.role === 'user'
   // Copy-to-clipboard: aggregate the message's text segments into one string
   // and track which message id is in its 1.5s "已复制" confirmation window.
@@ -180,21 +184,29 @@ export const RealMessageItem: React.FC<{
       }
 
       if (seg.kind === 'approval-request') {
+        // 已解决审批的静态提示（本地已解决与名单已解决共用同一 JSX）。
+        const resolvedHint = (
+          <div
+            key={`a-${seg.approvalId}`}
+            className="mt-2 flex items-center gap-1.5 rounded-lg border border-line bg-surface/60 px-3 py-2 text-[11px] text-ink-soft"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-success" />
+            操作确认已处理
+          </div>
+        )
+        // 本地已解决(确认/驳回回调成功): 无论流式与否都降级为静态提示 ——
+        // resume run 会继续写同一条 assistant 消息, 旧 approval part 曾在
+        // 流式窗口绕过名单检查复活为可再次点击的交互卡(重复弹出 BUG)。
+        if (resolvedApprovalIds && resolvedApprovalIds.has(seg.approvalId)) {
+          return resolvedHint
+        }
         // 恢复防重放门: 流式中的消息(含 L2 续跑)恒为交互卡; 空闲时以服务端
         // 名单为准 —— 已解决的渲染静态提示, 名单未加载前暂不出卡(避免已解决
         // 卡片闪现后再消失)。
         if (!isStreaming) {
           if (approvalsPendingIds === null || approvalsPendingIds === undefined) return null
           if (!approvalsPendingIds.has(seg.approvalId)) {
-            return (
-              <div
-                key={`a-${seg.approvalId}`}
-                className="mt-2 flex items-center gap-1.5 rounded-lg border border-line bg-surface/60 px-3 py-2 text-[11px] text-ink-soft"
-              >
-                <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-success" />
-                操作确认已处理
-              </div>
-            )
+            return resolvedHint
           }
         }
         return (
