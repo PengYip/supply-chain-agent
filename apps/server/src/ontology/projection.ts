@@ -92,6 +92,36 @@ async function listContracts(ctx: DbContext, uid: string): Promise<ProjectedEnti
   return rows.map(mapContractRow);
 }
 
+/** 总览工作台（Item 7）合同总数/字段读取入口：同一 USER_SCOPE 与 SOURCE_ROW_CAP 口径。 */
+export async function listContractEntities(ctx: DbContext, uid: string): Promise<ProjectedEntity[]> {
+  return listContracts(ctx, uid);
+}
+
+export interface ContractLedgerRef {
+  id: string;
+  contractNo: string;
+  /** 台账原始抽取字段（中文键开放词汇，如「数量」）——注册表投影之外的聚合口径用。 */
+  extracted: Record<string, unknown>;
+}
+
+/** 总览工作台（Item 7）超量收货/执行率聚合用：读原始台账行（只读，同 USER_SCOPE/CAP）。 */
+export async function listContractLedgerRefs(ctx: DbContext, uid: string): Promise<ContractLedgerRef[]> {
+  const sql = `SELECT id, contract_no, fields
+                 FROM contract_ledger WHERE ${USER_SCOPE_LEGACY}
+                ORDER BY created_at DESC, id LIMIT ${SOURCE_ROW_CAP}`;
+  const map = (r: Record<string, unknown>): ContractLedgerRef => ({
+    id: String(r['id']),
+    contractNo: String(r['contract_no'] ?? ''),
+    extracted: parseJsonObj(r['fields']),
+  });
+  if (ctx.backend === 'postgres') {
+    const res = await (ctx as PostgresDbContext).pool.query(numberPlaceholders(sql), [uid]);
+    return (res.rows as Array<Record<string, unknown>>).map(map);
+  }
+  const rows = ctx.sqlite.prepare(sql).all(uid) as Array<Record<string, unknown>>;
+  return rows.map(map);
+}
+
 // ---------------------------------------------------------------------------
 // 收发依据 <- documents。doc_type 白名单与 pipeline bindingProposal.GOODS_FIELD_DOCS
 // (收货单/发货单)对齐；本地声明避免 ontology -> pipeline 的反向依赖。
