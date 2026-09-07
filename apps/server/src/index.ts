@@ -21,6 +21,7 @@ import { auditRoute } from './routes/audit.js';
 import { reconciliationRoute } from './routes/reconciliation.js';
 import { bindingsRoute } from './routes/bindings.js';
 import { contractsRoute } from './routes/contracts.js';
+import { ontologyRoute } from './routes/ontology.js';
 import { partiesRoute } from './routes/parties.js';
 import { projectsRoute } from './routes/projects.js';
 import { templatesRoute } from './routes/templates.js';
@@ -128,6 +129,8 @@ app.use('/api/parties/*', requireAuth);
 app.use('/api/projects/*', requireAuth);
 app.use('/api/templates/*', requireAuth);
 
+app.use('/api/ontology/*', requireAuth);
+
 app.route('/api', chatRoute);
 app.route('/api', approvalCallback);
 app.route('/api', statusRoute);
@@ -162,6 +165,9 @@ app.route('/api/bindings', bindingsRoute);
 
 // 合同搜索(spec 2026-08-26): 图谱/绑定页共用组合框。
 app.route('/api/contracts', contractsRoute);
+
+// 本体台账(roadmap Item 3)：schema/实体列表/详情，只读投影。
+app.route('/api/ontology', ontologyRoute);
 
 // Self-party list management (Task A): DB-backed 自主体名单 + candidates + backfill.
 app.route('/api/parties', partiesRoute);
