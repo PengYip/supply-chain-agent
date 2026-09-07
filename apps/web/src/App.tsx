@@ -25,6 +25,7 @@ import { EntitiesView } from './components/entities/EntitiesView';
 import { ReviewWorkbench } from './components/review-workbench/ReviewWorkbench';
 import { ApprovalCenterView } from './components/approval/ApprovalCenterView';
 import { GovernanceView } from './components/governance/GovernanceView';
+import { OverviewView } from './components/overview/OverviewView';
 import { SharePage } from './components/share/SharePage';
 import { ReviewModal } from './components/ReviewModal';
 import { subscribeContainerRefreshes, subscribeReviewRequests, type ReviewQueueItem } from './lib/reviewModal';
@@ -306,7 +307,9 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
         />
       }
     >
-      {view === 'chat' ? (
+      {view === 'overview' ? (
+        <OverviewView />
+      ) : view === 'chat' ? (
         <ChatWorkspace
           activeSessionId={activeSessionId}
           initialAsk={view === 'chat' ? route.params.ask ?? null : null}

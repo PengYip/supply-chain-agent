@@ -7,6 +7,7 @@ import {
   FlaskConical,
   FolderKanban,
   History,
+  LayoutDashboard,
   Link2,
   MessageSquare,
   Network,
@@ -17,6 +18,7 @@ import {
 
 /** 视图唯一标识，同时是 hash 路由的一级路径（`#/chat` 等）。 */
 export type ViewId =
+  | 'overview'
   | 'chat'
   | 'approvals'
   | 'projects'
@@ -49,6 +51,7 @@ export interface NavItem {
 /** 视图注册表：路由、导航、顶栏标题的唯一事实源。
  *  分组语义：work = 日常业务高频入口；admin = 低频的配置/质量工具。 */
 export const NAV_ITEMS: NavItem[] = [
+  { id: 'overview', label: '总览', description: '待办与异常优先的登录门户', icon: LayoutDashboard, group: 'work', enabled: true },
   { id: 'chat', label: '对话', description: 'DeepSeek + 真实工具调用', icon: MessageSquare, group: 'work', enabled: true },
   { id: 'approvals', label: '审批中心', description: 'L2/L3 审批待办与历史', icon: ClipboardCheck, group: 'work', enabled: true },
   { id: 'projects', label: '项目', description: '项目维度汇总（合同面 + 执行面）', icon: FolderKanban, group: 'work', enabled: true },

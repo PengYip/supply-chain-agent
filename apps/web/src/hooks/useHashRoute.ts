@@ -8,10 +8,10 @@ export interface RouteState {
 }
 
 /** 解析 `#/view?key=value` 形式的 hash。纯函数。
- *  未注册 / 未开放的视图与空 hash 一律回退 chat（服务器无 SPA fallback，
- *  hash 路由是唯一可行方案，非法路径无需报错只需兜底）。
+ *  未注册 / 未开放的视图与空 hash 一律兜底 overview（登录后门户，roadmap Item 7；
+ *  显式直链如 `#/chat?session=x` 走注册表正常解析，不受默认切换影响）。
  *  前导斜杠必须剥掉：formatHash 产出 `#/view`，不剥则 path 带斜杠永远
- *  匹配不到注册表，所有导航都会静默回退 chat 并丢失查询参数。 */
+ *  匹配不到注册表，所有导航都会静默丢视图并丢失查询参数。 */
 export function parseHash(hash: string): RouteState {
   const raw = hash.replace(/^#/, '').replace(/^\/+/, '');
   const [path, query = ''] = raw.split('?');
@@ -19,7 +19,7 @@ export function parseHash(hash: string): RouteState {
   new URLSearchParams(query).forEach((value, key) => {
     if (value !== '') params[key] = value;
   });
-  const view: ViewId = isRoutableView(path) ? path : 'chat';
+  const view: ViewId = isRoutableView(path) ? path : 'overview';
   return { view, params };
 }
 
