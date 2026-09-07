@@ -39,7 +39,6 @@ describe('GET /api/approval/list', () => {
   it('200 返回本人 items 且 sideEffects 已解析', async () => {
     // createSession 签名以 sessionStore.ts facade 为准: createSession(role, userId?)
     const s = await createSession('trader', 'u1');
-    const approvalId = `ap_${uid('a')}`;
     await recordPendingApproval({ sessionId: s.id, level: 'L3', toolName: 'escalate_to_human',
       input: { issue: 'x' }, ticketId: `ESC-${uid('t')}` });
     const res = await get(appAs('u1'), '/approval/list?status=pending');

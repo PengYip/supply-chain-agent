@@ -51,7 +51,7 @@ async function seedL2Pending(userId: string) {
 
 describe('POST /api/approval/callback decision audit', () => {
   it('批准时记录决策人与理由', async () => {
-    const { sid, approvalId, rowId } = await seedL2Pending('u1');
+    const { approvalId } = await seedL2Pending('u1');
     const res = await post(appAs('u1'), { approvalId, approved: true, reason: '已核对附件' });
     expect(res.status).toBe(200);
     const row = await getPending(approvalId);

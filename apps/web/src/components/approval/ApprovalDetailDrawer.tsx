@@ -17,9 +17,10 @@ export function ApprovalDetailDrawer(props: { id: string; onClose(): void; onDec
   const load = async () => {
     const res = await fetch(`/api/approval/${props.id}`);
     if (res.ok) setDetail((await res.json()).item);
+    else setError(`加载失败 (HTTP ${res.status})`);
   };
   useEffect(() => {
-    void load();
+    void load().catch((e) => setError(`加载失败: ${String(e)}`));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.id]);
 
@@ -49,7 +50,13 @@ export function ApprovalDetailDrawer(props: { id: string; onClose(): void; onDec
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={props.onClose}>
       <div className="h-full w-[480px] overflow-y-auto bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-        {!detail ? <p className="text-sm text-ink-soft">加载中...</p> : (
+        {!detail ? (
+          error ? (
+            <p className="text-sm text-danger">加载失败: {error}</p>
+          ) : (
+            <p className="text-sm text-ink-soft">加载中...</p>
+          )
+        ) : (
           <>
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-semibold">{detail.tool_name}</h2>

@@ -244,7 +244,10 @@ const ListQuerySchema = z.object({
 
 function parseSideEffects(raw: string | null | undefined): SideEffect[] | null {
   if (!raw) return null;
-  try { return JSON.parse(raw) as SideEffect[]; } catch { return null; }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as SideEffect[]) : null;
+  } catch { return null; }
 }
 
 approvalCallback.get('/approval/list', async (c) => {
