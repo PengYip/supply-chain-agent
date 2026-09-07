@@ -1171,3 +1171,13 @@ git push origin HEAD:main   # 触发 CI + CD
 - 默认视图切换不破坏既有直链 hash：useHashRoute.test.ts 固化（显式 hash 解析不变，仅空/非法兜底改 overview）
 - 空数据/零依赖降级：零数据用例 + 卡片级 error 切片 + cube 预留位载荷
 - `GET /api/overview` 未进 agent 工具注册表与 tool-inventory.json
+
+---
+
+## 实现注记（2026-09-08 执行时确认，以代码为准）
+
+1. **合同数量读取走原始台账行**：`mapContractRow` 投影只映射注册表词汇字段（含「数量」的原始中文键不进 `fields`），故装配层不使用 `listContractEntities`，改用新增的 `listContractLedgerRefs`（projection.ts，同一 SQL/USER_SCOPE/SOURCE_ROW_CAP，返回 `{id, contractNo, extracted}`，`extracted` 为台账原始抽取字段 JSON）。注册表投影词汇契约不被破坏。
+2. **一份收货可分摊多合同**（docx §5.1 多边语义）：`overReceiptViolations` 按边端点归集，同一收货挂多合同时各自累计——测试期望含 c2 经 r1 分摊后 60>50 的第二条违规。
+3. **InvoiceEvent 种子必须带 `invoiceType`**（本体注册表必填字段，strict 校验）。
+4. **路由层取 ctx**：`buildOverviewMetrics(getDbContext(), user.id)`（漏 ctx 会在 tsc 被拦）。
+5. `ApprovalListFilter.limit` 缺省值 50 由 listApprovals 内部兜底（SQLite 侧 `filter.limit ?? 50`），count 不受 limit 影响。
