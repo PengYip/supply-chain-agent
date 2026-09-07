@@ -70,3 +70,23 @@ export function listEntities(
   const qs = params.toString();
   return request<EntityListResult>(`/api/ontology/entities/${encodeURIComponent(type)}${qs ? `?${qs}` : ''}`);
 }
+
+export interface EntityDetailResult {
+  entity: ProjectedEntity;
+  timeline: ProjectedEntity[];
+  netAmount: number | null;
+  asOf: { mode: 'business' | 'system'; at: string };
+}
+
+export function getEntityDetail(
+  type: string,
+  id: string,
+  opts: { asOf?: 'business' | 'system'; at?: string } = {},
+): Promise<EntityDetailResult> {
+  const params = new URLSearchParams();
+  if (opts.asOf) params.set('asOf', opts.asOf);
+  if (opts.at) params.set('at', opts.at);
+  const qs = params.toString();
+  return request<EntityDetailResult>(
+    `/api/ontology/entities/${encodeURIComponent(type)}/${encodeURIComponent(id)}${qs ? `?${qs}` : ''}`);
+}

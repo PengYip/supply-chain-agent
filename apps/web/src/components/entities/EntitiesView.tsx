@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { clsx } from 'clsx';
 import { useHashRoute } from '../../hooks/useHashRoute';
 import { fetchOntologySchema, listEntities, type OntologyEntitySchemaDTO, type ProjectedEntity } from '../../api/ontology';
+import { EntityDetailDrawer } from './EntityDetailDrawer';
 
 /** 实体台账(roadmap Item 3)：类型列表由注册表 schema 驱动，空源类型显示空态不报错。 */
 const PAGE_SIZE = 20; // 模块级常量
@@ -10,6 +11,7 @@ export function EntitiesView() {
   const [schema, setSchema] = useState<OntologyEntitySchemaDTO[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -111,7 +113,7 @@ export function EntitiesView() {
                   {rows.map((row) => {
                     const negative = typeof row.fields['amount'] === 'number' && (row.fields['amount'] as number) < 0;
                     return (
-                      <tr key={row.id} className="border-b border-line/60 last:border-b-0 hover:bg-surface/40">
+                      <tr key={row.id} onClick={() => setDetailId(row.id)} className={clsx('cursor-pointer border-b border-line/60 last:border-b-0 hover:bg-surface/40')}>
                         <td className="px-3 py-2 font-medium text-ink">{row.label}</td>
                         {active.ownFields.map((f) => {
                           const v = row.fields[f];
@@ -126,7 +128,7 @@ export function EntitiesView() {
                         <td className="px-3 py-2 text-right">
                           <button
                             type="button"
-                            onClick={() => askAgent(row)}
+                            onClick={(e) => { e.stopPropagation(); askAgent(row); }}
                             className="rounded border border-line px-2 py-0.5 text-xs text-ink-soft transition-colors hover:border-primary/40 hover:text-primary"
                           >
                             问 Agent
@@ -174,6 +176,15 @@ export function EntitiesView() {
           </div>
         )}
       </div>
+      {detailId && active && (
+        <EntityDetailDrawer
+          type={active.name}
+          typeLabel={active.label}
+          ownFields={active.ownFields}
+          entityId={detailId}
+          onClose={() => setDetailId(null)}
+        />
+      )}
     </div>
   );
 }
