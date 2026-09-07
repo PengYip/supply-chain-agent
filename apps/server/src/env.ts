@@ -97,6 +97,10 @@ const EnvSchema = z.object({
   TRUSTED_ORIGINS: z.string().optional(),
   /** 审批通知通道：local（默认，仅日志）| lark（预留，未实现时回退 local） */
   APPROVAL_CHANNEL: z.string().optional(),
+  // Overview dashboard (roadmap Item 7) metrics source. 'local' = in-process SQL
+  // aggregation over ledger/edges/approvals; 'cube' is a RESERVED seam (returns
+  // a degraded placeholder payload) -- no Cube integration in v1.
+  METRICS_SOURCE: z.enum(['local', 'cube']).default('local'),
   // 本公司主体名单(逗号分隔): 四流方向判定基准。资金流按付款人/收款人、货物流
   // 按买方/卖方、发票流按开票方/受票方, 锚点命中名单一侧即判定 收/付(进/销)。
   // 消费端 split(',') 后交给 domain/flowDirection.parseSelfPartyNames。

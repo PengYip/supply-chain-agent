@@ -23,6 +23,7 @@ import { bindingsRoute } from './routes/bindings.js';
 import { contractsRoute } from './routes/contracts.js';
 import { ontologyRoute } from './routes/ontology.js';
 import { toolsRoute } from './routes/tools.js';
+import { overviewRoute } from './routes/overview.js';
 import { writeoffRoute } from './routes/writeoff.js';
 import { partiesRoute } from './routes/parties.js';
 import { projectsRoute } from './routes/projects.js';
@@ -135,6 +136,8 @@ app.use('/api/ontology/*', requireAuth);
 app.use('/api/writeoff/*', requireAuth);
 // 治理后台只读面(roadmap Item 6)：工具 inventory 视图 + 权限快照。
 app.use('/api/tools/*', requireAuth);
+// 总览工作台只读聚合面(roadmap Item 7)。
+app.use('/api/overview/*', requireAuth);
 
 app.route('/api', chatRoute);
 app.route('/api', approvalCallback);
@@ -176,6 +179,8 @@ app.route('/api/ontology', ontologyRoute);
 app.route('/api/writeoff', writeoffRoute);
 // 治理后台(roadmap Item 6)：/api/tools/inventory + /api/tools/permissions，只读。
 app.route('/api/tools', toolsRoute);
+// 总览工作台(roadmap Item 7)：GET /api/overview，只读聚合。
+app.route('/api/overview', overviewRoute);
 
 // Self-party list management (Task A): DB-backed 自主体名单 + candidates + backfill.
 app.route('/api/parties', partiesRoute);
