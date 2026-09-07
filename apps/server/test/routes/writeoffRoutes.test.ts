@@ -10,6 +10,12 @@ vi.mock('../../src/pipeline/db/dbBackend.js', async (importOriginal) => {
 });
 const { writeoffRoute } = await import('../../src/routes/writeoff.js');
 const { insertTradeFact, insertOntologyEdge } = await import('../../src/ontology/repo.js');
+vi.mock('../../src/harness/runSession.js', () => ({
+  runSession: vi.fn(async () => {}),
+}));
+const { createSession, loadSession } = await import('../../src/harness/sessionStore.js');
+const { runSession } = await import('../../src/harness/runSession.js');
+const { buildWriteoffInstruction } = await import('../../src/routes/writeoff.js');
 
 function appAs(userId: string) {
   const app = new Hono<AuthEnv>();
@@ -71,5 +77,97 @@ describe('GET /api/writeoff/overview', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { modes: unknown[] };
     expect(body.modes.map((m) => (m as { relation: string }).relation)).toEqual(['OFFSET_SETTLE', 'WRITE_OFF']);
+  });
+});
+
+describe('buildWriteoffInstruction', () => {
+  it('含逐字 JSON、工具名与场景关键词（settlement 命中）', () => {
+    const items = [{ srcId: 'TF-p1', dstId: 'TF-i1', amount: 60, partial: true }];
+    const text = buildWriteoffInstruction('WRITE_OFF', items);
+    expect(text).toContain('create_writeoff');
+    expect(text).toContain(JSON.stringify(items));
+    expect(text).toContain('核销');
+    expect(text).toContain('禁止修改');
+  });
+});
+
+describe('POST /api/writeoff/submit', () => {
+  const post = (app: Hono<AuthEnv>, body: unknown) =>
+    app.request('http://test/api/writeoff/submit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+
+  it('401 without session', async () => {
+    const app = new Hono<AuthEnv>();
+    app.route('/api/writeoff', writeoffRoute);
+    const res = await post(app, { relation: 'WRITE_OFF', items: [] });
+    expect(res.status).toBe(401);
+  });
+
+  it('400 zod：空 items / 非法 relation', async () => {
+    const app = appAs('u1');
+    expect((await post(app, { relation: 'WRITE_OFF', items: [] })).status).toBe(400);
+    expect((await post(app, { relation: 'NOPE', items: [{ srcId: 'a', dstId: 'b', amount: 1 }] })).status).toBe(400);
+  });
+
+  it('400 守恒预检：超额返回 violations，不建会话不启 run', async () => {
+    const p = await insertTradeFact(ctx, {
+      entityType: 'PaymentEvent',
+      payload: { eventBizType: '正向', amount: 100, currency: 'CNY', payType: '预付' },
+      validAt: '2026-06-01', createdBy: 'demo',
+    }, 'u1');
+    const inv = await insertTradeFact(ctx, {
+      entityType: 'InvoiceEvent',
+      payload: { eventBizType: '正向', amount: 60, currency: 'CNY', invoiceNo: 'INV-C', invoiceType: '进项' },
+      validAt: '2026-06-02', createdBy: 'demo',
+    }, 'u1');
+    (runSession as ReturnType<typeof vi.fn>).mockClear();
+    const res = await post(appAs('u1'), {
+      relation: 'WRITE_OFF',
+      items: [{ srcId: p, dstId: inv, amount: 70 }],
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; violations: Array<{ code: string }> };
+    expect(body.error).toBe('allocation_violations');
+    expect(body.violations.map((v) => v.code)).toContain('dst_over_remaining');
+    expect(runSession).not.toHaveBeenCalled();
+  });
+
+  it('200：建会话+注标题+追加逐字指令+启动后台 run', async () => {
+    const p = await insertTradeFact(ctx, {
+      entityType: 'PaymentEvent',
+      payload: { eventBizType: '正向', amount: 100, currency: 'CNY', payType: '尾款' },
+      validAt: '2026-06-01', createdBy: 'demo',
+    }, 'u1');
+    const inv = await insertTradeFact(ctx, {
+      entityType: 'InvoiceEvent',
+      payload: { eventBizType: '正向', amount: 60, currency: 'CNY', invoiceNo: 'INV-D', invoiceType: '进项' },
+      validAt: '2026-06-02', createdBy: 'demo',
+    }, 'u1');
+    (runSession as ReturnType<typeof vi.fn>).mockClear();
+    const res = await post(appAs('u1'), {
+      relation: 'WRITE_OFF',
+      items: [{ srcId: p, dstId: inv, amount: 60 }],
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { sessionId: string; runId: string; status: string };
+    expect(body.status).toBe('busy');
+    expect(body.sessionId).toBeTruthy();
+    // run 以提交用户身份启动
+    expect(runSession).toHaveBeenCalledTimes(1);
+    const opts = (runSession as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+      userId?: string; messages: Array<{ role: string; content: unknown }>;
+    };
+    expect(opts.userId).toBe('u1');
+    // 首条消息即逐字指令：直接断言原始 content（外层 JSON.stringify 会转义引号）
+    const first = opts.messages[0] as { role: string; content: string };
+    expect(first.role).toBe('user');
+    expect(first.content).toContain('create_writeoff');
+    expect(first.content).toContain('"amount":60');
+    // 会话标题已设 + 指令作为首条消息持久化
+    const session = await loadSession(body.sessionId);
+    expect(session?.title).toContain('核销');
+    const persisted = JSON.stringify(session?.messages ?? []);
+    expect(persisted).toContain('create_writeoff');
   });
 });
