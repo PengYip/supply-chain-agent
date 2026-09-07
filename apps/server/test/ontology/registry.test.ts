@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
-  ONTOLOGY_ENTITIES, ENTITY_NAMES, entitySchema, entityFieldNames,
+  ONTOLOGY_ENTITIES, ENTITY_NAMES, ENTITY_LABELS, entitySchema, entityFieldNames,
   ONTOLOGY_RELATIONS, relationDef, isRelationPairAllowed,
   PayType, EventBizType, AllocateMethod, COMMODITY_CODES, MEANING_URIS,
   DUAL_TIMELINE_FIELDS, PROVENANCE_FIELDS, ontologySchemaJson,
@@ -102,5 +102,18 @@ describe('ontology registry', () => {
     // 只允许 zod 外部 import
     const imports = [...src.matchAll(/from '([^']+)'/g)].map((m) => m[1]!);
     expect(imports.every((i) => i === 'zod' || i.startsWith('.'))).toBe(true);
+  });
+
+  it('entity labels + ownFields for the Item 3 ledger UI', () => {
+    expect(Object.keys(ENTITY_LABELS).sort()).toEqual([...ENTITY_NAMES].sort());
+    for (const label of Object.values(ENTITY_LABELS)) {
+      expect(typeof label).toBe('string');
+      expect(label.length).toBeGreaterThan(0);
+    }
+    const json = JSON.parse(JSON.stringify(ontologySchemaJson()));
+    const invoice = json.entities.find((e: { name: string }) => e.name === 'InvoiceEvent');
+    expect(invoice.label).toBe('发票事件');
+    expect(invoice.ownFields).toContain('invoiceNo');
+    expect(invoice.ownFields).not.toContain('validAt'); // 时间轴字段在 fields 全集，不在 ownFields
   });
 });

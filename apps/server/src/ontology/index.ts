@@ -103,6 +103,21 @@ export const ONTOLOGY_ENTITIES: Record<OntologyEntityName, z.ZodObject<z.ZodRawS
 
 export const ENTITY_NAMES = Object.keys(ONTOLOGY_ENTITIES) as OntologyEntityName[];
 
+/** 实体中文标签（台账导航/治理 UI 用；新增实体必须补标签，registry 测试断言全覆盖）。 */
+export const ENTITY_LABELS: Record<OntologyEntityName, string> = {
+  TradeContract: '贸易合同',
+  TradeGoods: '商品',
+  Counterparty: '交易对手',
+  OrgUnit: '内部组织',
+  GoodsReceiptEvent: '收货事件',
+  GoodsDeliveryEvent: '发货事件',
+  SettlementEvent: '结算事件',
+  InvoiceEvent: '发票事件',
+  PaymentEvent: '付款事件',
+  CollectionEvent: '收款事件',
+  ServiceCostEvent: '服务费事件',
+};
+
 // ---------------------------------------------------------------------------
 // mixin 字段词汇（docx 双时间轴 + 溯源；表列名 snake_case 由仓储映射）
 // ---------------------------------------------------------------------------
@@ -277,6 +292,8 @@ export function ontologySchemaJson() {
     },
     entities: ENTITY_NAMES.map((n) => ({
       name: n,
+      label: ENTITY_LABELS[n],
+      ownFields: Object.keys(ONTOLOGY_ENTITIES[n]!.shape),
       fields: [...entityFieldNames(n)],
       meaning: MEANING_URIS[n] ?? null,
     })),
