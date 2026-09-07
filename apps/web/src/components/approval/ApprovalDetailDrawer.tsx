@@ -16,8 +16,15 @@ export function ApprovalDetailDrawer(props: { id: string; onClose(): void; onDec
 
   const load = async () => {
     const res = await fetch(`/api/approval/${props.id}`);
-    if (res.ok) setDetail((await res.json()).item);
-    else setError(`加载失败 (HTTP ${res.status})`);
+    if (!res.ok) {
+      setError(`加载失败 (HTTP ${res.status})`);
+      return;
+    }
+    const data = await res.json();
+    // 200 但 body 缺 item 时不能 setDetail(undefined): 会让 !detail 恒真且
+    // error 为空, 界面永久卡在"加载中"。
+    if (data?.item) setDetail(data.item);
+    else setError('加载失败: 响应缺少票据数据');
   };
   useEffect(() => {
     void load().catch((e) => setError(`加载失败: ${String(e)}`));

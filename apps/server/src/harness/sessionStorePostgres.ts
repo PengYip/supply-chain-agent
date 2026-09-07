@@ -604,24 +604,15 @@ export function createAgentSessionStore(pool: Pool): SessionStoreBackend {
 
     async appendSideEffect(toolCallId: string, effect: SideEffect): Promise<void> {
       await ensure();
-      const { rows } = await pool.query<{ id: string; side_effect_results: string | null }>(
-        'SELECT id, side_effect_results FROM pending_approvals WHERE tool_call_id = $1',
-        [toolCallId],
-      );
-      const row = rows[0];
-      if (!row) return; // no-op：票据不存在/已清理
-      let arr: SideEffect[];
-      try {
-        arr = row.side_effect_results
-          ? (JSON.parse(row.side_effect_results) as SideEffect[])
-          : [];
-      } catch {
-        arr = [];
-      }
-      arr.push(effect);
+      // 单语句 jsonb 原子追加: 读改写两步在并发下会互相覆盖、丢先写入的审计行。
+      // 列为 TEXT 存 JSON 数组字符串; 行内 JSON 损坏时 cast 抛错, 由调用方
+      // (agent.ts L2 wrapper) 的 catch 吞掉——审计失败不影响业务执行。
       await pool.query(
-        'UPDATE pending_approvals SET side_effect_results = $1 WHERE id = $2',
-        [JSON.stringify(arr), row.id],
+        `UPDATE pending_approvals
+         SET side_effect_results =
+           (COALESCE(NULLIF(side_effect_results, '')::jsonb, '[]'::jsonb) || $1::jsonb)::text
+         WHERE tool_call_id = $2`,
+        [JSON.stringify([effect]), toolCallId],
       );
     },
 

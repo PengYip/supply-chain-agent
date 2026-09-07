@@ -7,6 +7,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import type { DbContext } from '../pipeline/db/client.js';
+import { withContainerLock } from '../lib/containerLock.js';
 import { insertOntologyEdge, getTradeFactById } from './repo.js';
 import { validateAllocationPlan, type AllocationItem, type AllocationViolation } from './writeoff.js';
 
@@ -56,34 +57,40 @@ async function executeWriteoffEdges(
   | { status: 'ok'; relation: string; edges: Array<{ edgeId: string; srcId: string; dstId: string; amount: number }>; totalAmount: number }
   | { status: 'invalid'; violations: AllocationViolation[] }
 > {
-  const violations = await validateAllocationPlan(deps.ctx, relation, items, deps.userId);
-  if (violations.length > 0) return { status: 'invalid', violations };
+  // 校验与落边整体进程内串行(batch/review 路由同款 containerLock): 并发审批单
+  // 若都基于同一份余额快照通过守恒校验再各自落边, 会超额核销(TOCTOU)。这些是
+  // 短 DB 操作(<=50 条边), 全局单键串行开销可忽略; 单 pm2 实例部署下进程内锁已够。
+  // 注意: 多条边仍非单事务, 中途 DB 故障可能留下半单边(见审计/补偿机制, 待办)。
+  return withContainerLock('ontology-writeoff-execute', async () => {
+    const violations = await validateAllocationPlan(deps.ctx, relation, items, deps.userId);
+    if (violations.length > 0) return { status: 'invalid', violations };
 
-  const edges: Array<{ edgeId: string; srcId: string; dstId: string; amount: number }> = [];
-  let totalAmount = 0;
-  const now = new Date();
-  for (const item of items) {
-    // 事实行存在性已由 validateAllocationPlan 保证；这里取 entityType 供连接对写入。
-    const src = await getTradeFactById(deps.ctx, item.srcId, deps.userId);
-    const dst = await getTradeFactById(deps.ctx, item.dstId, deps.userId);
-    if (!src || !dst) {
-      return { status: 'invalid', violations: [{ itemIndex: items.indexOf(item), code: 'unknown_fact', detail: '事实行在写入时消失' }] };
+    const edges: Array<{ edgeId: string; srcId: string; dstId: string; amount: number }> = [];
+    let totalAmount = 0;
+    const now = new Date();
+    for (const item of items) {
+      // 事实行存在性已由 validateAllocationPlan 保证；这里取 entityType 供连接对写入。
+      const src = await getTradeFactById(deps.ctx, item.srcId, deps.userId);
+      const dst = await getTradeFactById(deps.ctx, item.dstId, deps.userId);
+      if (!src || !dst) {
+        return { status: 'invalid', violations: [{ itemIndex: items.indexOf(item), code: 'unknown_fact', detail: '事实行在写入时消失' }] };
+      }
+      const params: Record<string, unknown> = { amount: item.amount };
+      if (item.partial !== undefined) params['partial'] = item.partial;
+      if (item.batch !== undefined) params['batch'] = item.batch;
+      const edgeId = await insertOntologyEdge(deps.ctx, {
+        relation,
+        fromType: src.entityType as never,
+        fromId: item.srcId,
+        toType: dst.entityType as never,
+        toId: item.dstId,
+        params,
+        validAt: now,
+        createdBy: toolName,
+      }, deps.userId);
+      edges.push({ edgeId, srcId: item.srcId, dstId: item.dstId, amount: item.amount });
+      totalAmount += item.amount;
     }
-    const params: Record<string, unknown> = { amount: item.amount };
-    if (item.partial !== undefined) params['partial'] = item.partial;
-    if (item.batch !== undefined) params['batch'] = item.batch;
-    const edgeId = await insertOntologyEdge(deps.ctx, {
-      relation,
-      fromType: src.entityType as never,
-      fromId: item.srcId,
-      toType: dst.entityType as never,
-      toId: item.dstId,
-      params,
-      validAt: now,
-      createdBy: toolName,
-    }, deps.userId);
-    edges.push({ edgeId, srcId: item.srcId, dstId: item.dstId, amount: item.amount });
-    totalAmount += item.amount;
-  }
-  return { status: 'ok', relation, edges, totalAmount };
+    return { status: 'ok', relation, edges, totalAmount };
+  });
 }
