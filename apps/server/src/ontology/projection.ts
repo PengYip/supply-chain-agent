@@ -8,9 +8,9 @@
 //   TradeGoods/Counterparty/OrgUnit <- 无源，空态(「待本体基座灌数」)
 import type { DbContext, PostgresDbContext } from '../pipeline/db/client.js';
 import { effectiveUserId } from '../pipeline/db/repositories.js';
-import { asOfBusinessTime, numberPlaceholders } from './asof.js';
+import { asOfBusinessTime, numberPlaceholders, asOfSystemTime, normalizeIsoUtc, type AsOfPredicate } from './asof.js';
 import type { OntologyEntityName } from './index.js';
-import { listTradeFactsAsOf, type TradeFactRow } from './repo.js';
+import { listTradeFactsAsOf, getTradeFactById, listOntologyEdgesAsOf, type TradeFactRow } from './repo.js';
 
 export type ProjectionSource = 'contract_ledger' | 'documents' | 'trade_facts';
 
@@ -211,4 +211,109 @@ export async function listProjectedEntities(
   filtered.sort((a, b) => (b.ingestedAt ?? '').localeCompare(a.ingestedAt ?? '') || b.id.localeCompare(a.id));
   const start = (page - 1) * pageSize;
   return { items: filtered.slice(start, start + pageSize), total: filtered.length, page, pageSize };
+}
+
+// ---------------------------------------------------------------------------
+// 详情 + as-of 时间线(仅事件实体/trade_facts 源具备双时间轴)
+// ---------------------------------------------------------------------------
+
+export type AsOfMode = 'business' | 'system';
+
+export interface EntityDetail {
+  /** 本行本身(不做 as-of 过滤；as-of 只影响 timeline/netAmount) */
+  entity: ProjectedEntity;
+  /** 本行 + REVERSE_ORIGIN 边双向传递闭包，as-of 过滤，validAt 升序 */
+  timeline: ProjectedEntity[];
+  /** 时间线金额合计(无金额实体为 null)——红冲负数自动轧差(docx 6.2) */
+  netAmount: number | null;
+  asOf: { mode: AsOfMode; at: string };
+}
+
+/** 红冲溯源闭包(docx 5.4)：root + REVERSE_ORIGIN 边双向可达 facts，全部经同一 as-of 谓词过滤。 */
+async function reverseOriginCluster(
+  ctx: DbContext, rootId: string, pred: AsOfPredicate, uid: string,
+): Promise<TradeFactRow[]> {
+  const edges = await listOntologyEdgesAsOf(ctx, pred, { relation: 'REVERSE_ORIGIN' }, uid);
+  const seen = new Set<string>([rootId]);
+  let frontier = [rootId];
+  while (frontier.length > 0) {
+    const next: string[] = [];
+    for (const e of edges) {
+      if (frontier.includes(e.fromId) && !seen.has(e.toId)) { seen.add(e.toId); next.push(e.toId); }
+      if (frontier.includes(e.toId) && !seen.has(e.fromId)) { seen.add(e.fromId); next.push(e.fromId); }
+    }
+    frontier = next;
+  }
+  const facts = await listTradeFactsAsOf(ctx, pred, {}, uid);
+  return facts.filter((f) => seen.has(f.id));
+}
+
+async function findContractRowById(
+  ctx: DbContext, id: string, uid: string,
+): Promise<ProjectedEntity | null> {
+  const sql = `SELECT id, contract_no, title, contract_type, fields, created_at
+                 FROM contract_ledger WHERE id = ? AND ${USER_SCOPE_LEGACY}`;
+  if (ctx.backend === 'postgres') {
+    const res = await (ctx as PostgresDbContext).pool.query(numberPlaceholders(sql), [id, uid]);
+    const row = (res.rows as Array<Record<string, unknown>>)[0];
+    return row ? mapContractRow(row) : null;
+  }
+  const row = ctx.sqlite.prepare(sql).get(id, uid) as Record<string, unknown> | undefined;
+  return row ? mapContractRow(row) : null;
+}
+
+async function findDocRowById(
+  ctx: DbContext, id: string, type: 'GoodsReceiptEvent' | 'GoodsDeliveryEvent', uid: string,
+): Promise<ProjectedEntity | null> {
+  const sql = `SELECT id, doc_type, source_uri, review_status, created_at
+                 FROM documents WHERE id = ? AND ${USER_SCOPE_LEGACY}`;
+  if (ctx.backend === 'postgres') {
+    const res = await (ctx as PostgresDbContext).pool.query(numberPlaceholders(sql), [id, uid]);
+    const row = (res.rows as Array<Record<string, unknown>>)[0];
+    return row ? mapDocRow(type, row) : null;
+  }
+  const row = ctx.sqlite.prepare(sql).get(id, uid) as Record<string, unknown> | undefined;
+  return row ? mapDocRow(type, row) : null;
+}
+
+export async function getProjectedEntityDetail(
+  ctx: DbContext,
+  type: OntologyEntityName,
+  id: string,
+  opts: { mode?: AsOfMode; at?: string } = {},
+  userId?: string,
+): Promise<EntityDetail | null> {
+  const uid = effectiveUserId(userId);
+  const mode: AsOfMode = opts.mode ?? 'business';
+  const at = normalizeIsoUtc(opts.at ?? new Date()); // 非法输入 throw -> 路由转 400
+  const pred = mode === 'system' ? asOfSystemTime(at) : asOfBusinessTime(at);
+  const asOf = { mode, at };
+
+  if (type === 'TradeContract') {
+    const entity = await findContractRowById(ctx, id, uid);
+    return entity ? { entity, timeline: [], netAmount: null, asOf } : null;
+  }
+
+  // 事件实体：trade_facts 优先；收发两类再探 documents(收发依据单据行)
+  const fact = await getTradeFactById(ctx, id, uid);
+  if (fact) {
+    const cluster = await reverseOriginCluster(ctx, id, pred, uid);
+    const timeline = [...cluster]
+      .sort((a, b) => a.validAt.localeCompare(b.validAt) || a.ingestedAt.localeCompare(b.ingestedAt))
+      .map(factToEntity);
+    const amounts = cluster
+      .map((f) => f.payload['amount'])
+      .filter((v): v is number => typeof v === 'number');
+    return {
+      entity: factToEntity(fact),
+      timeline,
+      netAmount: amounts.length > 0 ? amounts.reduce((a, b) => a + b, 0) : null,
+      asOf,
+    };
+  }
+  if (type === 'GoodsReceiptEvent' || type === 'GoodsDeliveryEvent') {
+    const entity = await findDocRowById(ctx, id, type, uid);
+    return entity ? { entity, timeline: [], netAmount: null, asOf } : null;
+  }
+  return null;
 }

@@ -1,8 +1,8 @@
 // apps/server/test/ontology/projection.test.ts
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.js';
-import { listProjectedEntities } from '../../src/ontology/projection.js';
-import { insertTradeFact } from '../../src/ontology/repo.js';
+import { listProjectedEntities, getProjectedEntityDetail } from '../../src/ontology/projection.js';
+import { insertTradeFact, insertOntologyEdge } from '../../src/ontology/repo.js';
 
 let ctx: DbContext;
 beforeEach(() => {
@@ -134,5 +134,57 @@ describe('projection: events <- trade_facts + receipt/delivery docs', () => {
       validAt: '2026-06-15', createdBy: 'test',
     }, 'u2');
     expect((await listProjectedEntities(ctx, 'InvoiceEvent', {}, 'u1')).total).toBe(0);
+  });
+});
+
+describe('projection: entity detail as-of + REVERSE_ORIGIN netting', () => {
+  let originalId: string;
+  let reversalId: string;
+  beforeEach(async () => {
+    originalId = await insertTradeFact(ctx, {
+      entityType: 'InvoiceEvent',
+      payload: { invoiceNo: 'INV-1', invoiceType: '销项', eventBizType: '正向', amount: 1_000_000, currency: 'CNY' },
+      validAt: '2026-06-15', ingestedAt: '2026-06-16', createdBy: 'demo',
+    }, 'u1');
+    reversalId = await insertTradeFact(ctx, {
+      entityType: 'InvoiceEvent',
+      payload: { invoiceNo: 'INV-1', invoiceType: '销项', eventBizType: '逆向', amount: -1_000_000, currency: 'CNY' },
+      validAt: '2026-06-15', ingestedAt: '2026-08-05', createdBy: 'demo',
+    }, 'u1');
+    await insertOntologyEdge(ctx, {
+      relation: 'REVERSE_ORIGIN', fromType: 'InvoiceEvent', fromId: reversalId,
+      toType: 'InvoiceEvent', toId: originalId, params: { amount: 1_000_000 },
+      validAt: '2026-06-15', ingestedAt: '2026-08-05', createdBy: 'demo',
+    }, 'u1');
+  });
+
+  it('system@7/31 (当时口径): only the original fact was known -> net 1,000,000', async () => {
+    const d = await getProjectedEntityDetail(ctx, 'InvoiceEvent', originalId,
+      { mode: 'system', at: '2026-07-31T23:59:59.000Z' }, 'u1');
+    expect(d!.timeline).toHaveLength(1);
+    expect(d!.netAmount).toBe(1_000_000);
+  });
+
+  it('business@now (最新口径): original + reversal -> net 0', async () => {
+    const d = await getProjectedEntityDetail(ctx, 'InvoiceEvent', originalId,
+      { mode: 'business' }, 'u1');
+    expect(d!.timeline.map((e) => e.id).sort()).toEqual([originalId, reversalId].sort());
+    expect(d!.netAmount).toBe(0);
+  });
+
+  it('user scoping: other user gets null', async () => {
+    expect(await getProjectedEntityDetail(ctx, 'InvoiceEvent', originalId, {}, 'u2')).toBeNull();
+  });
+
+  it('contract detail has no timeline (dual timeline only on facts)', async () => {
+    ctx.sqlite.prepare(
+      `INSERT INTO contract_ledger (id, contract_no, display_contract_no, doc_type, document_id,
+          title, fields, field_meta, overall_confidence, needs_review, user_id, contract_type)
+       VALUES ('C1', 'HT-1', 'HT-1', '合同', 'd1', '', '{}', '{}', 1, 0, 'u1', '采购')`,
+    ).run();
+    const d = await getProjectedEntityDetail(ctx, 'TradeContract', 'C1', {}, 'u1');
+    expect(d!.entity.fields['contractNo']).toBe('HT-1');
+    expect(d!.timeline).toEqual([]);
+    expect(d!.netAmount).toBeNull();
   });
 });

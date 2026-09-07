@@ -95,6 +95,21 @@ export async function insertTradeFact(
   return id;
 }
 
+function factRowFrom(r: Record<string, unknown>, pg: boolean): TradeFactRow {
+  const iso = (v: unknown): string | null =>
+    v == null ? null : pg ? new Date(v as string).toISOString() : v as string;
+  return {
+    id: r['id'] as string,
+    entityType: r['entity_type'] as string,
+    payload: parseJson(r['payload']),
+    validAt: iso(r['valid_at']) as string,
+    invalidAt: iso(r['invalid_at']),
+    ingestedAt: iso(r['ingested_at']) as string,
+    createdBy: r['created_by'] as string,
+    userId: r['user_id'] as string,
+  };
+}
+
 export async function listTradeFactsAsOf(
   ctx: DbContext, pred: AsOfPredicate, opts: { entityType?: string } = {}, userId?: string,
 ): Promise<TradeFactRow[]> {
@@ -110,30 +125,33 @@ export async function listTradeFactsAsOf(
       `SELECT ${FACT_COLS} FROM trade_facts WHERE ${numberPlaceholders(where)} ORDER BY valid_at, id`,
       params,
     );
-    return (res.rows as Array<Record<string, unknown>>).map((r) => ({
-      id: r['id'] as string,
-      entityType: r['entity_type'] as string,
-      payload: parseJson(r['payload']),
-      validAt: new Date(r['valid_at'] as string).toISOString(),
-      invalidAt: r['invalid_at'] == null ? null : new Date(r['invalid_at'] as string).toISOString(),
-      ingestedAt: new Date(r['ingested_at'] as string).toISOString(),
-      createdBy: r['created_by'] as string,
-      userId: r['user_id'] as string,
-    }));
+    return (res.rows as Array<Record<string, unknown>>).map((r) => factRowFrom(r, true));
   }
   const rows = ctx.sqlite.prepare(
     `SELECT ${FACT_COLS} FROM trade_facts WHERE ${where} ORDER BY valid_at, id`,
   ).all(...params) as Array<Record<string, unknown>>;
-  return rows.map((r) => ({
-    id: r['id'] as string,
-    entityType: r['entity_type'] as string,
-    payload: parseJson(r['payload']),
-    validAt: r['valid_at'] as string,
-    invalidAt: (r['invalid_at'] as string | null) ?? null,
-    ingestedAt: r['ingested_at'] as string,
-    createdBy: r['created_by'] as string,
-    userId: r['user_id'] as string,
-  }));
+  return rows.map((r) => factRowFrom(r, false));
+}
+
+/** 按 id 单行读取(台账详情定位用)；用户隔离与 list 一致。 */
+export async function getTradeFactById(
+  ctx: DbContext, id: string, userId?: string,
+): Promise<TradeFactRow | null> {
+  const uid = effectiveUserId(userId);
+  const where = "id = ? AND (user_id = ? OR user_id = '')";
+  if (ctx.backend === 'postgres') {
+    const pg = ctx as PostgresDbContext;
+    const res = await pg.pool.query(
+      `SELECT ${FACT_COLS} FROM trade_facts WHERE ${numberPlaceholders(where)}`,
+      [id, uid],
+    );
+    const row = (res.rows as Array<Record<string, unknown>>)[0];
+    return row ? factRowFrom(row, true) : null;
+  }
+  const row = ctx.sqlite.prepare(
+    `SELECT ${FACT_COLS} FROM trade_facts WHERE ${where}`,
+  ).get(id, uid) as Record<string, unknown> | undefined;
+  return row ? factRowFrom(row, false) : null;
 }
 
 // ---------------------------------------------------------------------------

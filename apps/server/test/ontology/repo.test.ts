@@ -3,6 +3,7 @@ import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.
 import { asOfBusinessTime, asOfSystemTime, normalizeIsoUtc } from '../../src/ontology/asof.js';
 import {
   insertTradeFact, insertOntologyEdge, listTradeFactsAsOf, listOntologyEdgesAsOf,
+  getTradeFactById,
 } from '../../src/ontology/repo.js';
 
 let ctx: DbContext;
@@ -165,5 +166,17 @@ describe('M-1 canonical persistence (strict write boundary)', () => {
     const edges = await listOntologyEdgesAsOf(ctx, asOfBusinessTime('2026-09-07T00:00:00.000Z'), {});
     expect(edges).toHaveLength(1);
     expect(edges[0]!.params).toEqual({ amount: 500, batch: 'B1' });
+  });
+});
+
+describe('getTradeFactById', () => {
+  it('round-trips a fact with user scoping', async () => {
+    const id = await insertTradeFact(ctx, {
+      entityType: 'InvoiceEvent', payload: INVOICE(100, '正向'),
+      validAt: '2026-06-15', createdBy: 'test',
+    }, 'u1');
+    const hit = await getTradeFactById(ctx, id, 'u1');
+    expect(hit?.payload['amount']).toBe(100);
+    expect(await getTradeFactById(ctx, id, 'u2')).toBeNull();
   });
 });

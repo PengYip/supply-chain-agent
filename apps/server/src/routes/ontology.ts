@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
 import { ontologySchemaJson, OntologyEntityNameSchema } from '../ontology/index.js';
-import { listProjectedEntities } from '../ontology/projection.js';
+import { listProjectedEntities, getProjectedEntityDetail } from '../ontology/projection.js';
 
 export const ontologyRoute = new Hono<AuthEnv>();
 
@@ -48,5 +48,41 @@ ontologyRoute.get('/entities/:type', async (c) => {
   } catch (e) {
     console.error('[ontology] entities list failed:', errDetail(e));
     return c.json({ error: 'list failed', detail: errDetail(e) }, 500);
+  }
+});
+
+const detailQuerySchema = z.object({
+  asOf: z.enum(['business', 'system']).default('business'),
+  at: z.string().optional(),
+});
+
+/** GET /entities/:type/:id — 详情 + as-of 时间切片(红冲轧差时间线)。 */
+ontologyRoute.get('/entities/:type/:id', async (c) => {
+  const user = c.get('user')!;
+  const parsedType = OntologyEntityNameSchema.safeParse(c.req.param('type'));
+  if (!parsedType.success) {
+    return c.json({ error: 'unknown entity type', detail: 'type 必须是本体注册表 11 实体之一' }, 400);
+  }
+  const parsed = detailQuerySchema.safeParse(c.req.query());
+  if (!parsed.success) {
+    return c.json(
+      { error: 'invalid query params', detail: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) },
+      400,
+    );
+  }
+  try {
+    const detail = await getProjectedEntityDetail(
+      getDbContext(), parsedType.data, c.req.param('id'),
+      { mode: parsed.data.asOf, at: parsed.data.at }, user.id,
+    );
+    if (!detail) return c.json({ error: 'not found' }, 404);
+    return c.json(detail);
+  } catch (e) {
+    // normalizeIsoUtc 对非法 at 抛 'asof: invalid datetime' -> 400
+    if (e instanceof Error && e.message.startsWith('asof:')) {
+      return c.json({ error: 'invalid at', detail: e.message }, 400);
+    }
+    console.error('[ontology] entity detail failed:', errDetail(e));
+    return c.json({ error: 'detail failed', detail: errDetail(e) }, 500);
   }
 });
