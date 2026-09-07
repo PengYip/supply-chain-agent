@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把《本体建模技术备忘》§3 的领域模型（11 实体 / 8 关系类型 13 连接对 / 4 枚举 / 双时间轴）落成代码级 SSOT（zod 注册表），并为其提供双后端数据表（ontology_edges / trade_facts）、as-of 查询 helper、工具词汇 CI 门禁。
+**Goal:** 把《本体建模技术备忘》§3 的领域模型（11 实体 / 8 关系类型 14 连接对 / 4 枚举 / 双时间轴）落成代码级 SSOT（zod 注册表），并为其提供双后端数据表（ontology_edges / trade_facts）、as-of 查询 helper、工具词汇 CI 门禁。
 
 **Architecture:** 单文件纯 zod 注册表（`apps/server/src/ontology/index.ts`，只 import zod，前端可消费）+ 两张双后端镜像表（SQLite raw DDL 进 `client.ts migrate()`；Postgres raw DDL 进 `client.ts migratePostgres()` + drizzle twin 进 `postgres-schema.ts`）+ 自包含仓储模块 `ontology/repo.ts`（双后端 dispatch，仿 repositories.ts 风格）+ `toolOntologyMap` 词汇门禁挂进现有 CI 门禁测试。
 
@@ -45,7 +45,7 @@
 ## 设计决策（spec 要求写明理由的部分）
 
 1. **trade_facts 用通用表 + entity_type 判别（spec 倾向方案，采纳）**，不按实体分表。理由：(a) 7 类事件 payload 差异大且会随抽取管线演化，分表要么稀疏列要么频繁加列；(b) 真正的字段防线是写入边界的 zod 校验（`entitySchema(type).parse(payload)`），表结构只需保证判别键 + 三时间列；(c) 与领域铁律「不拆分同语义实体」一致；(d) Item 3 投影按 entity_type 过滤即可；未来某类事件查询模式固化后可无痛垂直拆表——as-of helper 与调用方不受影响。
-2. **关系口径：8 类型 / 13 连接对**。roadmap 写「9 关系」，docx §5 定稿实际是 4 核心类型（ALLOCATE_TO 3 对 / OFFSET_SETTLE 2 对 / WRITE_OFF 2 对 / REVERSE_ORIGIN 1 对）+ 4 辅助类型（FEEDS_INTO 2 对 / CORRESPONDS_TO 2 对 / TRIGGERS 1 对 / PROVIDE 1 对）= 8 类型 13 对；「9」按「4 核心 + 5 辅助连接语义」口径数（CORRESPONDS_TO 的两对语义各算一条）。注册表以**类型**为键、`pairs` 数组承载全部 13 对，语义零遗漏。
+2. **关系口径：8 类型 / 14 连接对**。roadmap 写「9 关系」，docx §5 定稿实际是 4 核心类型（ALLOCATE_TO 3 对 / OFFSET_SETTLE 2 对 / WRITE_OFF 2 对 / REVERSE_ORIGIN 1 对）+ 4 辅助类型（FEEDS_INTO 2 对 / CORRESPONDS_TO 2 对 / TRIGGERS 1 对 / PROVIDE 1 对）= 8 类型 14 对；「9」按「4 核心 + 5 辅助连接语义」口径数（CORRESPONDS_TO 的两对语义各算一条）。注册表以**类型**为键、`pairs` 数组承载全部 14 对，语义零遗漏。
 3. **CommodityCode v1 开放词汇**。备忘 §7 明示 TradeGoods 分层待业务确认；强造闭枚举有编造风险。v1 `commodityCode: z.string().min(1)` + 注册表导出 `COMMODITY_CODES` 词汇表常量（起步为空数组），业务确认后转闭枚举只改注册表单文件（符合验收 1 精神）。PayType/EventBizType/AllocateMethod 三枚举在 docx §6 有闭集定义，直接落 z.enum。
 4. **meaning URI 只建机制不挂条目**。roadmap OUT 边界明确「meaning 只挂已确认的 OEO/FIBO 条目」；v1 导出 `MEANING_URIS` 空映射 + URI 格式校验（测试断言所有已挂值匹配 URI 模式），词汇精选属后续任务（备忘落地路线第 4 步）。
 5. **实体词汇与语义规则分层**。`ONTOLOGY_ENTITIES` 存纯 `z.object`（保证 `.shape` 可直接取字段，供 CI 门禁与 Item 3 列生成）；「逆向=负数金额」等语义规则（docx §6.2）放独立 refinement，经 `entitySchema(name)` 在**写入边界**叠加。对应 docx 第三层（实体）与第四层（语义规则）的分层。
@@ -146,7 +146,7 @@ describe('ontology registry', () => {
       ['ALLOCATE_TO', 'OFFSET_SETTLE', 'WRITE_OFF', 'REVERSE_ORIGIN',
        'FEEDS_INTO', 'CORRESPONDS_TO', 'TRIGGERS', 'PROVIDE']));
     const pairs = ONTOLOGY_RELATIONS.flatMap((r) => r.pairs);
-    expect(pairs).toHaveLength(13);
+    expect(pairs).toHaveLength(14);
     for (const p of pairs) {
       expect(ENTITY_NAMES).toContain(p.from);
       expect(ENTITY_NAMES).toContain(p.to);
@@ -369,7 +369,7 @@ export function entityFieldNames(name: OntologyEntityName): Set<string> {
 }
 
 // ---------------------------------------------------------------------------
-// 关系（docx §5：4 核心 + 4 辅助 = 8 类型 / 13 连接对；带参是一等公民）
+// 关系（docx §5：4 核心 + 4 辅助 = 8 类型 / 14 连接对；带参是一等公民）
 // ---------------------------------------------------------------------------
 
 const NO_PARAMS = z.object({}).strict().describe('无参关系');
@@ -1418,7 +1418,7 @@ grep -n "^## " AGENTS.md
 ```markdown
 ## 本体基座 ontology foundation
 
-- 注册表 SSOT：`apps/server/src/ontology/index.ts`——纯 zod 单文件（只 import zod，无 node 内建，前端可消费；Item 3 经 `GET /api/ontology/schema` 返回 `ontologySchemaJson()`）。11 实体（4 静态 + 7 事件）+ 8 关系类型/13 连接对（docx 方案 §5 定稿；roadmap 的"9 关系"= 4 核心 + 5 辅助连接语义口径）+ 闭枚举 PayType/EventBizType/AllocateMethod（商品码 v1 开放词汇 `COMMODITY_CODES`，待业务确认后转闭枚举）+ 双时间轴字段（validAt/invalidAt/ingestedAt）+ meaning URI 机制（`MEANING_URIS` 只挂已确认条目）。领域变更上游 SSOT：`本体建模技术备忘.md` §3（其上游为 docs/ 下 docx 方案）。
+- 注册表 SSOT：`apps/server/src/ontology/index.ts`——纯 zod 单文件（只 import zod，无 node 内建，前端可消费；Item 3 经 `GET /api/ontology/schema` 返回 `ontologySchemaJson()`）。11 实体（4 静态 + 7 事件）+ 8 关系类型/14 连接对（docx 方案 §5 定稿；roadmap 的"9 关系"= 4 核心 + 5 辅助连接语义口径）+ 闭枚举 PayType/EventBizType/AllocateMethod（商品码 v1 开放词汇 `COMMODITY_CODES`，待业务确认后转闭枚举）+ 双时间轴字段（validAt/invalidAt/ingestedAt）+ meaning URI 机制（`MEANING_URIS` 只挂已确认条目）。领域变更上游 SSOT：`本体建模技术备忘.md` §3（其上游为 docs/ 下 docx 方案）。
 - 数据表：`ontology_edges`（带参关系边）与 `trade_facts`（事件事实通用表，entity_type 判别 + payload zod 校验；spec 决策理由见 plans/2026-09-07-ontology-foundation.md），双后端列对列镜像（SQLite raw DDL 在 `pipeline/db/client.ts migrate()`；PG raw DDL 在 `migratePostgres()` + drizzle twin 在 `postgres-schema.ts`）。时间列 UTC ISO（SQLite TEXT 字典序=时间序）。
 - as-of 查询：`asOfBusinessTime(t)` / `asOfSystemTime(t)`（`src/ontology/asof.ts`，语义=技术备忘 §4：业务时间=当时为真，系统时间=当时知道什么，月报复现走后者）。
 - 写入边界：`insertTradeFact` / `insertOntologyEdge`（`src/ontology/repo.ts`）——payload/params 走注册表 zod 校验（含"逆向=负数金额"语义规则），关系连接对白名单校验；不要绕过直写 SQL。
