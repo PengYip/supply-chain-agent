@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { listToolNames, getToolsForRole, isCubeSandboxEnabled } from '../../src/harness/roleToolRegistry.js';
 import { SCENARIO_TOOLS, SCENARIO_CORE, detectScenario, scenarioActiveTools } from '../../src/harness/scenarios.js';
 import { createDb, migrate } from '../../src/pipeline/db/client.js';
+import { toolOntologyMap, toolFieldsViolations } from '../../src/ontology/toolOntologyMap.js';
 
 // Tool-inventory methodology gate (docs/tool-design-methodology.md, 2026-08-28).
 // The inventory JSON is the SSOT for the tool surface; these assertions turn the
@@ -143,5 +144,21 @@ describe('tool inventory gate', () => {
     expect(detectScenario('这批货值多少？先暂估一下')).toBe('settlement');
     expect(detectScenario('请录入这份合同并解析')).toBe('entry');
     expect(detectScenario('这两份合同是什么关系')).toBe('qa');
+  });
+
+  it('toolOntologyMap: mapped tools stay inside the ontology vocabulary', () => {
+    const ctx = createDb(':memory:');
+    migrate(ctx.sqlite);
+    const tools = getToolsForRole('trader', { ctx });
+    expect(Object.keys(toolOntologyMap).length, 'demo mapping: exactly 3 tools').toBe(3);
+    for (const name of Object.keys(toolOntologyMap)) {
+      const t = tools.find((x) => x.name === name);
+      expect(t, `${name} is mapped in toolOntologyMap but not mounted for trader`).toBeDefined();
+      const fields = Object.keys((t!.inputSchema as { shape: Record<string, unknown> }).shape ?? {});
+      const violations = toolFieldsViolations(name, fields);
+      expect(violations,
+        `${name} inputSchema fields outside the ontology registry vocabulary: ${violations.join(', ')} ` +
+        '(add them to the entity schema or SHARED_TOOL_FIELD_NAMES in src/ontology/index.ts first)').toEqual([]);
+    }
   });
 });
