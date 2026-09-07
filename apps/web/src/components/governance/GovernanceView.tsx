@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { OntologyTab } from './OntologyTab';
 import { ToolsTab } from './ToolsTab';
 import { PermissionsTab } from './PermissionsTab';
+import { ApprovalAuditTab } from './ApprovalAuditTab';
 
 export type GovernanceTabId = 'ontology' | 'tools' | 'permissions' | 'approvals';
 
@@ -32,7 +33,7 @@ export function GovernanceView() {
         {tab === 'ontology' && <OntologyTab />}
         {tab === 'tools' && <ToolsTab />}
         {tab === 'permissions' && <PermissionsTab />}
-        {tab === 'approvals' && null}
+        {tab === 'approvals' && <ApprovalAuditTab />}
       </div>
     </div>
   );
