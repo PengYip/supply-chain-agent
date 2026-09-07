@@ -9,7 +9,10 @@ import {
   appendMessages,
   sessionBelongsTo,
   getSessionStatus,
+  listApprovals,
+  getApprovalById,
 } from '../harness/sessionStore.js';
+import type { SideEffect } from '../harness/sessionStore.js';
 import { startSessionRun, isRunning } from '../harness/runManager.js';
 import { runSession } from '../harness/runSession.js';
 import { buildHistoryModelMessages } from '../harness/historyCompaction.js';
@@ -224,4 +227,37 @@ approvalCallback.post('/approval/callback', async (c) => {
     { ok: true, status: approved ? 'approved' : 'denied', sessionId, runId: start.runId },
     { status: 200, headers: { 'x-session-id': sessionId } },
   );
+});
+
+// ---- Approval center read endpoints (requireAuth covers /api/approval/* in
+// index.ts; the defensive c.get('user') re-check is for direct-mount tests) ----
+
+const ListQuerySchema = z.object({
+  status: z.enum(['pending', 'approved', 'denied', 'all']).default('all'),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+function parseSideEffects(raw: string | null | undefined): SideEffect[] | null {
+  if (!raw) return null;
+  try { return JSON.parse(raw) as SideEffect[]; } catch { return null; }
+}
+
+approvalCallback.get('/approval/list', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const q = ListQuerySchema.safeParse(c.req.query());
+  if (!q.success) return c.json({ error: 'Invalid query', detail: q.error.flatten() }, 400);
+  const items = await listApprovals({ userId: user.id, ...q.data });
+  return c.json({ items: items.map((i) => ({ ...i, sideEffects: parseSideEffects(i.side_effect_results) })) });
+});
+
+approvalCallback.get('/approval/:id', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const row = await getApprovalById(c.req.param('id'));
+  if (!row) return c.json({ error: 'approval not found' }, 404);
+  if (!(await sessionBelongsTo(row.session_id, user.id))) {
+    return c.json({ error: 'approval not found' }, 404); // 防枚举：与不存在同响应
+  }
+  return c.json({ item: { ...row, sideEffects: parseSideEffects(row.side_effect_results) } });
 });
