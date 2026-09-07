@@ -552,18 +552,43 @@ async function listApprovals({
   userId,
   status = 'all',
   limit = 50,
+  toolName,
+  decidedBy,
+  createdFrom,
+  createdTo,
 }: ApprovalListFilter): Promise<ApprovalListItem[]> {
+  const conds: string[] = ['(s.user_id = ? OR s.user_id IS NULL)'];
+  const params: unknown[] = [userId];
+  if (status !== 'all') {
+    conds.push('pa.status = ?');
+    params.push(status);
+  }
+  if (toolName) {
+    conds.push('pa.tool_name = ?');
+    params.push(toolName);
+  }
+  if (decidedBy) {
+    conds.push('pa.decided_by = ?');
+    params.push(decidedBy);
+  }
+  if (createdFrom) {
+    conds.push('pa.created_at >= ?');
+    params.push(createdFrom);
+  }
+  if (createdTo) {
+    conds.push('pa.created_at <= ?');
+    params.push(createdTo);
+  }
   const rows = db
     .prepare(
       `SELECT pa.*, s.user_id AS session_user_id
          FROM pending_approvals pa
          JOIN sessions s ON s.id = pa.session_id
-        WHERE (s.user_id = ? OR s.user_id IS NULL)
-          AND (? = 'all' OR pa.status = ?)
+        WHERE ${conds.join(' AND ')}
         ORDER BY pa.created_at DESC
         LIMIT ?`,
     )
-    .all(userId, status, status, limit);
+    .all(...params, limit);
   return rows as ApprovalListItem[];
 }
 

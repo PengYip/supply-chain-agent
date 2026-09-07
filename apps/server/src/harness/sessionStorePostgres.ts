@@ -595,17 +595,43 @@ export function createAgentSessionStore(pool: Pool): SessionStoreBackend {
       userId,
       status = 'all',
       limit = 50,
+      toolName,
+      decidedBy,
+      createdFrom,
+      createdTo,
     }: ApprovalListFilter): Promise<ApprovalListItem[]> {
       await ensure();
+      const conds: string[] = ['(s.user_id = $1 OR s.user_id IS NULL)'];
+      const params: unknown[] = [userId];
+      if (status !== 'all') {
+        conds.push(`pa.status = $${params.length + 1}`);
+        params.push(status);
+      }
+      if (toolName) {
+        conds.push(`pa.tool_name = $${params.length + 1}`);
+        params.push(toolName);
+      }
+      if (decidedBy) {
+        conds.push(`pa.decided_by = $${params.length + 1}`);
+        params.push(decidedBy);
+      }
+      if (createdFrom) {
+        conds.push(`pa.created_at >= $${params.length + 1}`);
+        params.push(createdFrom);
+      }
+      if (createdTo) {
+        conds.push(`pa.created_at <= $${params.length + 1}`);
+        params.push(createdTo);
+      }
+      params.push(limit);
       const { rows } = await pool.query<ApprovalListItem>(
         `SELECT pa.*, s.user_id AS session_user_id
            FROM pending_approvals pa
            JOIN sessions s ON s.id = pa.session_id
-          WHERE (s.user_id = $1 OR s.user_id IS NULL)
-            AND ($2 = 'all' OR pa.status = $3)
+          WHERE ${conds.join(' AND ')}
           ORDER BY pa.created_at DESC
-          LIMIT $4`,
-        [userId, status, status, limit],
+          LIMIT $${params.length}`,
+        params,
       );
       return rows;
     },

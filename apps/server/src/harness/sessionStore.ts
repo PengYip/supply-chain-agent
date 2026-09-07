@@ -164,6 +164,14 @@ export type ApprovalListFilter = {
   userId: string;
   status?: 'pending' | 'approved' | 'denied' | 'all';
   limit?: number;
+  /** 精确匹配 tool_name（治理后台审批审计 tab, roadmap Item 6）。 */
+  toolName?: string;
+  /** 精确匹配 decided_by。 */
+  decidedBy?: string;
+  /** UTC ISO；created_at >= createdFrom（TEXT 列字典序=时间序，双后端同语义）。 */
+  createdFrom?: string;
+  /** UTC ISO；created_at <= createdTo。 */
+  createdTo?: string;
 };
 
 /** List-facing per-session row (GET /api/sessions). */

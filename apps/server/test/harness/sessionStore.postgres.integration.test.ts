@@ -294,6 +294,21 @@ describe.skipIf(!RUN_PG)('sessionStore postgres backend', () => {
     expect((await store.listPending(s.id)).map((p) => p.id)).toEqual(['ESC-pg-1']);
   });
 
+  it('listApprovals audit filters (roadmap Item 6): toolName + decidedBy', async () => {
+    const s = await store.createSession('trader', 'pg-u1');
+    await store.recordPendingApproval({ sessionId: s.id, level: 'L2', toolName: 'bind_document',
+      toolCallId: 'call-pg-1', input: {}, approvalId: 'ap-pg-1' });
+    await store.recordPendingApproval({ sessionId: s.id, level: 'L3', toolName: 'escalate_to_human',
+      toolCallId: 'call-pg-2', input: {}, ticketId: 'ESC-pg-1' });
+    const binds = await store.listApprovals({ userId: 'pg-u1', toolName: 'bind_document' });
+    expect(binds).toHaveLength(1);
+    expect(binds[0]!.tool_name).toBe('bind_document');
+    await store.resolveApproval((await store.getPending('ap-pg-1'))!.id, 'approved',
+      { decidedBy: 'pg-boss' });
+    expect(await store.listApprovals({ userId: 'pg-u1', decidedBy: 'pg-boss' })).toHaveLength(1);
+    expect(await store.listApprovals({ userId: 'pg-u1', decidedBy: 'no-one' })).toHaveLength(0);
+  });
+
   // ---- session events (replay buffer) ------------------------------------------
 
   it('session events: seq allocation, listSince, prune (per-session counters)', async () => {
