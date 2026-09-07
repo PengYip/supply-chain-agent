@@ -62,11 +62,14 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
  *  另承担会话级「分享 / 导出图片」入口（见下方覆盖层注释）。 */
 export function ChatWorkspace({
   activeSessionId,
+  initialAsk,
   onSelectSession,
   sessionsApi,
   chat,
 }: {
   activeSessionId: string | null;
+  /** 台账「问 Agent」跳入的首条消息文本（#/chat?session=new&ask=...），透传 RealChatView 消费。 */
+  initialAsk?: string | null;
   onSelectSession: (id: string) => void;
   sessionsApi: ReturnType<typeof useSessions>;
   /** RealChatView 其余 props 原样透传（sessionId 单独传入）。 */
@@ -205,7 +208,7 @@ export function ChatWorkspace({
           这里向下查询消息流 DOM。覆盖层本身 pointer-events-none，右侧原有的
           状态徽标与收藏按钮不受遮挡。 */}
       <div className="relative flex min-w-0 flex-1 flex" ref={chatAreaRef}>
-        <RealChatView sessionId={activeSessionId} {...chat} />
+        <RealChatView sessionId={activeSessionId} initialAsk={initialAsk} {...chat} />
         {activeSessionId && (
           <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex h-12 items-center px-4">
             <div className="pointer-events-auto flex items-center gap-1">

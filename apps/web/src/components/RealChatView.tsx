@@ -247,7 +247,9 @@ export const RealChatView: React.FC<{
   /** Per-docId parse state for referenced files, shown on the context chips
    *  (owned by App, where 添加到对话 fires the parse). */
   docParseStates: Record<string, DocParseState>;
-}> = ({ sessionId, contextFiles, setContextFiles, onSessionChanged, onSessionCreated, onFilesChanged, onOpenBindings, docParseStates }) => {
+  /** 台账「问 Agent」跳入(#/chat?session=new&ask=...)：无活动会话时注入首条消息。 */
+  initialAsk?: string | null;
+}> = ({ sessionId, contextFiles, setContextFiles, onSessionChanged, onSessionCreated, onFilesChanged, onOpenBindings, docParseStates, initialAsk }) => {
   const [input, setInput] = useState('')
 
   // 对话收藏: probe + header affordance for the CURRENT session. Self-contained
@@ -370,6 +372,16 @@ export const RealChatView: React.FC<{
   const { messages, status, error, connected, sendMessage, stopRun } = useSessionMessages(sessionId ?? null, {
     onSessionCreated: (id) => onSessionCreated?.(id),
   })
+  // 台账「问 Agent」跳入(#/chat?session=new&ask=...)：无活动会话时注入首条消息。
+  // ref 守卫保证只消费一次（StrictMode 双执行 / hash 抖动不重发）；
+  // 发送成功后 onSessionCreated -> selectSession 会把 hash 换成 session=<id>，ask 自然清除。
+  const askConsumedRef = useRef(false)
+  useEffect(() => {
+    if (!initialAsk || askConsumedRef.current) return
+    if (sessionId != null) return
+    askConsumedRef.current = true
+    void sendMessage(initialAsk)
+  }, [initialAsk, sessionId, sendMessage])
   const liveSessionId = sessionId ?? null
   const isBusy = status === 'busy'
   const isStreaming = isBusy

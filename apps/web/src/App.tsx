@@ -113,7 +113,9 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
   // activeSessionId 的旧双源已消除，popstate 时自动从 hash 恢复。
   const { route, navigate } = useHashRoute();
   const view = route.view;
-  const activeSessionId = route.params.session ?? null;
+  // 'new' 是「从台账/外部跳入待新建」哨兵：归一为无活动会话，首条消息由 ask 注入。
+  const activeSessionId =
+    route.params.session && route.params.session !== 'new' ? route.params.session : null;
   // 跨视图定位：绑定工作台 -> 图谱页，以合同节点为中心展开。
   // nonce 自增保证重复跳转同一合同也会触发图谱页重新查询。URL 表达不了
   // 「重复触发同一目标」，故 nonce 不进路由、保留 App state。
@@ -305,6 +307,7 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
       {view === 'chat' ? (
         <ChatWorkspace
           activeSessionId={activeSessionId}
+          initialAsk={view === 'chat' ? route.params.ask ?? null : null}
           onSelectSession={selectSession}
           sessionsApi={sessionsApi}
           chat={{
