@@ -456,6 +456,42 @@ export function migrate(sqlite: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_document_units_parent ON document_units(parent_document_id);
     CREATE INDEX IF NOT EXISTS idx_document_units_child ON document_units(child_document_id);
+
+    -- 本体基座(roadmap 2026-09-07 Item 2 / 技术备忘 §3-§4): 带参关系边 + 事件事实。
+    -- 实体业务数据 v1 不搬家(Item 3 只读投影), 本两表只收本体原生写入(经
+    -- src/ontology/repo.ts 的 zod 校验入口, 不要绕过直写)。时间列全 UTC ISO
+    -- (strftime Z 惯例, projects 表先例): TEXT 字典序即时间序, as-of 比较依赖此点。
+    CREATE TABLE IF NOT EXISTS ontology_edges (
+      id TEXT PRIMARY KEY,
+      relation TEXT NOT NULL,
+      from_type TEXT NOT NULL,
+      from_id TEXT NOT NULL,
+      to_type TEXT NOT NULL,
+      to_id TEXT NOT NULL,
+      params TEXT NOT NULL DEFAULT '{}',
+      valid_at TEXT NOT NULL,
+      invalid_at TEXT,
+      ingested_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      created_by TEXT NOT NULL,
+      user_id TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_ontology_edges_relation ON ontology_edges(relation, user_id);
+    CREATE INDEX IF NOT EXISTS idx_ontology_edges_from ON ontology_edges(from_type, from_id, user_id);
+    CREATE INDEX IF NOT EXISTS idx_ontology_edges_to ON ontology_edges(to_type, to_id, user_id);
+
+    CREATE TABLE IF NOT EXISTS trade_facts (
+      id TEXT PRIMARY KEY,
+      entity_type TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      valid_at TEXT NOT NULL,
+      invalid_at TEXT,
+      ingested_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      created_by TEXT NOT NULL,
+      user_id TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_trade_facts_type ON trade_facts(entity_type, user_id);
+    CREATE INDEX IF NOT EXISTS idx_trade_facts_valid ON trade_facts(valid_at);
+    CREATE INDEX IF NOT EXISTS idx_trade_facts_ingested ON trade_facts(ingested_at);
   `);
 
   // P4: 种子冲突策略列(managed-wins)。NULL=纯种子行(boot 可覆写);非空=DB 优先。
@@ -1097,6 +1133,38 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     END $$;`,
     `ALTER TABLE doc_chunk ADD COLUMN IF NOT EXISTS fts_vector tsvector GENERATED ALWAYS AS (to_tsvector('simple', regexp_replace(chunk_text, '([^0-9A-Za-z ])', '\\1 ', 'g'))) STORED`,
     `CREATE INDEX IF NOT EXISTS idx_doc_chunk_fts ON doc_chunk USING GIN (fts_vector)`,
+    // 本体基座(2026-09-07 Item 2): mirrors SQLite ontology_edges/trade_facts 列对列;
+    // params/payload 用 jsonb(PG 惯例, 供 Item 4/5 边摘要与聚合查询), 时间列 timestamptz。
+    `CREATE TABLE IF NOT EXISTS ontology_edges (
+       id TEXT PRIMARY KEY,
+       relation TEXT NOT NULL,
+       from_type TEXT NOT NULL,
+       from_id TEXT NOT NULL,
+       to_type TEXT NOT NULL,
+       to_id TEXT NOT NULL,
+       params jsonb NOT NULL DEFAULT '{}'::jsonb,
+       valid_at timestamptz NOT NULL,
+       invalid_at timestamptz,
+       ingested_at timestamptz NOT NULL DEFAULT NOW(),
+       created_by TEXT NOT NULL,
+       user_id TEXT NOT NULL DEFAULT ''
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_ontology_edges_relation ON ontology_edges(relation, user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_ontology_edges_from ON ontology_edges(from_type, from_id, user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_ontology_edges_to ON ontology_edges(to_type, to_id, user_id)`,
+    `CREATE TABLE IF NOT EXISTS trade_facts (
+       id TEXT PRIMARY KEY,
+       entity_type TEXT NOT NULL,
+       payload jsonb NOT NULL,
+       valid_at timestamptz NOT NULL,
+       invalid_at timestamptz,
+       ingested_at timestamptz NOT NULL DEFAULT NOW(),
+       created_by TEXT NOT NULL,
+       user_id TEXT NOT NULL DEFAULT ''
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_trade_facts_type ON trade_facts(entity_type, user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_trade_facts_valid ON trade_facts(valid_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_trade_facts_ingested ON trade_facts(ingested_at)`,
   ];
   try {
     for (const sql of statements) {

@@ -566,4 +566,29 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
     expect(await removeSelfParty(ctx, '浙江浙能富兴燃料有限公司')).toBe(false);
     expect(await listSelfParties(ctx)).toHaveLength(1);
   });
+
+  // ---- 本体基座(2026-09-07 Item 2): ontology_edges / trade_facts 建表 ----------
+  // 只读 information_schema 结构断言, 不写业务表; 外层 beforeEach TRUNCATE 门禁
+  // 与本块无关(两张本体表不在清库清单内, 断言也不依赖任何预置行)。
+
+  describe.skipIf(!RUN_PG)('ontology tables (PG lane)', () => {
+    beforeAll(async () => {
+      // migratePostgres 在 outer beforeAll 已跑且幂等; 此处再跑一次以声明依赖。
+      await migratePostgres(ctx.pool);
+    });
+
+    it('ontology_edges / trade_facts exist with mirrored columns', async () => {
+      const res = await ctx.pool.query(`SELECT table_name, column_name FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name IN ('ontology_edges','trade_facts')
+        ORDER BY table_name, ordinal_position`);
+      const byTable: Record<string, string[]> = {};
+      for (const r of res.rows as Array<{ table_name: string; column_name: string }>) {
+        (byTable[r.table_name] ??= []).push(r.column_name);
+      }
+      expect(byTable['ontology_edges']).toEqual(['id', 'relation', 'from_type', 'from_id',
+        'to_type', 'to_id', 'params', 'valid_at', 'invalid_at', 'ingested_at', 'created_by', 'user_id']);
+      expect(byTable['trade_facts']).toEqual(['id', 'entity_type', 'payload', 'valid_at',
+        'invalid_at', 'ingested_at', 'created_by', 'user_id']);
+    });
+  });
 });

@@ -586,3 +586,50 @@ export const sessionFavorites = pgTable(
   },
   (t) => [primaryKey({ columns: [t.sessionId, t.userId] })],
 );
+
+/**
+ * 本体基座(roadmap 2026-09-07 Item 2): 带参关系边 + 事件事实通用表。
+ * Mirrors SQLite ontology_edges/trade_facts 列对列; params/payload 用 jsonb。
+ * 原生写入只经 src/ontology/repo.ts(zod 校验), 不要绕过直写。
+ */
+export const ontologyEdges = pgTable(
+  'ontology_edges',
+  {
+    id: text('id').primaryKey(),
+    relation: text('relation').notNull(),
+    fromType: text('from_type').notNull(),
+    fromId: text('from_id').notNull(),
+    toType: text('to_type').notNull(),
+    toId: text('to_id').notNull(),
+    params: jsonb('params').notNull().default(sql`'{}'::jsonb`),
+    validAt: timestamp('valid_at', { withTimezone: true }).notNull(),
+    invalidAt: timestamp('invalid_at', { withTimezone: true }),
+    ingestedAt: timestamp('ingested_at', { withTimezone: true }).notNull().defaultNow(),
+    createdBy: text('created_by').notNull(),
+    userId: text('user_id').notNull().default(''),
+  },
+  (t) => ({
+    relIdx: index('idx_ontology_edges_relation').on(t.relation, t.userId),
+    fromIdx: index('idx_ontology_edges_from').on(t.fromType, t.fromId, t.userId),
+    toIdx: index('idx_ontology_edges_to').on(t.toType, t.toId, t.userId),
+  }),
+);
+
+export const tradeFacts = pgTable(
+  'trade_facts',
+  {
+    id: text('id').primaryKey(),
+    entityType: text('entity_type').notNull(),
+    payload: jsonb('payload').notNull(),
+    validAt: timestamp('valid_at', { withTimezone: true }).notNull(),
+    invalidAt: timestamp('invalid_at', { withTimezone: true }),
+    ingestedAt: timestamp('ingested_at', { withTimezone: true }).notNull().defaultNow(),
+    createdBy: text('created_by').notNull(),
+    userId: text('user_id').notNull().default(''),
+  },
+  (t) => ({
+    typeIdx: index('idx_trade_facts_type').on(t.entityType, t.userId),
+    validIdx: index('idx_trade_facts_valid').on(t.validAt),
+    ingestedIdx: index('idx_trade_facts_ingested').on(t.ingestedAt),
+  }),
+);
