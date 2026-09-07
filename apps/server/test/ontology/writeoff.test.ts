@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.js';
 import { insertTradeFact, insertOntologyEdge } from '../../src/ontology/repo.js';
 import {
-  writeoffModeRelations, listWriteoffBalances, getWriteoffOverview,
+  writeoffModeRelations, listWriteoffBalances, getWriteoffOverview, validateAllocationPlan,
 } from '../../src/ontology/writeoff.js';
 
 let ctx: DbContext;
@@ -92,5 +92,58 @@ describe('getWriteoffOverview', () => {
     const os = ov.modes.find((m) => m.relation === 'OFFSET_SETTLE')!;
     expect(os.dstTypes).toEqual(['SettlementEvent']);
     expect(os.targets.map((t) => t.entityType)).toEqual(['SettlementEvent']);
+  });
+});
+
+describe('validateAllocationPlan（守恒校验）', () => {
+  it('部分核销：对余额 20 的发票分配 15 通过（seed 后 invA 剩余 20）', async () => {
+    const { p, invA } = await seed();
+    const v = await validateAllocationPlan(ctx, 'WRITE_OFF',
+      [{ srcId: p, dstId: invA, amount: 15 }], 'u1');
+    expect(v).toEqual([]);
+  });
+
+  it('多发票合并付款：Σ分配 ≤ 资金余额 通过；超了报 src_over_remaining', async () => {
+    const { p, invA, invB } = await seed(); // p remaining 160（已核 40）
+    const ok = await validateAllocationPlan(ctx, 'WRITE_OFF', [
+      { srcId: p, dstId: invA, amount: 20 },
+      { srcId: p, dstId: invB, amount: 50 },
+    ], 'u1');
+    expect(ok).toEqual([]);
+    // invA remaining 20: 20+? ；资金侧 160+1 超额
+    const over = await validateAllocationPlan(ctx, 'WRITE_OFF', [
+      { srcId: p, dstId: invA, amount: 20 },
+      { srcId: p, dstId: invB, amount: 50 },
+      { srcId: p, dstId: invB, amount: 91 },
+    ], 'u1');
+    expect(over.map((x) => x.code)).toContain('src_over_remaining');
+  });
+
+  it('dst 超余额：发票 A 仅剩 20，分配 70 报 dst_over_remaining', async () => {
+    const { p, invA } = await seed();
+    const v = await validateAllocationPlan(ctx, 'WRITE_OFF',
+      [{ srcId: p, dstId: invA, amount: 70 }], 'u1');
+    expect(v.map((x) => x.code)).toEqual(['dst_over_remaining']);
+  });
+
+  it('冲抵不超结算额：OFFSET_SETTLE 对 Settlement 校验；错向连接报 pair_not_allowed', async () => {
+    const { p, stl, invA } = await seed();
+    const ok = await validateAllocationPlan(ctx, 'OFFSET_SETTLE',
+      [{ srcId: p, dstId: stl, amount: 80 }], 'u1');
+    expect(ok).toEqual([]);
+    const bad = await validateAllocationPlan(ctx, 'OFFSET_SETTLE',
+      [{ srcId: p, dstId: invA, amount: 10 }], 'u1');
+    expect(bad.map((x) => x.code)).toEqual(['pair_not_allowed']);
+  });
+
+  it('未知事实/非正数/跨用户隔离', async () => {
+    const { p, invA } = await seed();
+    expect((await validateAllocationPlan(ctx, 'WRITE_OFF',
+      [{ srcId: p, dstId: invA, amount: 0 }], 'u1')).map((x) => x.code)).toEqual(['non_positive']);
+    expect((await validateAllocationPlan(ctx, 'WRITE_OFF',
+      [{ srcId: 'TF-nope', dstId: invA, amount: 5 }], 'u1')).map((x) => x.code)).toEqual(['unknown_fact']);
+    // u2 看不见 u1 的事实行 -> unknown_fact（隔离即校验）
+    expect((await validateAllocationPlan(ctx, 'WRITE_OFF',
+      [{ srcId: p, dstId: invA, amount: 5 }], 'u2')).map((x) => x.code)).toEqual(['unknown_fact', 'unknown_fact']);
   });
 });

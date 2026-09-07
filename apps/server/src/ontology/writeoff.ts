@@ -7,7 +7,7 @@ import {
   listTradeFactsAsOf, listOntologyEdgesAsOf, type TradeFactRow,
 } from './repo.js';
 import { asOfBusinessTime } from './asof.js';
-import { ONTOLOGY_RELATIONS, ENTITY_LABELS, type OntologyEntityName } from './index.js';
+import { ONTOLOGY_RELATIONS, ENTITY_LABELS, type OntologyEntityName, isRelationPairAllowed } from './index.js';
 
 /** 资金侧实体（模式发现的种子口径：from ∈ 资金侧且 params 带 amount 的关系 = 核销类）。 */
 const FUND_ENTITY_TYPES: ReadonlySet<OntologyEntityName> = new Set<OntologyEntityName>(['PaymentEvent', 'CollectionEvent']);
@@ -121,4 +121,68 @@ export async function getWriteoffOverview(
     };
   });
   return { asOf: new Date().toISOString(), modes };
+}
+
+export interface AllocationItem {
+  srcId: string;
+  dstId: string;
+  amount: number;
+  partial?: boolean;
+  batch?: string;
+}
+
+export interface AllocationViolation {
+  itemIndex: number;
+  code: 'non_positive' | 'unknown_fact' | 'pair_not_allowed' | 'src_over_remaining' | 'dst_over_remaining';
+  detail: string;
+}
+
+/** 整单守恒校验：提交路由（预检）与工具 execute（权威）共用。
+ *  规则见计划 Task 4：正数 -> 事实存在 -> 连接对合法 -> 同单按 src/dst 累计不超各自 remaining。 */
+export async function validateAllocationPlan(
+  ctx: DbContext, relation: string, items: AllocationItem[], userId?: string,
+): Promise<AllocationViolation[]> {
+  const violations: AllocationViolation[] = [];
+  const rows = await listWriteoffBalances(ctx, userId);
+  const byId = new Map(rows.map((r) => [r.id, r]));
+
+  const srcUsed = new Map<string, number>();
+  const dstUsed = new Map<string, number>();
+
+  items.forEach((item, i) => {
+    if (!(item.amount > 0)) {
+      violations.push({ itemIndex: i, code: 'non_positive', detail: `分配额必须为正数, got ${item.amount}` });
+    }
+    const src = byId.get(item.srcId);
+    const dst = byId.get(item.dstId);
+    if (!src) violations.push({ itemIndex: i, code: 'unknown_fact', detail: `资金行 ${item.srcId} 不存在或不属于当前用户` });
+    if (!dst) violations.push({ itemIndex: i, code: 'unknown_fact', detail: `目标行 ${item.dstId} 不存在或不属于当前用户` });
+    if (src && dst && !isRelationPairAllowed(relation, src.entityType, dst.entityType)) {
+      violations.push({
+        itemIndex: i, code: 'pair_not_allowed',
+        detail: `${relation} 不允许 ${src.entityType} -> ${dst.entityType}`,
+      });
+    }
+    if (src) {
+      const used = (srcUsed.get(item.srcId) ?? 0) + item.amount;
+      srcUsed.set(item.srcId, used);
+      if (used > src.remaining + EPSILON) {
+        violations.push({
+          itemIndex: i, code: 'src_over_remaining',
+          detail: `资金行 ${src.label} 累计分配 ${used} 超余额 ${src.remaining}`,
+        });
+      }
+    }
+    if (dst) {
+      const used = (dstUsed.get(item.dstId) ?? 0) + item.amount;
+      dstUsed.set(item.dstId, used);
+      if (used > dst.remaining + EPSILON) {
+        violations.push({
+          itemIndex: i, code: 'dst_over_remaining',
+          detail: `目标行 ${dst.label} 累计分配 ${used} 超余额 ${dst.remaining}`,
+        });
+      }
+    }
+  });
+  return violations;
 }
