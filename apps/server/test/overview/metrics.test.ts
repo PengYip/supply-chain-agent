@@ -33,10 +33,12 @@ describe('overReceiptViolations', () => {
     { fromId: 'r4', toType: 'TradeContract', toId: 'c2' },
   ];
 
-  it('超合同量收货：按合同聚合正向收货量，超量即违规', () => {
+  it('超合同量收货：按合同聚合正向收货量（一份收货可分摊多合同），超量即违规', () => {
     const out = overReceiptViolations(contracts, receipts, edges);
+    // c1: 60+50=110 > 100；c2: r1 分摊 60 > 50（r4 无数量跳过）
     expect(out).toEqual([
       { contractId: 'c1', contractNo: 'HT-1', contractQty: 100, receivedQty: 110 },
+      { contractId: 'c2', contractNo: 'HT-2', contractQty: 50, receivedQty: 60 },
     ]);
   });
 
