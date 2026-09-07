@@ -245,6 +245,9 @@ export interface SessionStoreBackend {
   /** Cross-session approval list (approval center): rows whose owning session
    *  belongs to userId OR is legacy (user_id NULL), newest first. */
   listApprovals(filter: ApprovalListFilter): Promise<ApprovalListItem[]>;
+  /** Cross-session approval count with the same ownership/filter semantics as
+   *  listApprovals (limit ignored). Overview pending-approvals card (Item 7). */
+  countApprovals(filter: ApprovalListFilter): Promise<number>;
   getApprovalById(id: string): Promise<PendingApprovalRow | null>;
   getPending(id: string): Promise<PendingApprovalRow | null>;
   listPending(sessionId: string): Promise<PendingApprovalRow[]>;
@@ -527,6 +530,10 @@ export async function appendSideEffect(toolCallId: string, effect: SideEffect): 
 
 export async function listApprovals(filter: ApprovalListFilter): Promise<ApprovalListItem[]> {
   return (await getBackend()).listApprovals(filter);
+}
+
+export async function countApprovals(filter: ApprovalListFilter): Promise<number> {
+  return (await getBackend()).countApprovals(filter);
 }
 
 export async function getApprovalById(id: string): Promise<PendingApprovalRow | null> {

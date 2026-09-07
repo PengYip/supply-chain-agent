@@ -47,6 +47,7 @@ describe('GET /api/approval/list', () => {
     expect(Array.isArray(body.items)).toBe(true);
     expect(body.items[0]).toHaveProperty('level');
     expect(body.items[0]).toHaveProperty('sideEffects');
+    expect(typeof body.total).toBe('number');
   });
 
   it('limit/status 非法 400', async () => {

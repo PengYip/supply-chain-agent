@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 
 const { createSession, recordPendingApproval, resolveApproval, listApprovals, getPending } =
   await import('../../src/harness/sessionStore.js');
+const { countApprovals } = await import('../../src/harness/sessionStore.js');
 const { listApprovals: _l, getApprovalById } = await import('../../src/harness/sessionStore.js');
 
 const uid = (p: string) => `${p}-${randomUUID().slice(0, 8)}`;
@@ -114,5 +115,22 @@ describe('listApprovals audit filters (roadmap Item 6)', () => {
     const rows = await listApprovals({ userId: 'u1', status: 'denied', toolName: 'bind_document' });
     expect(rows).toHaveLength(1);
     expect(rows[0]!.status).toBe('denied');
+  });
+});
+
+describe('countApprovals (roadmap Item 7)', () => {
+  it('与 listApprovals 同语义计数，忽略 limit', async () => {
+    const s = await createSession('trader', 'u1');
+    await recordPendingApproval({ sessionId: s.id, level: 'L2', toolName: 'bind_document',
+      toolCallId: `call_${uid('c')}`, input: {}, approvalId: `ap_${uid('a')}` });
+    await recordPendingApproval({ sessionId: s.id, level: 'L3', toolName: 'escalate_to_human',
+      toolCallId: `call_${uid('c')}`, input: {}, ticketId: `ESC-${uid('t')}` });
+    const all = await listApprovals({ userId: 'u1' });
+    expect(await countApprovals({ userId: 'u1' })).toBe(all.length);
+    const binds = await listApprovals({ userId: 'u1', toolName: 'bind_document' });
+    expect(await countApprovals({ userId: 'u1', toolName: 'bind_document' })).toBe(binds.length);
+    expect(await countApprovals({ userId: 'u1', toolName: 'no_such_tool' })).toBe(0);
+    // limit=1 不影响 count
+    expect(await countApprovals({ userId: 'u1', limit: 1 })).toBe(all.length);
   });
 });

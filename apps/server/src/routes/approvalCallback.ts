@@ -10,6 +10,7 @@ import {
   sessionBelongsTo,
   getSessionStatus,
   listApprovals,
+  countApprovals,
   getApprovalById,
 } from '../harness/sessionStore.js';
 import type { SideEffect } from '../harness/sessionStore.js';
@@ -275,7 +276,8 @@ approvalCallback.get('/approval/list', async (c) => {
   const q = ListQuerySchema.safeParse(c.req.query());
   if (!q.success) return c.json({ error: 'Invalid query', detail: q.error.flatten() }, 400);
   const items = await listApprovals({ userId: user.id, ...q.data });
-  return c.json({ items: items.map((i) => ({ ...i, sideEffects: parseSideEffects(i.side_effect_results) })) });
+  const total = await countApprovals({ userId: user.id, ...q.data });
+  return c.json({ items: items.map((i) => ({ ...i, sideEffects: parseSideEffects(i.side_effect_results) })), total });
 });
 
 approvalCallback.get('/approval/:id', async (c) => {

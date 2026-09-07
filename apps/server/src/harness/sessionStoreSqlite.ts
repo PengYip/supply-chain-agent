@@ -548,15 +548,15 @@ async function getPending(id: string): Promise<PendingApprovalRow | null> {
   return row ?? null;
 }
 
-async function listApprovals({
+/** list/count 共用的过滤条件构造（同一所有权与过滤语义）。 */
+function approvalFilterConds({
   userId,
   status = 'all',
-  limit = 50,
   toolName,
   decidedBy,
   createdFrom,
   createdTo,
-}: ApprovalListFilter): Promise<ApprovalListItem[]> {
+}: ApprovalListFilter): { conds: string[]; params: unknown[] } {
   const conds: string[] = ['(s.user_id = ? OR s.user_id IS NULL)'];
   const params: unknown[] = [userId];
   if (status !== 'all') {
@@ -579,6 +579,11 @@ async function listApprovals({
     conds.push('pa.created_at <= ?');
     params.push(createdTo);
   }
+  return { conds, params };
+}
+
+async function listApprovals(filter: ApprovalListFilter): Promise<ApprovalListItem[]> {
+  const { conds, params } = approvalFilterConds(filter);
   const rows = db
     .prepare(
       `SELECT pa.*, s.user_id AS session_user_id
@@ -588,8 +593,21 @@ async function listApprovals({
         ORDER BY pa.created_at DESC
         LIMIT ?`,
     )
-    .all(...params, limit);
+    .all(...params, filter.limit ?? 50);
   return rows as ApprovalListItem[];
+}
+
+async function countApprovals(filter: ApprovalListFilter): Promise<number> {
+  const { conds, params } = approvalFilterConds(filter);
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n
+         FROM pending_approvals pa
+         JOIN sessions s ON s.id = pa.session_id
+        WHERE ${conds.join(' AND ')}`,
+    )
+    .get(...params) as { n: number };
+  return row.n;
 }
 
 async function getApprovalById(id: string): Promise<PendingApprovalRow | null> {
@@ -650,6 +668,7 @@ export const sqliteSessionStore: SessionStoreBackend = {
   getPending,
   appendSideEffect,
   listApprovals,
+  countApprovals,
   getApprovalById,
   listPending,
   countPendingApprovals,
