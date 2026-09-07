@@ -110,6 +110,9 @@ export function GraphCanvas({
   const renderChainRef = useRef<Promise<void>>(Promise.resolve());
   // 已应用的过滤集合: 建图 effect 已按初始值渲染, 后续变化 effect 跳过首次。
   const appliedFiltersRef = useRef<{ kinds: ReadonlySet<string>; plain: boolean } | null>(null);
+  // 已渲染到 G6 的 subgraph: 建图 effect 在挂载时按初始 subgraph 渲染并记录,
+  // 后续 subgraph 身份变化(穿透模式 lazy 展开/换锚点, 不重挂载)经增量 effect 推送。
+  const appliedSubgraphRef = useRef<Subgraph | null>(null);
 
   const buildData = (nodes: GraphNode[], edges: GraphEdge[]) => {
     const visibleNodes = nodes.filter((n) => !hiddenKinds.has(n.kind));
@@ -194,6 +197,7 @@ export function GraphCanvas({
   useEffect(() => {
     if (!containerRef.current) return;
     appliedFiltersRef.current = { kinds: hiddenKinds, plain: showPlainEdges };
+    appliedSubgraphRef.current = subgraph;
     const built = buildData(subgraph.nodes, subgraph.edges);
     const { layout } = built;
     const graph = new G6Graph({
@@ -367,6 +371,26 @@ export function GraphCanvas({
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hiddenKinds, showPlainEdges]);
+
+  // subgraph 身份变化(穿透模式 lazy 展开/加载新锚点, 不重挂载): 增量 setData 推送,
+  // 保留相机/缩放/拖拽位置。首帧已由建图 effect 按初始 subgraph 渲染, 此处跳过。
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph) return;
+    if (appliedSubgraphRef.current === subgraph) return;
+    appliedSubgraphRef.current = subgraph;
+    const built = buildData(subgraph.nodes, subgraph.edges);
+    renderChainRef.current = renderChainRef.current
+      .then(() => {
+        if (graphRef.current !== graph) return;
+        graph.setData({ nodes: built.nodes, edges: built.edges, combos: built.combos });
+        return graph.render();
+      })
+      .catch((e) => {
+        if (graphRef.current === graph) console.error(e);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subgraph]);
 
   const tip = useMemo(
     () => `自上而下 项目 · 合同 · 履约 — 双击节点向外展开 · 已隐藏类型 ${hiddenKinds.size || '无'}`,

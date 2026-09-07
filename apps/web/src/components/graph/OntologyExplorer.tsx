@@ -120,6 +120,9 @@ export function OntologyExplorer({ initialAnchor }: Props) {
       setAnchor(target);
       setSelected(null);
     } catch (e) {
+      // 加载失败清空画布: 避免旧锚点的节点/边留在新「当前中心」chip 之下。
+      setNodes([]);
+      setEdges([]);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
@@ -137,12 +140,16 @@ export function OntologyExplorer({ initialAnchor }: Props) {
     const t = node.props?.['__type'];
     const id = node.props?.['__id'];
     if (typeof t !== 'string' || typeof id !== 'string') return;
+    // 血缘 Document 节点无本体注册表类型(D7)：跨空间逐跳展开 deferred，静默忽略
+    // (不标记 expanded，后续也不可展开，符合 v1 语义)。
+    if (t === 'Document') return;
     const key = nodeKey(t, id);
     if (expandedRef.current.has(key)) return;
-    expandedRef.current.add(key);
     setLoading(true);
     fetchOntologyNeighbors(t, id, 1)
       .then((res) => {
+        // 展开成功才标记：失败可重试(不吞掉后续双击)
+        expandedRef.current.add(key);
         // merge 语义：保留既有节点，新增未见的节点与边
         setNodes((prev) => {
           const nodeMap = new Map(prev.map((n) => [n.elementId, n] as const));

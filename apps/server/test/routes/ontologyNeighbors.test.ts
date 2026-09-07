@@ -95,6 +95,25 @@ describe('GET /api/ontology/graph/neighbors', () => {
     expect(badDepth.status).toBe(400);
   });
 
+  it('zod query asserts: depth omitted defaults to 1; depth=abc / id= empty are 400', async () => {
+    await seedBridge();
+    const app = appAs('u1');
+    // depth 省略 -> 默认 1, 仍可解析合同锚点 -> 200
+    const noDepth = await app.request(
+      'http://test/api/ontology/graph/neighbors?type=TradeContract&id=C1');
+    expect(noDepth.status).toBe(200);
+    const noDepthBody = (await noDepth.json()) as { edges: unknown[] };
+    expect(noDepthBody.edges).toHaveLength(1);   // depth=1 只到服务费桥 S
+    // depth 非数字 -> coerce 失败 -> 400
+    const abcDepth = await app.request(
+      'http://test/api/ontology/graph/neighbors?type=TradeContract&id=C1&depth=abc');
+    expect(abcDepth.status).toBe(400);
+    // id 空串 -> trim().min(1) 失败 -> 400
+    const emptyId = await app.request(
+      'http://test/api/ontology/graph/neighbors?type=TradeContract&id=');
+    expect(emptyId.status).toBe(400);
+  });
+
   it('404 when anchor resolves to nothing and no adjacency', async () => {
     const res = await appAs('u1').request(
       'http://test/api/ontology/graph/neighbors?type=TradeContract&id=C-nope&depth=1');
