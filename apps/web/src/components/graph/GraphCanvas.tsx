@@ -251,6 +251,14 @@ export function GraphCanvas({
     });
     graph.on('node:pointerleave', () => onHover(null));
 
+    // 边悬停(Item 4 穿透模式边参数浮层)：与节点悬停共用 onHover 通道
+    graph.on<IElementEvent>('edge:pointerenter', (ev) => {
+      const datum = graph.getElementData(ev.target.id) as EdgeData;
+      const raw = (datum.data as unknown as CanvasDatum | undefined)?.rawEdge;
+      if (raw) onHover({ type: 'edge', edge: raw });
+    });
+    graph.on('edge:pointerleave', () => onHover(null));
+
     renderChainRef.current = renderChainRef.current
       .then(() => new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()); }))
       .then(async () => {
