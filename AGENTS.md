@@ -8,7 +8,9 @@ Privately-deployed enterprise AI agent for commodity supply-chain trading
 (energy / chemicals / metals). Core value prop = a **business-semantic action
 layer**: natural language maps to auditable tool calls, never free-form numbers.
 Stack: Vite + React 19 frontend; Hono + Vercel AI SDK 6 backend; DeepSeek (dev)
-/ Qwen (prod) models; SQLite (default) / Postgres+pgvector (prod target).
+/ Qwen (prod) models; Postgres+pgvector is the runtime DB (dev + prod).
+SQLite is deprecated for deployments, kept only as the zero-config default
+for tests/local runs.
 
 ## Repo layout — trust this over ARCHITECTURE.md
 
@@ -74,7 +76,9 @@ boot). Required and notable vars:
 - Code sandbox: `CUBE_API_URL/CUBE_SANDBOX_DOMAIN/CUBE_TEMPLATE_ALIAS`.
 - Langfuse (OTel): `LANGFUSE_BASE_URL/PUBLIC_KEY/SECRET_KEY`.
 - Postgres path: `DATABASE_URL`, `DB_BACKEND=postgres` (also enables the 11
-  Postgres integration tests, which otherwise skip).
+  Postgres integration tests, which otherwise skip). This is the dev/prod
+  runtime posture — SQLite is deprecated for deployments; see the
+  "Dev database topology" bullet under the 10.10.0.2 section.
 - `APPROVAL_CHANNEL` — 审批通知通道（default `local` 仅结构化日志；`lark` 预留未实现，回退 local）。
 
 Switching DeepSeek → Qwen is env-only; do not change code.
@@ -88,12 +92,28 @@ which reloads it).
 
 Access cheat-sheet (verify before trusting local files):
 
-- **Pipeline DB = Postgres** in docker container `sca-pgvector` (port 5433,
-  user `sca`, db `sca`, creds in the remote `.env`). Query via
-  `ssh ubuntu-server "docker exec sca-pgvector psql -U sca -d sca -c '...'"`
-  (Chinese output works fine). Harness session DB is still SQLite:
-  `~/supply-chain-agent/apps/server/data/agent.db`.
-  Remote `.env`: `DB_BACKEND=postgres`, `MINIO_ENDPOINT=localhost:9000`.
+- **Dev database topology (verified 2026-09-07): the runtime DB is Postgres.**
+  The dev deployment runs `DB_BACKEND=postgres` +
+  `DATABASE_URL=postgresql://sca:<pwd>@localhost:5433/sca`, so ALL dev data —
+  pipeline documents/units, auth, harness sessions, and `pending_approvals`
+  (approval center) — lives in docker container `sca-pgvector`
+  (`0.0.0.0:5433->5432`, user `sca`, db `sca`, creds in the remote `.env`).
+  Query via `ssh ubuntu-server "docker exec sca-pgvector psql -U sca -d sca -c '...'"`
+  (Chinese output works fine). Remote `.env`: `MINIO_ENDPOINT=localhost:9000`.
+- **PC access to the dev PG**: a standing SSH tunnel
+  `ssh -N -L 5433:localhost:5433 ubuntu-server` maps local 5433 to the
+  container. Local worktree `.env`s typically set only `DATABASE_URL` pointing
+  there — the "auth-only PG smoke" posture (业务仍走本地 SQLite, 勿设
+  `DB_BACKEND` unless you want everything on PG). Backend selection lives in
+  `src/pipeline/db/dbBackend.ts`: `DB_BACKEND` must equal exactly `postgres`,
+  anything else falls back to SQLite; the harness session store follows the
+  same switch (`sessionStore.ts` facade), and a Postgres deployment never
+  opens agent.db.
+- **Never debug business data against agent.db files.** Local
+  `apps/server/data/agent.db` is vitest/local-run scratch (shared-file test
+  pattern); the remote copy is stale since 2026-09-03. Real dev data is
+  always in `sca-pgvector` (2026-09-07: approval-center data was briefly
+  misjudged as missing because of this).
 - **MinIO** in container `minio_docker`, bucket `sca-files`, objects keyed
   `users/<user_id>/<uuid>-<filename>` (folder uploads insert a path segment,
   e.g. `users/<user_id>/合同/...`). The container image lacks `find` and a full
@@ -159,7 +179,9 @@ Access cheat-sheet (verify before trusting local files):
   `apps/server/drizzle.config.ts` (lives outside `src/` so it stays out of
   `tsc`). `migrateOnStartup()` runs at boot and is a no-op on SQLite. See
   `docs/postgres-migration-runbook.md`. Postgres is currently disk-gated — see
-  `docker-compose.yml` header.
+  `docker-compose.yml` header. Runtime posture (2026-09-07): Postgres is THE
+  deployment backend (dev + prod); SQLite is deprecated for deployments but
+  remains the zero-config default so tests run without a provisioned DB.
 - **Production serves same-origin.** In prod the Hono server on `:3001` also
   serves `apps/web/dist` as static files; no CORS needed. Build the web app
   before deploying the server.
