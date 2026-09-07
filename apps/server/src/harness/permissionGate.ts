@@ -80,3 +80,19 @@ registerPermission('create_offset', 'L2'); // 2026-09-07 Item 5: 预付冲抵落
 // L3: no registered tools -- money/irreversible operations are not executable
 // in-system. Human-in-the-loop goes through escalate_to_human tickets
 // (sessionStore pending approvals + /api/approval/callback resume).
+
+// ---- governance read surface (roadmap Item 6, 2026-09-08): 治理后台权限矩阵
+// 数据源。只读快照：按注册声明序导出（声明序即上方 L1->L2 分组），不含
+// getPermission 的 L1 兜底（未注册工具不属于已声明权限面）。L3 保留在 levels
+// 词汇里：sessionStore 审批行与 L3 工单流仍使用该层字符串。
+
+export const TOOL_PERMISSION_LEVELS: readonly ToolPermission[] = ['L1', 'L2', 'L3'];
+
+export interface PermissionEntry {
+  toolName: string;
+  level: ToolPermission;
+}
+
+export function listPermissions(): PermissionEntry[] {
+  return [...PERMISSIONS.entries()].map(([toolName, level]) => ({ toolName, level }));
+}
