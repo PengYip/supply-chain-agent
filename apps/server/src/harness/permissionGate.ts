@@ -75,6 +75,8 @@ registerPermission('manage_quota', 'L2'); // 2026-08-25 方案A §6: 额度创�
 registerPermission('update_document_fields', 'L2'); // post-ingest field correction (write)
 registerPermission('gather_settlement_evidence', 'L1'); // 2026-08-27 §15: 结算取证(只读)
 registerPermission('confirm_settlement', 'L2'); // 2026-08-27 §15: 结算结果人工确认后落台账
+registerPermission('create_writeoff', 'L2'); // 2026-09-07 Item 5: 票款核销落边（工作台提交，需审批）
+registerPermission('create_offset', 'L2'); // 2026-09-07 Item 5: 预付冲抵落边（工作台提交，需审批）
 // L3: no registered tools -- money/irreversible operations are not executable
 // in-system. Human-in-the-loop goes through escalate_to_human tickets
 // (sessionStore pending approvals + /api/approval/callback resume).

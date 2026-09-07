@@ -22,6 +22,7 @@ import { reconciliationRoute } from './routes/reconciliation.js';
 import { bindingsRoute } from './routes/bindings.js';
 import { contractsRoute } from './routes/contracts.js';
 import { ontologyRoute } from './routes/ontology.js';
+import { writeoffRoute } from './routes/writeoff.js';
 import { partiesRoute } from './routes/parties.js';
 import { projectsRoute } from './routes/projects.js';
 import { templatesRoute } from './routes/templates.js';
@@ -130,6 +131,7 @@ app.use('/api/projects/*', requireAuth);
 app.use('/api/templates/*', requireAuth);
 
 app.use('/api/ontology/*', requireAuth);
+app.use('/api/writeoff/*', requireAuth);
 
 app.route('/api', chatRoute);
 app.route('/api', approvalCallback);
@@ -168,6 +170,7 @@ app.route('/api/contracts', contractsRoute);
 
 // 本体台账(roadmap Item 3)：schema/实体列表/详情，只读投影。
 app.route('/api/ontology', ontologyRoute);
+app.route('/api/writeoff', writeoffRoute);
 
 // Self-party list management (Task A): DB-backed 自主体名单 + candidates + backfill.
 app.route('/api/parties', partiesRoute);

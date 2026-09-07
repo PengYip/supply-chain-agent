@@ -1,4 +1,5 @@
 import {
+  ArrowLeftRight,
   BookOpen,
   Boxes,
   Building2,
@@ -22,6 +23,7 @@ export type ViewId =
   | 'entities'
   | 'graph'
   | 'bindings'
+  | 'writeoff'
   | 'review'
   | 'eval'
   | 'audit'
@@ -52,6 +54,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'entities', label: '实体台账', description: '本体实体浏览（合同 / 收发依据 / 事件，as-of 时间切片）', icon: Boxes, group: 'work', enabled: true },
   { id: 'graph', label: '图谱', description: '实体关系可视化', icon: Network, group: 'work', enabled: true },
   { id: 'bindings', label: '绑定', description: '文档与合同绑定工作台', icon: Link2, group: 'work', enabled: true },
+  { id: 'writeoff', label: '核销', description: '票款核销与预付冲抵（多对多 / 部分金额 / 分批）', icon: ArrowLeftRight, group: 'work', enabled: true },
   { id: 'review', label: '集中复核', description: '多页票据表格化批量核对', icon: ClipboardCheck, group: 'work', enabled: true },
   { id: 'eval', label: '评估', description: '评估数据集与结果分析', icon: FlaskConical, group: 'admin', enabled: true },
   { id: 'audit', label: '用量审计', description: 'LLM 与 OCR 调用统计及明细', icon: History, group: 'admin', enabled: true },

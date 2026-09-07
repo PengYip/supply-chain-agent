@@ -15,6 +15,7 @@ import { useSessions } from './hooks/useSessions';
 import { EvalWorkbenchView } from './components/eval/EvalWorkbenchView';
 import { GraphView } from './components/graph/GraphView';
 import { BindingsView } from './components/bindings/BindingsView';
+import { WriteoffView } from './components/writeoff/WriteoffView';
 import { SelfPartyPanel } from './components/parties/SelfPartyPanel';
 import { FavoritesView } from './components/favorites/FavoritesView';
 import { AuditView } from './components/audit/AuditView';
@@ -325,6 +326,8 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
         />
       ) : view === 'bindings' ? (
         <BindingsView onOpenInGraph={openInGraph} docFocus={bindingsFocus} onChanged={() => { void filesApi.refresh(); }} />
+      ) : view === 'writeoff' ? (
+        <WriteoffView />
       ) : view === 'parties' ? (
         <SelfPartyPanel />
       ) : view === 'favorites' ? (

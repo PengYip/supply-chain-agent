@@ -150,7 +150,7 @@ describe('tool inventory gate', () => {
     const ctx = createDb(':memory:');
     migrate(ctx.sqlite);
     const tools = getToolsForRole('trader', { ctx });
-    expect(Object.keys(toolOntologyMap).length, 'demo mapping: exactly 3 tools').toBe(3);
+    expect(Object.keys(toolOntologyMap).length, 'demo mapping: exactly 5 tools').toBe(5);
     for (const name of Object.keys(toolOntologyMap)) {
       const t = tools.find((x) => x.name === name);
       expect(t, `${name} is mapped in toolOntologyMap but not mounted for trader`).toBeDefined();

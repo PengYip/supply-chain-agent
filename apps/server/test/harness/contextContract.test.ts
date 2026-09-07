@@ -38,6 +38,9 @@ const EXPECTED_TOOLS = [
   'manage_quota',
   'gather_settlement_evidence',
   'confirm_settlement',
+  // 2026-09-07 roadmap Item 5: writeoff workbench L2 tools
+  'create_writeoff',
+  'create_offset',
 ] as const;
 
 describe('tool-context contract registry', () => {
