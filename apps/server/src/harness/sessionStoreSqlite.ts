@@ -99,6 +99,10 @@ CREATE TABLE IF NOT EXISTS pending_approvals (
   approval_id TEXT,
   status TEXT NOT NULL,
   created_at TEXT NOT NULL,
+  decided_by TEXT,
+  decided_at TEXT,
+  reason TEXT,
+  side_effect_results TEXT,
   FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 
@@ -155,6 +159,18 @@ CREATE TABLE IF NOT EXISTS session_favorites (
   }
 }
 
+// Approval-center v1: decision/audit columns on pre-existing dev DBs.
+try {
+  const cols = db.prepare('PRAGMA table_info(pending_approvals)').all() as { name: string }[];
+  const have = new Set(cols.map((c) => c.name));
+  const add: string[] = [];
+  if (!have.has('decided_by')) add.push('decided_by TEXT');
+  if (!have.has('decided_at')) add.push('decided_at TEXT');
+  if (!have.has('reason')) add.push('reason TEXT');
+  if (!have.has('side_effect_results')) add.push('side_effect_results TEXT');
+  for (const col of add) db.exec(`ALTER TABLE pending_approvals ADD COLUMN ${col}`);
+} catch { /* 列已存在（vitest 并发竞态），忽略 */ }
+
 // ---- prepared statements ----
 
 const stmtInsertSession = db.prepare(
@@ -196,9 +212,6 @@ const stmtListMessages = db.prepare(
 const stmtInsertPending = db.prepare(
   `INSERT INTO pending_approvals (id, session_id, level, tool_name, tool_call_id, input_json, ticket_id, approval_id, status, created_at)
    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-);
-const stmtUpdatePendingStatus = db.prepare(
-  'UPDATE pending_approvals SET status = ? WHERE id = ?',
 );
 const stmtGetPending = db.prepare('SELECT * FROM pending_approvals WHERE id = ?');
 const stmtListPending = db.prepare(
@@ -508,8 +521,19 @@ async function recordPendingApproval(input: RecordPendingInput): Promise<void> {
 async function resolveApproval(
   id: string,
   status: ApprovalStatus,
+  decision?: { decidedBy?: string | null; reason?: string | null },
 ): Promise<void> {
-  stmtUpdatePendingStatus.run(status, id);
+  db.prepare(
+    `UPDATE pending_approvals
+       SET status = ?, decided_by = ?, decided_at = ?, reason = ?
+     WHERE id = ?`,
+  ).run(
+    status,
+    decision?.decidedBy ?? null,
+    decision ? new Date().toISOString() : null,
+    decision?.reason ?? null,
+    id,
+  );
 }
 
 async function getPending(id: string): Promise<PendingApprovalRow | null> {

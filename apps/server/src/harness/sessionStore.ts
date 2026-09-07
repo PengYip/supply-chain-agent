@@ -70,6 +70,12 @@ export type PendingApprovalRow = {
   approval_id: string | null;
   status: ApprovalStatus;
   created_at: string;
+  /** Approval-center v1 audit columns (null for legacy rows / pending). */
+  decided_by?: string | null;
+  decided_at?: string | null;
+  reason?: string | null;
+  /** JSON array of SideEffect records appended by appendSideEffect. */
+  side_effect_results?: string | null;
 };
 
 /** Raw `sessions` row shape (shared by both backend modules). Declared as a
@@ -200,7 +206,11 @@ export interface SessionStoreBackend {
   listSessionEventsSince(sessionId: string, sinceSeq: number): Promise<SessionEventRow[]>;
   pruneSessionEvents(sessionId: string): Promise<void>;
   recordPendingApproval(input: RecordPendingInput): Promise<void>;
-  resolveApproval(id: string, status: ApprovalStatus): Promise<void>;
+  resolveApproval(
+    id: string,
+    status: ApprovalStatus,
+    decision?: { decidedBy?: string | null; reason?: string | null },
+  ): Promise<void>;
   getPending(id: string): Promise<PendingApprovalRow | null>;
   listPending(sessionId: string): Promise<PendingApprovalRow[]>;
   countPendingApprovals(sessionId: string): Promise<number>;
@@ -464,8 +474,12 @@ export async function recordPendingApproval(input: RecordPendingInput): Promise<
   return (await getBackend()).recordPendingApproval(input);
 }
 
-export async function resolveApproval(id: string, status: ApprovalStatus): Promise<void> {
-  return (await getBackend()).resolveApproval(id, status);
+export async function resolveApproval(
+  id: string,
+  status: ApprovalStatus,
+  decision?: { decidedBy?: string | null; reason?: string | null },
+): Promise<void> {
+  return (await getBackend()).resolveApproval(id, status, decision);
 }
 
 export async function getPending(id: string): Promise<PendingApprovalRow | null> {

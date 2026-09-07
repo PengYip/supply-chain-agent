@@ -134,6 +134,15 @@ export async function ensureSessionTables(pool: Pool): Promise<void> {
       PRIMARY KEY (session_id, user_id)
     );
   `);
+
+  // Approval-center v1: decision/audit columns (idempotent on existing DBs;
+  // CREATE TABLE above predates them).
+  await pool.query(`
+    ALTER TABLE pending_approvals ADD COLUMN IF NOT EXISTS decided_by TEXT;
+    ALTER TABLE pending_approvals ADD COLUMN IF NOT EXISTS decided_at TEXT;
+    ALTER TABLE pending_approvals ADD COLUMN IF NOT EXISTS reason TEXT;
+    ALTER TABLE pending_approvals ADD COLUMN IF NOT EXISTS side_effect_results TEXT;
+  `);
 }
 
 /** BEGIN/COMMIT/ROLLBACK helper with guaranteed client release. */
@@ -527,9 +536,24 @@ export function createAgentSessionStore(pool: Pool): SessionStoreBackend {
       );
     },
 
-    async resolveApproval(id: string, status: 'pending' | 'approved' | 'denied'): Promise<void> {
+    async resolveApproval(
+      id: string,
+      status: 'pending' | 'approved' | 'denied',
+      decision?: { decidedBy?: string | null; reason?: string | null },
+    ): Promise<void> {
       await ensure();
-      await pool.query('UPDATE pending_approvals SET status = $1 WHERE id = $2', [status, id]);
+      await pool.query(
+        `UPDATE pending_approvals
+           SET status = $1, decided_by = $2, decided_at = $3, reason = $4
+         WHERE id = $5`,
+        [
+          status,
+          decision?.decidedBy ?? null,
+          decision ? new Date().toISOString() : null,
+          decision?.reason ?? null,
+          id,
+        ],
+      );
     },
 
     async getPending(id: string): Promise<PendingApprovalRow | null> {
