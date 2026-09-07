@@ -97,7 +97,9 @@ export function getDbContext(opts: GetDbContextOptions = {}): DbContext {
     void migratePostgres(ctx.pool);
     return ctx;
   }
-  const ctx = createDb(opts.sqlitePath ?? 'pipeline.db');
+  // SCA_PIPELINE_DB: 测试隔离缝(vitest setup-env 按文件注入临时库), 生产不设
+  // 即走 cwd 下 pipeline.db 原路径, 行为不变。
+  const ctx = createDb(opts.sqlitePath ?? process.env.SCA_PIPELINE_DB ?? 'pipeline.db');
   migrate(ctx.sqlite);
   // L4 vector recall (Task 6 v2): load sqlite-vec + create the vec0 table.
   // Graceful: if the extension cannot load (air-gapped / missing platform binary),
