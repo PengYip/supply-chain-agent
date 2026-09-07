@@ -3,7 +3,24 @@ name: CI/CD
 on:
   push:
     branches: [main]
+    # docs-only 变更不触发 CI/CD（单 runner 上每次全量跑约 5.5 分钟，
+    # 文档/采样脚本提交占比高，跳过是零风险收益）。
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '样本收集/**'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '样本收集/**'
+
+# 单 self-hosted runner 串行执行；连续 push main 时旧 run 排队导致 deploy
+# 空等（2026-09-07 实测排队 5.4 分钟）。取消被新 push 覆盖的旧 run：
+# 最终部署状态由最新 run 决定（deploy 全量 reset --hard + build），正确性无损。
+concurrency:
+  group: cicd-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ci:
