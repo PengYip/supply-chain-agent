@@ -34,6 +34,7 @@ import type {
   SessionRow,
   MessageRow,
   FavoriteRow,
+  SideEffect,
 } from './sessionStore.js';
 import { normalizeToUIMessage, parseTitle, parseMetadata } from './sessionStore.js';
 
@@ -541,6 +542,19 @@ async function getPending(id: string): Promise<PendingApprovalRow | null> {
   return row ?? null;
 }
 
+async function appendSideEffect(toolCallId: string, effect: SideEffect): Promise<void> {
+  const row = db
+    .prepare('SELECT id, side_effect_results FROM pending_approvals WHERE tool_call_id = ?')
+    .get(toolCallId) as { id: string; side_effect_results: string | null } | undefined;
+  if (!row) return; // no-op：票据不存在/已清理
+  const arr: SideEffect[] = row.side_effect_results
+    ? (() => { try { return JSON.parse(row.side_effect_results) as SideEffect[]; } catch { return []; } })()
+    : [];
+  arr.push(effect);
+  db.prepare('UPDATE pending_approvals SET side_effect_results = ? WHERE id = ?')
+    .run(JSON.stringify(arr), row.id);
+}
+
 async function listPending(sessionId: string): Promise<PendingApprovalRow[]> {
   return stmtListPending.all(sessionId) as PendingApprovalRow[];
 }
@@ -577,6 +591,7 @@ export const sqliteSessionStore: SessionStoreBackend = {
   recordPendingApproval,
   resolveApproval,
   getPending,
+  appendSideEffect,
   listPending,
   countPendingApprovals,
 };

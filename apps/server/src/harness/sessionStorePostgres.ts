@@ -43,6 +43,7 @@ import type {
   SessionRow,
   MessageRow,
   FavoriteRow,
+  SideEffect,
 } from './sessionStore.js';
 import { normalizeToUIMessage, parseTitle, parseMetadata } from './sessionStore.js';
 
@@ -563,6 +564,29 @@ export function createAgentSessionStore(pool: Pool): SessionStoreBackend {
         [id],
       );
       return rows[0] ?? null;
+    },
+
+    async appendSideEffect(toolCallId: string, effect: SideEffect): Promise<void> {
+      await ensure();
+      const { rows } = await pool.query<{ id: string; side_effect_results: string | null }>(
+        'SELECT id, side_effect_results FROM pending_approvals WHERE tool_call_id = $1',
+        [toolCallId],
+      );
+      const row = rows[0];
+      if (!row) return; // no-op：票据不存在/已清理
+      let arr: SideEffect[];
+      try {
+        arr = row.side_effect_results
+          ? (JSON.parse(row.side_effect_results) as SideEffect[])
+          : [];
+      } catch {
+        arr = [];
+      }
+      arr.push(effect);
+      await pool.query(
+        'UPDATE pending_approvals SET side_effect_results = $1 WHERE id = $2',
+        [JSON.stringify(arr), row.id],
+      );
     },
 
     async listPending(sessionId: string): Promise<PendingApprovalRow[]> {

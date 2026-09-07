@@ -146,6 +146,16 @@ export interface RecordPendingInput {
   approvalId?: string | null;
 }
 
+/** One audited side effect of an approved L2 tool call, appended to
+ *  pending_approvals.side_effect_results (JSON array) by appendSideEffect. */
+export interface SideEffect {
+  target: string;
+  action: string;
+  ok: boolean;
+  detail: string;
+  at: string;
+}
+
 /** List-facing per-session row (GET /api/sessions). */
 export interface SessionListItem {
   id: string;
@@ -211,6 +221,9 @@ export interface SessionStoreBackend {
     status: ApprovalStatus,
     decision?: { decidedBy?: string | null; reason?: string | null },
   ): Promise<void>;
+  /** Append one SideEffect to the approval row identified by tool_call_id
+   *  (read-modify-write of side_effect_results). No-op when no row matches. */
+  appendSideEffect(toolCallId: string, effect: SideEffect): Promise<void>;
   getPending(id: string): Promise<PendingApprovalRow | null>;
   listPending(sessionId: string): Promise<PendingApprovalRow[]>;
   countPendingApprovals(sessionId: string): Promise<number>;
@@ -484,6 +497,10 @@ export async function resolveApproval(
 
 export async function getPending(id: string): Promise<PendingApprovalRow | null> {
   return (await getBackend()).getPending(id);
+}
+
+export async function appendSideEffect(toolCallId: string, effect: SideEffect): Promise<void> {
+  return (await getBackend()).appendSideEffect(toolCallId, effect);
 }
 
 export async function listPending(sessionId: string): Promise<PendingApprovalRow[]> {
