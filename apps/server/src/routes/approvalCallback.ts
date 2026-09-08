@@ -127,15 +127,26 @@ approvalCallback.post('/approval/callback', async (c) => {
   const extraModelMessages: ModelMessage[] = [];
   let originalMessages: UIMessage[] = uiMessages;
 
-  if (ticketId) {
+  // Route by the ROW's level, never by the client-sent key (dev 2026-09-08
+  // incident): getPending(id) matches any row id, and an L2 row's id IS its
+  // approvalId -- so a callback posting { ticketId: <L2 approval id> } used to
+  // fall into the L3 branch, which appended a user instruction after the
+  // approval-requested assistant message. The interrupted tool call then had
+  // no tool result and the SDK prompt assembly threw AI_MissingToolResultsError
+  // (resume dead, trade_facts never written, side_effect_results empty, and the
+  // session history permanently poisoned). Symmetrically, an L3 row addressed
+  // via approvalId used to take the L2 branch and resume into
+  // InvalidToolApprovalError. The key is an address; the level is the semantic.
+  if (pending.level === 'L3') {
+    const l3Id = pending.ticket_id ?? pending.id;
     let instruction: string;
     if (!approved) {
       instruction =
-        `外部审批已拒绝（票据 ${ticketId}，理由：${reason ?? '用户拒绝'}）。` +
+        `外部审批已拒绝（票据 ${l3Id}，理由：${reason ?? '用户拒绝'}）。` +
         `请告知用户该操作未执行，并停止该操作的后续尝试。`;
     } else {
       instruction =
-        `人工已复核工单 ${ticketId}（理由：${reason ?? '已处理'}）。` +
+        `人工已复核工单 ${l3Id}（理由：${reason ?? '已处理'}）。` +
         `请根据人工判断继续处理用户之前的请求。如果人工反馈解决了不确定性，请直接回答用户；如果需要执行后续操作，请继续。`;
     }
     const instructionUIMsg = {
@@ -149,8 +160,9 @@ approvalCallback.post('/approval/callback', async (c) => {
   } else {
     // L2 resume message: role:'tool' has NO valid UIMessage form, so this is
     // TRANSIENT — passed into this resume turn only, never persisted. The TS
-    // ToolContent union only models tool-result parts, hence the cast.
-    const id = approvalId as string;
+    // ToolContent union only models tool-result parts, hence the cast. The ids
+    // come from the ROW (not the request) so either request key lands here.
+    const id = pending.approval_id ?? pending.id;
     extraModelMessages.push({
       role: 'tool',
       content: [
@@ -175,7 +187,7 @@ approvalCallback.post('/approval/callback', async (c) => {
 
   console.log(
     JSON.stringify({
-      event: ticketId ? 'approval_authorized' : 'approval_l2_resolved',
+      event: pending.level === 'L3' ? 'approval_authorized' : 'approval_l2_resolved',
       id: pending.id,
       approved,
       sessionId,
