@@ -7,7 +7,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import type { DbContext } from '../pipeline/db/client.js';
 import { insertTradeFact, type TradeFactInput } from './repo.js';
-import { PayType, EventBizType } from './index.js';
+import { PayType, EventBizType, DUAL_TIMELINE_FIELDS } from './index.js';
 
 export const TRADE_EVENT_TYPES = [
   'GoodsReceiptEvent', 'GoodsDeliveryEvent', 'SettlementEvent', 'InvoiceEvent',
@@ -76,6 +76,8 @@ export interface TradeEventFormFieldDTO {
   name: string;
   kind: 'string' | 'number' | 'enum';
   required: boolean;
+  /** 渲染微调：双时间轴字段（validAt 等）按日期控件呈现；值仍为 ISO 字符串。 */
+  widget?: 'date';
   options?: readonly string[];
   description: string;
   formDefault?: unknown;
@@ -109,6 +111,9 @@ export function tradeEventFormSchemaJson() {
         name,
         kind,
         required,
+        ...(kind === 'string' && (DUAL_TIMELINE_FIELDS as readonly string[]).includes(name)
+          ? { widget: 'date' as const }
+          : {}),
         ...(kind === 'enum' ? { options: (inner as unknown as { options: readonly string[] }).options } : {}),
         description: desc,
         ...(name in TRADE_EVENT_FORM_DEFAULTS ? { formDefault: TRADE_EVENT_FORM_DEFAULTS[name] } : {}),

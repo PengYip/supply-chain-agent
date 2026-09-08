@@ -48,7 +48,7 @@ describe('GET /api/trade-events/schema', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       tool: string;
-      fields: Array<{ name: string; kind: string; required: boolean; options?: string[]; formDefault?: unknown }>;
+      fields: Array<{ name: string; kind: string; required: boolean; options?: string[]; widget?: string; formDefault?: unknown }>;
     };
     expect(body.tool).toBe('create_trade_event');
     const byName = new Map(body.fields.map((f) => [f.name, f]));
@@ -62,6 +62,9 @@ describe('GET /api/trade-events/schema', () => {
     expect(byName.get('currency')!.required).toBe(false);
     expect(byName.get('invoiceNo')!.required).toBe(false);
     expect(byName.get('currency')!.formDefault).toBe('CNY');
+    // 双时间轴字段投影 date 控件（值仍为 ISO 字符串，前端渲染 input[type=date]）
+    expect(byName.get('validAt')!.widget).toBe('date');
+    expect(byName.get('amount')!.widget).toBeUndefined();
   });
 });
 

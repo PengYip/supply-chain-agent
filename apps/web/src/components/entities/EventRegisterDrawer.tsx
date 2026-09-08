@@ -16,6 +16,13 @@ interface Props {
 /** 全部输入先持字符串，提交时按字段 kind 归一（number 转 Number，可选项空值剔除）。 */
 type ValueMap = Record<string, string>;
 
+/** amount 与 currency 同缺同在（服务端写入边界不变量，缺失组合整单拒绝）：
+ *  amount 为空时 currency 禁用并清空；amount 恢复有值时 currency 回到预填
+ *  （删除显式值，让 formDefault=CNY 兜底重新生效）。数量-only 收/发货（不填金额）
+ *  是本表单主用例，联动保证前端不向服务端发空串 currency。 */
+const AMOUNT_FIELD = 'amount';
+const CURRENCY_FIELD = 'currency';
+
 const inputValueOf = (f: TradeEventFormField, values: ValueMap): string =>
   values[f.name] ?? (f.formDefault != null ? String(f.formDefault) : '');
 
@@ -34,7 +41,7 @@ function optionLabelOf(field: TradeEventFormField, option: string,
 export function EventRegisterDrawer({ eventEntities, initialType, onClose }: Props) {
   const [formSchema, setFormSchema] = useState<TradeEventFormSchema | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [values, setValues] = useState<ValueMap>({ entityType: initialType });
+  const [values, setValues] = useState<ValueMap>({ entityType: initialType, currency: '' });
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [formErrors, setFormErrors] = useState<string[]>([]);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -55,12 +62,22 @@ export function EventRegisterDrawer({ eventEntities, initialType, onClose }: Pro
   );
 
   const setValue = (name: string, value: string) => {
-    setValues((prev) => ({ ...prev, [name]: value }));
-    // 字段一旦改动即清其错误回显，避免陈旧红线。
+    setValues((prev) => {
+      const next = { ...prev, [name]: value };
+      if (name === AMOUNT_FIELD) {
+        // 联动（见 AMOUNT_FIELD 注释）：清空 amount 时连带清空 currency；
+        // amount 重新有值则删除显式 currency 值，formDefault 预填重新生效。
+        if (value.trim() === '') next[CURRENCY_FIELD] = '';
+        else delete next[CURRENCY_FIELD];
+      }
+      return next;
+    });
+    // 字段一旦改动即清其错误回显，避免陈旧红线；currency 随 amount 联动一并清。
     setFieldErrors((prev) => {
-      if (!(name in prev)) return prev;
+      const names = name === AMOUNT_FIELD ? [name, CURRENCY_FIELD] : [name];
+      if (!names.some((n) => n in prev)) return prev;
       const next = { ...prev };
-      delete next[name];
+      for (const n of names) delete next[n];
       return next;
     });
   };
@@ -140,6 +157,10 @@ export function EventRegisterDrawer({ eventEntities, initialType, onClose }: Pro
                 const errors = fieldErrors[f.name] ?? [];
                 const isEnum = f.kind === 'enum';
                 const options = f.options ?? [];
+                const amountField = formSchema.fields.find((x) => x.name === AMOUNT_FIELD);
+                const currencyLocked =
+                  f.name === CURRENCY_FIELD &&
+                  (!amountField || inputValueOf(amountField, values).trim() === '');
                 return (
                   <div key={f.name}>
                     <label className="mb-1 flex items-baseline gap-1 text-xs font-medium text-ink-soft" htmlFor={`ef-${f.name}`}>
@@ -167,9 +188,10 @@ export function EventRegisterDrawer({ eventEntities, initialType, onClose }: Pro
                         type={f.widget === 'date' ? 'date' : f.kind === 'number' ? 'number' : 'text'}
                         step={f.kind === 'number' ? 'any' : undefined}
                         value={value}
+                        disabled={currencyLocked}
                         onChange={(e) => setValue(f.name, e.target.value)}
                         className={clsx(
-                          'h-8 w-full rounded border bg-white px-2 text-sm text-ink placeholder:text-ink-soft/60 focus:outline-none focus:ring-1 focus:ring-primary/40',
+                          'h-8 w-full rounded border bg-white px-2 text-sm text-ink placeholder:text-ink-soft/60 focus:outline-none focus:ring-1 focus:ring-primary/40 disabled:cursor-not-allowed disabled:bg-surface disabled:text-ink-soft',
                           errors.length ? 'border-danger' : 'border-line',
                         )}
                       />
