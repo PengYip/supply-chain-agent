@@ -14,6 +14,7 @@ interface InventoryFile {
     name: string;
     layer: string;
     level: string;
+    group?: string;
     status: string;
     mount: string;
     requiresEnv?: string;
@@ -47,6 +48,8 @@ export interface InventoryToolView {
   name: string;
   layer: string;
   level: string;
+  /** 能力域分组（CI 门禁：active 工具必有非空 group 且 ∈ policy.groups）。 */
+  group: string;
   status: string;
   mount: string;
   requiresEnv?: string;
@@ -86,8 +89,13 @@ export function buildToolInventoryView(
   const mountedNames = states.map((s) => s.name);
   const tools: InventoryToolView[] = live.map((t) => {
     const state = stateByName.get(t.name);
+    // 与 CI 门禁同口径的运行时防御：active 条目缺 group 视为 inventory 漂移，直接失败。
+    if (!t.group?.trim()) {
+      throw new Error(`inventory active tool "${t.name}" has no group; declare one from policy.groups in docs/tool-inventory.json`);
+    }
     return {
       ...t,
+      group: t.group,
       registry: { mounted: state !== undefined, needsApproval: state?.needsApproval ?? false },
     };
   });

@@ -26,8 +26,16 @@ describe('GET /api/tools/inventory', () => {
     expect(body.source).toBe('docs/tool-inventory.json');
     expect(body.version).toBe('2026-09-08');
     const byName = new Map<string, {
-      status: string; registry: { mounted: boolean }; removalPlan?: string;
+      status: string; group?: string; registry: { mounted: boolean }; removalPlan?: string;
     }>(body.tools.map((t: { name: string }) => [t.name, t]));
+    // 分组透出（2026-09-08 治理后台分组展示）：active 工具的 view 必须携带
+    // 非空 group，取值 ∈ inventory policy.groups 词汇。
+    const groupVocab: string[] = body.policy.groups;
+    expect(groupVocab.length, 'policy.groups vocabulary must be non-empty').toBeGreaterThan(0);
+    for (const [name, t] of byName) {
+      expect(t.group?.trim(), `${name}: view tool missing group`).toBeTruthy();
+      expect(groupVocab, `${name}: group "${t.group}" outside policy.groups`).toContain(t.group!);
+    }
     // 2026-09-08 阶段1 移除落地：不再出现在 live tools[]，也不再有
     // deprecated+mounted 的过渡态；只存在于 removed[] 黑名单。
     const removedNames = new Set<string>(

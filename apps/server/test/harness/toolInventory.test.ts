@@ -20,6 +20,7 @@ interface InventoryTool {
   name: string;
   layer: string;
   level: string;
+  group?: string;
   status: string;
   mount: string;
   requiresEnv?: string;
@@ -30,7 +31,7 @@ interface InventoryTool {
   mergeInto?: string;
 }
 interface Inventory {
-  policy: { maxToolsMountedPerScenario: number };
+  policy: { maxToolsMountedPerScenario: number; groups?: string[] };
   tools: InventoryTool[];
   removed: Array<{ name: string; reason: string }>;
   merges: { plans: Array<{ target: string; absorbs: string[] }> };
@@ -76,6 +77,8 @@ describe('tool inventory gate', () => {
   it('every inventory entry documents layer/level/mount + whenToUse/boundary/rationale', () => {
     const names = inventory.tools.map((t) => t.name);
     expect(new Set(names).size, 'duplicate tool names in inventory').toBe(names.length);
+    // 能力域分组词汇（治理后台 ToolsTab 分组展示 + 展示顺序的 SSOT）。
+    const GROUPS = inventory.policy.groups ?? [];
     const deprecatedInTools: string[] = [];
     for (const t of inventory.tools) {
       expect(LAYERS, `${t.name}: bad layer`).toContain(t.layer);
@@ -85,6 +88,10 @@ describe('tool inventory gate', () => {
       expect(t.whenToUse?.trim(), `${t.name}: missing whenToUse`).toBeTruthy();
       expect(t.boundary?.trim(), `${t.name}: missing boundary (边界比能力描述更重要)`).toBeTruthy();
       expect(t.rationale?.trim(), `${t.name}: missing rationale`).toBeTruthy();
+      if (t.status === 'active') {
+        expect(t.group?.trim(), `${t.name}: active tools must declare a non-empty group (policy.groups 能力域)`).toBeTruthy();
+        expect(GROUPS, `${t.name}: group "${t.group}" not in policy.groups vocabulary`).toContain(t.group);
+      }
       if (t.status === 'deprecated') {
         // statusVocabulary semantics (2026-09-08): deprecated=已移除入黑名单.
         // A deprecated entry must live in removed[], never in tools[].

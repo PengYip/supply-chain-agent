@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { toolRowFlags, permissionMatrixRows, type ToolInventoryItemDTO, type PermissionSnapshotDTO } from './governanceModel';
 
 const tool = (over: Partial<ToolInventoryItemDTO>): ToolInventoryItemDTO => ({
-  name: 'x', layer: '感知', level: 'L1', status: 'active', mount: 'always',
+  name: 'x', layer: '感知', level: 'L1', group: '台账查询', status: 'active', mount: 'always',
   whenToUse: '', boundary: '', rationale: '', registry: { mounted: true, needsApproval: false },
   ...over,
 });

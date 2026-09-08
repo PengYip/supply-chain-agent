@@ -2,12 +2,14 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { clsx } from 'clsx';
-import { fetchToolInventory, type ToolInventoryDTO } from '../../api/governance';
+import { fetchToolInventory, type ToolInventoryDTO, type ToolInventoryItemDTO } from '../../api/governance';
 import { toolRowFlags } from './governanceModel';
 import { Section, Provenance } from './OntologyTab';
 
 /** 治理 Tab 2 工具面：tool-inventory SSOT 视图化 x 注册表实测对比。
- *  deprecated 且仍挂载的工具如实红标呈现（含 removalPlan），不掩饰漂移。 */
+ *  按 inventory policy.groups 能力域分组渲染（组标题 + 组内工具数 + 工具卡片），
+ *  组内顺序 = inventory 声明顺序；deprecated 且仍挂载的工具如实红标呈现（含
+ *  removalPlan），不掩饰漂移。 */
 export function ToolsTab() {
   const [inv, setInv] = useState<ToolInventoryDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -23,11 +25,25 @@ export function ToolsTab() {
   if (error) return <div className="rounded-lg border border-line bg-white p-4 text-sm text-danger">{error}</div>;
   if (!inv) return <div className="rounded-lg border border-line bg-white p-4 text-sm text-ink-soft">加载中...</div>;
 
+  // 分组展示顺序以 inventory policy.groups 为 SSOT；未登记的新组兜底追加在尾部。
+  const groupOrder = inv.policy.groups ?? [];
+  const byGroup = new Map<string, ToolInventoryItemDTO[]>();
+  for (const t of inv.tools) {
+    const list = byGroup.get(t.group);
+    if (list) list.push(t);
+    else byGroup.set(t.group, [t]);
+  }
+  const orderedGroups = [
+    ...groupOrder.filter((g) => byGroup.has(g)),
+    ...[...byGroup.keys()].filter((g) => !groupOrder.includes(g)),
+  ];
+
   return (
     <div className="max-w-6xl space-y-4 pb-2">
       <div className="flex flex-wrap items-center gap-3 text-xs text-ink-soft">
         <span>inventory version {inv.version}</span>
         <span>注册表实测挂载（trader）：{inv.mountedCount} 个</span>
+        <span>能力域分组：{orderedGroups.length} 组</span>
         {(inv.diff.mountedNotInInventory.length > 0 || inv.diff.inventoryNotMounted.length > 0) && (
           <span className="rounded bg-danger/10 px-1.5 py-0.5 text-danger">
             漂移：挂载多出 {inv.diff.mountedNotInInventory.join('、') || '无'}；inventory 缺挂载 {inv.diff.inventoryNotMounted.join('、') || '无'}
@@ -36,38 +52,21 @@ export function ToolsTab() {
       </div>
 
       <Section title={`工具清单（${inv.tools.length}）`}>
-        <div className="space-y-2">
-          {inv.tools.map((t) => {
-            const flags = toolRowFlags(t);
+        <div className="space-y-4">
+          {orderedGroups.map((g) => {
+            const tools = byGroup.get(g)!;
             return (
-              <div key={t.name} className={clsx('rounded-lg border bg-white p-3',
-                flags.deprecatedMounted ? 'border-danger/40' : 'border-line')}>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-sm font-medium text-ink">{t.name}</span>
-                  <Badge>{t.layer}</Badge>
-                  <Badge accent={t.level === 'L2'}>{t.level}</Badge>
-                  <Badge accent={t.status === 'deprecated'}>{t.status}</Badge>
-                  <Badge>mount: {t.mount}</Badge>
-                  <Badge accent={flags.deprecatedMounted}>
-                    {t.registry.mounted ? '注册表：已挂载' : '注册表：未挂载'}
-                  </Badge>
-                  {t.registry.mounted && (
-                    <Badge accent={t.registry.needsApproval}>
-                      {t.registry.needsApproval ? 'needsApproval（L2 软门控）' : '自动执行'}
-                    </Badge>
+              <div key={g} className="space-y-2">
+                <div className="flex items-center gap-2 border-b border-line pb-1">
+                  <h4 className="text-sm font-medium text-ink">{g}</h4>
+                  <span className="rounded bg-surface px-1.5 py-0.5 text-xs text-ink-soft">{tools.length} 个</span>
+                  {inv.policy.groupMeaning?.[g] && (
+                    <span className="text-xs text-ink-soft">{inv.policy.groupMeaning[g]}</span>
                   )}
-                  {flags.envGated && t.requiresEnv && <Badge>{t.requiresEnv}</Badge>}
                 </div>
-                <dl className="mt-2 space-y-1 text-xs text-ink-soft">
-                  <div><dt className="inline font-medium text-ink">何时用：</dt><dd className="inline"> {t.whenToUse}</dd></div>
-                  <div><dt className="inline font-medium text-ink">边界：</dt><dd className="inline"> {t.boundary}</dd></div>
-                  <div><dt className="inline font-medium text-ink">存留理由：</dt><dd className="inline"> {t.rationale}</dd></div>
-                  {t.removalPlan && (
-                    <div className={clsx(flags.deprecatedMounted && 'text-danger')}>
-                      <dt className="inline font-medium">移除计划：</dt><dd className="inline"> {t.removalPlan}</dd>
-                    </div>
-                  )}
-                </dl>
+                <div className="space-y-2">
+                  {tools.map((t) => <ToolCard key={t.name} t={t} />)}
+                </div>
               </div>
             );
           })}
@@ -86,7 +85,42 @@ export function ToolsTab() {
         </div>
       </Section>
 
-      <Provenance text={`数据出处：docs/tool-inventory.json（工具面 SSOT, version ${inv.version}）x 角色工具注册表实测挂载（apps/server/src/harness/roleToolRegistry.ts，经 GET /api/tools/inventory）`} />
+      <Provenance text={`数据出处：docs/tool-inventory.json（工具面 SSOT, version ${inv.version}）x 角色工具注册表实测挂载（apps/server/src/harness/roleToolRegistry.ts，经 GET /api/tools/inventory）；分组依据同文件 policy.groups 能力域词汇（组名/组序/组释义均来自 inventory，经该端点透出），组内排序保持 inventory 声明顺序`} />
+    </div>
+  );
+}
+
+function ToolCard({ t }: { t: ToolInventoryItemDTO }) {
+  const flags = toolRowFlags(t);
+  return (
+    <div className={clsx('rounded-lg border bg-white p-3',
+      flags.deprecatedMounted ? 'border-danger/40' : 'border-line')}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-sm font-medium text-ink">{t.name}</span>
+        <Badge>{t.layer}</Badge>
+        <Badge accent={t.level === 'L2'}>{t.level}</Badge>
+        <Badge accent={t.status === 'deprecated'}>{t.status}</Badge>
+        <Badge>mount: {t.mount}</Badge>
+        <Badge accent={flags.deprecatedMounted}>
+          {t.registry.mounted ? '注册表：已挂载' : '注册表：未挂载'}
+        </Badge>
+        {t.registry.mounted && (
+          <Badge accent={t.registry.needsApproval}>
+            {t.registry.needsApproval ? 'needsApproval（L2 软门控）' : '自动执行'}
+          </Badge>
+        )}
+        {flags.envGated && t.requiresEnv && <Badge>{t.requiresEnv}</Badge>}
+      </div>
+      <dl className="mt-2 space-y-1 text-xs text-ink-soft">
+        <div><dt className="inline font-medium text-ink">何时用：</dt><dd className="inline"> {t.whenToUse}</dd></div>
+        <div><dt className="inline font-medium text-ink">边界：</dt><dd className="inline"> {t.boundary}</dd></div>
+        <div><dt className="inline font-medium text-ink">存留理由：</dt><dd className="inline"> {t.rationale}</dd></div>
+        {t.removalPlan && (
+          <div className={clsx(flags.deprecatedMounted && 'text-danger')}>
+            <dt className="inline font-medium">移除计划：</dt><dd className="inline"> {t.removalPlan}</dd>
+          </div>
+        )}
+      </dl>
     </div>
   );
 }

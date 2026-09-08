@@ -5,10 +5,19 @@
 
 export interface InventoryRegistryStateDTO { mounted: boolean; needsApproval: boolean; }
 
+export interface ToolInventoryPolicyDTO {
+  maxToolsMountedPerScenario?: number;
+  /** 能力域分组词汇（有序，即治理后台 ToolsTab 的分组展示顺序 SSOT）。 */
+  groups?: string[];
+  groupMeaning?: Record<string, string>;
+}
+
 export interface ToolInventoryItemDTO {
   name: string;
   layer: string;
   level: string;
+  /** 能力域分组，取值 ∈ policy.groups（CI 门禁强制 active 工具非空）。 */
+  group: string;
   status: string;
   mount: string;
   requiresEnv?: string;
@@ -23,7 +32,7 @@ export interface ToolInventoryItemDTO {
 export interface ToolInventoryDTO {
   source: string;
   version: string;
-  policy: unknown;
+  policy: ToolInventoryPolicyDTO;
   tools: ToolInventoryItemDTO[];
   removed: Array<{ name: string; reason: string; removedOn?: string; mergedInto?: string }>;
   merges: unknown;
