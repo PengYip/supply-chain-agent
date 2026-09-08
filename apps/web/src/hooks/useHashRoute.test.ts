@@ -25,6 +25,9 @@ describe('旧路由重定向（导航整合 2026-09-08）', () => {
     expect(parseHash('#/entities')).toEqual({ view: 'ontology', params: { tab: 'ledger' } });
     expect(parseHash('#/graph')).toEqual({ view: 'ontology', params: { tab: 'graph' } });
   });
+  it('#/ledger 重定向到项目视图台账 tab', () => {
+    expect(parseHash('#/ledger')).toEqual({ view: 'projects', params: { tab: 'ledger' } });
+  });
   it('旧路由查询参数透传且优先级高于注入参数', () => {
     expect(parseHash('#/entities?type=Contract')).toEqual({
       view: 'ontology',

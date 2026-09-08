@@ -13,6 +13,7 @@ export interface RouteState {
 const LEGACY_ROUTE_REDIRECTS: Record<string, { view: ViewId; inject: Record<string, string> }> = {
   entities: { view: 'ontology', inject: { tab: 'ledger' } },
   graph: { view: 'ontology', inject: { tab: 'graph' } },
+  ledger: { view: 'projects', inject: { tab: 'ledger' } },
 };
 
 /** 解析 `#/view?key=value` 形式的 hash。纯函数。

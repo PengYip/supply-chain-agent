@@ -22,7 +22,8 @@ export function jumpTargetForCard(card: OverviewCardKey): JumpTarget {
     case 'pendingWriteoff':
       return { view: 'writeoff' };
     case 'executionRate':
-      return { view: 'ledger' };
+      // 项目台账已并入项目视图（导航整合）：跳项目台账 tab
+      return { view: 'projects', params: { tab: 'ledger' } };
   }
 }
 

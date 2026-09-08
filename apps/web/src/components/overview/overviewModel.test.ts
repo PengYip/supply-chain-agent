@@ -7,7 +7,7 @@ describe('jumpTargetForCard', () => {
     expect(jumpTargetForCard('paymentBlocks')).toEqual({ view: 'approvals' });
     expect(jumpTargetForCard('overReceipt')).toEqual({ view: 'ontology', params: { tab: 'ledger' } });
     expect(jumpTargetForCard('pendingWriteoff')).toEqual({ view: 'writeoff' });
-    expect(jumpTargetForCard('executionRate')).toEqual({ view: 'ledger' });
+    expect(jumpTargetForCard('executionRate')).toEqual({ view: 'projects', params: { tab: 'ledger' } });
   });
 });
 

@@ -14,6 +14,9 @@ import { useProjects } from '../../hooks/useProjects';
 import type { ProjectMembership } from '../../api/projects';
 import { fetchLedgerContracts, type ContractSearchItem } from '../../api/contractSearch';
 import { ContractSearchBar } from '../common/ContractSearchBar';
+import { useHashRoute } from '../../hooks/useHashRoute';
+import { PageHeader } from '../shell/PageHeader';
+import { ProjectLedgerView } from '../ledger/ProjectLedgerView';
 
 /* ---------- 项目工作台(spec 2026-08-20 §6.2) ----------
  *
@@ -53,7 +56,20 @@ function MetricCell({ label, value, emphasis }: { label: string; value: string; 
   );
 }
 
-export function ProjectsView() {
+const PROJECT_TABS = [
+  { key: 'summary', label: '汇总' },
+  { key: 'ledger', label: '台账' },
+] as const;
+
+type ProjectTab = (typeof PROJECT_TABS)[number]['key'];
+
+/** 项目视图（导航整合 2026-09-08）：汇总(项目工作台) + 台账(原项目台账视图迁入)
+ *  双 tab，tab 落 hash 参数（#/projects?tab=ledger），旧 /ledger 路由在 parseHash
+ *  重定向至此。 */
+export function ProjectsView({ onOpenParties }: { onOpenParties?: () => void }) {
+  const { route, navigate } = useHashRoute();
+  const tab: ProjectTab = route.params['tab'] === 'ledger' ? 'ledger' : 'summary';
+  const setTab = (t: ProjectTab) => navigate('projects', t === 'ledger' ? { tab: t } : {}, { replace: true });
   const {
     projects, loading, error, selectedCode, selectProject,
     memberships, rollup, detailLoading, refreshAll,
@@ -128,7 +144,33 @@ export function ProjectsView() {
   const selected = projects.find((p) => p.code === selectedCode) ?? null;
 
   return (
-    <div className="flex h-full min-w-0 bg-surface/40">
+    <div className="flex h-full min-w-0 flex-col bg-surface/40">
+      {/* 二级工具条（视图标题由 AppTopbar 承担）：汇总/台账分段式 Tab */}
+      <PageHeader
+        tabs={
+          <div className="flex items-center gap-1 rounded-lg bg-surface p-0.5">
+            {PROJECT_TABS.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setTab(t.key)}
+                aria-pressed={tab === t.key}
+                className={clsx(
+                  'rounded-md px-3 py-1 text-xs transition-colors',
+                  tab === t.key ? 'bg-white font-medium text-primary shadow-sm' : 'text-ink-soft hover:text-ink',
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        }
+      />
+      <div className="min-h-0 flex-1">
+        {tab === 'ledger' ? (
+          <ProjectLedgerView onOpenProjects={() => setTab('summary')} onOpenParties={onOpenParties} />
+        ) : (
+        <div className="flex h-full min-w-0">
       {/* 左栏: 项目列表 + 新建 */}
       <aside className="w-72 shrink-0 flex flex-col border-r border-line bg-white">
         <div className="shrink-0 border-b border-line px-4 py-3 flex items-center gap-2">
@@ -452,6 +494,9 @@ export function ProjectsView() {
               </div>
             )}
           </div>
+        )}
+      </div>
+        </div>
         )}
       </div>
     </div>

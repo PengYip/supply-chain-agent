@@ -1,6 +1,5 @@
 import {
   ArrowLeftRight,
-  BookOpen,
   Building2,
   ClipboardCheck,
   FlaskConical,
@@ -21,7 +20,6 @@ export type ViewId =
   | 'chat'
   | 'approvals'
   | 'projects'
-  | 'ledger'
   | 'ontology'
   | 'bindings'
   | 'writeoff'
@@ -51,7 +49,6 @@ export interface NavItem {
  *  funds = 资金相关（审批/核销）；collab = 登录门户与对话；admin = 低频的配置/质量工具。 */
 export const NAV_ITEMS: NavItem[] = [
   { id: 'projects', label: '项目', description: '项目维度汇总（合同面 + 执行面）', icon: FolderKanban, group: 'fulfill', enabled: true },
-  { id: 'ledger', label: '项目台账', description: '按项目归集合同的凭证齐套率', icon: BookOpen, group: 'fulfill', enabled: true },
   { id: 'bindings', label: '绑定', description: '文档与合同绑定工作台', icon: Link2, group: 'fulfill', enabled: true },
   { id: 'review', label: '集中复核', description: '多页票据表格化批量核对', icon: ClipboardCheck, group: 'fulfill', enabled: true },
   { id: 'ontology', label: '本体', description: '本体台账与本体图谱（实体浏览 / 关系穿透）', icon: Network, group: 'ontology', enabled: true },

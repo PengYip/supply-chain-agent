@@ -19,7 +19,6 @@ import { SelfPartyPanel } from './components/parties/SelfPartyPanel';
 import { FavoritesView } from './components/favorites/FavoritesView';
 import { AuditView } from './components/audit/AuditView';
 import { ProjectsView } from './components/projects/ProjectsView';
-import { ProjectLedgerView } from './components/ledger/ProjectLedgerView';
 import { OntologyView } from './components/ontology/OntologyView';
 import { ReviewWorkbench } from './components/review-workbench/ReviewWorkbench';
 import { ApprovalCenterView } from './components/approval/ApprovalCenterView';
@@ -338,9 +337,7 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
           onOpenInBindings={openBindingsForDoc}
         />
       ) : view === 'projects' ? (
-        <ProjectsView />
-      ) : view === 'ledger' ? (
-        <ProjectLedgerView onOpenProjects={() => navigate('projects')} onOpenParties={openParties} />
+        <ProjectsView onOpenParties={openParties} />
       ) : view === 'governance' ? (
         <GovernanceView />
       ) : view === 'eval' ? (
