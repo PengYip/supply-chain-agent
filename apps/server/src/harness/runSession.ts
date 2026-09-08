@@ -34,6 +34,7 @@ import { classifyProviderError } from './providerErrors.js';
 import { fetchDeepseekBalance, formatDeepseekBalance } from './deepseekBalance.js';
 import { env } from '../env.js';
 import type { Role } from './roleToolRegistry.js';
+import type { ScenarioOrAll } from './scenarios.js';
 
 // Closing fallback texts for turns that end without any model text. They are
 // DIFFERENTIATED (incident 2026-09-02): the tools/step-cap text must only be
@@ -87,6 +88,15 @@ export interface RunSessionOpts {
    */
   skipStatusMessage?: boolean;
   /**
+   * Explicit scenario override forwarded to runStream (which uses it instead of
+   * detectScenario on the trailing user text). Non-chat entrypoints (trade
+   * events form) must pin it: on the first turn the <agent_status> snapshot is
+   * the trailing role:'user' message, so auto-detection never sees the real
+   * instruction and misroutes (incident 2026-09-08: create_trade_event stayed
+   * invisible, the run degraded to escalate_to_human).
+   */
+  scenario?: ScenarioOrAll;
+  /**
    * Continuation mode for approval-resume runs: the persisted UI history whose
    * LAST message is the assistant message to continue (the L2
    * approval-requested message). The SDK seeds UI assembly from it, so
@@ -120,7 +130,7 @@ export function extractMessageText(msg: any): string {
 }
 
 export async function runSession(opts: RunSessionOpts): Promise<void> {
-  const { sessionId, role, messages, auditTraceId, abortSignal, userId, model, isFirstTurn, firstUserText, skipStatusMessage, originalMessages } = opts;
+  const { sessionId, role, messages, auditTraceId, abortSignal, userId, model, isFirstTurn, firstUserText, skipStatusMessage, originalMessages, scenario } = opts;
   const auditT0 = Date.now();
   // Audit: this turn's user input (prompt tail) for the usage-audit page.
   const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
@@ -183,6 +193,8 @@ export async function runSession(opts: RunSessionOpts): Promise<void> {
       model,
       abortSignal,
       skipStatusMessage,
+      // 表单类入口（POST /api/trade-events）显式钉场景，覆盖首轮的状态消息误检测。
+      scenario,
       onStreamError: (error) => {
         streamError = error;
       },

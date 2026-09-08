@@ -49,8 +49,10 @@ function fieldLevelErrors(error: z.ZodError): {
   return { formErrors: flat.formErrors, fieldErrors };
 }
 
-/** 固定指令模板：逐字 JSON + 场景关键词（结算域 -> settlement，工具可见性依赖此命中，
- *  见 scenarios.ts SETTLEMENT_RE）+ 禁改数字纪律。与核销工作台模板同构。 */
+/** 固定指令模板：逐字 JSON + 场景关键词（结算域 -> settlement；后台 run 的首轮场景
+ *  由下方 runSession 显式指定，关键词兜底的是审批恢复轮 —— resume 带 skipStatusMessage，
+ *  自动检测扫到的末尾 user 消息正是本指令，命中与否决定恢复轮工具可见性）+ 禁改数字纪律。
+ *  与核销工作台模板同构。 */
 export function buildTradeEventInstruction(input: TradeEventInput): string {
   const { entityType, ...fields } = input;
   return [
@@ -112,6 +114,10 @@ tradeEventsRoute.post('/', async (c) => {
       abortSignal: signal,
       // 标题已手动设置，跳过首轮 title-gen。
       isFirstTurn: false,
+      // 显式钉 settlement：首轮 runStream 会在指令尾部追加 <agent_status> 状态消息
+      // （role:'user'），detectScenario 只扫末尾 user 消息，对状态文本落 entry，
+      // create_trade_event 不可见 -> 模型只能 escalate_to_human（2026-09-08 事故）。
+      scenario: 'settlement',
     }),
   );
   if ('conflict' in start) {
