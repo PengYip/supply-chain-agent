@@ -238,6 +238,7 @@ export async function listProjectedEntities(
   const q = opts.q?.trim().toLowerCase() ?? '';
   const filtered = q
     ? rows.filter((e) => e.label.toLowerCase().includes(q)
+      || e.id.toLowerCase().includes(q)
       || JSON.stringify(e.fields).toLowerCase().includes(q))
     : rows;
   filtered.sort((a, b) => (b.ingestedAt ?? '').localeCompare(a.ingestedAt ?? '') || b.id.localeCompare(a.id));

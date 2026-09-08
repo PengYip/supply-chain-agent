@@ -16,6 +16,8 @@ import { getDbContext } from '../src/pipeline/db/dbBackend.js';
 import type { DbContext } from '../src/pipeline/db/client.js';
 import type { TradeFactInput, OntologyEdgeInput } from '../src/ontology/repo.js';
 import { insertTradeFact, insertOntologyEdge } from '../src/ontology/repo.js';
+import { normalizeName } from '../src/graph/normalize.js';
+import { createEntity, mergeEdge } from '../src/graph/repo.js';
 
 const MARKER = 'demo-lineage';
 const CONTRACT_ID = 'C-DEMO-LIN';
@@ -38,7 +40,8 @@ async function main() {
   const ctx = getDbContext();
   const existing = await countSeeded(ctx);
   if (existing !== '0') {
-    console.log(`demo lineage already seeded (${existing} edges), skip.`);
+    console.log(`demo lineage already seeded (${existing} edges), skip SQL writes.`);
+    await syncNeo4jDemo(dryRun);
     return;
   }
 
@@ -119,9 +122,38 @@ async function main() {
     toType: 'PaymentEvent', toId: p1, validAt: '2026-06-25' });
 
   console.log(`contract = ${CONTRACT_ID} (${CONTRACT_NO})`);
+  await syncNeo4jDemo(dryRun);
   console.log('验收 1(2 跳可达发票/付款)：');
   console.log(`  curl -b <auth> 'http://localhost:3001/api/ontology/graph/neighbors?type=TradeContract&id=${CONTRACT_ID}&depth=2'`);
   console.log('验收 4(深度上限)：');
   console.log(`  curl -b <auth> '...&depth=4'  # 预期 400`);
+}
+
+// 图谱搜索入口(/api/graph/resolve)按 normalizeName 精确匹配 Neo4j Contract 节点，
+// 而 SQL 种子不含图写入 -> 文档模式搜演示合同报「尚未同步到图谱」。这里补一份
+// 最小 Neo4j 演示子图(演示单据 -[executes]-> 合同)。MERGE 幂等：已 seeded 重跑
+// 本脚本也会执行本段，用于修复存量环境。NEO4J_PASSWORD 未设则跳过(与图写路径同门禁)。
+async function syncNeo4jDemo(dryRun: boolean): Promise<void> {
+  if (dryRun) {
+    console.log('[dry-run] would sync neo4j demo subgraph (doc-demo-lin -[executes]-> Contract)');
+    return;
+  }
+  if (!process.env.NEO4J_PASSWORD) {
+    console.log('NEO4J_PASSWORD not set, skip neo4j demo subgraph.');
+    return;
+  }
+  const doc = await createEntity({
+    kind: 'Document', name: 'doc-demo-lin',
+    props: { docId: 'doc-demo-lin', docType: '合同', source: 'demo-lineage' },
+  });
+  const contract = await createEntity({
+    kind: 'Contract', name: normalizeName(CONTRACT_NO),
+    props: { rawName: CONTRACT_NO, source: 'demo-lineage' },
+  });
+  await mergeEdge({
+    srcId: doc.elementId, dstId: contract.elementId,
+    kind: 'executes', confidence: 1, props: { source: 'demo-lineage' },
+  });
+  console.log(`neo4j demo subgraph ok: doc-demo-lin -[executes]-> Contract(${normalizeName(CONTRACT_NO)})`);
 }
 void main().catch((e) => { console.error(e); process.exit(1); });

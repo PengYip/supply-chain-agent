@@ -65,6 +65,13 @@ describe('projection: TradeContract <- contract_ledger (read-only)', () => {
     expect(q.total).toBe(1);
   });
 
+  it('q filter matches entity id too (origin selector promises id search)', async () => {
+    insertContract('C-DEMO-LIN', 'HT-DEMO-LIN-001', '采购');
+    const byId = await listProjectedEntities(ctx, 'TradeContract', { q: 'C-DEMO-LIN' }, 'u1');
+    expect(byId.total).toBe(1);
+    expect(byId.items[0]!.id).toBe('C-DEMO-LIN');
+  });
+
   it('types without a source return an empty page, not error (acceptance 4)', async () => {
     const res = await listProjectedEntities(ctx, 'TradeGoods', {}, 'u1');
     expect(res).toEqual({ items: [], total: 0, page: 1, pageSize: 20 });
