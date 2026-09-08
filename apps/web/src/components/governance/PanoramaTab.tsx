@@ -11,6 +11,7 @@ import {
 } from '../../api/ontology';
 import type { GraphEdge, GraphNode, Subgraph } from '../../hooks/useGraph';
 import { GraphCanvas } from '../graph/GraphCanvas';
+import { computeOntologyLayout } from '../graph/ontologyLayout';
 import { ONTOLOGY_EDGE_LEGEND, edgeLabel } from '../graph/businessTypes';
 import { useHashRoute } from '../../hooks/useHashRoute';
 
@@ -109,6 +110,9 @@ export function PanoramaTab() {
             centerElementId={subgraph.subject?.elementId ?? null}
             hiddenKinds={NO_HIDDEN_KINDS}
             showPlainEdges
+            // 本体分层布局 + 整图适配初始视口：11 节点按关系方向分列, 14 条边默认可辨。
+            computeLayout={computeOntologyLayout}
+            initialViewport="fit"
             onHover={() => { /* 全景图无悬停浮层，通道保留 */ }}
             onNodeSelect={(node) => setSelected({ type: 'node', node })}
             onEdgeSelect={(edge) => setSelected({ type: 'edge', edge })}

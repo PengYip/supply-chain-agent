@@ -7,7 +7,7 @@ import { Graph as G6Graph, type EdgeData, type IElementEvent, type NodeData } fr
 import type { GraphEdge, GraphNode, InspectTarget, Subgraph } from '../../hooks/useGraph';
 import { EDGE_STYLE_OVERRIDES, businessTypeOf, contractTypeStyle, docTypeName, docTypeStyle, nodeDisplayName } from './businessTypes';
 import { useDocMeta } from './docMeta';
-import { cardSpec, classifyEdge, computeLayeredLayout, type NodeCardMeta } from './layeredLayout';
+import { cardSpec, classifyEdge, computeLayeredLayout, type LayoutResult, type NodeCardMeta } from './layeredLayout';
 
 interface GraphCanvasProps {
   subgraph: Subgraph;
@@ -16,6 +16,10 @@ interface GraphCanvasProps {
   hiddenKinds: ReadonlySet<string>;
   /** 是否显示普通关系边(层级履约边与绑定边恒显)。 */
   showPlainEdges: boolean;
+  /** 布局函数(默认文档泳道分层)；治理全景图换用本体分层。 */
+  computeLayout?: (nodes: GraphNode[], edges: GraphEdge[], metaMap?: Record<string, NodeCardMeta>) => LayoutResult;
+  /** 初始视口：lane=聚焦中心节点所在泳道(默认)；fit=整图适配(全景图, 14 条边默认可辨)。 */
+  initialViewport?: 'lane' | 'fit';
   onHover: (t: InspectTarget | null) => void;
   onNodeSelect: (node: GraphNode) => void;
   onEdgeSelect: (edge: GraphEdge) => void;
@@ -101,11 +105,13 @@ function themeOf(nd: GraphNode, subtitle: string): { label: string; color: strin
 }
 
 export function GraphCanvas({
-  subgraph, centerElementId, hiddenKinds, showPlainEdges, onHover, onNodeSelect, onEdgeSelect, onPaneSelect, onNodeDoubleClick,
+  subgraph, centerElementId, hiddenKinds, showPlainEdges, computeLayout, initialViewport = 'lane',
+  onHover, onNodeSelect, onEdgeSelect, onPaneSelect, onNodeDoubleClick,
 }: GraphCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<G6Graph | null>(null);
   const docMeta = useDocMeta();
+  const layoutFn = computeLayout ?? computeLayeredLayout;
   // 渲染串行化: 所有 render/setData 排队执行, 避免并发渲染交错。
   const renderChainRef = useRef<Promise<void>>(Promise.resolve());
   // 已应用的过滤集合: 建图 effect 已按初始值渲染, 后续变化 effect 跳过首次。
@@ -133,7 +139,7 @@ export function GraphCanvas({
       metaMap[nd.elementId] = { displayName: nodeDisplayName(nd, docMeta), subtitle: subtitleOf(nd, docMeta) };
     }
 
-    const layout = computeLayeredLayout(visibleNodes, visibleEdges, metaMap);
+    const layout = layoutFn(visibleNodes, visibleEdges, metaMap);
 
     const g6Nodes = visibleNodes.map((nd) => {
       const meta = metaMap[nd.elementId]!;
@@ -268,8 +274,13 @@ export function GraphCanvas({
       .then(async () => {
         if (disposed) return;
         await graph.render();
-        // 导航优先的初始视口: 聚焦中心节点(或首条泳道根), 自然缩放不拉远到全局。
+        // 初始视口：fit=整图适配(治理全景图, 全部关系边默认可辨)；
+        // lane(默认)=导航优先, 聚焦中心节点所在泳道, 自然缩放不拉远到全局。
         try {
+          if (initialViewport === 'fit') {
+            await graph.fitView({ when: 'always', direction: 'both' });
+            return;
+          }
           const size = graph.getSize();
           const focusLane =
             layout.lanes.find((l) =>
