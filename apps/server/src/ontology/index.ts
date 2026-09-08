@@ -162,6 +162,14 @@ const eventAmountRule = (v: Record<string, unknown>, ctx: z.RefinementCtx) => {
   }
 };
 
+/** 实体 phase（注册表派生：static=4 静态 / event=7 事件）。前端表单入口/台账按此
+ *  区分登记面，禁止在 web 硬编码事件类型清单——新增实体只改本文件。 */
+export type EntityPhase = 'static' | 'event';
+
+export function entityPhase(name: OntologyEntityName): EntityPhase {
+  return EVENT_ENTITY_NAMES.includes(name) ? 'event' : 'static';
+}
+
 /** 写入边界用的完整 schema：词汇 + 语义规则。静态实体直接返回原 schema。
  *  M-1 裁决(2026-09-07)：strict——注册表外字段快速失败(不静默剥离)；
  *  仓储持久化 parse 后的规范值，DB 内 payload 字段恒 ⊆ 注册表词汇。 */
@@ -300,6 +308,7 @@ export function ontologySchemaJson() {
     entities: ENTITY_NAMES.map((n) => ({
       name: n,
       label: ENTITY_LABELS[n],
+      phase: entityPhase(n),
       ownFields: Object.keys(ONTOLOGY_ENTITIES[n]!.shape),
       fields: [...entityFieldNames(n)],
       meaning: MEANING_URIS[n] ?? null,

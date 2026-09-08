@@ -25,6 +25,7 @@ import { ontologyRoute } from './routes/ontology.js';
 import { toolsRoute } from './routes/tools.js';
 import { overviewRoute } from './routes/overview.js';
 import { writeoffRoute } from './routes/writeoff.js';
+import { tradeEventsRoute } from './routes/tradeEvents.js';
 import { partiesRoute } from './routes/parties.js';
 import { projectsRoute } from './routes/projects.js';
 import { templatesRoute } from './routes/templates.js';
@@ -134,6 +135,9 @@ app.use('/api/templates/*', requireAuth);
 
 app.use('/api/ontology/*', requireAuth);
 app.use('/api/writeoff/*', requireAuth);
+// 事件登记表单入口：POST 落在集合根路径, 需同时护住精确路径与子路径(GET /schema)。
+app.use('/api/trade-events', requireAuth);
+app.use('/api/trade-events/*', requireAuth);
 // 治理后台只读面(roadmap Item 6)：工具 inventory 视图 + 权限快照。
 app.use('/api/tools/*', requireAuth);
 // 总览工作台只读聚合面(roadmap Item 7)。
@@ -177,6 +181,7 @@ app.route('/api/contracts', contractsRoute);
 // 本体台账(roadmap Item 3)：schema/实体列表/详情，只读投影。
 app.route('/api/ontology', ontologyRoute);
 app.route('/api/writeoff', writeoffRoute);
+app.route('/api/trade-events', tradeEventsRoute);
 // 治理后台(roadmap Item 6)：/api/tools/inventory + /api/tools/permissions，只读。
 app.route('/api/tools', toolsRoute);
 // 总览工作台(roadmap Item 7)：GET /api/overview，只读聚合。

@@ -14,6 +14,26 @@ export const TRADE_EVENT_TYPES = [
   'PaymentEvent', 'CollectionEvent', 'ServiceCostEvent',
 ] as const;
 
+// inputSchema SSOT：工具与表单入口（POST /api/trade-events）共用同一 zod 定义，
+// 路由/web 一律经 export 消费或经 tradeEventFormSchemaJson 投影，禁止复制字段定义。
+export const CreateTradeEventInputSchema = z.object({
+  entityType: z.enum(TRADE_EVENT_TYPES).describe('事件类型（7 类之一）'),
+  eventBizType: EventBizType.describe('业务方向：正向=正数金额；逆向（红冲/退款）=负数金额'),
+  amount: z.number().describe('金额；正向为正数，逆向（红冲/退款）必须为负数（如红冲 -800000）'),
+  currency: z.string().min(1).describe('币种（如 CNY）'),
+  validAt: z.string().min(1).describe('业务发生时间 ISO 日期（如 2026-06-25）'),
+  invoiceNo: z.string().optional().describe('发票号（InvoiceEvent 必填，如 INV-2026-001）'),
+  invoiceType: z.enum(['销项', '进项']).optional().describe('发票类型（InvoiceEvent 必填）'),
+  payType: PayType.optional().describe('付款类型（PaymentEvent 必填：预付/尾款/进度款/质保金）'),
+  costType: z.string().optional().describe('费用类型（ServiceCostEvent 必填，如 物流）'),
+  quantity: z.number().optional().describe('数量（收货/发货必填，如 100）'),
+  unit: z.string().optional().describe('单位（收货/发货/结算必填，如 吨）'),
+  settledQuantity: z.number().optional().describe('结算数量（SettlementEvent 必填，如 100）'),
+});
+
+/** 表单 UX 默认值（服务端投影给表单入口；业务语义仍以注册表与写入边界为准）。 */
+const TRADE_EVENT_FORM_DEFAULTS: Record<string, unknown> = { currency: 'CNY' };
+
 export function buildCreateTradeEventTool(deps: { ctx: DbContext; userId?: string }) {
   return tool({
     description:
@@ -27,20 +47,7 @@ export function buildCreateTradeEventTool(deps: { ctx: DbContext; userId?: strin
       '不符会整单拒绝并在 detail 返回原因；逆向事件金额必须为负数（写入边界强制）；' +
       '数字或日期不精确时先向用户确认，不要猜测。' +
       '返回 { status: "ok", id, entityType } 或 { status: "invalid", detail }。',
-    inputSchema: z.object({
-      entityType: z.enum(TRADE_EVENT_TYPES).describe('事件类型（7 类之一）'),
-      eventBizType: EventBizType.describe('业务方向：正向=正数金额；逆向（红冲/退款）=负数金额'),
-      amount: z.number().describe('金额；正向为正数，逆向（红冲/退款）必须为负数（如红冲 -800000）'),
-      currency: z.string().min(1).describe('币种（如 CNY）'),
-      validAt: z.string().min(1).describe('业务发生时间 ISO 日期（如 2026-06-25）'),
-      invoiceNo: z.string().optional().describe('发票号（InvoiceEvent 必填，如 INV-2026-001）'),
-      invoiceType: z.enum(['销项', '进项']).optional().describe('发票类型（InvoiceEvent 必填）'),
-      payType: PayType.optional().describe('付款类型（PaymentEvent 必填：预付/尾款/进度款/质保金）'),
-      costType: z.string().optional().describe('费用类型（ServiceCostEvent 必填，如 物流）'),
-      quantity: z.number().optional().describe('数量（收货/发货必填，如 100）'),
-      unit: z.string().optional().describe('单位（收货/发货/结算必填，如 吨）'),
-      settledQuantity: z.number().optional().describe('结算数量（SettlementEvent 必填，如 100）'),
-    }),
+    inputSchema: CreateTradeEventInputSchema,
     execute: async ({ entityType, validAt, ...payload }) => {
       try {
         const id = await insertTradeFact(
@@ -54,4 +61,54 @@ export function buildCreateTradeEventTool(deps: { ctx: DbContext; userId?: strin
       }
     },
   });
+}
+
+// ---------------------------------------------------------------------------
+// 表单入口投影（GET /api/trade-events/schema 数据源）：从同一 inputSchema zod
+// 反射字段元数据，web 不复制任何字段/枚举定义。闭枚举值直接来自注册表 enum。
+// ---------------------------------------------------------------------------
+
+export interface TradeEventFormFieldDTO {
+  name: string;
+  kind: 'string' | 'number' | 'enum';
+  required: boolean;
+  options?: readonly string[];
+  description: string;
+  formDefault?: unknown;
+}
+
+function unwrapField(sch: z.ZodTypeAny): { inner: z.ZodTypeAny; required: boolean } {
+  let inner = sch;
+  let required = true;
+  while (inner instanceof z.ZodOptional || inner instanceof z.ZodNullable) {
+    if (inner instanceof z.ZodOptional) required = false;
+    inner = inner.unwrap();
+  }
+  return { inner, required };
+}
+
+function fieldKind(inner: z.ZodTypeAny): 'string' | 'number' | 'enum' | null {
+  if (inner instanceof z.ZodEnum || inner instanceof z.ZodNativeEnum) return 'enum';
+  if (inner instanceof z.ZodNumber) return 'number';
+  if (inner instanceof z.ZodString) return 'string';
+  return null;
+}
+
+export function tradeEventFormSchemaJson() {
+  const fields: TradeEventFormFieldDTO[] = Object.entries(CreateTradeEventInputSchema.shape)
+    .map(([name, sch]) => {
+      const { inner, required } = unwrapField(sch);
+      const kind = fieldKind(inner);
+      if (!kind) throw new Error(`eventTools: unsupported field type for form projection: ${name}`);
+      const desc = inner.description ?? sch.description ?? '';
+      return {
+        name,
+        kind,
+        required,
+        ...(kind === 'enum' ? { options: (inner as unknown as { options: readonly string[] }).options } : {}),
+        description: desc,
+        ...(name in TRADE_EVENT_FORM_DEFAULTS ? { formDefault: TRADE_EVENT_FORM_DEFAULTS[name] } : {}),
+      };
+    });
+  return { tool: 'create_trade_event', fields };
 }
