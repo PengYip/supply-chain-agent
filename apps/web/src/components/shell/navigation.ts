@@ -34,7 +34,7 @@ export type ViewId =
   | 'favorites'
   | 'parties';
 
-export type NavGroupId = 'work' | 'admin';
+export type NavGroupId = 'fulfill' | 'ontology' | 'funds' | 'collab' | 'admin';
 
 export interface NavItem {
   id: ViewId;
@@ -49,19 +49,20 @@ export interface NavItem {
 }
 
 /** 视图注册表：路由、导航、顶栏标题的唯一事实源。
- *  分组语义：work = 日常业务高频入口；admin = 低频的配置/质量工具。 */
+ *  分组语义（导航整合 2026-09-08）：fulfill = 合同履约过程；ontology = 本体数据面；
+ *  funds = 资金相关（审批/核销）；collab = 登录门户与对话；admin = 低频的配置/质量工具。 */
 export const NAV_ITEMS: NavItem[] = [
-  { id: 'overview', label: '总览', description: '待办与异常优先的登录门户', icon: LayoutDashboard, group: 'work', enabled: true },
-  { id: 'chat', label: '对话', description: 'DeepSeek + 真实工具调用', icon: MessageSquare, group: 'work', enabled: true },
-  { id: 'approvals', label: '审批中心', description: 'L2/L3 审批待办与历史', icon: ClipboardCheck, group: 'work', enabled: true },
-  { id: 'projects', label: '项目', description: '项目维度汇总（合同面 + 执行面）', icon: FolderKanban, group: 'work', enabled: true },
-  { id: 'ledger', label: '项目台账', description: '按项目归集合同的凭证齐套率', icon: BookOpen, group: 'work', enabled: true },
-  { id: 'entities', label: '实体台账', description: '本体实体浏览（合同 / 收发依据 / 事件，as-of 时间切片）', icon: Boxes, group: 'work', enabled: true },
-  { id: 'graph', label: '图谱', description: '实体关系可视化', icon: Network, group: 'work', enabled: true },
-  { id: 'bindings', label: '绑定', description: '文档与合同绑定工作台', icon: Link2, group: 'work', enabled: true },
-  { id: 'writeoff', label: '核销', description: '票款核销与预付冲抵（多对多 / 部分金额 / 分批）', icon: ArrowLeftRight, group: 'work', enabled: true },
+  { id: 'projects', label: '项目', description: '项目维度汇总（合同面 + 执行面）', icon: FolderKanban, group: 'fulfill', enabled: true },
+  { id: 'ledger', label: '项目台账', description: '按项目归集合同的凭证齐套率', icon: BookOpen, group: 'fulfill', enabled: true },
+  { id: 'bindings', label: '绑定', description: '文档与合同绑定工作台', icon: Link2, group: 'fulfill', enabled: true },
+  { id: 'review', label: '集中复核', description: '多页票据表格化批量核对', icon: ClipboardCheck, group: 'fulfill', enabled: true },
+  { id: 'entities', label: '实体台账', description: '本体实体浏览（合同 / 收发依据 / 事件，as-of 时间切片）', icon: Boxes, group: 'ontology', enabled: true },
+  { id: 'graph', label: '图谱', description: '实体关系可视化', icon: Network, group: 'ontology', enabled: true },
+  { id: 'approvals', label: '审批中心', description: 'L2/L3 审批待办与历史', icon: ClipboardCheck, group: 'funds', enabled: true },
+  { id: 'writeoff', label: '核销', description: '票款核销与预付冲抵（多对多 / 部分金额 / 分批）', icon: ArrowLeftRight, group: 'funds', enabled: true },
+  { id: 'overview', label: '总览', description: '待办与异常优先的登录门户', icon: LayoutDashboard, group: 'collab', enabled: true },
+  { id: 'chat', label: '对话', description: 'DeepSeek + 真实工具调用', icon: MessageSquare, group: 'collab', enabled: true },
   { id: 'governance', label: '治理后台', description: '本体 / 工具面 / 权限 / 审批审计 只读治理视图', icon: Shield, group: 'admin', enabled: true },
-  { id: 'review', label: '集中复核', description: '多页票据表格化批量核对', icon: ClipboardCheck, group: 'work', enabled: true },
   { id: 'eval', label: '评估', description: '评估数据集与结果分析', icon: FlaskConical, group: 'admin', enabled: true },
   { id: 'audit', label: '用量审计', description: 'LLM 与 OCR 调用统计及明细', icon: History, group: 'admin', enabled: true },
   { id: 'favorites', label: '收藏反馈', description: '对话收藏与用户反馈', icon: Star, group: 'admin', enabled: true },
@@ -69,7 +70,10 @@ export const NAV_ITEMS: NavItem[] = [
 ];
 
 export const NAV_GROUPS: Array<{ id: NavGroupId; label: string }> = [
-  { id: 'work', label: '工作台' },
+  { id: 'fulfill', label: '履约' },
+  { id: 'ontology', label: '本体' },
+  { id: 'funds', label: '资金' },
+  { id: 'collab', label: '协作' },
   { id: 'admin', label: '管理' },
 ];
 
