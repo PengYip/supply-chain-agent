@@ -112,12 +112,18 @@ export function OntologyExplorer({ initialAnchor }: Props) {
     setAnchor({ type: initialAnchor.type, id: initialAnchor.id, label: initialAnchor.label });
   }, [initialAnchor]);
 
+  // 过期响应守卫: 连续点选两个锚点时, replace 语义下慢的旧响应不得整体覆盖
+  // 新锚点的画布。搜索结果用独立序号。
+  const loadSeqRef = useRef(0);
+  const searchSeqRef = useRef(0);
   const load = useCallback(async (target: { type: string; id: string; label: string }, d: number) => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     setError(null);
     expandedRef.current = new Set([nodeKey(target.type, target.id)]);
     try {
       const res = await fetchOntologyNeighbors(target.type, target.id, d);
+      if (seq !== loadSeqRef.current) return;
       // replace 语义：锚点节点 + 全量邻接重建画布
       const anchorNode = toGraphNode(res.anchorNode);
       const nodeMap = new Map<string, GraphNode>();
@@ -130,12 +136,13 @@ export function OntologyExplorer({ initialAnchor }: Props) {
       setAnchor(target);
       setSelected(null);
     } catch (e) {
+      if (seq !== loadSeqRef.current) return;
       // 加载失败清空画布: 避免旧锚点的节点/边留在新「当前中心」chip 之下。
       setNodes([]);
       setEdges([]);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) setLoading(false);
     }
   }, []);
 
@@ -181,13 +188,17 @@ export function OntologyExplorer({ initialAnchor }: Props) {
   const search = useCallback(async () => {
     if (!selectedType) return;
     setSearching(true);
+    const seq = ++searchSeqRef.current;
     try {
       const res = await listEntities(selectedType, { q: q.trim() || undefined, pageSize: 10 });
+      if (seq !== searchSeqRef.current) return;
       setCandidates(res.items);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // 搜索失败不写全局 error: 画布数据完好, 写全局 error 会把上方状态行
+      // 整个变成"加载失败"。仅停在旧候选列表即可(控制台留痕)。
+      console.error('[OntologyExplorer] candidate search failed:', e);
     } finally {
-      setSearching(false);
+      if (seq === searchSeqRef.current) setSearching(false);
     }
   }, [selectedType, q]);
 

@@ -158,10 +158,23 @@ export async function getTradeFactById(
 // ontology_edges
 // ---------------------------------------------------------------------------
 
-export async function insertOntologyEdge(
-  ctx: DbContext, input: OntologyEdgeInput, userId?: string,
-): Promise<string> {
-  // 写入边界: 关系存在 + 连接对合法 + params 走关系的 strict schema
+interface PreparedEdgeRow {
+  id: string;
+  relation: string;
+  fromType: OntologyEntityName;
+  fromId: string;
+  toType: OntologyEntityName;
+  toId: string;
+  paramsJson: string;
+  validAt: string;
+  invalidAt: string | null;
+  ingestedAt: string | null;
+  createdBy: string;
+  uid: string;
+}
+
+// 写入边界: 关系存在 + 连接对合法 + params 走关系的 strict schema
+function prepareEdgeRow(input: OntologyEdgeInput, userId?: string): PreparedEdgeRow {
   const def = relationDef(input.relation);
   if (!isRelationPairAllowed(input.relation, input.fromType, input.toType)) {
     throw new Error(
@@ -169,31 +182,74 @@ export async function insertOntologyEdge(
       ` (allowed: ${def.pairs.map((p) => `${p.from}->${p.to}`).join(', ')})`);
   }
   const canonicalParams = def.params.parse(input.params ?? {});
-  const id = rid('OE');
-  const validAt = normalizeIsoUtc(input.validAt);
-  const invalidAt = input.invalidAt == null ? null : normalizeIsoUtc(input.invalidAt);
-  const ingestedAt = input.ingestedAt == null ? null : normalizeIsoUtc(input.ingestedAt);
-  const uid = effectiveUserId(userId);
+  return {
+    id: rid('OE'),
+    relation: input.relation,
+    fromType: input.fromType,
+    fromId: input.fromId,
+    toType: input.toType,
+    toId: input.toId,
+    paramsJson: JSON.stringify(canonicalParams),
+    validAt: normalizeIsoUtc(input.validAt),
+    invalidAt: input.invalidAt == null ? null : normalizeIsoUtc(input.invalidAt),
+    ingestedAt: input.ingestedAt == null ? null : normalizeIsoUtc(input.ingestedAt),
+    createdBy: input.createdBy,
+    uid: effectiveUserId(userId),
+  };
+}
 
+const PG_EDGE_INSERT = `INSERT INTO ontology_edges (${EDGE_COLS})
+   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10, NOW()),$11,$12)`;
+const SQLITE_EDGE_INSERT = `INSERT INTO ontology_edges (id, relation, from_type, from_id, to_type, to_id, params,
+      valid_at, invalid_at, ingested_at, created_by, user_id)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now')), ?, ?)`;
+
+const edgeRowParams = (r: PreparedEdgeRow) => [
+  r.id, r.relation, r.fromType, r.fromId, r.toType, r.toId,
+  r.paramsJson, r.validAt, r.invalidAt, r.ingestedAt, r.createdBy, r.uid,
+];
+
+export async function insertOntologyEdge(
+  ctx: DbContext, input: OntologyEdgeInput, userId?: string,
+): Promise<string> {
+  const row = prepareEdgeRow(input, userId);
   if (ctx.backend === 'postgres') {
     const pg = ctx as PostgresDbContext;
-    await pg.pool.query(
-      `INSERT INTO ontology_edges (${EDGE_COLS})
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10, NOW()),$11,$12)`,
-      [id, input.relation, input.fromType, input.fromId, input.toType, input.toId,
-       JSON.stringify(canonicalParams), validAt, invalidAt,
-       ingestedAt, input.createdBy, uid],
-    );
-    return id;
+    await pg.pool.query(PG_EDGE_INSERT, edgeRowParams(row));
+    return row.id;
   }
-  ctx.sqlite.prepare(
-    `INSERT INTO ontology_edges (id, relation, from_type, from_id, to_type, to_id, params,
-        valid_at, invalid_at, ingested_at, created_by, user_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now')), ?, ?)`,
-  ).run(id, input.relation, input.fromType, input.fromId, input.toType, input.toId,
-    JSON.stringify(canonicalParams), validAt, invalidAt,
-    ingestedAt, input.createdBy, uid);
-  return id;
+  ctx.sqlite.prepare(SQLITE_EDGE_INSERT).run(...edgeRowParams(row));
+  return row.id;
+}
+
+/** 事务性批量落边: 全部行先过写入边界校验(校验期零连接占用), 再整批原子提交
+ *  —— 任一条写入失败整批回滚、零边产生(核销"失败整单拒绝"语义的落地保证)。
+ *  返回与输入顺序一致的边 id 数组。 */
+export async function insertOntologyEdgesBatch(
+  ctx: DbContext, inputs: OntologyEdgeInput[], userId?: string,
+): Promise<string[]> {
+  const rows = inputs.map((i) => prepareEdgeRow(i, userId));
+  if (rows.length === 0) return [];
+  if (ctx.backend === 'postgres') {
+    const pg = ctx as PostgresDbContext;
+    const client = await pg.pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const r of rows) await client.query(PG_EDGE_INSERT, edgeRowParams(r));
+      await client.query('COMMIT');
+    } catch (err) {
+      try { await client.query('ROLLBACK'); } catch { /* 连接已坏, 无可回滚 */ }
+      throw err;
+    } finally {
+      client.release();
+    }
+  } else {
+    // better-sqlite3 事务要求同步函数体; 单条插入本就是同步 prepare/run。
+    ctx.sqlite.transaction(() => {
+      for (const r of rows) ctx.sqlite.prepare(SQLITE_EDGE_INSERT).run(...edgeRowParams(r));
+    })();
+  }
+  return rows.map((r) => r.id);
 }
 
 export async function listOntologyEdgesAsOf(

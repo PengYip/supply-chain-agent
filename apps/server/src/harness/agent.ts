@@ -181,18 +181,30 @@ export function buildGatedTools(role: Role, deps?: HarnessDeps, failures?: Failu
         gated[name] = { ...audited, needsApproval: true };
       } else {
         const gatedExecute: Tool['execute'] = async (input, options) => {
-          const output = await origExecute(input, options);
           const callId = options?.toolCallId;
-          if (callId) {
-            let detail = '';
-            try { detail = JSON.stringify(output).slice(0, 500); }
-            catch { detail = String(output).slice(0, 500); }
-            void appendSideEffect(callId, {
-              target: `toolCall:${callId}`, action: name, ok: true,
-              detail, at: new Date().toISOString(),
-            }).catch(() => { /* 审计失败不影响业务执行 */ });
+          try {
+            const output = await origExecute(input, options);
+            if (callId) {
+              let detail = '';
+              try { detail = JSON.stringify(output).slice(0, 500); }
+              catch { detail = String(output).slice(0, 500); }
+              void appendSideEffect(callId, {
+                target: `toolCall:${callId}`, action: name, ok: true,
+                detail, at: new Date().toISOString(),
+              }).catch(() => { /* 审计失败不影响业务执行 */ });
+            }
+            return output;
+          } catch (err) {
+            // 抛异常也必须留痕, 否则审批单上"已批准"却查不到任何执行痕迹。
+            if (callId) {
+              void appendSideEffect(callId, {
+                target: `toolCall:${callId}`, action: name, ok: false,
+                detail: `执行异常: ${String(err)}`.slice(0, 500),
+                at: new Date().toISOString(),
+              }).catch(() => { /* 审计失败不影响业务执行 */ });
+            }
+            throw err;
           }
-          return output;
         };
         gated[name] = { ...audited, execute: gatedExecute, needsApproval: true };
       }

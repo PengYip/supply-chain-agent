@@ -177,9 +177,17 @@ const EnvSchema = z.object({
   // 锚定模式阈值(2026-09-04 事故: 分类器 0.76 置信也大概率正确, 弃用落回检测
   // 先验是错误边界)。低于此值才完全弃用分类器(回落检测先验);
   // [ORIENTATION_ANCHOR_SCORE, ORIENTATION_MIN_SCORE) 区间走锚定模式(双候选,
-  // plan0=分类器方向, 择优先验自动锚到分类器方向)。需 <= ORIENTATION_MIN_SCORE
-  // (boot 不强制校验, 配置时注意)。
+  // plan0=分类器方向, 择优先验自动锚到分类器方向)。
   ORIENTATION_ANCHOR_SCORE: z.coerce.number().min(0).max(1).default(0.6),
+// anchor > min 会让锚定模式区间为空、探针静默失效, boot 直接报错不带病上线。
+}).superRefine((cfg, ctx) => {
+  if (cfg.ORIENTATION_ANCHOR_SCORE > cfg.ORIENTATION_MIN_SCORE) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['ORIENTATION_ANCHOR_SCORE'],
+      message: 'ORIENTATION_ANCHOR_SCORE 必须小于等于 ORIENTATION_MIN_SCORE(否则 [anchor, min) 区间为空, 锚定模式静默失效)',
+    });
+  }
 });
 
 const parsed = EnvSchema.safeParse(process.env);

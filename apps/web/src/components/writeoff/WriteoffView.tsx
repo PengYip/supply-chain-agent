@@ -49,7 +49,7 @@ export function WriteoffView() {
       setSelectedFunds(new Set());
       setSelectedTargets(new Set());
       setCells({});
-      setResult(null);
+      // 不清 result: 提交成功后 refresh 会跑, 这里清掉会把"已提交"横幅立即抹掉。
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -97,11 +97,11 @@ export function WriteoffView() {
   }, [activeFunds, activeTargets, cells]);
 
   const invalidCells = useMemo(() => {
-    const bad: string[] = [];
+    const bad = new Set<string>();
     for (const f of activeFunds) {
       for (const t of activeTargets) {
         const v = cellAmount(f.id, t.id);
-        if (v < 0) bad.push(cellKey(f.id, t.id));
+        if (v < 0) bad.add(cellKey(f.id, t.id));
       }
     }
     return bad;
@@ -111,7 +111,7 @@ export function WriteoffView() {
   const targetOver = (t: WriteoffBalanceRow) => (targetTotals.get(t.id) ?? 0) > t.remaining + 0.005;
   const hasAllocation = [...fundTotals.values()].some((v) => v > 0);
   const canSubmit = !!mode && hasAllocation
-    && invalidCells.length === 0
+    && invalidCells.size === 0
     && !activeFunds.some(fundOver) && !activeTargets.some(targetOver)
     && !submitting;
 
@@ -272,7 +272,7 @@ export function WriteoffView() {
                     </td>
                     {activeTargets.map((t) => {
                       const key = cellKey(f.id, t.id);
-                      const bad = invalidCells.includes(key) || false;
+                      const bad = invalidCells.has(key);
                       return (
                         <td key={key} className="px-1 py-1">
                           <input

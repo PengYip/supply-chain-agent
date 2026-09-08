@@ -1,7 +1,7 @@
 // apps/web/src/components/review-workbench/ReviewWorkbench.tsx
 // 全页集中复核工作台(spec 2026-09-04): 左原文页 + 右类型分组可编辑表格。
 // Task 7 骨架; Task 8 表格 / Task 9 原文栏 / Task 10 键盘流与批量操作。
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { RotateCw } from 'lucide-react';
 import {
@@ -39,11 +39,16 @@ export function ReviewWorkbench({ docId }: { docId?: string }) {
   const [batchBusy, setBatchBusy] = useState(false);
   const [releaseArmed, setReleaseArmed] = useState(false); // 一键放行两步确认
 
+  // 过期响应守卫: 连续切换单据组时, 慢的旧 docId 响应不得把旧数据/旧错误
+  // 覆盖到新 docId 视图上。
+  const loadSeqRef = useRef(0);
   const load = useCallback(async (id: string) => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     setError(null);
     try {
       const d = await fetchReviewWorkbench(id);
+      if (seq !== loadSeqRef.current) return;
       setData(d);
       // docId 切换: 清空行级客户端状态(已核勾选/已编辑行/编辑中行/选中行/操作错误)
       setCheckedRows(new Set());
@@ -55,10 +60,11 @@ export function ReviewWorkbench({ docId }: { docId?: string }) {
       const idx = d.groups.findIndex((g) => g.kind === 'voucher-table');
       setActiveGroup(idx >= 0 ? idx : 0);
     } catch (e) {
+      if (seq !== loadSeqRef.current) return;
       setError(e instanceof Error ? e.message : String(e));
       setData(null);
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) setLoading(false);
     }
   }, []);
 

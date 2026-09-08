@@ -7,7 +7,8 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import type { DbContext } from '../pipeline/db/client.js';
-import { insertOntologyEdge, getTradeFactById } from './repo.js';
+import { withContainerLock } from '../lib/containerLock.js';
+import { insertOntologyEdgesBatch, getTradeFactById, type OntologyEdgeInput } from './repo.js';
 import { validateAllocationPlan, type AllocationItem, type AllocationViolation } from './writeoff.js';
 
 const itemSchema = z.object({
@@ -56,34 +57,47 @@ async function executeWriteoffEdges(
   | { status: 'ok'; relation: string; edges: Array<{ edgeId: string; srcId: string; dstId: string; amount: number }>; totalAmount: number }
   | { status: 'invalid'; violations: AllocationViolation[] }
 > {
-  const violations = await validateAllocationPlan(deps.ctx, relation, items, deps.userId);
-  if (violations.length > 0) return { status: 'invalid', violations };
+  // 校验与落边整体进程内串行(batch/review 路由同款 containerLock): 并发审批单
+  // 若都基于同一份余额快照通过守恒校验再各自落边, 会超额核销(TOCTOU)。这些是
+  // 短 DB 操作(<=50 条边), 全局单键串行开销可忽略; 单 pm2 实例部署下进程内锁已够。
+  return withContainerLock('ontology-writeoff-execute', async () => {
+    const violations = await validateAllocationPlan(deps.ctx, relation, items, deps.userId);
+    if (violations.length > 0) return { status: 'invalid', violations };
 
-  const edges: Array<{ edgeId: string; srcId: string; dstId: string; amount: number }> = [];
-  let totalAmount = 0;
-  const now = new Date();
-  for (const item of items) {
-    // 事实行存在性已由 validateAllocationPlan 保证；这里取 entityType 供连接对写入。
-    const src = await getTradeFactById(deps.ctx, item.srcId, deps.userId);
-    const dst = await getTradeFactById(deps.ctx, item.dstId, deps.userId);
-    if (!src || !dst) {
-      return { status: 'invalid', violations: [{ itemIndex: items.indexOf(item), code: 'unknown_fact', detail: '事实行在写入时消失' }] };
+    // 先取全部事实行并组装边输入, 任一消失即整单拒绝(此时尚未落任何边)。
+    const now = new Date();
+    const inputs: OntologyEdgeInput[] = [];
+    for (const [itemIndex, item] of items.entries()) {
+      // 事实行存在性已由 validateAllocationPlan 保证；这里取 entityType 供连接对写入。
+      const src = await getTradeFactById(deps.ctx, item.srcId, deps.userId);
+      const dst = await getTradeFactById(deps.ctx, item.dstId, deps.userId);
+      if (!src || !dst) {
+        return { status: 'invalid', violations: [{ itemIndex, code: 'unknown_fact', detail: '事实行在写入时消失' }] };
+      }
+      const params: Record<string, unknown> = { amount: item.amount };
+      if (item.partial !== undefined) params['partial'] = item.partial;
+      if (item.batch !== undefined) params['batch'] = item.batch;
+      inputs.push({
+        relation,
+        fromType: src.entityType as never,
+        fromId: item.srcId,
+        toType: dst.entityType as never,
+        toId: item.dstId,
+        params,
+        validAt: now,
+        createdBy: toolName,
+      });
     }
-    const params: Record<string, unknown> = { amount: item.amount };
-    if (item.partial !== undefined) params['partial'] = item.partial;
-    if (item.batch !== undefined) params['batch'] = item.batch;
-    const edgeId = await insertOntologyEdge(deps.ctx, {
-      relation,
-      fromType: src.entityType as never,
-      fromId: item.srcId,
-      toType: dst.entityType as never,
-      toId: item.dstId,
-      params,
-      validAt: now,
-      createdBy: toolName,
-    }, deps.userId);
-    edges.push({ edgeId, srcId: item.srcId, dstId: item.dstId, amount: item.amount });
-    totalAmount += item.amount;
-  }
-  return { status: 'ok', relation, edges, totalAmount };
+    // 整批单事务落边(repo.insertOntologyEdgesBatch): 中途失败整批回滚,
+    // 践行"失败整单拒绝零边产生"的承诺。
+    const edgeIds = await insertOntologyEdgesBatch(deps.ctx, inputs, deps.userId);
+    const edges = inputs.map((inp, i) => ({
+      edgeId: edgeIds[i]!,
+      srcId: inp.fromId,
+      dstId: inp.toId,
+      amount: items[i]!.amount,
+    }));
+    const totalAmount = edges.reduce((s, e) => s + e.amount, 0);
+    return { status: 'ok', relation, edges, totalAmount };
+  });
 }

@@ -919,7 +919,7 @@ export async function listLatestExtractionsByDocIdsPg(
             e.overall_confidence, e.needs_review
      FROM extractions e
      WHERE e.document_id IN (${placeholders}) ${userFilter}
-     ORDER BY e.document_id, e.created_at DESC`,
+     ORDER BY e.document_id, e.created_at DESC, e.id DESC`,
     [...params, ...ids],
   );
   for (const r of res.rows as Array<Record<string, unknown>>) {

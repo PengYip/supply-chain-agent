@@ -191,7 +191,9 @@ export function unitCandidateScore(input: {
   mismatchCount: number;
   /** 该候选的旋回方向(逐 region 顺时针度数, 与 images 一一对应)。 */
   rotations?: number[];
-  /** 检测报出的方向(先验锚点); 与检测方向一致的候选 +DETECTION_DIRECTION_PRIOR。 */
+  /** 先验锚点方向: 非锚定模式 = VLM 检测方向; 锚定模式 = 分类器纠正方向
+   *  (documentEntry candidates[0].rotations[0], 两种模式下 plan0 即锚点)。
+   *  与锚点一致的候选 +DETECTION_DIRECTION_PRIOR。 */
   detectedRotation?: number | null;
 }): number {
   const leaves = readingLeaves(input.fields);

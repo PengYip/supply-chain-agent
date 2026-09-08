@@ -176,7 +176,11 @@ try {
   if (!have.has('reason')) add.push('reason TEXT');
   if (!have.has('side_effect_results')) add.push('side_effect_results TEXT');
   for (const col of add) db.exec(`ALTER TABLE pending_approvals ADD COLUMN ${col}`);
-} catch { /* 列已存在（vitest 并发竞态），忽略 */ }
+} catch (err) {
+  // 只吞并发迁移的重复列错误(vitest 并发竞态); readonly/磁盘等真实错误必须
+  // 上抛, 否则迁移静默半途而废, 症状推迟到后续写入才暴露、难以定位。
+  if (!(err instanceof Error && /duplicate column/i.test(err.message))) throw err;
+}
 
 // ---- prepared statements ----
 
@@ -618,16 +622,20 @@ async function getApprovalById(id: string): Promise<PendingApprovalRow | null> {
 }
 
 async function appendSideEffect(toolCallId: string, effect: SideEffect): Promise<void> {
-  const row = db
-    .prepare('SELECT id, side_effect_results FROM pending_approvals WHERE tool_call_id = ?')
-    .get(toolCallId) as { id: string; side_effect_results: string | null } | undefined;
-  if (!row) return; // no-op：票据不存在/已清理
-  const arr: SideEffect[] = row.side_effect_results
-    ? (() => { try { return JSON.parse(row.side_effect_results) as SideEffect[]; } catch { return []; } })()
-    : [];
-  arr.push(effect);
-  db.prepare('UPDATE pending_approvals SET side_effect_results = ? WHERE id = ?')
-    .run(JSON.stringify(arr), row.id);
+  // 读改写整体包事务(better-sqlite3 同步执行): 并发追加同一 tool_call_id 时,
+  // 裸读改写会互相覆盖、丢先写入的审计行。
+  db.transaction(() => {
+    const row = db
+      .prepare('SELECT id, side_effect_results FROM pending_approvals WHERE tool_call_id = ?')
+      .get(toolCallId) as { id: string; side_effect_results: string | null } | undefined;
+    if (!row) return; // no-op：票据不存在/已清理
+    const arr: SideEffect[] = row.side_effect_results
+      ? (() => { try { return JSON.parse(row.side_effect_results) as SideEffect[]; } catch { return []; } })()
+      : [];
+    arr.push(effect);
+    db.prepare('UPDATE pending_approvals SET side_effect_results = ? WHERE id = ?')
+      .run(JSON.stringify(arr), row.id);
+  })();
 }
 
 async function listPending(sessionId: string): Promise<PendingApprovalRow[]> {

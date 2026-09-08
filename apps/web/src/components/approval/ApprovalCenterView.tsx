@@ -22,12 +22,18 @@ export function ApprovalCenterView() {
   const [items, setItems] = useState<ApprovalItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`/api/approval/list?status=${tab}&limit=100`);
-      if (res.ok) setItems((await res.json()).items ?? []);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setItems((await res.json()).items ?? []);
+      setError(null);
+    } catch (e) {
+      // 轮询场景下静默失败会让用户对着过期列表毫无察觉, 必须显式提示。
+      setError(e instanceof Error ? e.message : String(e));
     } finally { setLoading(false); }
   }, [tab]);
 
@@ -47,6 +53,7 @@ export function ApprovalCenterView() {
           </button>
         ))}
         {loading && <span className="text-xs text-ink-soft">刷新中...</span>}
+        {error && <span className="text-xs text-danger">刷新失败: {error}</span>}
       </div>
 
       <div className="flex-1 overflow-y-auto">

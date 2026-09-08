@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { clsx } from 'clsx';
 import { useHashRoute } from '../../hooks/useHashRoute';
 import { fetchOntologySchema, listEntities, type OntologyEntitySchemaDTO, type ProjectedEntity } from '../../api/ontology';
@@ -31,24 +31,33 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
+  // 过期响应守卫: 搜索每键触发 load, 先发后至的旧响应不得覆盖新结果。
+  const seqRef = useRef(0);
 
   const load = useCallback(async () => {
     if (!selected) return;
+    const seq = ++seqRef.current;
     setLoading(true);
     setListError(null);
     try {
       const res = await listEntities(selected, { page, pageSize: PAGE_SIZE, q: q.trim() || undefined });
+      if (seq !== seqRef.current) return;
       setRows(res.items);
       setTotal(res.total);
     } catch (e) {
+      if (seq !== seqRef.current) return;
       setListError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (seq === seqRef.current) setLoading(false);
     }
   }, [selected, page, q]);
 
   useEffect(() => { setPage(1); }, [selected, q]);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    // 搜索框每键一次请求太密, 300ms 防抖合并连续键入(翻页/切换类型同样稍延)。
+    const t = setTimeout(() => { void load(); }, 300);
+    return () => clearTimeout(t);
+  }, [load]);
 
   const askAgent = (row: ProjectedEntity) => {
     if (!active) return;

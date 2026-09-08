@@ -376,11 +376,17 @@ export const RealChatView: React.FC<{
   // ref 守卫保证只消费一次（StrictMode 双执行 / hash 抖动不重发）；
   // 发送成功后 onSessionCreated -> selectSession 会把 hash 换成 session=<id>，ask 自然清除。
   const askConsumedRef = useRef(false)
+  // sendError 供 initialAsk 注入失败时复用composer同款错误提示(声明须在本 effect 之前)。
+  const [sendError, setSendError] = useState<string | null>(null)
   useEffect(() => {
     if (!initialAsk || askConsumedRef.current) return
     if (sessionId != null) return
     askConsumedRef.current = true
-    void sendMessage(initialAsk)
+    void sendMessage(initialAsk).then((res) => {
+      if (res.error) {
+        setSendError(res.error === 'session_busy' ? '会话正在处理上一条消息，请稍候再发送' : `发送失败：${res.error}`)
+      }
+    })
   }, [initialAsk, sessionId, sendMessage])
   const liveSessionId = sessionId ?? null
   const isBusy = status === 'busy'
@@ -530,7 +536,6 @@ export const RealChatView: React.FC<{
   // 已「暂不处理」的 L3 工单集合（按 ticketId 记忆）：忽略只是本地隐藏复核
   // 卡，不回调后端，工单在服务端仍处 pending；新工单不在集合内，照常亮卡。
   const [dismissedTickets, setDismissedTickets] = useState<Set<string>>(new Set())
-  const [sendError, setSendError] = useState<string | null>(null)
 
   // 当前待处理项的唯一键：切换工单 / 切换会话时用于复位复核卡。
   const pendingKey =

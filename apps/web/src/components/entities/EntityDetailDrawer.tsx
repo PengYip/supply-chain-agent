@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { clsx } from 'clsx';
 import { getEntityDetail, type EntityDetailResult } from '../../api/ontology';
 
@@ -20,18 +20,23 @@ export function EntityDetailDrawer({ type, typeLabel, ownFields, entityId, onClo
   const [detail, setDetail] = useState<EntityDetailResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 过期响应守卫: 快速切换实体/口径时, 慢的旧响应不得覆盖新数据。
+  const seqRef = useRef(0);
 
   const load = useCallback(async () => {
+    const seq = ++seqRef.current;
     setLoading(true);
     setError(null);
     try {
       const res = await getEntityDetail(type, entityId,
         mode === 'system' ? { asOf: 'system', at: at || new Date().toISOString() } : {});
+      if (seq !== seqRef.current) return;
       setDetail(res);
     } catch (e) {
+      if (seq !== seqRef.current) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (seq === seqRef.current) setLoading(false);
     }
   }, [type, entityId, mode, at]);
 
