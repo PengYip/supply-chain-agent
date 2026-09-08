@@ -95,6 +95,9 @@ export function OntologyExplorer({ initialAnchor }: Props) {
   const [truncated, setTruncated] = useState(false);
   const [selected, setSelected] = useState<InspectTarget | null>(null);
   const [detail, setDetail] = useState<{ type: string; id: string } | null>(null);
+  // 单击节点开详情抽屉，但要避开双击展开：单击先挂 220ms 定时器，双击取消之。
+  const clickTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (clickTimer.current) window.clearTimeout(clickTimer.current); }, []);
   const [hoverEdge, setHoverEdge] = useState<GraphEdge | null>(null);
   const expandedRef = useRef<Set<string>>(new Set());
 
@@ -154,6 +157,8 @@ export function OntologyExplorer({ initialAnchor }: Props) {
 
   // 双击节点 = lazy 展开该节点 depth=1 邻接(与文档模式「双击增量展开」语义一致)
   const handleNodeDoubleClick = useCallback((node: GraphNode) => {
+    // 双击取消单击挂起的详情抽屉(点击->双击的连击序列)
+    if (clickTimer.current) { window.clearTimeout(clickTimer.current); clickTimer.current = null; }
     const t = node.props?.['__type'];
     const id = node.props?.['__id'];
     if (typeof t !== 'string' || typeof id !== 'string') return;
@@ -183,6 +188,16 @@ export function OntologyExplorer({ initialAnchor }: Props) {
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
+  }, []);
+
+  // 单击节点 = 直接开实体详情抽屉(本体节点)；血缘 Document 无详情端点语义(D7)，
+  // 退回底部摘要(selected)。定时器避开双击连击。
+  const handleNodeSelect = useCallback((node: GraphNode) => {
+    const t = detailTarget(node);
+    if (!t) { setSelected({ type: 'node', node }); return; }
+    setSelected(null);
+    if (clickTimer.current) window.clearTimeout(clickTimer.current);
+    clickTimer.current = window.setTimeout(() => { setDetail(t); clickTimer.current = null; }, 220);
   }, []);
 
   const search = useCallback(async () => {
@@ -310,7 +325,7 @@ export function OntologyExplorer({ initialAnchor }: Props) {
               if (t && t.type === 'edge') setHoverEdge(t.edge);
               else setHoverEdge(null);
             }}
-            onNodeSelect={(n) => setSelected({ type: 'node', node: n })}
+            onNodeSelect={handleNodeSelect}
             onEdgeSelect={(e) => setSelected({ type: 'edge', edge: e })}
             onPaneSelect={() => setSelected(null)}
             onNodeDoubleClick={handleNodeDoubleClick}
@@ -328,28 +343,17 @@ export function OntologyExplorer({ initialAnchor }: Props) {
         )}
       </div>
 
-      {/* 选中详情(节点/边参数) */}
+      {/* 选中详情(边参数/血缘 Document 摘要；本体节点单击直接开抽屉) */}
       {selected && (
         <div className="max-h-48 overflow-y-auto border-t border-line bg-white px-3 py-2 text-sm">
           {selected.type === 'node' ? (
-            <div className="flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <div className="font-medium text-ink">{selected.node.name}</div>
-                <div className="mt-0.5 text-xs text-ink-soft">
-                  {String(selected.node.props?.['__type'] ?? selected.node.kind)}
-                  {' / '}
-                  {String(selected.node.props?.['__id'] ?? selected.node.elementId)}
-                </div>
+            <div>
+              <div className="font-medium text-ink">{selected.node.name}</div>
+              <div className="mt-0.5 text-xs text-ink-soft">
+                {String(selected.node.props?.['__type'] ?? selected.node.kind)}
+                {' / '}
+                {String(selected.node.props?.['__id'] ?? selected.node.elementId)}
               </div>
-              {detailTarget(selected.node) && (
-                <button
-                  type="button"
-                  onClick={() => setDetail(detailTarget(selected.node))}
-                  className="h-7 shrink-0 rounded border border-line px-2 text-xs text-ink-soft transition-colors hover:border-primary/40 hover:text-primary"
-                >
-                  查看详情
-                </button>
-              )}
             </div>
           ) : (
             <div>
