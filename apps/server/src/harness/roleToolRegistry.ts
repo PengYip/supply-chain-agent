@@ -1,10 +1,9 @@
 import type { Tool } from 'ai';
-import { queryOrders, crossCheck } from '../tools/queries.js';
 import { buildQueryBusinessTool } from '../pipeline/tools/queryBusiness.js';
-import { escalateToHuman, verifyDocumentFields } from '../tools/hitl.js';
+import { escalateToHuman } from '../tools/hitl.js';
 import { buildLoadSkillTool } from '../tools/skillTool.js';
 import {
-  buildIngestDocumentTool, buildExtractFieldsTool, buildBindDocumentTool, buildInspectExtractionTool,
+  buildIngestDocumentTool, buildBindDocumentTool, buildInspectExtractionTool,
   buildPresentDocumentReviewTool, buildUpdateDocumentFieldsTool,
   buildListBindingProposalsTool,
 } from '../pipeline/tools/documentEntry.js';
@@ -42,10 +41,10 @@ export function isCubeSandboxEnabled(e: NodeJS.ProcessEnv = process.env): boolea
 }
 
 // Runtime deps threaded through tool construction. The doc-entry tools (T8) need
-// a DbContext to persist/loaded BlockModels; extract_fields additionally needs
-// an injected LanguageModel (ExtractionDeps); ingest_document + recall_documents
-// optionally take an Embedder for the L4 vector recall index (Task 6 v2).
-// Existing static tools ignore these.
+// a DbContext to persist/loaded BlockModels; ingest_document additionally takes
+// an injected LanguageModel (ExtractionDeps) for its auto-extraction chain;
+// ingest_document + recall_documents optionally take an Embedder for the L4
+// vector recall index (Task 6 v2). Existing static tools ignore these.
 export interface HarnessDeps {
   ctx: DbContext;
   extraction?: ExtractionDeps;
@@ -69,14 +68,16 @@ export type GatedTool = Tool<any, any> & { name: string };
 
 // role -> tool subset.
 //
-// Trader's static BASE set is 4 tools (2 L1 reads: query_orders / cross_check +
-// 2 L1 HITL/doc tools: escalate_to_human / verify_document_fields). All L2
-// writes (bind_document / tag_document / create_entity / ...) are the
-// DbContext-dependent builders appended in getToolsForRole(deps) below.
+// Trader's static BASE set is 2 tools (L1 reads/HITL: load_skill +
+// escalate_to_human). The demo-era BASE reads (query_orders / cross_check /
+// verify_document_fields) were removed on 2026-09-08 (tool-inventory 阶段1
+// 砍死: blacklisted in docs/tool-inventory.json "removed" -- they must never
+// be re-mounted here). All L2 writes (bind_document / create_entity / ...) are
+// the DbContext-dependent builders appended in getToolsForRole(deps) below.
 //
-// T9: trader gains three doc-entry tools (ingest_document L1, extract_fields L1,
-// bind_document L2). Their INSTANCES need a DbContext, so they are appended in
-// getToolsForRole(deps) rather than declared statically here.
+// T9: trader's doc-entry tools (ingest_document L1, bind_document L2). Their
+// INSTANCES need a DbContext, so they are appended in getToolsForRole(deps)
+// rather than declared statically here.
 //
 // NOTE on activeTools: in a later phase, a `prepareStep` hook will narrow
 // `activeTools` per step based on the current role + parsed intent, so each step
@@ -89,10 +90,7 @@ export type GatedTool = Tool<any, any> & { name: string };
 const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
   trader: [
     { ...buildLoadSkillTool(), name: 'load_skill' },
-    { ...queryOrders, name: 'query_orders' },
-    { ...crossCheck, name: 'cross_check' },
     { ...escalateToHuman, name: 'escalate_to_human' },
-    { ...verifyDocumentFields, name: 'verify_document_fields' },
   ],
 };
 
@@ -100,7 +98,7 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
 // though constructing their instances requires a DbContext (see getToolsForRole).
 // query_contract is listed here too: after the BASE removal above its name would
 // otherwise drop out of listToolNames (it is still always registered for trader).
-const TRADER_CTX_TOOL_NAMES = ['query_business', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'link_documents', 'manage_template', 'manage_quota', 'gather_settlement_evidence', 'confirm_settlement', 'create_writeoff', 'create_offset', 'create_trade_event'] as const;
+const TRADER_CTX_TOOL_NAMES = ['query_business', 'ingest_document', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'link_documents', 'manage_template', 'manage_quota', 'gather_settlement_evidence', 'confirm_settlement', 'create_writeoff', 'create_offset', 'create_trade_event'] as const;
 
 export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
   const base: GatedTool[] = (BASE_TOOLS_FOR_ROLE[role] ?? []).map((t) => ({ ...t }));
@@ -118,7 +116,9 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
       const reranker = deps.reranker !== undefined ? deps.reranker : defaultReranker();
       base.push(
         { ...buildIngestDocumentTool({ ctx, embedder, classifier, extraction, tagger, userId }), name: 'ingest_document' },
-        { ...buildExtractFieldsTool({ ctx, extraction, userId }), name: 'extract_fields' },
+        // extract_fields was removed from the surface on 2026-09-08 (阶段1 砍死,
+        // blacklisted): ingest_document's internal auto-extraction chain covers
+        // the re-extract use case; the builder stays pipeline-internal.
         // present_document_review is L1: read-only 5-dim review card (业务类型/字段/关系/TAG/向量化).
         { ...buildPresentDocumentReviewTool({ ctx, userId }), name: 'present_document_review' },
         // update_document_fields is L2: apply user field corrections + explicit

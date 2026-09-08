@@ -3,13 +3,14 @@ import { getToolsForRole, listToolNames } from '../../src/harness/roleToolRegist
 import { createDb, migrate } from '../../src/pipeline/db/client.js';
 
 describe('trader role wiring', () => {
-  it('trader exposes ingest/extract/bind document tools', () => {
+  it('trader exposes ingest/bind document tools; extract_fields stays removed', () => {
     const ctx = createDb(':memory:');
     migrate(ctx.sqlite);
     const names = listToolNames('trader');
     expect(names).toContain('ingest_document');
-    expect(names).toContain('extract_fields');
     expect(names).toContain('bind_document');
+    // 2026-09-08 工具精简阶段1: extract_fields removed (blacklisted).
+    expect(names).not.toContain('extract_fields');
   });
 
   it('bind_document is flagged needsApproval (L2)', () => {
@@ -20,13 +21,11 @@ describe('trader role wiring', () => {
     expect(bind.needsApproval).toBe(true);
   });
 
-  it('ingest_document and extract_fields are L1 (no needsApproval)', () => {
+  it('ingest_document is L1 (no needsApproval)', () => {
     const ctx = createDb(':memory:');
     migrate(ctx.sqlite);
     const tools = getToolsForRole('trader', { ctx });
     const ingest = tools.find((t) => t.name === 'ingest_document')!;
-    const extract = tools.find((t) => t.name === 'extract_fields')!;
     expect(ingest.needsApproval ?? false).toBe(false);
-    expect(extract.needsApproval ?? false).toBe(false);
   });
 });

@@ -1,13 +1,9 @@
 /** Agent 工具的中文业务别名。技术名仅作为 title/fallback 展示。 */
 const TOOL_LABELS: Record<string, string> = {
   query_business: '业务台账查询',
-  query_orders: '订单查询',
-  cross_check: '账实核对',
   escalate_to_human: '转人工复核',
   load_skill: '加载业务流程',
-  verify_document_fields: '单据字段核验',
   ingest_document: '录入单据',
-  extract_fields: '提取结构化字段',
   bind_document: '确认单据绑定',
   recall_documents: '检索单据原文',
   execute_code: '执行计算',

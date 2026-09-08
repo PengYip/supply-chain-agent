@@ -5,13 +5,9 @@ describe('toolLabel', () => {
   it('maps every registered agent tool to a Chinese business alias', () => {
     const tools = [
       'query_business',
-      'query_orders',
-      'cross_check',
       'escalate_to_human',
       'load_skill',
-      'verify_document_fields',
       'ingest_document',
-      'extract_fields',
       'bind_document',
       'recall_documents',
       'execute_code',

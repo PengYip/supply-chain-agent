@@ -78,8 +78,9 @@ export function buildToolInventoryView(
     mounted ??
     getToolsForRole('trader', { ctx: getDbContext() }).map(toRegistryState);
   const stateByName = new Map(states.map((s) => [s.name, s]));
-  // 与 toolInventory.test.ts 同口径：active+deprecated 都是 live 条目。
-  const live = inv.tools.filter((t) => t.status === 'active' || t.status === 'deprecated');
+  // 与 toolInventory.test.ts 同口径：只有 status 'active' 是 live 条目
+  // (2026-09-08 起 deprecated=已移除入黑名单，只能出现在 removed[])。
+  const live = inv.tools.filter((t) => t.status === 'active');
   const liveNames = live.map((t) => t.name);
   const liveSet = new Set(liveNames);
   const mountedNames = states.map((s) => s.name);

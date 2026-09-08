@@ -15,13 +15,9 @@ import { listToolNames } from '../../src/harness/roleToolRegistry.js';
 // from the registry so a newly-added tool forces a test update here (no silent drift).
 const EXPECTED_TOOLS = [
   'query_business',
-  'query_orders',
-  'cross_check',
   'escalate_to_human',
   'load_skill',
-  'verify_document_fields',
   'ingest_document',
-  'extract_fields',
   'bind_document',
   'recall_documents',
   'execute_code',
@@ -54,6 +50,11 @@ describe('tool-context contract registry', () => {
     // And the explicit expected set is exactly contracted too.
     for (const name of EXPECTED_TOOLS) {
       expect(hasContract(name), `${name} should have a contract`).toBe(true);
+    }
+    // 2026-09-08 工具精简阶段1: the four removed tools keep NO contract entry.
+    for (const name of ['query_orders', 'cross_check', 'verify_document_fields', 'extract_fields'] as const) {
+      expect(listToolNames('trader'), `${name} was removed from the registry`).not.toContain(name);
+      expect(hasContract(name), `${name} was removed -- no contract entry may remain`).toBe(false);
     }
   });
 
@@ -103,9 +104,6 @@ describe('contract injection-exposure mapping (integration point 1)', () => {
     // output). Their budgets must be full: generic key-field compression can
     // turn a non-empty result into an unreadable `{_summarized:true}` handle.
     const evidenceTools = [
-      'query_orders',
-      'verify_document_fields',
-      'extract_fields',
       'inspect_extraction',
       'execute_code',
       'graph_find_entity',
@@ -120,23 +118,23 @@ describe('contract injection-exposure mapping (integration point 1)', () => {
   });
 
   it('marks tools that RETURN external-derived content as output tagged', () => {
-    // extract_fields + verify_document_fields return field/OCR strings derived
-    // from uploaded documents, and recall_documents returns BM25 snippets of
-    // ingested doc text -> all must be wrapped in <external_content>. execute_code
-    // runs user-supplied Python whose stdout can carry injection payloads too.
+    // recall_documents returns BM25 snippets of ingested doc text and
+    // inspect_extraction/present_document_review return document-derived field
+    // strings -> all must be wrapped in <external_content>. execute_code runs
+    // user-supplied Python whose stdout can carry injection payloads too.
     // gather_settlement_evidence returns 台账/化验/凭证抽取字段(文档原文回流).
+    // (extract_fields/verify_document_fields were removed 2026-09-08.)
     expect([...getTaggedOutputTools()].sort()).toEqual(
-      ['execute_code', 'extract_fields', 'gather_settlement_evidence', 'inspect_extraction', 'present_document_review', 'recall_documents', 'verify_document_fields'].sort(),
+      ['execute_code', 'gather_settlement_evidence', 'inspect_extraction', 'present_document_review', 'recall_documents'].sort(),
     );
   });
 
   it('marks tools that HANDLE external content (even when output is raw)', () => {
     // ingest_document returns only a {docId,...} handle (output raw) but still
-    // parsed an untrusted file -> injection external. extract/verify both handle
-    // AND return external content. recall_documents reads back that doc text.
-    // execute_code runs untrusted user code (injection external).
+    // parsed an untrusted file -> injection external. recall_documents reads
+    // back that doc text. execute_code runs untrusted user code.
     expect([...getExternalHandlingTools()].sort()).toEqual(
-      ['execute_code', 'extract_fields', 'gather_settlement_evidence', 'ingest_document', 'inspect_extraction', 'present_document_review', 'recall_documents', 'verify_document_fields'].sort(),
+      ['execute_code', 'gather_settlement_evidence', 'ingest_document', 'inspect_extraction', 'present_document_review', 'recall_documents'].sort(),
     );
   });
 

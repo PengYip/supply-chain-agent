@@ -40,8 +40,8 @@ export type AutoExtractionFieldMeta = Record<
  * Result of the extract step: the post-conversion records handed to save.
  * The real extract dep wraps extractGroundedFields (which returns the
  * ExtractedField[] array + proposedRelationships) and performs the SAME
- * array->record conversion that the extract_fields tool does in
- * documentEntry.ts, so save receives exactly the shape it expects.
+ * array->record conversion the (now-removed, 2026-09-08) extract_fields tool
+ * used in documentEntry.ts, so save receives exactly the shape it expects.
  */
 export interface AutoExtractionResult {
   fields: AutoExtractionFields;
@@ -193,7 +193,8 @@ export async function runAutoExtraction(args: {
 //
 // Builds real AutoExtractionDeps from a shared DbContext + ExtractionDeps (a
 // LanguageModel handle), wiring the same extractGroundedFields + saveExtraction
-// the extract_fields tool uses. This keeps runAutoExtraction itself free of any
+// chain the (now-removed, 2026-09-08) extract_fields tool used. This keeps
+// runAutoExtraction itself free of any
 // direct dependency on the extraction/repo modules (testable with pure mocks),
 // while giving ingestFile a one-line wiring point.
 //
@@ -206,9 +207,9 @@ export async function runAutoExtraction(args: {
 /**
  * Build production AutoExtractionDeps backed by extractGroundedFields +
  * saveExtraction + setExtractionStatus. The returned extract dep performs the
- * SAME ExtractedField[] -> Record conversion the extract_fields tool does in
- * documentEntry.ts:225-230, so save receives exactly the shape saveExtraction
- * expects.
+ * SAME ExtractedField[] -> Record conversion the (removed 2026-09-08)
+ * extract_fields tool used in documentEntry.ts:225-230, so save receives
+ * exactly the shape saveExtraction expects.
  */
 export function buildAutoExtractionDeps(args: {
   ctx: DbContext;

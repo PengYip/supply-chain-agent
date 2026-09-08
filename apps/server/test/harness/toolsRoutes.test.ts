@@ -19,22 +19,31 @@ const get = (app: Hono<AuthEnv>, path: string) =>
   app.request(`http://test/api/tools${path}`, { method: 'GET' });
 
 describe('GET /api/tools/inventory', () => {
-  it('200：SSOT 工具清单 × 注册表对比，deprecated+mounted 如实在列', async () => {
+  it('200：SSOT 工具清单 × 注册表对比，阶段1 移除的四工具只存在于黑名单', async () => {
     const res = await get(appAs('u1'), '/inventory');
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.source).toBe('docs/tool-inventory.json');
-    expect(body.version).toBe('2026-08-28');
+    expect(body.version).toBe('2026-09-08');
     const byName = new Map<string, {
       status: string; registry: { mounted: boolean }; removalPlan?: string;
     }>(body.tools.map((t: { name: string }) => [t.name, t]));
+    // 2026-09-08 阶段1 移除落地：不再出现在 live tools[]，也不再有
+    // deprecated+mounted 的过渡态；只存在于 removed[] 黑名单。
+    const removedNames = new Set<string>(
+      (body.removed as Array<{ name: string }>).map((r) => r.name),
+    );
     for (const name of ['query_orders', 'cross_check', 'verify_document_fields', 'extract_fields']) {
-      const t = byName.get(name)!;
-      expect(t.status).toBe('deprecated');
-      expect(t.registry.mounted).toBe(true);
-      expect(t.removalPlan).toBeTruthy();
+      expect(byName.get(name), `${name} must leave tools[]`).toBeUndefined();
+      expect(removedNames.has(name), `${name} must be blacklisted in removed[]`).toBe(true);
     }
     expect(byName.get('query_business')!.registry.mounted).toBe(true);
+    // 黑名单工具也绝不允许以挂载态回流。
+    const mountedNames = (body.tools as Array<{ name: string; registry: { mounted: boolean } }>)
+      .filter((t) => t.registry.mounted).map((t) => t.name);
+    for (const name of removedNames) {
+      expect(mountedNames, `removed tool "${name}" must not be mounted`).not.toContain(name);
+    }
   });
 });
 

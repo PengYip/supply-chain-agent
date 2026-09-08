@@ -154,7 +154,6 @@ export function withToolTimeout(
 // extraction and scanned-PDF ingest can exceed the default 120s budget; other
 // tools stay on env.TOOL_TIMEOUT_MS.
 const TOOL_TIMEOUT_OVERRIDES: Record<string, number> = {
-  extract_fields: 240000,
   ingest_document: 240000,
 };
 
@@ -428,8 +427,8 @@ export async function runStream({ messages, role, auditTraceId, model, deps, use
       baseURL: env.OPENAI_BASE_URL,
       apiKey: env.OPENAI_API_KEY,
     }).chat(env.OPENAI_MODEL);
-  // Reuse the same model handle for both the agent loop and extract_fields so
-  // there is a single DeepSeek client per turn.
+  // Reuse the same model handle for both the agent loop and ingest_document's
+  // auto-extraction chain so there is a single DeepSeek client per turn.
   const harnessDeps = deps ?? {
     ctx: getHarnessDbContext(),
     extraction: { model: resolvedModel },

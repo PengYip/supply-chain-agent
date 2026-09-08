@@ -7,11 +7,17 @@ const inventoryPath = fileURLToPath(new URL('../../../../docs/tool-inventory.jso
 const inventory = JSON.parse(readFileSync(inventoryPath, 'utf-8')) as {
   version: string;
   tools: Array<{ name: string; status: string }>;
+  removed: Array<{ name: string }>;
 };
+
+// 与 toolInventory.test.ts / toolInventoryView.ts 同口径（2026-09-08 起）：
+// 只有 status 'active' 是 live 条目；deprecated=已移除入黑名单。
+const liveTools = (): Array<{ name: string; status: string }> =>
+  inventory.tools.filter((t) => t.status === 'active');
 
 describe('toolInventoryView', () => {
   it('显式挂载清单：每条 inventory 工具带 registry 对比，diff 为空', () => {
-    const live = inventory.tools.filter((t) => t.status === 'active' || t.status === 'deprecated');
+    const live = liveTools();
     const mounted = live.map((t) => ({ name: t.name, needsApproval: t.name === 'bind_document' }));
     const view = buildToolInventoryView(mounted);
     expect(view.source).toBe('docs/tool-inventory.json');
@@ -32,23 +38,23 @@ describe('toolInventoryView', () => {
     ]);
     expect(view.diff.mountedNotInInventory).toEqual(['ghost_tool']);
     expect(view.diff.inventoryNotMounted).toEqual(
-      inventory.tools
-        .filter((t) => (t.status === 'active' || t.status === 'deprecated') && t.name !== 'load_skill')
+      liveTools()
+        .filter((t) => t.name !== 'load_skill')
         .map((t) => t.name),
     );
   });
 
-  it('deprecated+mounted 如实呈现（Item 6 硬要求：不掩饰）', () => {
-    const liveNames = inventory.tools
-      .filter((t) => t.status === 'active' || t.status === 'deprecated')
-      .map((t) => t.name);
-    const view = buildToolInventoryView(liveNames.map((n) => ({ name: n, needsApproval: false })));
+  it('阶段1 移除的四工具只出现在 removed[]，tools[] 无 deprecated 过渡态', () => {
+    const removedNames = new Set(inventory.removed.map((r) => r.name));
+    const view = buildToolInventoryView([]);
     for (const name of ['query_orders', 'cross_check', 'verify_document_fields', 'extract_fields']) {
-      const t = view.tools.find((x) => x.name === name)!;
-      expect(t.status).toBe('deprecated');
-      expect(t.registry.mounted).toBe(true);
-      expect(t.removalPlan).toBeTruthy();
+      expect(removedNames.has(name), `${name} must be blacklisted in removed[]`).toBe(true);
+      expect(view.tools.find((x) => x.name === name), `${name} must leave tools[]`).toBeUndefined();
     }
+    expect(
+      inventory.tools.some((t) => t.status === 'deprecated'),
+      'deprecated=已移除入黑名单: tools[] must not carry deprecated entries',
+    ).toBe(false);
   });
 
   it('removed 黑名单原样带出', () => {

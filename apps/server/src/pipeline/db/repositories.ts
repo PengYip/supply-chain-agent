@@ -2597,10 +2597,10 @@ export async function createDocumentStub(
  * Used by processDocument to fill in the parsed values on a stub (only the
  * provided fields are written). blockModel is accepted (deviation from the
  * literal spec which listed only docType/modality): persisting the parsed
- * BlockModel is REQUIRED for downstream tools (extract_fields / inspect_extraction
- * / recall all read block_model), otherwise the Model B refactor would leave
- * uploaded docs unparseable by the agent. userId is accepted for parity (void,
- * like setReviewStatus).
+ * BlockModel is REQUIRED for downstream tools (ingest auto-extraction /
+ * inspect_extraction / recall all read block_model), otherwise the Model B
+ * refactor would leave uploaded docs unparseable by the agent. userId is
+ * accepted for parity (void, like setReviewStatus).
  */
 export async function updateDocumentMeta(
   ctx: DbContext,

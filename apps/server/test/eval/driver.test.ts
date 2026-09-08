@@ -101,7 +101,7 @@ describe('runEpisode', () => {
 
   it('cleans up the session even when the sim fails (simError artifact)', async () => {
     const ds = loadByFileUrl(new URL('../../eval/agent/datasets/core.yaml', import.meta.url).href);
-    const t1 = ds.find((s) => s.id === 't1-order-status')!;
+    const t1 = ds.find((s) => s.id === 't1-contract-info')!;
     const ctx = createDb(':memory:');
     migrate(ctx.sqlite);
     const artifact = await runEpisode({

@@ -8,13 +8,20 @@ const here = dirname(fileURLToPath(import.meta.url));
 const core = join(here, '../../eval/agent/datasets/core.yaml');
 
 describe('core dataset', () => {
-  it('loads 9 scenarios covering tiers 1-3', () => {
+  it('loads 5 scenarios covering tiers 1-3', () => {
     const scenarios = loadDataset(core);
-    expect(scenarios).toHaveLength(9);
+    expect(scenarios).toHaveLength(5);
     const tiers = new Set(scenarios.map((s) => s.tier));
     expect(tiers).toEqual(new Set([1, 2, 3]));
     const ids = scenarios.map((s) => s.id);
-    expect(ids).toContain('t1-order-status');
+    // 2026-09-08 工具精简阶段1: query_orders/cross_check/verify_document_fields
+    // 黑名单化后, 依赖它们的 t1-order-status / t1-missing-invoice / t2-crosscheck
+    // / t3-ocr-review 四个场景已删除, 黑名单工具不得出现在 mustAppear。
+    const mustAppearIds = scenarios.flatMap((s) => s.verifiers.mustAppear ?? []);
+    for (const banned of ['query_orders', 'cross_check', 'verify_document_fields', 'extract_fields']) {
+      expect(mustAppearIds, `blacklisted tool "${banned}" in core.yaml mustAppear`).not.toContain(banned);
+    }
+    expect(ids).toContain('t1-contract-info');
     expect(ids).toContain('t2-payment-flow');
     expect(ids).toContain('t3-pressure-claim');
   });

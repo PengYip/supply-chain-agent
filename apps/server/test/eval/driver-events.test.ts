@@ -23,14 +23,14 @@ function fakeModel(): LanguageModelV2 {
         chunks.push({ type: 'start' });
         chunks.push({
           type: 'tool-call',
-          toolCallId: 'call_1', toolName: 'query_orders',
-          input: JSON.stringify({ contractNo: 'HT-2024-001' }),
+          toolCallId: 'call_1', toolName: 'query_business',
+          input: JSON.stringify({ entity: 'contract', contractNo: 'HT-2024-001' }),
         } as unknown as UIMessageChunk);
         chunks.push({ type: 'finish', finishReason: 'tool-calls', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } } as unknown as UIMessageChunk);
       } else {
         chunks.push({ type: 'start' });
         chunks.push({ type: 'text-start', id: 't1' });
-        chunks.push({ type: 'text-delta', id: 't1', delta: '订单已查到' });
+        chunks.push({ type: 'text-delta', id: 't1', delta: '合同已查到' });
         chunks.push({ type: 'text-end', id: 't1' });
         chunks.push({ type: 'finish', finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } } as unknown as UIMessageChunk);
       }
@@ -65,10 +65,10 @@ function fakeModel(): LanguageModelV2 {
 
 const scenario: Scenario = {
   id: 'evt-probe', tier: 1, capability: [],
-  persona: { facts: ['订单 ORD-2024-0881'], disclosure: '按需', goal: '查订单后结束', patience: 3 },
+  persona: { facts: ['合同 HT-2024-001'], disclosure: '按需', goal: '查合同后结束', patience: 3 },
   approvalPolicy: { default: 'approve', rules: [] },
   maxTurns: 4,
-  verifiers: { contractLinked: [], mustAppear: ['query_orders'], forbidden: [], keywordInReply: [], keywordInTranscript: [] },
+  verifiers: { contractLinked: [], mustAppear: ['query_business'], forbidden: [], keywordInReply: [], keywordInTranscript: [] },
   rubric: { dimensions: [{ name: '准确性', weight: 'essential', scoring: { '4': '好', '1': '差' } }] },
 };
 
@@ -83,7 +83,7 @@ describe('driver onEvent seam', () => {
       onEvent: (e) => events.push(e),
       simFn: async () => (turn++ === 0 ? { message: '查一下 ORD-2024-0881', done: false } : { message: '好的', done: true }),
     });
-    expect(artifact.toolCalls.some((t) => t.toolName === 'query_orders')).toBe(true);
+    expect(artifact.toolCalls.some((t) => t.toolName === 'query_business')).toBe(true);
     const kinds = events.map((e) => e.type);
     // First user turn, then a tool_call, then an assistant turn.
     expect(kinds[0]).toBe('turn');

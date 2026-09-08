@@ -101,7 +101,7 @@ export function buildQueryBusinessTool(deps: QueryBusinessDeps) {
               '悬空凭证=已完成解析但未绑定合同的凭证类单据(对 recall 检索不可见)。' +
               '处理: 与用户逐份确认归属合同号后调用 bind_document(L2, 需用户确认; ' +
               'sourceSpan 可传 {blockId:"",start:0,end:0} 占位, 并向用户说明本次绑定依据用户口述/凭证信息)。' +
-              'hasExtraction=false 的单据建议先 extract_fields 抽取后再绑定。',
+              'hasExtraction=false 的单据暂无结构化抽取, 如实告知用户该单据字段尚未抽取完成, 不得猜测字段值。',
           };
         }
       }

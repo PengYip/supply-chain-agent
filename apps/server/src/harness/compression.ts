@@ -168,6 +168,9 @@ function truncateText(text: string, max: number): string {
 // that evidence to the generic key-fields compressor: the user can see the
 // review card / extraction result while the model would only receive handles
 // (e.g. extractionId) and then wrongly claim the lab values were unavailable.
+// extract_fields was removed from the mounted surface (2026-09-08, blacklisted)
+// but stays listed here so results replayed from OLD persisted sessions still
+// compress correctly.
 const EVIDENCE_SUMMARY_TOOLS = new Set(['present_document_review', 'extract_fields']);
 
 /** Keep the evidence-bearing subset of a review-card output. */

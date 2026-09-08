@@ -45,7 +45,9 @@ const STATUSES = ['active', 'deprecated'];
 const MOUNTS = ['always', 'env'];
 
 function mountedInventoryNames(): string[] {
-  return inventory.tools.filter((t) => t.status === 'active' || t.status === 'deprecated').map((t) => t.name);
+  // 2026-09-08 起 status 词汇语义: deprecated=已移除入黑名单（只能出现在
+  // removed[]），只有 active 是 live 条目、参与双射断言。
+  return inventory.tools.filter((t) => t.status === 'active').map((t) => t.name);
 }
 
 describe('tool inventory gate', () => {
@@ -74,6 +76,7 @@ describe('tool inventory gate', () => {
   it('every inventory entry documents layer/level/mount + whenToUse/boundary/rationale', () => {
     const names = inventory.tools.map((t) => t.name);
     expect(new Set(names).size, 'duplicate tool names in inventory').toBe(names.length);
+    const deprecatedInTools: string[] = [];
     for (const t of inventory.tools) {
       expect(LAYERS, `${t.name}: bad layer`).toContain(t.layer);
       expect(LEVELS, `${t.name}: bad level`).toContain(t.level);
@@ -83,9 +86,17 @@ describe('tool inventory gate', () => {
       expect(t.boundary?.trim(), `${t.name}: missing boundary (边界比能力描述更重要)`).toBeTruthy();
       expect(t.rationale?.trim(), `${t.name}: missing rationale`).toBeTruthy();
       if (t.status === 'deprecated') {
-        expect(t.removalPlan?.trim(), `${t.name}: deprecated entries must carry a removalPlan`).toBeTruthy();
+        // statusVocabulary semantics (2026-09-08): deprecated=已移除入黑名单.
+        // A deprecated entry must live in removed[], never in tools[].
+        deprecatedInTools.push(
+          `${t.name}: status "deprecated" means removed-into-blacklist -- move this entry to "removed"`,
+        );
       }
     }
+    expect(
+      deprecatedInTools,
+      'deprecated inventory entries found in tools[] (deprecated=已移除入黑名单, see policy.statusVocabularyMeaning)',
+    ).toEqual([]);
   });
 
   it('mergeInto targets are declared merge plans', () => {

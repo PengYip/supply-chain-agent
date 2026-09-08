@@ -111,7 +111,7 @@ export interface VlmDeps {
 
 export interface ToolDeps {
   ctx: DbContext;
-  extraction?: ExtractionDeps; // inject for extract_fields; defaults to real model
+  extraction?: ExtractionDeps; // inject for the ingest auto-extraction chain; defaults to real model
   /** Lane B: per-chunk semantic tagger. When set, ingest tags chunks against the
    *  docType's closed taxonomy (getTaxonomy); unset -> chunks stored untagged. */
   tagger?: ChunkTagger;
@@ -1007,7 +1007,8 @@ export async function ingestFile(opts: IngestOptions): Promise<{
 
   // Lane A (2a): auto-extraction. Additive post-ingest stage: when a model is
   // wired, run extractGroundedFields + saveExtraction automatically so the
-  // document is field-ready without an explicit extract_fields call. Fully
+  // document is field-ready at ingest time (the manual extract_fields tool was
+  // removed 2026-09-08; this chain is the only extraction producer). Fully
   // fault-isolated (runAutoExtraction never throws; failures -> 'failed' status
   // on the doc row), and wrapped here too for defense-in-depth. A failure never
   // blocks ingest -- the document stays searchable via FTS5 + vectors.
@@ -2271,8 +2272,8 @@ export function buildIngestDocumentTool(deps: ToolDeps) {
       '录入一份原始单据(合同/发票/提单/装箱单)。解析文件为结构化 BlockModel 并持久化, ' +
       '内置分类器自动判定单据类型(docType 为可选提示, 分类器会确认或纠正)并打自动标签, ' +
       '返回 docId、分类结果(classifiedDocType / confidence / source)、标签与向量化状态。' +
-      '抽取模型可用时, 录入后自动做字段抽取(含合同台账回写), 无需再调 extract_fields; ' +
-      '仅在需要重抽或抽取失败时才用 extract_fields。' +
+      '抽取模型可用时, 录入后自动做字段抽取(含合同台账回写), 录入即字段就绪。' +
+      '若抽取缺失或失败, 如实告知用户该单据字段暂不可用, 不得猜测字段值。' +
       '用户经上传按钮上传的文件已由系统自动解析与抽取(字段/关系/标签/向量均已就绪), 禁止对它们调用本工具(其路径不在 INGEST_ROOT, 必然失败); 上下文出现其 docId 时直接用 present_document_review 呈现复核卡。仅当用户给出 INGEST_ROOT 内的本地文件路径、且该文件尚未录入时才调用本工具。' +
       '调用示例: 1) 最小调用 {sourceUri: "<INGEST_ROOT>/合同.txt", modality: "digital"}; ' +
       '2) 带类型提示 {sourceUri: "<INGEST_ROOT>/提单.txt", modality: "scanned", docType: "提单"} ' +
@@ -2418,22 +2419,22 @@ export function buildExtractFieldsTool(deps: ToolDeps) {
 /**
  * inspect_extraction — L1 perception tool.
  * On-demand evidence drill-down for a SINGLE already-extracted field.
- * Scope boundary: only fields that extract_fields already produced (given by
- * extractionId). NOT a general text-retrieval tool (use recall_documents for
- * arbitrary text). citedText is recomputed from persisted sourceSpans + the
- * loaded BlockModel via validateSpan, so the span validator stays the single
- * source of truth (citedText is never stored separately).
+ * Scope boundary: only fields produced by the ingestion auto-extraction chain
+ * (given by extractionId). NOT a general text-retrieval tool (use
+ * recall_documents for arbitrary text). citedText is recomputed from persisted
+ * sourceSpans + the loaded BlockModel via validateSpan, so the span validator
+ * stays the single source of truth (citedText is never stored separately).
  */
 export function buildInspectExtractionTool(deps: ToolDeps) {
   return tool({
     description:
       '查看某个已抽取字段的证据（原文片段 citedText 与 sourceSpans）。' +
-      '仅限 extract_fields 已经抽取出的字段（用其返回的 extractionId）。' +
+      '仅限单据录入时自动抽取已产出的字段（用录入结果/复核卡给出的 extractionId）。' +
       '不要用它做任意文本检索（那应该用 recall_documents）。' +
       '使用场景：用户想看某字段值在原文哪里、或对抽取结果存疑需要取证时。',
     inputSchema: z.object({
-      extractionId: z.string().min(1).describe('extract_fields 返回的 extractionId'),
-      fieldName: z.string().min(1).describe('要查看证据的字段名，取自 extract_fields 返回 fields[].name'),
+      extractionId: z.string().min(1).describe('录入自动抽取返回的 extractionId'),
+      fieldName: z.string().min(1).describe('要查看证据的字段名，取自抽取结果 fields[].name'),
     }),
     execute: async ({ extractionId, fieldName }) => {
       const row = await loadExtraction(deps.ctx, extractionId, deps.userId);

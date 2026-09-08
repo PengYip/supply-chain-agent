@@ -1,5 +1,5 @@
 {
-  "version": "2026-08-28",
+  "version": "2026-09-08",
   "methodology": "docs/tool-design-methodology.md",
   "description": "工具清单 SSOT。新增/删除/合并工具必须先改本清单（含 whenToUse/boundary/rationale），再改 registry；apps/server/test/harness/toolInventory.test.ts 断言两侧一致。",
   "policy": {
@@ -10,34 +10,16 @@
       "active",
       "deprecated"
     ],
+    "statusVocabularyMeaning": {
+      "active": "已挂载在 registry，与 tools[] 参与 CI 双射断言。",
+      "deprecated": "已移除入黑名单：条目必须位于 removed[]（附 reason/removedOn），tools[] 中不得再出现 status=deprecated 的条目（CI 门禁拒绝）。历史条目移除时先标 deprecated + removalPlan，落地移除后即迁入 removed[]。"
+    },
     "mountVocabulary": [
       "always",
       "env"
     ]
   },
   "tools": [
-    {
-      "name": "query_orders",
-      "layer": "感知",
-      "level": "L1",
-      "status": "deprecated",
-      "mount": "always",
-      "whenToUse": "（演示遗留）按合同号查种子订单执行状态。",
-      "boundary": "数据来自硬编码种子，真实合同号永远 notFound；不做任何真实查询。",
-      "rationale": "纯演示工具，2026-08-28 工具精简第一阶段的移除对象。",
-      "removalPlan": "工具精简阶段1（砍死）：从 BASE_TOOLS_FOR_ROLE 移除并挪入 removed 黑名单。"
-    },
-    {
-      "name": "cross_check",
-      "layer": "感知",
-      "level": "L1",
-      "status": "deprecated",
-      "mount": "always",
-      "whenToUse": "（演示遗留）对种子合同做订单/发票交叉核验。",
-      "boundary": "仅种子数据，无真实数据路径。",
-      "rationale": "纯演示工具，移除对象。",
-      "removalPlan": "工具精简阶段1（砍死）：随 query_orders 一并移除。"
-    },
     {
       "name": "escalate_to_human",
       "layer": "协作",
@@ -59,17 +41,6 @@
       "rationale": "Skill 化(方法论第4步, 2026-08-28): '怎么做'的流程知识按需加载, 不占常驻描述 token, 不进工具面名额; 索引在 SYSTEM_PROMPT 静态尾部, 全文走工具结果持久进入对话。"
     },
     {
-      "name": "verify_document_fields",
-      "layer": "感知",
-      "level": "L1",
-      "status": "deprecated",
-      "mount": "always",
-      "whenToUse": "（早期 HITL 演示）校验文档字段。",
-      "boundary": "已被 present_document_review + update_document_fields 复核闭环取代。",
-      "rationale": "功能被正式复核闭环覆盖，保留会造成双轨。",
-      "removalPlan": "工具精简阶段1：确认无流程引用后移除。"
-    },
-    {
       "name": "query_business",
       "layer": "感知",
       "level": "L1",
@@ -88,17 +59,6 @@
       "whenToUse": "从文件路径录入单据：解析、分块、打标、向量化、分类、自动抽取、生成绑定建议。",
       "boundary": "只接受 INGEST_ROOT 白名单内的路径；不绑定、不写台账（绑定走 bind_document 人工确认）。",
       "rationale": "单据录入链的入口。"
-    },
-    {
-      "name": "extract_fields",
-      "layer": "感知",
-      "level": "L1",
-      "status": "deprecated",
-      "mount": "always",
-      "whenToUse": "（遗留）对已录入文档手动重跑字段抽取。",
-      "boundary": "ingest_document 内部已自动抽取；仅在需要强制重抽时有意义。",
-      "rationale": "与 ingest 的自动抽取链重叠。",
-      "removalPlan": "工具精简阶段1：确认无独立调用场景后移除。"
     },
     {
       "name": "bind_document",
@@ -293,6 +253,26 @@
     }
   ],
   "removed": [
+    {
+      "name": "query_orders",
+      "reason": "工具精简阶段1（砍死）：纯演示工具，数据来自硬编码种子，真实合同号永远 notFound。2026-08-28 标记 deprecated，2026-09-08 正式从 roleToolRegistry BASE 表移除。",
+      "removedOn": "2026-09-08"
+    },
+    {
+      "name": "cross_check",
+      "reason": "工具精简阶段1（砍死）：纯演示工具，仅种子数据无真实数据路径。2026-08-28 标记 deprecated，2026-09-08 随 query_orders 一并正式移除。",
+      "removedOn": "2026-09-08"
+    },
+    {
+      "name": "verify_document_fields",
+      "reason": "工具精简阶段1：早期 HITL 演示，功能已被 present_document_review + update_document_fields 复核闭环取代，保留造成双轨。2026-08-28 标记 deprecated，2026-09-08 正式移除。",
+      "removedOn": "2026-09-08"
+    },
+    {
+      "name": "extract_fields",
+      "reason": "工具精简阶段1：与 ingest_document 的自动抽取链重叠，强制重抽场景由录入链内部覆盖。2026-08-28 标记 deprecated，2026-09-08 正式从 registry 与场景挂载移除（builder 保留为管线内部 API）。",
+      "removedOn": "2026-09-08"
+    },
     {
       "name": "create_payment",
       "reason": "系统内无资金类工具闭环（历史 BASE 工具，早已移除）。",

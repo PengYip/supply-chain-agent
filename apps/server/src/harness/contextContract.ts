@@ -57,12 +57,12 @@ export interface ToolContextContract {
 //    no external content leaks into the return) BUT injection 'external'
 //    (it parsed an untrusted uploaded file). The injection layer still
 //    sanitizes the ingest path; the return itself is a safe handle.
-//  - extract_fields / verify_document_fields: output 'tagged' (their RETURN
-//    VALUES are field/OCR strings derived from external documents, which may
-//    carry prompt injection -> must be wrapped in <external_content>).
+//  - inspect_extraction: output 'tagged' (its RETURN VALUES are field strings
+//    derived from external documents, which may carry prompt injection -> must
+//    be wrapped in <external_content>).
 //  - escalate_to_human: signal 'todo' (it opens a pending human ticket).
-//  - Reads (query_*, cross_check): signal 'counter'; writes that mutate
-//    business state (link/bind, e.g. bind_document): signal 'env'.
+//  - Reads (query_business): signal 'counter'; writes that mutate business
+//    state (link/bind, e.g. bind_document): signal 'env'.
 export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract>> = {
   // 阶段2 工具合并(2026-08-28): 结构化 SSOT 统一读入口, 原 query_contract /
   // query_execution_flows / query_quota_usage / project_rollup / template_overview
@@ -71,14 +71,6 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
   // budget 'full' 以免截掉枚举结果(与原 query_contract/quota/template 一致)。
   // signal 'counter'(读)。persist 'business' 标记它读取的业务存储。
   query_business: {
-    output: 'raw', budget: 'full', signal: 'counter',
-    persist: 'business', risk: { level: 'L1', injection: 'safe' },
-  },
-  query_orders: {
-    output: 'raw', budget: 'full', signal: 'counter',
-    persist: 'business', risk: { level: 'L1', injection: 'safe' },
-  },
-  cross_check: {
     output: 'raw', budget: 'full', signal: 'counter',
     persist: 'business', risk: { level: 'L1', injection: 'safe' },
   },
@@ -94,16 +86,8 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'counter',
     persist: 'session', risk: { level: 'L1', injection: 'safe' },
   },
-  verify_document_fields: {
-    output: 'tagged', budget: 'full', signal: 'counter',
-    persist: 'session', risk: { level: 'L1', injection: 'external' },
-  },
   ingest_document: {
     output: 'raw', budget: 'full', signal: 'todo',
-    persist: 'business', risk: { level: 'L1', injection: 'external' },
-  },
-  extract_fields: {
-    output: 'tagged', budget: 'full', signal: 'todo',
     persist: 'business', risk: { level: 'L1', injection: 'external' },
   },
   inspect_extraction: {
@@ -173,7 +157,8 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
   },
   recall_documents: {
     // Returns BM25 snippets of ingested document text -> external content, so
-    // output is 'tagged' (injectionDefense wraps each snippet, like extract_fields).
+    // output is 'tagged' (injectionDefense wraps each snippet, like the
+    // other document-derived 'tagged' tools).
     // budget 'full': matches are already bounded by the caller-supplied limit
     // and fullText mode is bounded upstream. Additional snippet/match clipping
     // made the model believe evidence was unavailable; do not compress again.

@@ -31,7 +31,6 @@ const CORE = [...SCENARIO_CORE];
 const ENTRY: readonly string[] = [
   ...CORE,
   'ingest_document',
-  'extract_fields',
   'present_document_review',
   'update_document_fields',
   'bind_document',

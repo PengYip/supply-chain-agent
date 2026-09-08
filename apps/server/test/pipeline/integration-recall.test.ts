@@ -270,24 +270,25 @@ describe('integration: document-entry -> hybrid recall chain', () => {
       embedder,
     });
     const names = tools.map((t) => t.name);
-    // base 4 (create_payment removed: no in-system money tools) + query_business
+    // base 2 (load_skill + escalate_to_human; demo-era query_orders/cross_check/
+    // verify_document_fields removed 2026-09-08, blacklisted) + query_business
     // (阶段2 合并: 原 query_contract/project_rollup/query_quota_usage/
-    // template_overview/query_execution_flows 五合一) + 3 doc-entry +
-    // recall_documents + inspect_extraction + tag_document +
-    // create_entity + link_entities + graph_query + graph_find_entity +
-    // present_document_review + update_document_fields + list_binding_proposals
-    // + link_documents(三合一) + manage_template +
-    // manage_quota + gather_settlement_evidence/confirm_settlement +
-    // load_skill(Skill 化, 2026-08-28)
+    // template_overview/query_execution_flows 五合一) + doc-entry
+    // (ingest_document; extract_fields removed 2026-09-08) +
+    // recall_documents + inspect_extraction + create_entity + link_entities +
+    // graph_query + graph_find_entity + present_document_review +
+    // update_document_fields + list_binding_proposals + link_documents(三合一) +
+    // manage_template + manage_quota + gather_settlement_evidence/
+    // confirm_settlement + load_skill(Skill 化, 2026-08-28)
     // + create_writeoff/create_offset(核销工作台, 2026-09-07 Item 5)
     // + create_trade_event(事件登记, 2026-09-08)
-    // = 29 live trader tools; 2026-08-28 tool-inventory methodology env-gates
+    // = 22 live trader tools; 2026-08-28 tool-inventory methodology env-gates
     // execute_code behind CUBE_SANDBOX_ENABLED (default off).
-    const expected = 26 + (isCubeSandboxEnabled() ? 1 : 0);
+    const expected = 22 + (isCubeSandboxEnabled() ? 1 : 0);
     expect(names).toHaveLength(expected);
     expect(names).toContain('recall_documents');
     expect(names).toContain('ingest_document');
-    expect(names).toContain('extract_fields');
+    expect(names).not.toContain('extract_fields');
     expect(names).toContain('query_business');
     // The buildGatedTools choke point enforces a contract for every live tool;
     // passing here means recall_documents (and friends) all have contract entries.

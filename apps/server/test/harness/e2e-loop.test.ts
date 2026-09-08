@@ -121,15 +121,16 @@ describe('agent e2e loop (stub model)', () => {
     // (a) the live streamText call received the scenario-narrowed toolset
     // (阶段3 场景挂载): mounted set is 22 + gated(execute_code); user text
     // '请录入这份合同' routes to the ENTRY scenario, so the model sees
-    // SCENARIO_TOOLS.entry ∩ mounted = 10 tools (CORE + doc-entry chain),
-    // which still covers the canned ingest_document call.
+    // SCENARIO_TOOLS.entry ∩ mounted = 9 tools (CORE + doc-entry chain;
+    // extract_fields removed 2026-09-08), which still covers the canned
+    // ingest_document call.
     const mounted = listToolNames('trader').filter(
       (n) => n !== 'execute_code' || isCubeSandboxEnabled(),
     );
     const expectedNames = scenarioActiveTools('entry', mounted)!;
     expect(capturedNames).toHaveLength(expectedNames.length);
     expect([...capturedNames].sort()).toEqual([...expectedNames].sort());
-    for (const n of ['ingest_document', 'extract_fields', 'bind_document', 'query_business', 'escalate_to_human', 'recall_documents']) {
+    for (const n of ['ingest_document', 'bind_document', 'query_business', 'escalate_to_human', 'recall_documents']) {
       expect(capturedNames).toContain(n);
     }
 

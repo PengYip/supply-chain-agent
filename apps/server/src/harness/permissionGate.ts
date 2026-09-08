@@ -50,13 +50,9 @@ export function isSoftGate(toolName: string): boolean {
 // ---- default registrations (declared up-front as the system source of truth) ----
 // L1 readonly
 registerPermission('query_business', 'L1'); // 阶段2 工具合并: 结构化 SSOT 统一读入口(原 query_contract/query_execution_flows/project_rollup/query_quota_usage/template_overview 五合一)
-registerPermission('query_orders', 'L1');
-registerPermission('cross_check', 'L1');
 registerPermission('escalate_to_human', 'L1'); // T3: uncertainty fallback
-registerPermission('verify_document_fields', 'L1'); // T4: document OCR check
 // T9: document-entry pipeline tools
 registerPermission('ingest_document', 'L1'); // T9: parse + persist BlockModel
-registerPermission('extract_fields', 'L1'); // T9: grounded field extraction
 registerPermission('inspect_extraction', 'L1'); // on-demand field-evidence drill-down
 registerPermission('recall_documents', 'L1'); // T6: FTS5 keyword recall over chunks
 registerPermission('execute_code', 'L1'); // CubeSandbox: isolated Python execution
