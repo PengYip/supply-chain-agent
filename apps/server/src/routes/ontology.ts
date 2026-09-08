@@ -1,11 +1,11 @@
-// 本体只读 REST 面(roadmap Item 3)：/schema + /entities 列表/详情。
+// 本体只读 REST 面(roadmap Item 3)：/schema + /entities 列表/详情 + /counts 实体计数(Item 8)。
 // 挂载：index.ts `app.use('/api/ontology/*', requireAuth)` + `app.route('/api/ontology', ontologyRoute)`。
 // 只读：本文件与 projection 层绝不写任何源表。
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
-import { ontologySchemaJson, OntologyEntityNameSchema } from '../ontology/index.js';
+import { ontologySchemaJson, OntologyEntityNameSchema, ENTITY_NAMES } from '../ontology/index.js';
 import { listProjectedEntities, getProjectedEntityDetail } from '../ontology/projection.js';
 import { getNeighbors } from '../ontology/neighbors.js';
 
@@ -22,6 +22,25 @@ ontologyRoute.use('*', async (c, next) => {
 
 /** GET /schema — 注册表纯 JSON 投影(台账列生成/类型列表的数据源)。 */
 ontologyRoute.get('/schema', (c) => c.json(ontologySchemaJson()));
+
+/** GET /counts — 11 实体逐一实时计数(治理全景图节点数据源, roadmap Item 8)。
+ *  复用 listProjectedEntities 的列表口径(total 含共享域与用户域)，不引入新计数 SQL。 */
+ontologyRoute.get('/counts', async (c) => {
+  const user = c.get('user')!;
+  try {
+    const ctx = getDbContext();
+    const entries = await Promise.all(
+      ENTITY_NAMES.map(async (name) => {
+        const total = (await listProjectedEntities(ctx, name, {}, user.id)).total;
+        return [name, total] as const;
+      }),
+    );
+    return c.json({ counts: Object.fromEntries(entries) });
+  } catch (e) {
+    console.error('[ontology] counts failed:', errDetail(e));
+    return c.json({ error: 'counts failed', detail: errDetail(e) }, 500);
+  }
+});
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
