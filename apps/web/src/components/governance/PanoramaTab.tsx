@@ -12,7 +12,7 @@ import {
 import type { GraphEdge, GraphNode, Subgraph } from '../../hooks/useGraph';
 import { GraphCanvas } from '../graph/GraphCanvas';
 import { computeOntologyLayout } from '../graph/ontologyLayout';
-import { ONTOLOGY_EDGE_LEGEND, edgeLabel } from '../graph/businessTypes';
+import { edgeLabel } from '../graph/businessTypes';
 import { useHashRoute } from '../../hooks/useHashRoute';
 
 /** 全景节点 elementId 前缀(与本体穿透模式 `<type>:<id>` 复合键同一形态)。 */
@@ -87,18 +87,9 @@ export function PanoramaTab() {
 
   return (
     <div className="flex h-full min-w-0 flex-col">
-      {/* 边图例：颜色/虚线与 EDGE_STYLE_OVERRIDES 同源(businessTypes tokens) */}
-      <div className="flex flex-wrap items-center gap-3 border-b border-line bg-white px-3 py-1.5 text-xs text-ink-soft">
-        {ONTOLOGY_EDGE_LEGEND.map((l) => (
-          <span key={l.relation} className="flex items-center gap-1">
-            <span
-              className="inline-block h-0 w-6 border-t-2"
-              style={{ borderColor: l.color, borderTopStyle: l.dashed ? 'dashed' : 'solid' }}
-            />
-            {edgeLabel(l.relation)}
-          </span>
-        ))}
-        <span className="ml-auto">
+      {/* 边类型已内联标注在画布边上, 图例条仅保留实体/关系统计 */}
+      <div className="flex items-center justify-end border-b border-line bg-white px-3 py-1.5 text-xs text-ink-soft">
+        <span>
           实体 {subgraph.nodes.length} · 关系 {subgraph.edges.length} · 单击查看详情
         </span>
       </div>

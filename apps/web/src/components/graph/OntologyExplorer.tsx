@@ -11,7 +11,7 @@ import {
 import type { GraphEdge, GraphNode, InspectTarget, Subgraph } from '../../hooks/useGraph';
 import { GraphCanvas } from './GraphCanvas';
 import { EntityDetailDrawer } from '../entities/EntityDetailDrawer';
-import { ONTOLOGY_EDGE_LEGEND, edgeLabel } from './businessTypes';
+import { edgeLabel } from './businessTypes';
 
 export interface OntologyAnchorJump {
   type: string;
@@ -299,18 +299,7 @@ export function OntologyExplorer({ initialAnchor }: Props) {
         {truncated && <span className="text-xs text-ink-soft">结果已截断（缩小深度或逐跳展开）</span>}
       </div>
 
-      {/* 边图例(验收 2：颜色/图例区分两类边) */}
-      <div className="flex flex-wrap items-center gap-3 border-b border-line bg-white px-3 py-1.5 text-xs text-ink-soft">
-        {ONTOLOGY_EDGE_LEGEND.map((l) => (
-          <span key={l.relation} className="flex items-center gap-1">
-            <span
-              className="inline-block h-0 w-6 border-t-2"
-              style={{ borderColor: l.color, borderTopStyle: l.dashed ? 'dashed' : 'solid' }}
-            />
-            {edgeLabel(l.relation)}
-          </span>
-        ))}
-      </div>
+      {/* 边类型已内联标注在画布边上(EDGE_LABELS -> G6 edge label), 不再设图例条 */}
 
       {/* 画布 + 悬停参数浮层 */}
       <div className="relative min-h-0 flex-1">

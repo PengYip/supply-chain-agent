@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { Graph as G6Graph, type EdgeData, type IElementEvent, type NodeData } from '@antv/g6';
 import type { GraphEdge, GraphNode, InspectTarget, Subgraph } from '../../hooks/useGraph';
-import { EDGE_STYLE_OVERRIDES, businessTypeOf, contractTypeStyle, docTypeName, docTypeStyle, nodeDisplayName } from './businessTypes';
+import { EDGE_STYLE_OVERRIDES, businessTypeOf, contractTypeStyle, docTypeName, docTypeStyle, edgeLabel, nodeDisplayName } from './businessTypes';
 import { useDocMeta } from './docMeta';
 import { cardSpec, classifyEdge, computeLayeredLayout, type LayoutResult, type NodeCardMeta } from './layeredLayout';
 
@@ -187,6 +187,20 @@ export function GraphCanvas({
           ...(override?.dashed ? { lineDash: [5, 4] } : {}),
           endArrow: true,
           endArrowSize: 7,
+          // 边类型内联标签(edge type inline label)：小号字 + 白底描边, 随边中点展示,
+          // 替代外部图例条; 标注在边中点, 不遮两端节点卡片。
+          labelText: edgeLabel(ed.type),
+          labelPlacement: 'center' as const,
+          labelFontSize: 10,
+          labelFill: '#475569',
+          labelOpacity: 0.95,
+          labelBackground: true as const,
+          labelBackgroundFill: '#FFFFFF',
+          labelBackgroundOpacity: 0.85,
+          labelBackgroundStroke: '#E2E8F0',
+          labelBackgroundLineWidth: 1,
+          labelBackgroundPadding: [1, 4] as [number, number],
+          labelBackgroundRadius: 3,
         },
       };
     });

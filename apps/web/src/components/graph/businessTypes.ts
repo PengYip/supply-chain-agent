@@ -278,16 +278,3 @@ export function contractTypeStyle(
   }
   return BASE_CONTRACT_STYLE;
 }
-
-/** 穿透模式边图例(roadmap Item 4)：色值/虚线与 EDGE_STYLE_OVERRIDES 严格一致。 */
-export const ONTOLOGY_EDGE_LEGEND: ReadonlyArray<{ relation: string; color: string; dashed: boolean }> = [
-  { relation: 'ALLOCATE_TO', color: '#2563EB', dashed: false },
-  { relation: 'OFFSET_SETTLE', color: '#16A34A', dashed: false },
-  { relation: 'WRITE_OFF', color: '#EA580C', dashed: false },
-  { relation: 'REVERSE_ORIGIN', color: '#DC2626', dashed: false },
-  { relation: 'FEEDS_INTO', color: '#94A3B8', dashed: true },
-  { relation: 'CORRESPONDS_TO', color: '#94A3B8', dashed: true },
-  { relation: 'TRIGGERS', color: '#94A3B8', dashed: true },
-  { relation: 'PROVIDE', color: '#94A3B8', dashed: true },
-  { relation: 'CONTAINS', color: '#64748B', dashed: true },
-];
