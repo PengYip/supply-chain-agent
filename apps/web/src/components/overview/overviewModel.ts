@@ -5,17 +5,24 @@ import type { ViewId } from '../shell/navigation';
 export type OverviewCardKey =
   | 'pendingApprovals' | 'overReceipt' | 'paymentBlocks' | 'executionRate' | 'pendingWriteoff';
 
-export function jumpTargetForCard(card: OverviewCardKey): ViewId {
+/** 卡片跳转目标：视图 + 可选 hash 参数（tab 合一后带 tab 定位，导航整合 2026-09-08）。 */
+export interface JumpTarget {
+  view: ViewId;
+  params?: Record<string, string>;
+}
+
+export function jumpTargetForCard(card: OverviewCardKey): JumpTarget {
   switch (card) {
     case 'pendingApprovals':
     case 'paymentBlocks':
-      return 'approvals';
+      return { view: 'approvals' };
     case 'overReceipt':
-      return 'entities';
+      // 实体台账已并入本体视图（导航整合）：跳本体台账 tab
+      return { view: 'ontology', params: { tab: 'ledger' } };
     case 'pendingWriteoff':
-      return 'writeoff';
+      return { view: 'writeoff' };
     case 'executionRate':
-      return 'ledger';
+      return { view: 'ledger' };
   }
 }
 

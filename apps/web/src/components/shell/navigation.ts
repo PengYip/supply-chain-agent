@@ -1,7 +1,6 @@
 import {
   ArrowLeftRight,
   BookOpen,
-  Boxes,
   Building2,
   ClipboardCheck,
   FlaskConical,
@@ -23,8 +22,7 @@ export type ViewId =
   | 'approvals'
   | 'projects'
   | 'ledger'
-  | 'entities'
-  | 'graph'
+  | 'ontology'
   | 'bindings'
   | 'writeoff'
   | 'governance'
@@ -56,8 +54,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'ledger', label: '项目台账', description: '按项目归集合同的凭证齐套率', icon: BookOpen, group: 'fulfill', enabled: true },
   { id: 'bindings', label: '绑定', description: '文档与合同绑定工作台', icon: Link2, group: 'fulfill', enabled: true },
   { id: 'review', label: '集中复核', description: '多页票据表格化批量核对', icon: ClipboardCheck, group: 'fulfill', enabled: true },
-  { id: 'entities', label: '实体台账', description: '本体实体浏览（合同 / 收发依据 / 事件，as-of 时间切片）', icon: Boxes, group: 'ontology', enabled: true },
-  { id: 'graph', label: '图谱', description: '实体关系可视化', icon: Network, group: 'ontology', enabled: true },
+  { id: 'ontology', label: '本体', description: '本体台账与本体图谱（实体浏览 / 关系穿透）', icon: Network, group: 'ontology', enabled: true },
   { id: 'approvals', label: '审批中心', description: 'L2/L3 审批待办与历史', icon: ClipboardCheck, group: 'funds', enabled: true },
   { id: 'writeoff', label: '核销', description: '票款核销与预付冲抵（多对多 / 部分金额 / 分批）', icon: ArrowLeftRight, group: 'funds', enabled: true },
   { id: 'overview', label: '总览', description: '待办与异常优先的登录门户', icon: LayoutDashboard, group: 'collab', enabled: true },

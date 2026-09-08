@@ -159,7 +159,7 @@ export function PanoramaTab() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => navigate('entities', { type: entityNameOf(node.elementId) })}
+                  onClick={() => navigate('ontology', { tab: 'ledger', type: entityNameOf(node.elementId) })}
                   className="rounded border border-line px-2.5 py-1 text-xs text-ink-soft transition-colors hover:border-primary/40 hover:text-primary"
                 >
                   在实体台账中查看

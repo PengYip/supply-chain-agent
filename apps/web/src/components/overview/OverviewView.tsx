@@ -37,7 +37,10 @@ export function OverviewView() {
     );
   }
 
-  const jump = (card: OverviewCardKey) => navigate(jumpTargetForCard(card));
+  const jump = (card: OverviewCardKey) => {
+    const target = jumpTargetForCard(card);
+    navigate(target.view, target.params);
+  };
 
   return (
     <div className="space-y-6 overflow-y-auto p-6">

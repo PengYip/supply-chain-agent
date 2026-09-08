@@ -13,7 +13,6 @@ import { usePageFileDrop } from './hooks/usePageFileDrop';
 import { processDocument, type DocParseState } from './api/process';
 import { useSessions } from './hooks/useSessions';
 import { EvalWorkbenchView } from './components/eval/EvalWorkbenchView';
-import { GraphView } from './components/graph/GraphView';
 import { BindingsView } from './components/bindings/BindingsView';
 import { WriteoffView } from './components/writeoff/WriteoffView';
 import { SelfPartyPanel } from './components/parties/SelfPartyPanel';
@@ -21,7 +20,7 @@ import { FavoritesView } from './components/favorites/FavoritesView';
 import { AuditView } from './components/audit/AuditView';
 import { ProjectsView } from './components/projects/ProjectsView';
 import { ProjectLedgerView } from './components/ledger/ProjectLedgerView';
-import { EntitiesView } from './components/entities/EntitiesView';
+import { OntologyView } from './components/ontology/OntologyView';
 import { ReviewWorkbench } from './components/review-workbench/ReviewWorkbench';
 import { ApprovalCenterView } from './components/approval/ApprovalCenterView';
 import { GovernanceView } from './components/governance/GovernanceView';
@@ -123,35 +122,26 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
   // 'new' 是「从台账/外部跳入待新建」哨兵：归一为无活动会话，首条消息由 ask 注入。
   const activeSessionId =
     route.params.session && route.params.session !== 'new' ? route.params.session : null;
-  // 跨视图定位：绑定工作台 -> 图谱页，以合同节点为中心展开。
-  // nonce 自增保证重复跳转同一合同也会触发图谱页重新查询。URL 表达不了
-  // 「重复触发同一目标」，故 nonce 不进路由、保留 App state。
+  // 跨视图定位：绑定工作台/实体台账详情 -> 本体视图图谱 tab，按 focus 类型自动
+  // 切文档图谱/本体穿透模式。nonce 自增保证重复跳转同一合同也会触发图谱页重新
+  // 查询。URL 表达不了「重复触发同一目标」，故 nonce 不进路由、保留 App state。
   const [graphFocus, setGraphFocus] = useState<GraphFocus | null>(null);
   const graphFocusNonceRef = useRef(0);
   const openInGraph = useCallback((target: GraphFocusTarget) => {
     graphFocusNonceRef.current += 1;
     setGraphFocus({ nonce: graphFocusNonceRef.current, target });
-    navigate('graph');
+    navigate('ontology', { tab: 'graph' });
   }, [navigate]);
-  // 跨视图定位 -> 绑定工作台：图谱 Inspector「去审核」(spec 2026-08-26 §4.4)
+  // 跨视图定位 -> 绑定工作台：本体视图图谱 Inspector「去审核」(spec 2026-08-26 §4.4)
   // 与文件抽屉「未挂合同」徽标两条入口共用同一 focus 状态。nonce 自增保证重复
   // 跳转同一文档也会重新选中。
   const [bindingsFocus, setBindingsFocus] = useState<{ docId: string; nonce: number } | null>(null);
   const bindingsFocusNonceRef = useRef(0);
-  const openInBindings = useCallback((docId: string) => {
+  const openBindingsForDoc = useCallback((docId: string) => {
     bindingsFocusNonceRef.current += 1;
     setBindingsFocus({ docId, nonce: bindingsFocusNonceRef.current });
     navigate('bindings');
   }, [navigate]);
-  // 文件抽屉「未挂合同」徽标 -> 绑定工作台（离开对话视图，抽屉随视图切换收起）。
-  const openBindingsForDoc = useCallback(
-    (docId: string) => {
-      bindingsFocusNonceRef.current += 1;
-      setBindingsFocus({ docId, nonce: bindingsFocusNonceRef.current });
-      navigate('bindings');
-    },
-    [navigate],
-  );
   // 全局复核弹窗（App 层单例）： 文件树子单据行/复核卡拆分清单经
   // lib/reviewModal 通道请求打开；弹窗已开时切换目标（key 化重挂载）。
   const [reviewDocId, setReviewDocId] = useState<string | null>(null);
@@ -182,7 +172,7 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
   // 定位覆盖用户操作（openInGraph/openInBindings/openBindingsForDoc 直接调
   // navigate，不清自己刚设置的 focus）。
   const handleNavigate = useCallback((v: ViewId) => {
-    if (v === 'graph') setGraphFocus(null);
+    if (v === 'ontology') setGraphFocus(null);
     if (v === 'bindings') setBindingsFocus(null);
     navigate(v);
   }, [navigate]);
@@ -341,14 +331,16 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
         <FavoritesView onOpenSession={(id) => navigate('chat', { session: id })} />
       ) : view === 'approvals' ? (
         <ApprovalCenterView />
-      ) : view === 'graph' ? (
-        <GraphView focus={graphFocus} onOpenInBindings={openInBindings} />
+      ) : view === 'ontology' ? (
+        <OntologyView
+          graphFocus={graphFocus}
+          onOpenInGraph={openInGraph}
+          onOpenInBindings={openBindingsForDoc}
+        />
       ) : view === 'projects' ? (
         <ProjectsView />
       ) : view === 'ledger' ? (
         <ProjectLedgerView onOpenProjects={() => navigate('projects')} onOpenParties={openParties} />
-      ) : view === 'entities' ? (
-        <EntitiesView onOpenInGraph={openInGraph} />
       ) : view === 'governance' ? (
         <GovernanceView />
       ) : view === 'eval' ? (
