@@ -144,11 +144,13 @@ export async function getOntologyNeighbors(
 }
 
 // ---------------------------------------------------------------------------
-// 文档血缘(Neo4j)锚点层融合(D7)：
-//   TradeContract 锚点 -> Contract 图节点(name=normalizeName(contractNo))，
+// 文档血缘(Neo4j)锚点层融合(D7) + 跨空间逐跳(spec 2026-09-09 P2)：
+//   锚点层: TradeContract 锚点 -> Contract 图节点(name=normalizeName(contractNo))，
 //     graphQuery 不限 edgeKinds(取 executes/references 等文档邻域，承载主链可穿)；
-//   收/发单据锚点 -> Document 图节点(name=docId)，edgeKinds=['CONTAINS'](批拆血缘)。
-//   事件实体(TF id)无图节点，不融合。跨空间逐跳展开 deferred(需稳定桥表)。
+//     收/发单据锚点 -> Document 图节点(name=docId)，edgeKinds=['CONTAINS'](批拆血缘)。
+//   跨空间逐跳(P2): BFS 中途可达的 TradeContract / 收发单据源(documents 源)节点
+//     同样展开文档血缘(depth=1)——本体走到合同, 合同带出单据, 一屏到底。
+//     事实实体(TF id)节点仍不展开(无文档溯源, EVIDENCE 边待 P2 接缝)。
 // 降级(D5)：NEO4J_PASSWORD 未设或图故障 -> lineage.available=false，本体部分照常；
 //   图锚点不存在 -> subjectFound=false(正常态，如演示合同无上传文档)。
 // ---------------------------------------------------------------------------
@@ -158,11 +160,16 @@ export interface LineageStatus {
   available: boolean;
   /** 锚点在图中找到对应节点。 */
   subjectFound: boolean;
+  /** 跨空间逐跳展开的桥节点数(锚点之外的合同/收发单据源)。 */
+  bridgesExpanded: number;
 }
 
 export interface NeighborsResult extends OntologyNeighbors {
   lineage: LineageStatus;
 }
+
+const clampDepth = (d: number): number =>
+  Math.min(Math.max(Math.trunc(d) || 1, 1), MAX_NEIGHBOR_DEPTH);
 
 async function lineageSubjectElementId(
   ctx: DbContext, type: OntologyEntityName, id: string, uid: string,
@@ -183,6 +190,30 @@ async function lineageSubjectElementId(
   return null;
 }
 
+/** BFS 可达节点的桥解析(P2)：合同 -> Contract 图节点；收发单据源(documents 源,
+ *  id=docId) -> Document 图节点。事实源(trade_facts)返回 null(无图桥)。 */
+async function midNodeLineageSubject(
+  ctx: DbContext, n: NeighborNode, uid: string,
+): Promise<{ elementId: string; id: string; type: string; edgeKinds?: string[] } | null> {
+  if (n.entityType === 'TradeContract') {
+    const contract = await findContractRowById(ctx, n.id, uid);
+    const contractNo = String(contract?.fields['contractNo'] ?? '');
+    if (!contract || !contractNo) return null;
+    const hits = await findEntities({ kind: 'Contract', name: normalizeName(contractNo), exact: true });
+    return hits[0] ? { elementId: hits[0].elementId, id: n.id, type: 'TradeContract' } : null;
+  }
+  if ((n.entityType === 'GoodsReceiptEvent' || n.entityType === 'GoodsDeliveryEvent')
+    && n.source === 'documents') {
+    const doc = await findDocRowById(ctx, n.id, n.entityType, uid);
+    if (!doc) return null;
+    const hits = await findEntities({ kind: 'Document', name: doc.id, exact: true });
+    return hits[0]
+      ? { elementId: hits[0].elementId, id: n.id, type: n.entityType, edgeKinds: ['CONTAINS'] }
+      : null;
+  }
+  return null;
+}
+
 function docIdOfGraphNode(n: GraphEntity): string {
   const p = n.props?.['docId'];
   return typeof p === 'string' && p ? p : n.name;
@@ -197,7 +228,68 @@ function docLabel(n: GraphEntity): string {
   return n.name.slice(0, 12);
 }
 
-/** 邻接总入口(路由唯一消费方)：本体 BFS + 血缘锚点层融合。 */
+/** 跨主体去重累积器：文档节点键与 lineage 边 id。 */
+interface MergeAcc {
+  docKeys: Set<string>;
+  edgeIds: Set<string>;
+}
+
+/** 把一个图节点(subject)的邻域并入结果：文档节点 + lineage 边，键去重。 */
+async function mergeLineageNeighborhood(
+  result: OntologyNeighbors,
+  acc: MergeAcc,
+  subject: { elementId: string; id: string; type: string; edgeKinds?: string[] },
+  depth: number,
+): Promise<void> {
+  const res = await graphQuery({
+    subjectId: subject.elementId,
+    depth,
+    direction: 'both',
+    ...(subject.edgeKinds ? { edgeKinds: subject.edgeKinds } : {}),
+  });
+  // elementId -> 业务 id 映射(合同侧 = 台账 id, 文档侧 = docId)
+  const infoByElementId = new Map<string, { id: string; type: string }>([
+    [subject.elementId, { id: subject.id, type: subject.type }],
+  ]);
+  for (const n of res.nodes) {
+    const docId = docIdOfGraphNode(n);
+    infoByElementId.set(n.elementId, { id: docId, type: 'Document' });
+    const key = `Document:${docId}`;
+    if (acc.docKeys.has(key)) continue;
+    acc.docKeys.add(key);
+    result.nodes.push({
+      id: docId,
+      entityType: 'Document',
+      label: docLabel(n),
+      source: 'neo4j',
+      props: {
+        docType: n.props?.['docType'] ?? null,
+        batchRole: n.props?.['batchRole'] ?? null,
+      },
+    });
+  }
+  for (const e of res.edges) {
+    const id = `lineage ${e.elementId}`;
+    if (acc.edgeIds.has(id)) continue;
+    const from = infoByElementId.get(e.srcId);
+    const to = infoByElementId.get(e.dstId);
+    if (!from || !to) continue;   // 端点不在结果集(截断/异类)则弃边
+    acc.edgeIds.add(id);
+    result.edges.push({
+      id,
+      relation: e.type,
+      origin: 'lineage',
+      fromType: from.type,
+      fromId: from.id,
+      toType: to.type,
+      toId: to.id,
+      params: e.props ?? {},
+      validAt: null,
+    });
+  }
+}
+
+/** 邻接总入口(路由唯一消费方)：本体 BFS + 血缘锚点层融合 + 跨空间逐跳(P2)。 */
 export async function getNeighbors(
   ctx: DbContext,
   input: { type: OntologyEntityName; id: string; depth: number },
@@ -206,54 +298,35 @@ export async function getNeighbors(
 ): Promise<NeighborsResult> {
   const uid = effectiveUserId(userId);
   const result = await getOntologyNeighbors(ctx, input, uid, opts);
-  const lineage: LineageStatus = { available: false, subjectFound: false };
+  const maxNodes = opts.maxNodes ?? MAX_NEIGHBOR_NODES;
+  const lineage: LineageStatus = { available: false, subjectFound: false, bridgesExpanded: 0 };
 
   if (process.env.NEO4J_PASSWORD) {
     try {
+      const acc: MergeAcc = { docKeys: new Set(), edgeIds: new Set(result.edges.map((e) => e.id)) };
+      // 锚点层(D7)：锚点可桥图则按请求深度展开
       const subject = await lineageSubjectElementId(ctx, input.type, input.id, uid);
       if (subject) {
-        const res = await graphQuery({
-          subjectId: subject.elementId,
-          depth: Math.min(Math.max(Math.trunc(input.depth) || 1, 1), MAX_NEIGHBOR_DEPTH),
-          direction: 'both',
-          ...(subject.edgeKinds ? { edgeKinds: subject.edgeKinds } : {}),
-        });
-        // elementId -> 业务 id 映射(合同锚点侧 = 台账 id, 文档侧 = docId)
-        const infoByElementId = new Map<string, { id: string; type: string }>([
-          [subject.elementId, { id: input.id, type: input.type }],
-        ]);
-        for (const n of res.nodes) {
-          infoByElementId.set(n.elementId, { id: docIdOfGraphNode(n), type: 'Document' });
-          result.nodes.push({
-            id: docIdOfGraphNode(n),
-            entityType: 'Document',
-            label: docLabel(n),
-            source: 'neo4j',
-            props: {
-              docType: n.props?.['docType'] ?? null,
-              batchRole: n.props?.['batchRole'] ?? null,
-            },
-          });
-        }
-        for (const e of res.edges) {
-          const from = infoByElementId.get(e.srcId);
-          const to = infoByElementId.get(e.dstId);
-          if (!from || !to) continue;   // 端点不在结果集(截断/异类)则弃边
-          result.edges.push({
-            id: `lineage ${e.elementId}`,
-            relation: e.type,
-            origin: 'lineage',
-            fromType: from.type,
-            fromId: from.id,
-            toType: to.type,
-            toId: to.id,
-            params: e.props ?? {},
-            validAt: null,
-          });
-        }
+        await mergeLineageNeighborhood(
+          result, acc,
+          { elementId: subject.elementId, id: input.id, type: input.type, edgeKinds: subject.edgeKinds },
+          clampDepth(input.depth),
+        );
         lineage.subjectFound = true;
       }
       lineage.available = true;
+
+      // 跨空间逐跳(P2)：BFS 可达的合同/收发单据源节点逐个展开 depth=1 血缘，
+      // 节点上限守卫(超限即停，响应规模双保险不变)。
+      const anchorKey = `${input.type}:${input.id}`;
+      for (const n of [...result.nodes]) {
+        if (result.nodes.length >= maxNodes) break;
+        if (`${n.entityType}:${n.id}` === anchorKey) continue;
+        const bridge = await midNodeLineageSubject(ctx, n, uid);
+        if (!bridge) continue;
+        await mergeLineageNeighborhood(result, acc, bridge, 1);
+        lineage.bridgesExpanded += 1;
+      }
     } catch (e) {
       // 血缘层故障不拖垮本体邻接(D5)：合并端点的部分可用是有意义的。
       console.warn('[ontology/neighbors] lineage merge skipped:',

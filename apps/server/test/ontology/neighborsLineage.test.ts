@@ -56,7 +56,7 @@ describe('getNeighbors lineage merge (mocked graph)', () => {
     });
 
     const res = await getNeighbors(ctx, { type: 'TradeContract', id: 'C1', depth: 1 }, 'u1');
-    expect(res.lineage).toEqual({ available: true, subjectFound: true });
+    expect(res.lineage).toEqual({ available: true, subjectFound: true, bridgesExpanded: 0 });
     const docNodes = res.nodes.filter((n) => n.source === 'neo4j');
     expect(docNodes.map((n) => n.id).sort()).toEqual(['doc-uuid-1', 'doc-uuid-2']);
     expect(docNodes.every((n) => n.entityType === 'Document')).toBe(true);
@@ -104,7 +104,7 @@ describe('getNeighbors lineage merge (mocked graph)', () => {
     insertContract('C1', 'HT-DEMO-001');
     graphRepoMocks.findEntities.mockResolvedValue([]);
     const res = await getNeighbors(ctx, { type: 'TradeContract', id: 'C1', depth: 1 }, 'u1');
-    expect(res.lineage).toEqual({ available: true, subjectFound: false });
+    expect(res.lineage).toEqual({ available: true, subjectFound: false, bridgesExpanded: 0 });
     expect(graphRepoMocks.graphQuery).not.toHaveBeenCalled();
   });
 
@@ -122,7 +122,7 @@ describe('getNeighbors lineage merge (mocked graph)', () => {
       params: { amount: 50_000, method: '金额' }, validAt: '2026-06-01', createdBy: 'test',
     }, 'u1');
     const res = await getNeighbors(ctx, { type: 'TradeContract', id: 'C1', depth: 1 }, 'u1');
-    expect(res.lineage).toEqual({ available: false, subjectFound: false });
+    expect(res.lineage).toEqual({ available: false, subjectFound: false, bridgesExpanded: 0 });
     expect(res.edges).toHaveLength(1);   // 本体部分照常
     expect(graphRepoMocks.findEntities).not.toHaveBeenCalled();
   });

@@ -23,10 +23,10 @@ export interface OntologySchemaDTO {
   }>;
 }
 
-async function request<T>(url: string): Promise<T> {
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(url, { credentials: 'include' });
+    res = await fetch(url, { credentials: 'include', ...init });
   } catch {
     throw new Error('网络错误，请稍后重试');
   }
@@ -133,7 +133,7 @@ export interface NeighborsResultDTO {
   anchorNode: NeighborNodeDTO;
   nodes: NeighborNodeDTO[];
   edges: NeighborEdgeDTO[];
-  lineage: { available: boolean; subjectFound: boolean };
+  lineage: { available: boolean; subjectFound: boolean; bridgesExpanded?: number };
   truncated: boolean;
 }
 
@@ -142,6 +142,24 @@ export function fetchOntologyNeighbors(
 ): Promise<NeighborsResultDTO> {
   const params = new URLSearchParams({ type, id, depth: String(depth) });
   return request<NeighborsResultDTO>(`/api/ontology/graph/neighbors?${params.toString()}`);
+}
+
+// ---------------------------------------------------------------------------
+// 图谱同步（spec 2026-09-09 P1/P2）：把台账事实/本体关系全量幂等投影到 Neo4j，
+// 穿透视图因此可跨空间逐跳（本体走到合同 -> 合同带出单据血缘）。
+// ---------------------------------------------------------------------------
+
+export interface GraphSyncResultDTO {
+  status: 'ok' | 'partial' | 'skipped';
+  nodeCount: number;
+  edgeCount: number;
+  prunedCount: number;
+  truncated: boolean;
+  failures: string[];
+}
+
+export function syncOntologyGraph(): Promise<GraphSyncResultDTO> {
+  return request<GraphSyncResultDTO>('/api/ontology/graph/sync', { method: 'POST' });
 }
 
 // ---------------------------------------------------------------------------

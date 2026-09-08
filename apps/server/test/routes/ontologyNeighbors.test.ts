@@ -136,7 +136,7 @@ describe('GET /api/ontology/graph/neighbors', () => {
     expect(body.nodes.some((n) => n.id === i && n.entityType === 'InvoiceEvent')).toBe(true);
     expect(body.nodes.some((n) => n.id === p && n.entityType === 'PaymentEvent')).toBe(true);
     expect(body.edges.every((e) => e.origin === 'ontology')).toBe(true);
-    expect(body.lineage).toEqual({ available: false, subjectFound: false });
+    expect(body.lineage).toEqual({ available: false, subjectFound: false, bridgesExpanded: 0 });
     expect(body.truncated).toBe(false);
   });
 

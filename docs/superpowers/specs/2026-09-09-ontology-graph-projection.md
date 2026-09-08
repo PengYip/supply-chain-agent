@@ -118,3 +118,23 @@ MATCH path = (red:InvoiceEvent)-[:REVERSE_ORIGIN*1..3]->(blue:InvoiceEvent) RETU
   逐条容错/safe 吞错）。build/lint/test 全绿；无 DDL、无新工具（tool-inventory 不动）。
 - P2/P3（未做）：neighbors 单图优先、EVIDENCE 边（待 facts 增加文档溯源字段）、
   agent 跨空间多跳与 GraphRAG。
+
+## P2 实施记录（2026-09-09，前后端同步结合）
+
+- **后端跨空间逐跳**（`ontology/neighbors.ts`）：血缘合并重构为 `mergeLineageNeighborhood`
+  （文档节点键 + lineage 边 id 双去重累积器）；`getNeighbors` 在锚点层之外，对 BFS
+  可达的 TradeContract / 收发单据源（documents 源，id=docId）节点逐个展开 depth=1
+  文档血缘（`midNodeLineageSubject` 桥解析），节点上限守卫即停。原"跨空间逐跳展开
+  deferred(需稳定桥表)"欠账就此还掉——本体走到合同，合同带出单据，一屏穿透。
+  `LineageStatus` 增量字段 `bridgesExpanded`（桥展开计数，前端 DTO 可选透传）。
+- **前端**（`apps/web`）：`api/ontology.ts` 新增 `syncOntologyGraph()`（POST
+  /api/ontology/graph/sync）与 lineage DTO 增量字段；`OntologyExplorer` 工具栏新增
+  「同步图谱」按钮（ok/partial/skipped 三态反馈，6s 自动消退）——投影不再只是
+  curl 入口，用户在穿透视图一键回填；画布对血缘 Document 节点/lineage 边的渲染
+  沿用既有 edgeLabel/EDGE_PARAM_LABELS（unitIndex/pages 已在映射内），跨空间
+  节点零新增渲染逻辑。
+- **测试**：`test/ontology/neighborsMultiAnchor.test.ts` 3 例（中途合同展开并桥接
+  到 BFS 既有节点 / 桥脱靶静默降级 / maxNodes 守卫即停）；4 处既有 lineage 形状
+  断言补 `bridgesExpanded: 0`。
+- 事实实体(TF id)节点仍不展开文档血缘——facts 无文档溯源字段，等
+  create_trade_event 增加 documentId 溯源后补 EVIDENCE 边（P3 接缝）。

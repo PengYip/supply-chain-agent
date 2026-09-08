@@ -4,7 +4,7 @@
 // elementId 用 `<type>:<id>` 复合键(两套身份体系不冲突)，业务键放 props 供展开回读。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  fetchOntologyNeighbors, listEntities, fetchOntologySchema,
+  fetchOntologyNeighbors, listEntities, fetchOntologySchema, syncOntologyGraph,
   type NeighborsResultDTO, type NeighborNodeDTO, type NeighborEdgeDTO,
   type OntologyEntitySchemaDTO, type ProjectedEntity,
 } from '../../api/ontology';
@@ -100,6 +100,11 @@ export function OntologyExplorer({ initialAnchor }: Props) {
   useEffect(() => () => { if (clickTimer.current) window.clearTimeout(clickTimer.current); }, []);
   const [hoverEdge, setHoverEdge] = useState<GraphEdge | null>(null);
   const expandedRef = useRef<Set<string>>(new Set());
+  // 图谱同步(spec 2026-09-09 P2)：手动全量投影入口（台账事实/本体关系 -> Neo4j）。
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const syncTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (syncTimer.current) window.clearTimeout(syncTimer.current); }, []);
 
   useEffect(() => {
     let alive = true;
@@ -217,6 +222,27 @@ export function OntologyExplorer({ initialAnchor }: Props) {
     }
   }, [selectedType, q]);
 
+  const runGraphSync = useCallback(async () => {
+    if (syncTimer.current) { window.clearTimeout(syncTimer.current); syncTimer.current = null; }
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const r = await syncOntologyGraph();
+      setSyncMsg(
+        r.status === 'ok'
+          ? `已投影 ${r.nodeCount} 节点 / ${r.edgeCount} 边`
+          : r.status === 'skipped'
+            ? '图谱未配置（NEO4J_PASSWORD 未设置），已跳过'
+            : `部分成功：${r.failures.length} 条失败（已投影 ${r.nodeCount} 节点 / ${r.edgeCount} 边）`,
+      );
+      syncTimer.current = window.setTimeout(() => setSyncMsg(null), 6000);
+    } catch (e) {
+      setSyncMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncing(false);
+    }
+  }, []);
+
   const subgraph: Subgraph = useMemo(() => {
     const anchorNode = anchor ? toGraphNode({ ...anchorProps(anchor) }) : null;
     const subject = nodes[0] && anchorNode ? nodes.find((n) => n.elementId === anchorNode.elementId) ?? nodes[0] : null;
@@ -297,6 +323,18 @@ export function OntologyExplorer({ initialAnchor }: Props) {
           </span>
         )}
         {truncated && <span className="text-xs text-ink-soft">结果已截断（缩小深度或逐跳展开）</span>}
+        <span className="ml-auto flex items-center gap-2">
+          {syncMsg && <span className="text-xs text-ink-soft">{syncMsg}</span>}
+          <button
+            type="button"
+            onClick={() => void runGraphSync()}
+            disabled={syncing}
+            title="把台账事实/本体关系全量投影到 Neo4j（幂等，可重复点击）；同步后穿透可跨空间逐跳"
+            className="h-8 rounded border border-line px-3 text-xs text-ink-soft transition-colors hover:border-primary/40 hover:text-primary disabled:opacity-50"
+          >
+            {syncing ? '同步中...' : '同步图谱'}
+          </button>
+        </span>
       </div>
 
       {/* 边类型已内联标注在画布边上(EDGE_LABELS -> G6 edge label), 不再设图例条 */}
