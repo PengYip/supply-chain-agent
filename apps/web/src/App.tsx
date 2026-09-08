@@ -110,12 +110,16 @@ function App() {
 interface SessionUser { name: string; email: string; id: string }
 
 function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => void }) {
-  // 文件面板常驻右栏，登录后默认展开；顶栏只负责折叠/展开切换。
-  const [fileDrawerOpen, setFileDrawerOpen] = useState(true);
   // hash 路由是视图与活动会话的 SSOT：`#/chat?session=<id>`。手动 setState
   // activeSessionId 的旧双源已消除，popstate 时自动从 hash 恢复。
   const { route, navigate } = useHashRoute();
   const view = route.view;
+  // 文件面板常驻右栏（open 只控宽不卸载），仅对话视图默认展开：进入 chat 自动
+  // 展开，切到其他视图自动收起；同视图内仍可用顶栏按钮手动开合。
+  const [fileDrawerOpen, setFileDrawerOpen] = useState(() => view === 'chat');
+  useEffect(() => {
+    setFileDrawerOpen(view === 'chat');
+  }, [view]);
   // 'new' 是「从台账/外部跳入待新建」哨兵：归一为无活动会话，首条消息由 ask 注入。
   const activeSessionId =
     route.params.session && route.params.session !== 'new' ? route.params.session : null;
@@ -139,12 +143,11 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
     setBindingsFocus({ docId, nonce: bindingsFocusNonceRef.current });
     navigate('bindings');
   }, [navigate]);
-  // 文件抽屉「未挂合同」徽标 -> 绑定工作台（跳转即关抽屉）。
+  // 文件抽屉「未挂合同」徽标 -> 绑定工作台（离开对话视图，抽屉随视图切换收起）。
   const openBindingsForDoc = useCallback(
     (docId: string) => {
       bindingsFocusNonceRef.current += 1;
       setBindingsFocus({ docId, nonce: bindingsFocusNonceRef.current });
-      setFileDrawerOpen(false);
       navigate('bindings');
     },
     [navigate],
