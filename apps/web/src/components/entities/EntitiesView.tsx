@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { clsx } from 'clsx';
 import { useHashRoute } from '../../hooks/useHashRoute';
 import { fetchOntologySchema, listEntities, type OntologyEntitySchemaDTO, type ProjectedEntity } from '../../api/ontology';
 import { EntityDetailDrawer } from './EntityDetailDrawer';
+import { EventRegisterDrawer } from './EventRegisterDrawer';
 import type { GraphFocusTarget } from '../graph/focus';
 
 /** 实体台账(roadmap Item 3)：类型列表由注册表 schema 驱动，空源类型显示空态不报错。 */
@@ -19,6 +20,8 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
   const { route, navigate } = useHashRoute();
   const [selected, setSelected] = useState<string | null>(route.params['type'] ?? null);
   const [detailId, setDetailId] = useState<string | null>(null);
+  // 事件登记表单入口（仅事件类实体显示，清单来自 schema 端点 phase 字段）。
+  const [registerOpen, setRegisterOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -29,6 +32,10 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
   }, []);
 
   const active = schema?.find((e) => e.name === selected) ?? null;
+  const eventEntities = useMemo(
+    () => (schema ?? []).filter((e) => e.phase === 'event').map((e) => ({ name: e.name, label: e.label })),
+    [schema],
+  );
 
   const [rows, setRows] = useState<ProjectedEntity[]>([]);
   const [total, setTotal] = useState(0);
@@ -123,6 +130,15 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
               {loading && <span className="text-xs text-ink-soft">加载中...</span>}
               {listError && <span className="text-xs text-danger">{listError}</span>}
               <span className="ml-auto text-xs text-ink-soft">共 {total} 条</span>
+              {active.phase === 'event' && (
+                <button
+                  type="button"
+                  onClick={() => setRegisterOpen(true)}
+                  className="rounded-md bg-blue-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-blue-700"
+                >
+                  登记事件
+                </button>
+              )}
             </div>
             {active.ownFields.includes('amount') && (
               <div className="flex flex-wrap items-center gap-2 text-xs text-ink-soft">
@@ -231,6 +247,13 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
               ? (label) => onOpenInGraph({ entityType: active.name, entityId: detailId, label })
               : undefined
           }
+        />
+      )}
+      {registerOpen && active && (
+        <EventRegisterDrawer
+          eventEntities={eventEntities}
+          initialType={active.name}
+          onClose={() => setRegisterOpen(false)}
         />
       )}
     </div>

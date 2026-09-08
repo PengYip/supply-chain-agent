@@ -1,6 +1,8 @@
 export interface OntologyEntitySchemaDTO {
   name: string;
   label: string;
+  /** 注册表派生（static=4 静态 / event=7 事件）；事件清单以此为 SSOT，禁止前端硬编码。 */
+  phase: 'static' | 'event';
   ownFields: string[];
   fields: string[];
   meaning: string | null;
