@@ -72,6 +72,27 @@ describe('projection: TradeContract <- contract_ledger (read-only)', () => {
     expect(byId.items[0]!.id).toBe('C-DEMO-LIN');
   });
 
+  it('basic filters: validAt date range + amount range (2026-09-08)', async () => {
+    const pay = (amount: number, validAt: string) => insertTradeFact(ctx, {
+      entityType: 'PaymentEvent',
+      payload: { eventBizType: '正向', amount, currency: 'CNY', payType: '预付' },
+      validAt, createdBy: 'demo',
+    }, 'u1');
+    await pay(100_000, '2026-06-01');
+    await pay(300_000, '2026-06-15');
+    await pay(500_000, '2026-07-01');
+    const june = await listProjectedEntities(ctx, 'PaymentEvent', { validFrom: '2026-06-01', validTo: '2026-06-30' }, 'u1');
+    expect(june.total).toBe(2);
+    const big = await listProjectedEntities(ctx, 'PaymentEvent', { amountMin: 250_000 }, 'u1');
+    expect(big.total).toBe(2);
+    const band = await listProjectedEntities(ctx, 'PaymentEvent', { validFrom: '2026-06-10', validTo: '2026-06-30', amountMin: 200_000, amountMax: 400_000 }, 'u1');
+    expect(band.items.map((e) => e.fields['amount'])).toEqual([300_000]);
+    // 静态实体无业务时间：时间过滤激活时被排除而非报错
+    insertContract('C9', 'HT-2026-009', '采购');
+    const noContract = await listProjectedEntities(ctx, 'TradeContract', { validFrom: '2026-01-01' }, 'u1');
+    expect(noContract.total).toBe(0);
+  });
+
   it('types without a source return an empty page, not error (acceptance 4)', async () => {
     const res = await listProjectedEntities(ctx, 'TradeGoods', {}, 'u1');
     expect(res).toEqual({ items: [], total: 0, page: 1, pageSize: 20 });

@@ -8,6 +8,9 @@ import type { GraphFocusTarget } from '../graph/focus';
 /** 实体台账(roadmap Item 3)：类型列表由注册表 schema 驱动，空源类型显示空态不报错。 */
 const PAGE_SIZE = 20; // 模块级常量
 
+/** 事件实体基础过滤(2026-09-08)：业务时间范围 + 金额范围(仅注册表含 amount 字段与否决定显隐)。 */
+const EMPTY_FILTERS = { validFrom: '', validTo: '', amountMin: '', amountMax: '' };
+
 export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocusTarget) => void }) {
   const [schema, setSchema] = useState<OntologyEntitySchemaDTO[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -29,6 +32,8 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [q, setQ] = useState('');
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const [draftFilters, setDraftFilters] = useState(EMPTY_FILTERS);
   const [loading, setLoading] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
   // 过期响应守卫: 搜索每键触发 load, 先发后至的旧响应不得覆盖新结果。
@@ -40,7 +45,15 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
     setLoading(true);
     setListError(null);
     try {
-      const res = await listEntities(selected, { page, pageSize: PAGE_SIZE, q: q.trim() || undefined });
+      const res = await listEntities(selected, {
+        page,
+        pageSize: PAGE_SIZE,
+        q: q.trim() || undefined,
+        validFrom: filters.validFrom || undefined,
+        validTo: filters.validTo || undefined,
+        amountMin: filters.amountMin === '' ? undefined : Number(filters.amountMin),
+        amountMax: filters.amountMax === '' ? undefined : Number(filters.amountMax),
+      });
       if (seq !== seqRef.current) return;
       setRows(res.items);
       setTotal(res.total);
@@ -50,9 +63,11 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
     } finally {
       if (seq === seqRef.current) setLoading(false);
     }
-  }, [selected, page, q]);
+  }, [selected, page, q, filters]);
 
-  useEffect(() => { setPage(1); }, [selected, q]);
+  useEffect(() => { setPage(1); }, [selected, q, filters]);
+  // 切换实体类型时清空过滤(不同类型的过滤维度不同, 残留过滤易造成"空列表"困惑)。
+  useEffect(() => { setDraftFilters(EMPTY_FILTERS); setFilters(EMPTY_FILTERS); }, [selected]);
   useEffect(() => {
     // 搜索框每键一次请求太密, 300ms 防抖合并连续键入(翻页/切换类型同样稍延)。
     const t = setTimeout(() => { void load(); }, 300);
@@ -107,6 +122,22 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
               {listError && <span className="text-xs text-danger">{listError}</span>}
               <span className="ml-auto text-xs text-ink-soft">共 {total} 条</span>
             </div>
+            {active.ownFields.includes('amount') && (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-ink-soft">
+                <span>业务时间</span>
+                <input type="date" value={draftFilters.validFrom} onChange={(e) => setDraftFilters({ ...draftFilters, validFrom: e.target.value })} aria-label="业务时间从" className="h-7 rounded border border-line bg-white px-2 text-xs text-ink" />
+                <span>至</span>
+                <input type="date" value={draftFilters.validTo} onChange={(e) => setDraftFilters({ ...draftFilters, validTo: e.target.value })} aria-label="业务时间到" className="h-7 rounded border border-line bg-white px-2 text-xs text-ink" />
+                <span className="ml-2">金额</span>
+                <input type="number" placeholder="最小" value={draftFilters.amountMin} onChange={(e) => setDraftFilters({ ...draftFilters, amountMin: e.target.value })} aria-label="金额最小" className="h-7 w-24 rounded border border-line bg-white px-2 text-xs text-ink placeholder:text-ink-soft/60" />
+                <span>至</span>
+                <input type="number" placeholder="最大" value={draftFilters.amountMax} onChange={(e) => setDraftFilters({ ...draftFilters, amountMax: e.target.value })} aria-label="金额最大" className="h-7 w-24 rounded border border-line bg-white px-2 text-xs text-ink placeholder:text-ink-soft/60" />
+                <button type="button" onClick={() => setFilters(draftFilters)} className="h-7 rounded border border-line px-3 transition-colors hover:border-primary/40 hover:text-primary">应用过滤</button>
+                {(draftFilters.validFrom || draftFilters.validTo || draftFilters.amountMin || draftFilters.amountMax) ? (
+                  <button type="button" onClick={() => { setDraftFilters(EMPTY_FILTERS); setFilters(EMPTY_FILTERS); }} className="h-7 rounded border border-line px-3 transition-colors hover:border-primary/40 hover:text-primary">清除</button>
+                ) : null}
+              </div>
+            )}
             <div className="overflow-x-auto rounded-lg border border-line bg-white">
               <table className="w-full text-sm">
                 <thead>

@@ -228,7 +228,7 @@ async function collectEntities(ctx: DbContext, type: OntologyEntityName, uid: st
 export async function listProjectedEntities(
   ctx: DbContext,
   type: OntologyEntityName,
-  opts: { page?: number; pageSize?: number; q?: string } = {},
+  opts: { page?: number; pageSize?: number; q?: string; validFrom?: string; validTo?: string; amountMin?: number; amountMax?: number } = {},
   userId?: string,
 ): Promise<EntityListResult> {
   const page = Math.max(1, opts.page ?? 1);
@@ -241,9 +241,31 @@ export async function listProjectedEntities(
       || e.id.toLowerCase().includes(q)
       || JSON.stringify(e.fields).toLowerCase().includes(q))
     : rows;
-  filtered.sort((a, b) => (b.ingestedAt ?? '').localeCompare(a.ingestedAt ?? '') || b.id.localeCompare(a.id));
+  // 基础过滤(2026-09-08)：业务时间范围(取日期部分, 含端点) + 金额范围。
+  // 事件实体必有 validAt/amount；静态实体(如合同)投影无业务时间 -> 时间过滤激活时被排除。
+  const { validFrom, validTo, amountMin, amountMax } = opts;
+  const hasTime = validFrom !== undefined || validTo !== undefined;
+  const hasAmount = amountMin !== undefined || amountMax !== undefined;
+  const scopeFiltered = hasTime || hasAmount
+    ? filtered.filter((e) => {
+        if (hasTime) {
+          if (!e.validAt) return false;
+          const d = e.validAt.slice(0, 10);
+          if (validFrom !== undefined && d < validFrom) return false;
+          if (validTo !== undefined && d > validTo) return false;
+        }
+        if (hasAmount) {
+          const amt = e.fields['amount'];
+          if (typeof amt !== 'number') return false;
+          if (amountMin !== undefined && amt < amountMin) return false;
+          if (amountMax !== undefined && amt > amountMax) return false;
+        }
+        return true;
+      })
+    : filtered;
+  scopeFiltered.sort((a, b) => (b.ingestedAt ?? '').localeCompare(a.ingestedAt ?? '') || b.id.localeCompare(a.id));
   const start = (page - 1) * pageSize;
-  return { items: filtered.slice(start, start + pageSize), total: filtered.length, page, pageSize };
+  return { items: scopeFiltered.slice(start, start + pageSize), total: scopeFiltered.length, page, pageSize };
 }
 
 // ---------------------------------------------------------------------------

@@ -61,12 +61,16 @@ export interface EntityListResult {
 
 export function listEntities(
   type: string,
-  opts: { page?: number; pageSize?: number; q?: string } = {},
+  opts: { page?: number; pageSize?: number; q?: string; validFrom?: string; validTo?: string; amountMin?: number; amountMax?: number } = {},
 ): Promise<EntityListResult> {
   const params = new URLSearchParams();
   if (opts.page) params.set('page', String(opts.page));
   if (opts.pageSize) params.set('pageSize', String(opts.pageSize));
   if (opts.q) params.set('q', opts.q);
+  if (opts.validFrom) params.set('validFrom', opts.validFrom);
+  if (opts.validTo) params.set('validTo', opts.validTo);
+  if (opts.amountMin !== undefined) params.set('amountMin', String(opts.amountMin));
+  if (opts.amountMax !== undefined) params.set('amountMax', String(opts.amountMax));
   const qs = params.toString();
   return request<EntityListResult>(`/api/ontology/entities/${encodeURIComponent(type)}${qs ? `?${qs}` : ''}`);
 }

@@ -27,6 +27,11 @@ const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
   q: z.string().trim().max(100).optional(),
+  // 基础过滤(2026-09-08)：业务时间范围(YYYY-MM-DD, 含端点) + 金额范围(事件实体有效)。
+  validFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  validTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  amountMin: z.coerce.number().optional(),
+  amountMax: z.coerce.number().optional(),
 });
 
 /** GET /entities/:type — 只读投影列表(type 白名单=注册表 11 实体)。 */
