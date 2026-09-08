@@ -41,6 +41,15 @@ export function fetchOntologySchema(): Promise<OntologySchemaDTO> {
   return request<OntologySchemaDTO>('/api/ontology/schema');
 }
 
+/** 11 实体实时计数(治理全景图数据源, roadmap Item 8)。key = 注册表实体名。 */
+export interface OntologyCountsDTO {
+  counts: Record<string, number>;
+}
+
+export function fetchOntologyCounts(): Promise<OntologyCountsDTO> {
+  return request<OntologyCountsDTO>('/api/ontology/counts');
+}
+
 export interface ProjectedEntity {
   id: string;
   entityType: string;
