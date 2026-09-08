@@ -55,15 +55,15 @@ export const ONTOLOGY_ENTITIES: Record<OntologyEntityName, z.ZodObject<z.ZodRawS
   }),
   GoodsReceiptEvent: z.object({
     eventBizType: EventBizType.describe('收货(含采购退货); 逆向=负数金额'),
-    amount: z.number().describe('金额; 逆向为负数(docx §6.2 自动轧差)'),
-    currency: Currency,
+    amount: z.number().optional().describe('金额; 可选(数量-only 合法): 磅单/质检单常只有数量, 货值口径可后置于结算, 暂估可填正数估值; 逆向为负数(docx §6.2 自动轧差); 与 currency 同缺同在'),
+    currency: Currency.optional().describe('币种; 与 amount 同缺同在'),
     quantity: z.number().optional().describe('数量'),
     unit: z.string().optional(),
   }),
   GoodsDeliveryEvent: z.object({
     eventBizType: EventBizType.describe('发货(含销售退货); 逆向=负数金额'),
-    amount: z.number(),
-    currency: Currency,
+    amount: z.number().optional().describe('金额; 可选(数量-only 合法): 货值口径可后置于结算, 暂估可填正数估值; 逆向为负数(docx §6.2 自动轧差); 与 currency 同缺同在'),
+    currency: Currency.optional().describe('币种; 与 amount 同缺同在'),
     quantity: z.number().optional(),
     unit: z.string().optional(),
   }),
@@ -151,6 +151,7 @@ const EVENT_ENTITY_NAMES: readonly OntologyEntityName[] = [
 const eventAmountRule = (v: Record<string, unknown>, ctx: z.RefinementCtx) => {
   const bizType = v['eventBizType'];
   const amount = v['amount'];
+  // 守卫：amount 缺省时跳过方向断言（收/发货数量冲正合法，货值后置结算）；存在时规则不变。
   if (typeof amount !== 'number') return;
   if (bizType === '逆向' && amount >= 0) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['amount'],
@@ -159,6 +160,23 @@ const eventAmountRule = (v: Record<string, unknown>, ctx: z.RefinementCtx) => {
   if (bizType === '正向' && amount <= 0) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['amount'],
       message: '正向事件金额必须为正数' });
+  }
+};
+
+// 收/发货 amount 可选（2026-09-08）后的配对不变量：amount 与 currency 要么都有要么都无。
+const AMOUNT_CURRENCY_PAIRED_EVENTS: readonly OntologyEntityName[] = [
+  'GoodsReceiptEvent', 'GoodsDeliveryEvent',
+];
+
+const amountCurrencyPairRule = (v: Record<string, unknown>, ctx: z.RefinementCtx) => {
+  const hasAmount = typeof v['amount'] === 'number';
+  const hasCurrency = typeof v['currency'] === 'string' && v['currency'] !== '';
+  if (hasAmount !== hasCurrency) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [hasAmount ? 'currency' : 'amount'],
+      message: 'amount 与 currency 必须同缺同在(收/发货可仅数量登记, 货值口径后置于结算)',
+    });
   }
 };
 
@@ -175,7 +193,12 @@ export function entityPhase(name: OntologyEntityName): EntityPhase {
  *  仓储持久化 parse 后的规范值，DB 内 payload 字段恒 ⊆ 注册表词汇。 */
 export function entitySchema(name: OntologyEntityName): z.ZodTypeAny {
   const base = ONTOLOGY_ENTITIES[name].strict();
-  return EVENT_ENTITY_NAMES.includes(name) ? base.superRefine(eventAmountRule) : base;
+  if (!EVENT_ENTITY_NAMES.includes(name)) return base;
+  const withAmountRule = base.superRefine(eventAmountRule);
+  if (AMOUNT_CURRENCY_PAIRED_EVENTS.includes(name)) {
+    return withAmountRule.superRefine(amountCurrencyPairRule);
+  }
+  return withAmountRule;
 }
 
 /** 字段全集 = 实体自有 ∪ 双时间轴 ∪ 溯源（CI 门禁与 Item 3 列生成共用）。 */

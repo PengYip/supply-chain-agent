@@ -93,6 +93,23 @@ describe('projection: TradeContract <- contract_ledger (read-only)', () => {
     expect(noContract.total).toBe(0);
   });
 
+  it('amountMin/amountMax 过滤排除无金额行（数量-only 收货不进金额过滤结果）', async () => {
+    await insertTradeFact(ctx, {
+      entityType: 'GoodsReceiptEvent',
+      payload: { eventBizType: '正向', quantity: 100, unit: '吨' },
+      validAt: '2026-06-15', createdBy: 't',
+    }, 'u1');
+    await insertTradeFact(ctx, {
+      entityType: 'GoodsReceiptEvent',
+      payload: { eventBizType: '正向', amount: 500, currency: 'CNY' },
+      validAt: '2026-06-15', createdBy: 't',
+    }, 'u1');
+    const res = await listProjectedEntities(ctx, 'GoodsReceiptEvent', { amountMin: 100 }, 'u1');
+    expect(res.total).toBe(1);
+    expect(res.items[0]!.fields['amount']).toBe(500);
+    expect(res.items[0]!.fields['quantity']).toBeUndefined();
+  });
+
   it('types without a source return an empty page, not error (acceptance 4)', async () => {
     const res = await listProjectedEntities(ctx, 'TradeGoods', {}, 'u1');
     expect(res).toEqual({ items: [], total: 0, page: 1, pageSize: 20 });
@@ -202,6 +219,17 @@ describe('projection: entity detail as-of + REVERSE_ORIGIN netting', () => {
 
   it('user scoping: other user gets null', async () => {
     expect(await getProjectedEntityDetail(ctx, 'InvoiceEvent', originalId, {}, 'u2')).toBeNull();
+  });
+
+  it('数量-only 收货详情：timeline 有行但 netAmount 为 null（SUM 跳过无金额行，前端显示 —）', async () => {
+    const id = await insertTradeFact(ctx, {
+      entityType: 'GoodsReceiptEvent',
+      payload: { eventBizType: '正向', quantity: 100, unit: '吨' },
+      validAt: '2026-06-15', createdBy: 't',
+    }, 'u1');
+    const d = await getProjectedEntityDetail(ctx, 'GoodsReceiptEvent', id, {}, 'u1');
+    expect(d!.timeline).toHaveLength(1);
+    expect(d!.netAmount).toBeNull();
   });
 
   it('contract detail has no timeline (dual timeline only on facts)', async () => {

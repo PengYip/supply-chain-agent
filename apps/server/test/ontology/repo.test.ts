@@ -53,6 +53,23 @@ describe('ontology repo write boundary', () => {
     })).rejects.toThrow();
   });
 
+  it('数量冲正：逆向收货无金额可登记（金额方向断言仅在有 amount 时生效）', async () => {
+    const id = await insertTradeFact(ctx, {
+      entityType: 'GoodsReceiptEvent',
+      payload: { eventBizType: '逆向', quantity: 10, unit: '吨' },
+      validAt: '2026-06-15', createdBy: 'test',
+    });
+    expect(id).toMatch(/^TF-/);
+    const rows = await listTradeFactsAsOf(ctx, asOfBusinessTime('2026-09-08T00:00:00.000Z'), {});
+    const row = rows.find((r) => r.id === id)!;
+    expect(row.payload).toEqual({ eventBizType: '逆向', quantity: 10, unit: '吨' });
+    await expect(insertTradeFact(ctx, { // 有 amount 时规则不变：逆向正数仍拒
+      entityType: 'GoodsReceiptEvent',
+      payload: { eventBizType: '逆向', amount: 100, currency: 'CNY' },
+      validAt: '2026-06-15', createdBy: 'test',
+    })).rejects.toThrow();
+  });
+
   it('insertOntologyEdge validates relation + pair + params', async () => {
     const id = await insertOntologyEdge(ctx, {
       relation: 'WRITE_OFF', fromType: 'PaymentEvent', fromId: 'TF-P1',

@@ -40,6 +40,40 @@ describe('ontology registry', () => {
       { ...base, eventBizType: '逆向', amount: -100 }).success).toBe(true);
   });
 
+  describe('收/发货 amount 可选（2026-09-08：磅单/质检单常只有数量，货值后置结算）', () => {
+    const qtyOnly = { eventBizType: '正向', quantity: 100, unit: '吨' };
+
+    it('数量-only 收货/发货合法（amount/currency 全省略）', () => {
+      expect(entitySchema('GoodsReceiptEvent').safeParse(qtyOnly).success).toBe(true);
+      expect(entitySchema('GoodsDeliveryEvent').safeParse(qtyOnly).success).toBe(true);
+    });
+
+    it('amount 与 currency 同缺同在（superRefine 不变量）：只有其一被拒', () => {
+      expect(entitySchema('GoodsReceiptEvent').safeParse({ eventBizType: '正向', amount: 100 }).success).toBe(false);
+      expect(entitySchema('GoodsReceiptEvent').safeParse({ eventBizType: '正向', currency: 'CNY' }).success).toBe(false);
+      expect(entitySchema('GoodsDeliveryEvent').safeParse({ eventBizType: '正向', amount: 100 }).success).toBe(false);
+      expect(entitySchema('GoodsDeliveryEvent').safeParse({ eventBizType: '正向', currency: 'CNY' }).success).toBe(false);
+    });
+
+    it('amount 存在时语义不变：正向正数/逆向负数/两全合法', () => {
+      expect(entitySchema('GoodsReceiptEvent').safeParse(
+        { eventBizType: '正向', amount: 100, currency: 'CNY' }).success).toBe(true);
+      expect(entitySchema('GoodsReceiptEvent').safeParse(
+        { eventBizType: '逆向', amount: 100, currency: 'CNY' }).success).toBe(false);
+      expect(entitySchema('GoodsDeliveryEvent').safeParse(
+        { eventBizType: '逆向', amount: -100, currency: 'CNY' }).success).toBe(true);
+    });
+
+    it('五个钱事件 amount 仍必填（结算/发票/收付款/服务费不动）', () => {
+      const moneyEvents = [
+        'SettlementEvent', 'InvoiceEvent', 'PaymentEvent', 'CollectionEvent', 'ServiceCostEvent',
+      ] as const;
+      for (const t of moneyEvents) {
+        expect(entitySchema(t).safeParse({ eventBizType: '正向' }).success).toBe(false);
+      }
+    });
+  });
+
   it('8 relation types / 14 pairs, endpoints all valid entity names', () => {
     expect(ONTOLOGY_RELATIONS).toHaveLength(8);
     const names = ONTOLOGY_RELATIONS.map((r) => r.name);

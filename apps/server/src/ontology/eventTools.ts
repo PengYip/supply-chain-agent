@@ -19,8 +19,8 @@ export const TRADE_EVENT_TYPES = [
 export const CreateTradeEventInputSchema = z.object({
   entityType: z.enum(TRADE_EVENT_TYPES).describe('事件类型（7 类之一）'),
   eventBizType: EventBizType.describe('业务方向：正向=正数金额；逆向（红冲/退款）=负数金额'),
-  amount: z.number().describe('金额；正向为正数，逆向（红冲/退款）必须为负数（如红冲 -800000）'),
-  currency: z.string().min(1).describe('币种（如 CNY）'),
+  amount: z.number().optional().describe('金额；正向为正数，逆向（红冲/退款）必须为负数（如红冲 -800000）；收货/发货可省略（仅数量登记，结算价后置），省略时不得传 currency'),
+  currency: z.string().min(1).optional().describe('币种（如 CNY）；与 amount 同缺同在'),
   validAt: z.string().min(1).describe('业务发生时间 ISO 日期（如 2026-06-25）'),
   invoiceNo: z.string().optional().describe('发票号（InvoiceEvent 必填，如 INV-2026-001）'),
   invoiceType: z.enum(['销项', '进项']).optional().describe('发票类型（InvoiceEvent 必填）'),
@@ -44,7 +44,11 @@ export function buildCreateTradeEventTool(deps: { ctx: DbContext; userId?: strin
       '边界：一次只登记一条事实；不核销不冲抵（核销用 create_writeoff、冲抵用 create_offset）；' +
       '字段组合必须满足本体注册表（发票必须 invoiceNo+invoiceType、付款必须 payType、' +
       '收发货必须 quantity+unit、结算必须 settledQuantity+unit、服务费必须 costType），' +
-      '不符会整单拒绝并在 detail 返回原因；逆向事件金额必须为负数（写入边界强制）；' +
+      '不符会整单拒绝并在 detail 返回原因；' +
+      '收货/发货可仅数量登记（磅单/质检单常只有数量：amount 与 currency 同时省略，' +
+      '结算价后置补登；数量冲正的逆向同样无需金额），提供金额时正向必须正数、逆向必须负数；' +
+      '其余事件 amount+currency 必填；' +
+      '逆向事件金额必须为负数（写入边界强制）；' +
       '数字或日期不精确时先向用户确认，不要猜测。' +
       '返回 { status: "ok", id, entityType } 或 { status: "invalid", detail }。',
     inputSchema: CreateTradeEventInputSchema,

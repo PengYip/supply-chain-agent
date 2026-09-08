@@ -57,7 +57,9 @@ describe('GET /api/trade-events/schema', () => {
     expect(byName.get('eventBizType')!.options).toEqual(['正向', '逆向']);
     expect(byName.get('payType')!.options).toEqual(['预付', '尾款', '进度款', '质保金']);
     expect(byName.get('amount')!.kind).toBe('number');
-    expect(byName.get('amount')!.required).toBe(true);
+    // 2026-09-08 收/发货 amount 可选化：工具级 schema 放开必填（权威校验在注册表写入边界）
+    expect(byName.get('amount')!.required).toBe(false);
+    expect(byName.get('currency')!.required).toBe(false);
     expect(byName.get('invoiceNo')!.required).toBe(false);
     expect(byName.get('currency')!.formDefault).toBe('CNY');
   });
@@ -118,6 +120,33 @@ describe('POST /api/trade-events', () => {
     const body = (await res.json()) as { error: string; detail: { fieldErrors: Record<string, string[]> } };
     expect(body.error).toBe('invalid_event');
     expect(Object.keys(body.detail.fieldErrors)).toContain('amount');
+    expect(runSession).not.toHaveBeenCalled();
+  });
+
+  it('200 数量-only 收货（无 amount/currency）通过语义预检：建会话启 run', async () => {
+    const app = appAs('u1');
+    (runSession as ReturnType<typeof vi.fn>).mockClear();
+    const res = await post(app, {
+      entityType: 'GoodsReceiptEvent', eventBizType: '正向',
+      quantity: 100, unit: '吨', validAt: '2026-06-25',
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ticketId: string };
+    expect(body.ticketId).toBeTruthy();
+    expect(runSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('400 注册表语义预检：收/发货只带 amount 缺 currency（同缺同在不变量），整单拒绝不启 run', async () => {
+    const app = appAs('u1');
+    (runSession as ReturnType<typeof vi.fn>).mockClear();
+    const res = await post(app, {
+      entityType: 'GoodsReceiptEvent', eventBizType: '正向',
+      amount: 500, quantity: 10, validAt: '2026-06-25',
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; detail: { fieldErrors: Record<string, string[]> } };
+    expect(body.error).toBe('invalid_event');
+    expect(Object.keys(body.detail.fieldErrors)).toContain('currency');
     expect(runSession).not.toHaveBeenCalled();
   });
 

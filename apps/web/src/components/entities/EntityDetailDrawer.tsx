@@ -132,11 +132,12 @@ export function EntityDetailDrawer({ type, typeLabel, ownFields, entityId, onClo
           <div className="px-4 py-3">
             <div className="mb-2 flex items-center justify-between">
               <div className="text-xs font-medium text-ink-soft">时间线（as-of 切片，红冲负数红标）</div>
-              {detail.netAmount != null && (
+              {/* 数量-only 行（收/发货金额后置结算）无净额：显示 — 而非 0/NaN */}
+              {hasTimeline && (
                 <div className="text-sm">
                   净额：
-                  <span className={clsx('font-medium tabular-nums', detail.netAmount < 0 ? 'text-danger' : 'text-ink')}>
-                    {detail.netAmount.toLocaleString()}
+                  <span className={clsx('font-medium tabular-nums', detail.netAmount != null && detail.netAmount < 0 ? 'text-danger' : 'text-ink')}>
+                    {detail.netAmount != null ? detail.netAmount.toLocaleString() : '—'}
                   </span>
                 </div>
               )}
@@ -161,10 +162,12 @@ export function EntityDetailDrawer({ type, typeLabel, ownFields, entityId, onClo
                       {reverse && (
                         <span className="rounded border border-danger/30 bg-danger/10 px-1 text-xs text-danger">逆向</span>
                       )}
-                      {typeof amount === 'number' && (
+                      {typeof amount === 'number' ? (
                         <span className={clsx('ml-auto tabular-nums', negative ? 'text-danger' : 'text-ink')}>
                           {amount.toLocaleString()}
                         </span>
+                      ) : (
+                        <span className="ml-auto tabular-nums text-ink-soft">—</span>
                       )}
                       <span className="text-xs text-ink-soft">{row.validAt?.slice(0, 10) ?? ''}</span>
                     </div>

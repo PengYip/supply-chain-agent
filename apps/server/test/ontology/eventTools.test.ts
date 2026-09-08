@@ -45,4 +45,33 @@ describe('create_trade_event execute', () => {
     }, { toolCallId: 'call_test_3', messages: [] } as never);
     expect(out.status).toBe('invalid');
   });
+
+  it('收/发货数量-only 登记 ok（磅单常只有数量，结算价后置）', async () => {
+    const t = buildCreateTradeEventTool({ ctx, userId: 'u1' });
+    const out = await t.execute!({
+      entityType: 'GoodsReceiptEvent', eventBizType: '正向',
+      validAt: '2026-06-25', quantity: 100, unit: '吨',
+    }, { toolCallId: 'call_test_4', messages: [] } as never);
+    expect(out.status).toBe('ok');
+    if (out.status !== 'ok') return;
+    const row = await getTradeFactById(ctx, out.id, 'u1');
+    expect(row?.payload).toEqual({ eventBizType: '正向', quantity: 100, unit: '吨' });
+  });
+
+  it('amount 与 currency 同缺同在：只带 amount 缺 currency -> invalid（注册表不变量经写入边界）', async () => {
+    const t = buildCreateTradeEventTool({ ctx, userId: 'u1' });
+    const out = await t.execute!({
+      entityType: 'GoodsReceiptEvent', eventBizType: '正向', amount: 500,
+      validAt: '2026-06-25', quantity: 10,
+    }, { toolCallId: 'call_test_5', messages: [] } as never);
+    expect(out.status).toBe('invalid');
+    if (out.status !== 'invalid') return;
+    expect(out.detail).toContain('currency');
+  });
+
+  it('工具描述声明收/发货数量-only 登记路径', () => {
+    const t = buildCreateTradeEventTool({ ctx });
+    expect(t.description).toContain('数量');
+    expect(t.description).toContain('后置');
+  });
 });
