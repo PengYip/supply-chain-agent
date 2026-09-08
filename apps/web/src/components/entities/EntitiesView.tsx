@@ -14,7 +14,10 @@ const EMPTY_FILTERS = { validFrom: '', validTo: '', amountMin: '', amountMax: ''
 export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocusTarget) => void }) {
   const [schema, setSchema] = useState<OntologyEntitySchemaDTO[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  // 路由参数预选(#/entities?type=X，治理全景图「在实体台账中查看」入口)；
+  // 非注册表类型自然落到「从左侧选择实体类型」空态，无需校验。
+  const { route, navigate } = useHashRoute();
+  const [selected, setSelected] = useState<string | null>(route.params['type'] ?? null);
   const [detailId, setDetailId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -27,7 +30,6 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
 
   const active = schema?.find((e) => e.name === selected) ?? null;
 
-  const { navigate } = useHashRoute();
   const [rows, setRows] = useState<ProjectedEntity[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
