@@ -231,6 +231,39 @@ export async function deleteStaleContainsEdges(
   }
 }
 
+/**
+ * 本体事实节点收敛删除(spec 2026-09-09 §2.2): 投影是"最终结果语义"——当前
+ * as-of 口径之外的同用户(含共享 '' 行)事实节点连同其全部关系一并删除。仅限
+ * 投影自有 label(FACT_NODE_LABELS), Document/Contract 等业务节点不受影响。
+ * 调用方守卫: truncated 时不得调用(防超限误删)。
+ */
+export async function pruneFactNodes(
+  label: string,
+  keepIds: string[],
+  userId: string,
+): Promise<number> {
+  const labelToken = assertToken(label, 'label');
+  const session = getDriver().session();
+  try {
+    const result = await session.executeWrite((txc) =>
+      txc.run(
+        `
+        MATCH (n:$($label))
+        WHERE (n.userId = $userId OR n.userId = '')
+          AND NOT n.name IN $keep
+        DETACH DELETE n
+        RETURN count(n) AS removed
+        `,
+        { label: labelToken, keep: keepIds, userId },
+      ),
+    );
+    const rec = result.records[0];
+    return Number(rec?.get('removed') ?? 0);
+  } finally {
+    await session.close();
+  }
+}
+
 export interface FindEntitiesInput {
   kind?: string;
   name: string;

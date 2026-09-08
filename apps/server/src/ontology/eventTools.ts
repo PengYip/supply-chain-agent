@@ -8,6 +8,7 @@ import { z } from 'zod';
 import type { DbContext } from '../pipeline/db/client.js';
 import { insertTradeFact, type TradeFactInput } from './repo.js';
 import { PayType, EventBizType, DUAL_TIMELINE_FIELDS } from './index.js';
+import { syncOntologyGraphSafe } from './graphSync.js';
 
 export const TRADE_EVENT_TYPES = [
   'GoodsReceiptEvent', 'GoodsDeliveryEvent', 'SettlementEvent', 'InvoiceEvent',
@@ -59,6 +60,8 @@ export function buildCreateTradeEventTool(deps: { ctx: DbContext; userId?: strin
           { entityType, payload, validAt, createdBy: 'create_trade_event' } as TradeFactInput,
           deps.userId,
         );
+        // 落账成功后图投影 fire-and-forget(spec 2026-09-09): 永不阻塞登记主流程。
+        void syncOntologyGraphSafe(deps.ctx, deps.userId);
         return { status: 'ok' as const, id, entityType };
       } catch (e) {
         return { status: 'invalid' as const, detail: e instanceof Error ? e.message : String(e) };

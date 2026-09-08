@@ -10,6 +10,7 @@ import type { DbContext } from '../pipeline/db/client.js';
 import { withContainerLock } from '../lib/containerLock.js';
 import { insertOntologyEdgesBatch, getTradeFactById, type OntologyEdgeInput } from './repo.js';
 import { validateAllocationPlan, type AllocationItem, type AllocationViolation } from './writeoff.js';
+import { syncOntologyGraphSafe } from './graphSync.js';
 
 const itemSchema = z.object({
   srcId: z.string().min(1).describe('资金行 id（PaymentEvent/CollectionEvent 事实 id，工作台提交原样传递）'),
@@ -91,6 +92,8 @@ async function executeWriteoffEdges(
     // 整批单事务落边(repo.insertOntologyEdgesBatch): 中途失败整批回滚,
     // 践行"失败整单拒绝零边产生"的承诺。
     const edgeIds = await insertOntologyEdgesBatch(deps.ctx, inputs, deps.userId);
+    // 落边成功后图投影 fire-and-forget(spec 2026-09-09): 永不阻塞审批主流程。
+    void syncOntologyGraphSafe(deps.ctx, deps.userId);
     const edges = inputs.map((inp, i) => ({
       edgeId: edgeIds[i]!,
       srcId: inp.fromId,

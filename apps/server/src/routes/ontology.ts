@@ -1,7 +1,8 @@
 // 本体只读 REST 面(roadmap Item 3)：/schema + /entities 列表/详情 + /counts 实体计数(Item 8)。
 // 2026-09-08 增补主数据登记直写端点：POST /master-data（表单入口第二个客户端），
 // 直调 insertTradeFact 唯一写入边界——主数据非资金事实，不走 agent 会话不加 L2 工具。
-// 除该端点外本文件与 projection 层绝不写任何源表。
+// 2026-09-09 增补 POST /graph/sync 本体图谱回填——写 Neo4j 投影，不写任何源表；
+// 成功路径附带 fire-and-forget 图投影（syncOntologyGraphSafe）。
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AuthEnv } from '../lib/auth-middleware.js';
@@ -12,6 +13,7 @@ import {
 import { listProjectedEntities, getProjectedEntityDetail } from '../ontology/projection.js';
 import { getNeighbors } from '../ontology/neighbors.js';
 import { insertTradeFact } from '../ontology/repo.js';
+import { syncOntologyGraph, syncOntologyGraphSafe } from '../ontology/graphSync.js';
 import {
   CreateMasterDataInputSchema, commodityCodeGateError, masterDataFormSchemaJson,
 } from '../ontology/masterData.js';
@@ -93,10 +95,26 @@ ontologyRoute.post('/master-data', async (c) => {
       { entityType, payload, validAt: validAt ?? new Date(), createdBy: 'manual' },
       user.id,
     );
+    // 落账成功后图投影 fire-and-forget(spec 2026-09-09): 永不阻塞登记主流程。
+    void syncOntologyGraphSafe(getDbContext(), user.id);
     return c.json({ id, entityType });
   } catch (e) {
     console.error('[ontology] master-data write failed:', errDetail(e));
     return c.json({ error: 'master-data write failed', detail: errDetail(e) }, 500);
+  }
+});
+
+/** POST /graph/sync — 本体图谱手动全量回填(spec 2026-09-09)：trade_facts/ontology_edges
+ *  最新业务口径幂等投影到 Neo4j（事实节点 + 带参关系 + prune 收敛）。图未配置
+ *  （NEO4J_PASSWORD 未设）返回 {status:'skipped'}；存量数据一次性收敛入口。 */
+ontologyRoute.post('/graph/sync', async (c) => {
+  const user = c.get('user')!;
+  try {
+    const result = await syncOntologyGraph({ ctx: getDbContext(), userId: user.id });
+    return c.json(result);
+  } catch (e) {
+    console.error('[ontology] graph sync failed:', errDetail(e));
+    return c.json({ error: 'graph sync failed', detail: errDetail(e) }, 500);
   }
 });
 
