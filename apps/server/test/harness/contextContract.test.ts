@@ -41,6 +41,8 @@ const EXPECTED_TOOLS = [
   // 2026-09-07 roadmap Item 5: writeoff workbench L2 tools
   'create_writeoff',
   'create_offset',
+  // 2026-09-08: trade event registration L2 tool
+  'create_trade_event',
 ] as const;
 
 describe('tool-context contract registry', () => {

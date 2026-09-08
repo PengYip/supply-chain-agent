@@ -16,6 +16,7 @@ import { buildManageTemplateTool } from '../pipeline/tools/manageTemplateTool.js
 import { buildManageQuotaTool } from '../pipeline/tools/quotaTools.js';
 import { buildGatherSettlementEvidenceTool, buildConfirmSettlementTool } from '../pipeline/tools/settlementTools.js';
 import { buildCreateWriteoffTool, buildCreateOffsetTool } from '../ontology/writeoffTools.js';
+import { buildCreateTradeEventTool } from '../ontology/eventTools.js';
 import type { DbContext } from '../pipeline/db/client.js';
 import type { ExtractionDeps } from '../pipeline/extraction.js';
 import type { ClassifierDeps } from '../pipeline/classifier.js';
@@ -99,7 +100,7 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
 // though constructing their instances requires a DbContext (see getToolsForRole).
 // query_contract is listed here too: after the BASE removal above its name would
 // otherwise drop out of listToolNames (it is still always registered for trader).
-const TRADER_CTX_TOOL_NAMES = ['query_business', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'link_documents', 'manage_template', 'manage_quota', 'gather_settlement_evidence', 'confirm_settlement', 'create_writeoff', 'create_offset'] as const;
+const TRADER_CTX_TOOL_NAMES = ['query_business', 'ingest_document', 'extract_fields', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'link_documents', 'manage_template', 'manage_quota', 'gather_settlement_evidence', 'confirm_settlement', 'create_writeoff', 'create_offset', 'create_trade_event'] as const;
 
 export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
   const base: GatedTool[] = (BASE_TOOLS_FOR_ROLE[role] ?? []).map((t) => ({ ...t }));
@@ -163,6 +164,9 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
       base.push(
         { ...buildCreateWriteoffTool({ ctx, userId }), name: 'create_writeoff', needsApproval: true },
         { ...buildCreateOffsetTool({ ctx, userId }), name: 'create_offset', needsApproval: true },
+        // create_trade_event is L2 (2026-09-08): 对话登记本体事件事实,
+        // needsApproval 走审批中心; execute 经 insertTradeFact 写入边界校验。
+        { ...buildCreateTradeEventTool({ ctx, userId }), name: 'create_trade_event', needsApproval: true },
       );
       // execute_code is L1: run Python in an isolated CubeSandbox microVM.
       // Env-gated: absent from the toolset unless the deployment opted in

@@ -134,6 +134,8 @@ export const SHARED_TOOL_FIELD_NAMES = [
   // 核销工作台工具（create_writeoff/create_offset, 2026-09-07 Item 5）:
   // items=整单分配计划容器; amount/partial/batch=OFFSET_SETTLE/WRITE_OFF 关系 params 词汇。
   'items', 'amount', 'partial', 'batch',
+  // 事件登记工具（create_trade_event, 2026-09-08）：entityType=事件事实判别键。
+  'entityType',
 ] as const;
 
 // ---------------------------------------------------------------------------

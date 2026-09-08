@@ -242,6 +242,13 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
   },
+  // 2026-09-08 事件登记: 对话结构化输入(经 LLM 翻译但受审批+写入边界双闸) ->
+  // output 'raw' / injection 'safe'; 返回事实 id 短句 -> budget 'full'。
+  // 落 trade_facts SSOT -> signal 'env', persist 'business'。L2 软门控。
+  create_trade_event: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'business', risk: { level: 'L2', injection: 'safe' },
+  },
 };
 
 /** True iff a contract exists for the given tool name. */

@@ -31,6 +31,10 @@ export const toolOntologyMap: Readonly<Record<string, ToolOntologyMapping>> = {
     entities: ['PaymentEvent', 'CollectionEvent', 'SettlementEvent'],
     note: '预付冲抵工作台: 词汇口径同 create_writeoff',
   },
+  create_trade_event: {
+    entities: ['GoodsReceiptEvent', 'GoodsDeliveryEvent', 'SettlementEvent', 'InvoiceEvent', 'PaymentEvent', 'CollectionEvent', 'ServiceCostEvent'],
+    note: '事件登记(2026-09-08): entityType 判别键属共享词汇, 其余字段=7 事件实体自有词汇, validAt 属双时间轴共享词汇',
+  },
 };
 
 const SHARED = new Set<string>(SHARED_TOOL_FIELD_NAMES);

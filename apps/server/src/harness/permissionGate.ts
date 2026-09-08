@@ -77,6 +77,7 @@ registerPermission('gather_settlement_evidence', 'L1'); // 2026-08-27 §15: 结�
 registerPermission('confirm_settlement', 'L2'); // 2026-08-27 §15: 结算结果人工确认后落台账
 registerPermission('create_writeoff', 'L2'); // 2026-09-07 Item 5: 票款核销落边（工作台提交，需审批）
 registerPermission('create_offset', 'L2'); // 2026-09-07 Item 5: 预付冲抵落边（工作台提交，需审批）
+registerPermission('create_trade_event', 'L2'); // 2026-09-08: 本体事件登记落 trade_facts（对话登记，需审批）
 // L3: no registered tools -- money/irreversible operations are not executable
 // in-system. Human-in-the-loop goes through escalate_to_human tickets
 // (sessionStore pending approvals + /api/approval/callback resume).

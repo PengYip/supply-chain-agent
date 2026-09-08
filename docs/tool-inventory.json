@@ -280,6 +280,16 @@
       "whenToUse": "预付冲抵工作台提交后执行：付款/收款与结算之间建立 OFFSET_SETTLE 带参边，一次调用携带整单分配计划。",
       "boundary": "L2 需审批中心批准后才落边；冲抵额不超结算余额（服务端校验）；items 逐字来自工作台提交，禁止模型改数。",
       "rationale": "与 create_writeoff 同族（冲抵语义），独立工具保持关系语义显式、审计单据可读。"
+    },
+    {
+      "name": "create_trade_event",
+      "layer": "执行",
+      "level": "L2",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "对话登记单条本体事件事实（付款/收款/收货/发货/发票/结算/服务费）到 trade_facts：用户口述业务事实（金额/币种/业务时间/方向类型）时调用，落库后台账与穿透图即时可见。",
+      "boundary": "L2 需审批中心批准；一次一条事实，不做核销/冲抵（用 create_writeoff/create_offset）；字段组合必须满足本体注册表（如发票必须 invoiceNo/invoiceType、付款必须 payType），不符整单拒绝并返回原因；逆向=负数金额语义由写入边界强制；不接受自由文本数字与日期。",
+      "rationale": "trade_facts 此前零生产写入方（仅种子/测试），事件登记是对话核心价值主张（自然语言->受治理可审计写入）的落地；词汇/语义规则全部复用本体注册表，未来表单入口复用同一工具后端。"
     }
   ],
   "removed": [

@@ -12,6 +12,7 @@ describe('permissionGate snapshot', () => {
     expect(byName.get('query_business')).toBe('L1');
     expect(byName.get('bind_document')).toBe('L2');
     expect(byName.get('create_writeoff')).toBe('L2');
+    expect(byName.get('create_trade_event')).toBe('L2');
     // L3 当前无注册工具（permissionGate 头注：money/irreversible 不落系统内工具）
     expect([...byName.values()].filter((l) => l === 'L3')).toHaveLength(0);
   });
