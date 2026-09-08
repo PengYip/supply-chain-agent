@@ -14,6 +14,8 @@ const LEGACY_ROUTE_REDIRECTS: Record<string, { view: ViewId; inject: Record<stri
   entities: { view: 'ontology', inject: { tab: 'ledger' } },
   graph: { view: 'ontology', inject: { tab: 'graph' } },
   ledger: { view: 'projects', inject: { tab: 'ledger' } },
+  // 己方主体并入本体台账：落地内部组织并自动打开己方名单管理抽屉
+  parties: { view: 'ontology', inject: { tab: 'ledger', type: 'OrgUnit', parties: '1' } },
 };
 
 /** 解析 `#/view?key=value` 形式的 hash。纯函数。

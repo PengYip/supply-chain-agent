@@ -1,6 +1,5 @@
 import {
   ArrowLeftRight,
-  Building2,
   ClipboardCheck,
   FlaskConical,
   FolderKanban,
@@ -27,8 +26,7 @@ export type ViewId =
   | 'review'
   | 'eval'
   | 'audit'
-  | 'favorites'
-  | 'parties';
+  | 'favorites';
 
 export type NavGroupId = 'fulfill' | 'ontology' | 'funds' | 'collab' | 'admin';
 
@@ -60,7 +58,6 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'eval', label: '评估', description: '评估数据集与结果分析', icon: FlaskConical, group: 'admin', enabled: true },
   { id: 'audit', label: '用量审计', description: 'LLM 与 OCR 调用统计及明细', icon: History, group: 'admin', enabled: true },
   { id: 'favorites', label: '收藏反馈', description: '对话收藏与用户反馈', icon: Star, group: 'admin', enabled: true },
-  { id: 'parties', label: '己方主体', description: '仅添加你自己的公司', icon: Building2, group: 'admin', enabled: true },
 ];
 
 export const NAV_GROUPS: Array<{ id: NavGroupId; label: string }> = [

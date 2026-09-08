@@ -15,7 +15,6 @@ import { useSessions } from './hooks/useSessions';
 import { EvalWorkbenchView } from './components/eval/EvalWorkbenchView';
 import { BindingsView } from './components/bindings/BindingsView';
 import { WriteoffView } from './components/writeoff/WriteoffView';
-import { SelfPartyPanel } from './components/parties/SelfPartyPanel';
 import { FavoritesView } from './components/favorites/FavoritesView';
 import { AuditView } from './components/audit/AuditView';
 import { ProjectsView } from './components/projects/ProjectsView';
@@ -175,8 +174,12 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
     if (v === 'bindings') setBindingsFocus(null);
     navigate(v);
   }, [navigate]);
-  // 台账执行区块 -> 主体名单页的跳转(主体未配置导致流水为空时的引导)。
-  const openParties = useCallback(() => navigate('parties'), [navigate]);
+  // 台账执行区块 -> 己方主体管理（导航整合后入口收进本体台账）：
+  // 预选内部组织并自动打开名单管理抽屉（parties=1 哨兵参数）。
+  const openParties = useCallback(
+    () => navigate('ontology', { tab: 'ledger', type: 'OrgUnit', parties: '1' }),
+    [navigate],
+  );
   // 会话切换用 replace：高频操作不灌爆浏览器历史；跨视图跳转用 push。
   const selectSession = useCallback(
     (id: string) => navigate('chat', { session: id }, { replace: true }),
@@ -324,8 +327,6 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
         <BindingsView onOpenInGraph={openInGraph} docFocus={bindingsFocus} onChanged={() => { void filesApi.refresh(); }} />
       ) : view === 'writeoff' ? (
         <WriteoffView />
-      ) : view === 'parties' ? (
-        <SelfPartyPanel />
       ) : view === 'favorites' ? (
         <FavoritesView onOpenSession={(id) => navigate('chat', { session: id })} />
       ) : view === 'approvals' ? (

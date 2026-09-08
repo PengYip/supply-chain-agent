@@ -8,6 +8,7 @@ import {
 import { EntityDetailDrawer } from './EntityDetailDrawer';
 import { EventRegisterDrawer } from './EventRegisterDrawer';
 import { MasterDataDrawer } from './MasterDataDrawer';
+import { SelfPartyPanel } from '../parties/SelfPartyPanel';
 import type { GraphFocusTarget } from '../graph/focus';
 
 /** 实体台账(roadmap Item 3)：类型列表由注册表 schema 驱动，空源类型显示空态不报错。 */
@@ -19,7 +20,8 @@ const EMPTY_FILTERS = { validFrom: '', validTo: '', amountMin: '', amountMax: ''
 export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocusTarget) => void }) {
   const [schema, setSchema] = useState<OntologyEntitySchemaDTO[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // 路由参数预选(#/entities?type=X，治理全景图「在实体台账中查看」入口)；
+  // 路由参数预选(#/ontology?tab=ledger&type=X，治理全景图「在实体台账中查看」入口；
+  // 旧 #/entities?type=X 由 parseHash 重定向映射到同一参数组合)，
   // 非注册表类型自然落到「从左侧选择实体类型」空态，无需校验。
   const { route, navigate } = useHashRoute();
   const [selected, setSelected] = useState<string | null>(route.params['type'] ?? null);
@@ -29,6 +31,9 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
   // 主数据登记表单入口（商品/交易对手/内部组织，清单来自 master-data/schema 投影）。
   const [masterForm, setMasterForm] = useState<MasterDataTypeFormDTO[] | null>(null);
   const [masterRegisterOpen, setMasterRegisterOpen] = useState(false);
+  // 己方主体管理抽屉（导航整合 2026-09-08）：原 /parties 视图并入本体台账，
+  // 作为内部组织(OrgUnit)的己方名单管理入口；#/parties 深链经 parties=1 参数自动打开。
+  const [partiesOpen, setPartiesOpen] = useState(route.params['parties'] === '1');
 
   useEffect(() => {
     let alive = true;
@@ -170,6 +175,15 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
                   登记
                 </button>
               )}
+              {activeMaster?.name === 'OrgUnit' && (
+                <button
+                  type="button"
+                  onClick={() => setPartiesOpen(true)}
+                  className="rounded-md border border-line px-3 py-1.5 text-xs text-ink-soft transition-colors hover:border-primary/40 hover:text-primary"
+                >
+                  己方主体管理
+                </button>
+              )}
             </div>
             {active.ownFields.includes('amount') && (
               <div className="flex flex-wrap items-center gap-2 text-xs text-ink-soft">
@@ -296,6 +310,36 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
           onSaved={() => { void load(); }}
         />
       )}
+      {partiesOpen && <SelfPartyDrawer onClose={() => setPartiesOpen(false)} />}
+    </div>
+  );
+}
+
+/** 己方主体管理抽屉：承载原己方主体视图的名单/候选/冲突管理能力（SelfPartyPanel 原样迁入）。 */
+function SelfPartyDrawer({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/30" role="dialog" aria-modal="true">
+      <div className="flex h-full w-[760px] max-w-[90vw] flex-col bg-surface shadow-lg">
+        <div className="flex shrink-0 items-center justify-between border-b border-line bg-white px-4 py-3">
+          <div>
+            <div className="text-sm font-medium text-ink">己方主体管理</div>
+            <div className="mt-0.5 text-xs leading-5 text-ink-soft">
+              仅添加你自己的公司；名单用于执行流水归属与台账口径
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="关闭"
+            className="rounded p-1 text-ink-soft transition-colors hover:bg-surface hover:text-ink"
+          >
+            关闭
+          </button>
+        </div>
+        <div className="min-h-0 flex-1">
+          <SelfPartyPanel />
+        </div>
+      </div>
     </div>
   );
 }

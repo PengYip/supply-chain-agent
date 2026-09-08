@@ -28,6 +28,12 @@ describe('旧路由重定向（导航整合 2026-09-08）', () => {
   it('#/ledger 重定向到项目视图台账 tab', () => {
     expect(parseHash('#/ledger')).toEqual({ view: 'projects', params: { tab: 'ledger' } });
   });
+  it('#/parties 重定向到本体台账的己方主体管理入口', () => {
+    expect(parseHash('#/parties')).toEqual({
+      view: 'ontology',
+      params: { tab: 'ledger', type: 'OrgUnit', parties: '1' },
+    });
+  });
   it('旧路由查询参数透传且优先级高于注入参数', () => {
     expect(parseHash('#/entities?type=Contract')).toEqual({
       view: 'ontology',
@@ -40,9 +46,12 @@ describe('旧路由重定向（导航整合 2026-09-08）', () => {
     expect(parseHash(canonical!)).toEqual(parseHash('#/entities?type=Contract'));
     expect(canonicalHash('#/chat?session=s1')).toBeNull();
   });
-  it('本体视图路由可达，旧路径不再作为一级视图注册', () => {
+  it('本体/项目视图路由可达，旧路径不再作为一级视图注册', () => {
     expect(isRoutableView('ontology')).toBe(true);
+    expect(isRoutableView('projects')).toBe(true);
     expect(isRoutableView('entities')).toBe(false);
     expect(isRoutableView('graph')).toBe(false);
+    expect(isRoutableView('ledger')).toBe(false);
+    expect(isRoutableView('parties')).toBe(false);
   });
 });
