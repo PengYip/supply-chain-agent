@@ -13,6 +13,8 @@ export const EventBizType = z.enum(['正向', '逆向']);
 export const AllocateMethod = z.enum(['金额', '数量', '重量', '定额']);
 
 // 商品码：备忘 §7 待业务确认（TradeGoods 分层），v1 开放词汇表；确认后转 z.enum 只改本文件。
+// 门禁语义（2026-09-08）：词汇非空时主数据登记端点强制校验编码 ∈ COMMODITY_CODES；
+// v1 词汇为空 => 自由填写，业务确认转闭枚举后自动收紧（见 ontology/masterData.ts）。
 export const COMMODITY_CODES: readonly string[] = [];
 
 // meaning URI 映射：只挂已确认的 OEO/FIBO 条目（roadmap OUT：不做全量词汇导入）。
@@ -116,6 +118,22 @@ export const ENTITY_LABELS: Record<OntologyEntityName, string> = {
   PaymentEvent: '付款事件',
   CollectionEvent: '收款事件',
   ServiceCostEvent: '服务费事件',
+};
+
+/** 实体说明性文字（业务定义 + 在对账/履约链中的角色；schema DTO 透出给治理 UI，
+ *  新增实体必须补描述，registry 测试断言全覆盖）。 */
+export const ENTITY_DESCRIPTIONS: Record<OntologyEntityName, string> = {
+  TradeContract: '与交易对手签订的购销/服务合同，履约链的主轴锚点；收发、结算、票款等事件经 ALLOCATE_TO 归属到合同，支撑合同执行率与对账。',
+  TradeGoods: '合同与事件中流转货物的品类口径（商品码/规格/单位）；作为收发货与结算数量的口径基准，保证履约数量对账一致。',
+  Counterparty: '与本方发生业务往来的外部企业（供应商/客户/服务商）；是合同与资金、物流事件的对手方维度，对账时用于匹配双方口径。',
+  OrgUnit: '本方内部参与交易的业务主体（分公司/事业部等）；明确事件的归属主体，区分内部多主体间的资金与货权口径。',
+  GoodsReceiptEvent: '货物实际到货/入库的事实（含采购退货，逆向=负数金额），履约执行的起点凭证；作为结算依据（FEEDS_INTO）并与磅单/质检数量对齐。',
+  GoodsDeliveryEvent: '货物实际发出/出库的事实（含销售退货，逆向=负数金额），履约交付的核心凭证；与收货对齐后喂入结算形成货值口径。',
+  SettlementEvent: '按合同对一段履约结果计价的事实（补差/冲减走逆向负数）；向上承接收发货（FEEDS_INTO）、向下对齐发票（CORRESPONDS_TO），是资金对账的枢纽。',
+  InvoiceEvent: '增值税发票开具/收到的事实（红冲=逆向负数+REVERSE_ORIGIN 溯源）；票款匹配（WRITE_OFF）的一方，进销项对账与税务合规的依据。',
+  PaymentEvent: '本方对外支付资金的事实（预付/尾款/进度款/质保金，退款=逆向负数）；经 OFFSET_SETTLE/WRITE_OFF 与结算、发票冲抵，是资金流出的对账凭证。',
+  CollectionEvent: '本方收到资金的事实（预收/回款，退款=逆向负数）；经 OFFSET_SETTLE/WRITE_OFF 与结算、发票冲抵，是资金流入的对账凭证。',
+  ServiceCostEvent: '第三方服务费用（物流/质检/仓储/报关/保险）发生的事实；经 ALLOCATE_TO 归属合同成本，经 TRIGGERS 驱动付款。',
 };
 
 // ---------------------------------------------------------------------------
@@ -331,6 +349,7 @@ export function ontologySchemaJson() {
     entities: ENTITY_NAMES.map((n) => ({
       name: n,
       label: ENTITY_LABELS[n],
+      description: ENTITY_DESCRIPTIONS[n],
       phase: entityPhase(n),
       ownFields: Object.keys(ONTOLOGY_ENTITIES[n]!.shape),
       fields: [...entityFieldNames(n)],

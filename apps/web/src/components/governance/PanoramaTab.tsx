@@ -52,7 +52,7 @@ export function PanoramaTab() {
       elementId: `${ENTITY_ID_PREFIX}${e.name}`,
       kind: e.name,
       name: e.label,
-      props: { count: counts?.counts[e.name] ?? 0, meaning: e.meaning, ownFields: e.ownFields },
+      props: { count: counts?.counts[e.name] ?? 0, description: e.description, meaning: e.meaning, ownFields: e.ownFields },
     }));
     const edges: GraphEdge[] = schema.relations.flatMap((r) =>
       r.pairs.map((p) => ({
@@ -129,6 +129,7 @@ export function PanoramaTab() {
           )}
           {selected?.type === 'node' && (() => {
             const node = selected.node;
+            const description = typeof node.props?.description === 'string' ? node.props.description : null;
             const meaning = typeof node.props?.meaning === 'string' ? node.props.meaning : null;
             const ownFields = Array.isArray(node.props?.ownFields)
               ? (node.props.ownFields as unknown[]).filter((f): f is string => typeof f === 'string')
@@ -152,6 +153,12 @@ export function PanoramaTab() {
                     ))}
                     {ownFields.length === 0 && <li className="text-xs text-ink-soft/60">（无）</li>}
                   </ul>
+                </div>
+                <div>
+                  <div className="text-xs font-medium text-ink-soft">说明</div>
+                  {description
+                    ? <div className="mt-1 text-xs leading-5 text-ink">{description}</div>
+                    : <div className="mt-1 text-xs text-ink-soft/60">（注册表未收录）</div>}
                 </div>
                 <div>
                   <div className="text-xs font-medium text-ink-soft">meaning</div>

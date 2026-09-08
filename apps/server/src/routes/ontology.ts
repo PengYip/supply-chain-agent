@@ -1,13 +1,21 @@
 // 本体只读 REST 面(roadmap Item 3)：/schema + /entities 列表/详情 + /counts 实体计数(Item 8)。
-// 挂载：index.ts `app.use('/api/ontology/*', requireAuth)` + `app.route('/api/ontology', ontologyRoute)`。
-// 只读：本文件与 projection 层绝不写任何源表。
+// 2026-09-08 增补主数据登记直写端点：POST /master-data（表单入口第二个客户端），
+// 直调 insertTradeFact 唯一写入边界——主数据非资金事实，不走 agent 会话不加 L2 工具。
+// 除该端点外本文件与 projection 层绝不写任何源表。
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
-import { ontologySchemaJson, OntologyEntityNameSchema, ENTITY_NAMES } from '../ontology/index.js';
+import {
+  ontologySchemaJson, OntologyEntityNameSchema, ENTITY_NAMES, entitySchema,
+} from '../ontology/index.js';
 import { listProjectedEntities, getProjectedEntityDetail } from '../ontology/projection.js';
 import { getNeighbors } from '../ontology/neighbors.js';
+import { insertTradeFact } from '../ontology/repo.js';
+import {
+  CreateMasterDataInputSchema, commodityCodeGateError, masterDataFormSchemaJson,
+} from '../ontology/masterData.js';
+import { fieldLevelErrors } from '../lib/zodFieldErrors.js';
 
 export const ontologyRoute = new Hono<AuthEnv>();
 
@@ -39,6 +47,56 @@ ontologyRoute.get('/counts', async (c) => {
   } catch (e) {
     console.error('[ontology] counts failed:', errDetail(e));
     return c.json({ error: 'counts failed', detail: errDetail(e) }, 500);
+  }
+});
+
+/** GET /master-data/schema — 主数据登记表单投影（字段反射自注册表 3 类静态实体）。 */
+ontologyRoute.get('/master-data/schema', (c) => c.json(masterDataFormSchemaJson()));
+
+/** POST /master-data — 主数据登记直写端点（商品/交易对手/内部组织）。
+ *  校验链：inputSchema strict（字段级报错）-> 注册表 entitySchema strict（各实体
+ *  必填/词汇权威校验）-> 商品码词汇门禁（COMMODITY_CODES 非空时收紧）-> insertTradeFact
+ *  唯一写入边界（createdBy='manual' 溯源）。成功后台账列表/详情即时可见。 */
+ontologyRoute.post('/master-data', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+
+  let json: unknown;
+  try { json = await c.req.json(); } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+  const parsed = CreateMasterDataInputSchema.strict().safeParse(json);
+  if (!parsed.success) {
+    return c.json({ error: 'invalid_body', detail: fieldLevelErrors(parsed.error) }, 400);
+  }
+  const { entityType, validAt, ...payload } = parsed.data;
+
+  // 注册表权威预检（快速失败，省一次失败写入）：各实体 strict schema（必填/实体词汇边界）。
+  const entityCheck = entitySchema(entityType).safeParse(payload);
+  if (!entityCheck.success) {
+    return c.json({ error: 'invalid_master_data', detail: fieldLevelErrors(entityCheck.error) }, 400);
+  }
+  // 商品码词汇门禁：v1 词汇为空 => 自由填写（见 index.ts COMMODITY_CODES 注释）。
+  if (entityType === 'TradeGoods' && typeof payload['commodityCode'] === 'string') {
+    const gate = commodityCodeGateError(payload['commodityCode']);
+    if (gate) {
+      return c.json({
+        error: 'invalid_master_data',
+        detail: { formErrors: [gate], fieldErrors: { commodityCode: [gate] } },
+      }, 400);
+    }
+  }
+
+  try {
+    const id = await insertTradeFact(
+      getDbContext(),
+      { entityType, payload, validAt: validAt ?? new Date(), createdBy: 'manual' },
+      user.id,
+    );
+    return c.json({ id, entityType });
+  } catch (e) {
+    console.error('[ontology] master-data write failed:', errDetail(e));
+    return c.json({ error: 'master-data write failed', detail: errDetail(e) }, 500);
   }
 });
 

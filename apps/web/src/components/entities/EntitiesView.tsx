@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { clsx } from 'clsx';
 import { useHashRoute } from '../../hooks/useHashRoute';
-import { fetchOntologySchema, listEntities, type OntologyEntitySchemaDTO, type ProjectedEntity } from '../../api/ontology';
+import {
+  fetchMasterDataFormSchema, fetchOntologySchema, listEntities,
+  type MasterDataTypeFormDTO, type OntologyEntitySchemaDTO, type ProjectedEntity,
+} from '../../api/ontology';
 import { EntityDetailDrawer } from './EntityDetailDrawer';
 import { EventRegisterDrawer } from './EventRegisterDrawer';
+import { MasterDataDrawer } from './MasterDataDrawer';
 import type { GraphFocusTarget } from '../graph/focus';
 
 /** 实体台账(roadmap Item 3)：类型列表由注册表 schema 驱动，空源类型显示空态不报错。 */
@@ -22,18 +26,30 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
   const [detailId, setDetailId] = useState<string | null>(null);
   // 事件登记表单入口（仅事件类实体显示，清单来自 schema 端点 phase 字段）。
   const [registerOpen, setRegisterOpen] = useState(false);
+  // 主数据登记表单入口（商品/交易对手/内部组织，清单来自 master-data/schema 投影）。
+  const [masterForm, setMasterForm] = useState<MasterDataTypeFormDTO[] | null>(null);
+  const [masterRegisterOpen, setMasterRegisterOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
     fetchOntologySchema()
       .then((s) => { if (alive) setSchema(s.entities); })
       .catch((e: unknown) => { if (alive) setError(e instanceof Error ? e.message : String(e)); });
+    fetchMasterDataFormSchema()
+      .then((s) => { if (alive) setMasterForm(s.types); })
+      .catch(() => { if (alive) setMasterForm([]); });
     return () => { alive = false; };
   }, []);
 
   const active = schema?.find((e) => e.name === selected) ?? null;
+  const activeMaster = masterForm?.find((t) => t.name === selected) ?? null;
   const eventEntities = useMemo(
     () => (schema ?? []).filter((e) => e.phase === 'event').map((e) => ({ name: e.name, label: e.label })),
+    [schema],
+  );
+  // 事件登记抽屉顶部所选类型说明（注册表 ENTITY_DESCRIPTIONS 经 schema 端点透出）。
+  const entityDescriptions = useMemo(
+    () => Object.fromEntries((schema ?? []).map((e) => [e.name, e.description])),
     [schema],
   );
 
@@ -106,6 +122,7 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
             key={e.name}
             type="button"
             onClick={() => setSelected(e.name)}
+            title={e.description}
             className={clsx(
               'block w-full px-4 py-2 text-left text-sm transition-colors',
               selected === e.name
@@ -116,6 +133,11 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
             {e.label}
           </button>
         ))}
+        {active && (
+          <div className="mt-2 border-t border-line px-4 pt-2 pb-4 text-xs leading-5 text-ink-soft" title={active.description}>
+            {active.description}
+          </div>
+        )}
       </aside>
       <div className="min-w-0 flex-1 overflow-y-auto px-5 py-4">
         {active ? (
@@ -137,6 +159,15 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
                   className="rounded-md bg-blue-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-blue-700"
                 >
                   登记事件
+                </button>
+              )}
+              {activeMaster && (
+                <button
+                  type="button"
+                  onClick={() => setMasterRegisterOpen(true)}
+                  className="rounded-md bg-blue-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-blue-700"
+                >
+                  登记
                 </button>
               )}
             </div>
@@ -199,7 +230,7 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
                   {!loading && rows.length === 0 && (
                     <tr>
                       <td colSpan={active.ownFields.length + 3} className="px-3 py-8 text-center text-sm text-ink-soft">
-                        待本体基座灌数（该类型暂无数据源）
+                        {activeMaster ? '暂无数据，点击右上角「登记」录入' : '待本体基座灌数（该类型暂无数据源）'}
                       </td>
                     </tr>
                   )}
@@ -239,6 +270,7 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
         <EntityDetailDrawer
           type={active.name}
           typeLabel={active.label}
+          typeDescription={active.description}
           ownFields={active.ownFields}
           entityId={detailId}
           onClose={() => setDetailId(null)}
@@ -253,7 +285,15 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
         <EventRegisterDrawer
           eventEntities={eventEntities}
           initialType={active.name}
+          entityDescriptions={entityDescriptions}
           onClose={() => setRegisterOpen(false)}
+        />
+      )}
+      {masterRegisterOpen && activeMaster && (
+        <MasterDataDrawer
+          masterType={activeMaster}
+          onClose={() => setMasterRegisterOpen(false)}
+          onSaved={() => { void load(); }}
         />
       )}
     </div>

@@ -1,0 +1,77 @@
+// 主数据登记（2026-09-08）：商品/交易对手/内部组织 3 类静态实体的表单入口共享后端。
+// 直接端点写入（不走 agent 会话、不加 L2 工具）：主数据非资金事实，审批暂不要求；
+// 唯一写入边界仍是 insertTradeFact（注册表 strict zod + createdBy='manual' 溯源），
+// 禁止任何直写 SQL。字段词汇=注册表静态实体 schema（与事件登记 inputSchema 同构）。
+import { z } from 'zod';
+import {
+  COMMODITY_CODES, ENTITY_DESCRIPTIONS, ENTITY_LABELS, ONTOLOGY_ENTITIES,
+} from './index.js';
+import { unwrapField, fieldKind } from './eventTools.js';
+
+export const MASTER_DATA_TYPES = ['TradeGoods', 'Counterparty', 'OrgUnit'] as const;
+export type MasterDataType = (typeof MASTER_DATA_TYPES)[number];
+
+// inputSchema SSOT：端点与表单投影共用同一 zod（路由叠加 strict）；
+// 各实体自己的必填约束由端点预检 entitySchema(strict) 权威执行，这里字段全可选（并集）。
+export const CreateMasterDataInputSchema = z.object({
+  entityType: z.enum(MASTER_DATA_TYPES).describe('主数据类型（商品/交易对手/内部组织）'),
+  validAt: z.string().min(1).optional().describe('业务生效时间 ISO 日期（如 2026-06-25）；缺省=登记时刻'),
+  name: z.string().min(1).optional().describe('名称（商品名/企业名/内部组织名，三类实体均必填）'),
+  commodityCode: z.string().min(1).optional().describe('商品码（仅商品必填）；v1 开放词汇自由填写，业务确认后收敛为闭枚举自动收紧'),
+  spec: z.string().optional().describe('规格品位（仅商品，选填）'),
+  unit: z.string().optional().describe('计量单位（仅商品，选填，如 吨）'),
+  role: z.string().optional().describe('角色（仅交易对手必填）：供应商/客户/服务商'),
+  code: z.string().optional().describe('组织编码（仅内部组织，选填）'),
+});
+
+/** 商品码门禁：词汇非空时强制 ∈ COMMODITY_CODES；空词汇（v1 开放，业务未确认）自由填写，
+ *  转闭枚举后自动收紧。vocabulary 参数默认注册表词汇，测试可注入。 */
+export function commodityCodeGateError(
+  commodityCode: string,
+  vocabulary: readonly string[] = COMMODITY_CODES,
+): string | null {
+  if (vocabulary.length === 0) return null;
+  return vocabulary.includes(commodityCode)
+    ? null
+    : `商品码 ${commodityCode} 不在 COMMODITY_CODES 词汇内（允许：${vocabulary.join('/')}）`;
+}
+
+// ---------------------------------------------------------------------------
+// 表单入口投影（GET /api/ontology/master-data/schema 数据源）：字段/必填/描述
+// 全部反射自注册表静态实体 schema，web 不复制任何字段定义。
+// ---------------------------------------------------------------------------
+
+export interface MasterDataFormFieldDTO {
+  name: string;
+  kind: 'string' | 'number' | 'enum';
+  required: boolean;
+  description: string;
+}
+
+export interface MasterDataTypeFormDTO {
+  name: MasterDataType;
+  label: string;
+  description: string;
+  fields: MasterDataFormFieldDTO[];
+}
+
+export function masterDataFormSchemaJson(): { types: MasterDataTypeFormDTO[] } {
+  return {
+    types: MASTER_DATA_TYPES.map((t) => ({
+      name: t,
+      label: ENTITY_LABELS[t],
+      description: ENTITY_DESCRIPTIONS[t],
+      fields: Object.entries(ONTOLOGY_ENTITIES[t].shape).map(([name, sch]) => {
+        const { inner, required } = unwrapField(sch);
+        const kind = fieldKind(inner);
+        if (!kind) throw new Error(`masterData: unsupported field type for form projection: ${t}.${name}`);
+        return {
+          name,
+          kind,
+          required,
+          description: inner.description ?? sch.description ?? '',
+        };
+      }),
+    })),
+  };
+}

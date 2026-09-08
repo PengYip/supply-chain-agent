@@ -5,6 +5,8 @@ import { getEntityDetail, type EntityDetailResult } from '../../api/ontology';
 interface Props {
   type: string;
   typeLabel: string;
+  /** 注册表实体说明（详情抽屉头部说明行；schema 端点透出）。 */
+  typeDescription?: string;
   ownFields: string[];
   entityId: string;
   onClose: () => void;
@@ -13,7 +15,7 @@ interface Props {
 }
 
 /** 实体详情：字段表 + as-of 时间线(红冲负数红标) + 净额轧差。仅事件实体有时间线。 */
-export function EntityDetailDrawer({ type, typeLabel, ownFields, entityId, onClose, onViewInGraph }: Props) {
+export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields, entityId, onClose, onViewInGraph }: Props) {
   // asOf 语义(技术备忘 §4)：最新口径=business@now；当时口径=system@<日期>(月报复现)。
   const [mode, setMode] = useState<'business' | 'system'>('business');
   const [at, setAt] = useState('');
@@ -51,6 +53,9 @@ export function EntityDetailDrawer({ type, typeLabel, ownFields, entityId, onClo
           <div>
             <div className="text-sm font-medium text-ink">{typeLabel}详情</div>
             <div className="mt-0.5 text-xs text-ink-soft">{detail?.entity.label ?? entityId}</div>
+            {typeDescription && (
+              <div className="mt-0.5 max-w-[380px] text-xs leading-5 text-ink-soft/80">{typeDescription}</div>
+            )}
           </div>
           {onViewInGraph && (
             <button

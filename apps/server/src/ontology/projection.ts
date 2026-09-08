@@ -1,11 +1,11 @@
 // apps/server/src/ontology/projection.ts
 // 台账只读投影(roadmap 2026-09-07 Item 3)。铁律：本模块只含 SELECT，绝不写
 // contract_ledger/documents/trade_facts 任何源表(验收 3，代码审查确认无写路径)。
-// 映射 v1(理由见计划「摸底结论」)：
+// 映射 v1(理由见计划「摸底结论」；2026-09-08 起静态主数据可经表单直写 trade_facts)：
 //   TradeContract                 <- contract_ledger
 //   Goods{Receipt,Delivery}Event  <- documents(doc_type 收货单/发货单) ∪ trade_facts
-//   其余 5 事件实体                <- trade_facts(列表口径=最新口径 asOfBusinessTime(now))
-//   TradeGoods/Counterparty/OrgUnit <- 无源，空态(「待本体基座灌数」)
+//   其余 5 事件 + TradeGoods/Counterparty/OrgUnit <- trade_facts
+//     (静态 3 类主数据源=POST /api/ontology/master-data 手工登记, 列表口径=最新口径)
 import type { DbContext, PostgresDbContext } from '../pipeline/db/client.js';
 import { effectiveUserId } from '../pipeline/db/repositories.js';
 import { asOfBusinessTime, numberPlaceholders, asOfSystemTime, normalizeIsoUtc, type AsOfPredicate } from './asof.js';
@@ -174,11 +174,6 @@ async function listReceiptDeliveryDocs(
 // 事件 <- trade_facts(列表口径 = 最新口径：asOfBusinessTime(now))
 // ---------------------------------------------------------------------------
 
-const EVENT_TYPES: readonly OntologyEntityName[] = [
-  'GoodsReceiptEvent', 'GoodsDeliveryEvent', 'SettlementEvent', 'InvoiceEvent',
-  'PaymentEvent', 'CollectionEvent', 'ServiceCostEvent',
-];
-
 const BUSINESS_KEY_FIELDS = ['invoiceNo', 'contractNo', 'name', 'costType'] as const;
 
 function businessKeyOf(p: Record<string, unknown>): string | null {
@@ -221,8 +216,9 @@ async function collectEntities(ctx: DbContext, type: OntologyEntityName, uid: st
     ]);
     return [...docs, ...facts];
   }
-  if ((EVENT_TYPES as readonly string[]).includes(type)) return listFacts(ctx, type, uid);
-  return []; // TradeGoods/Counterparty/OrgUnit：无源空态(待本体基座灌数)
+  // 其余 5 事件 + 手工登记静态主数据（TradeGoods/Counterparty/OrgUnit，POST
+  // /api/ontology/master-data -> insertTradeFact）都以 trade_facts 为源。
+  return listFacts(ctx, type, uid);
 }
 
 export async function listProjectedEntities(

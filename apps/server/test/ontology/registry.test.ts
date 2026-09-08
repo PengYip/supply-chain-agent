@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
-  ONTOLOGY_ENTITIES, ENTITY_NAMES, ENTITY_LABELS, entitySchema, entityFieldNames,
+  ONTOLOGY_ENTITIES, ENTITY_NAMES, ENTITY_LABELS, ENTITY_DESCRIPTIONS,
+  entitySchema, entityFieldNames, type OntologyEntityName,
   ONTOLOGY_RELATIONS, relationDef, isRelationPairAllowed,
   PayType, EventBizType, AllocateMethod, COMMODITY_CODES, MEANING_URIS,
   DUAL_TIMELINE_FIELDS, PROVENANCE_FIELDS, ontologySchemaJson,
@@ -149,5 +150,21 @@ describe('ontology registry', () => {
     expect(invoice.label).toBe('发票事件');
     expect(invoice.ownFields).toContain('invoiceNo');
     expect(invoice.ownFields).not.toContain('validAt'); // 时间轴字段在 fields 全集，不在 ownFields
+  });
+
+  it('11 实体全有非空中文 description（业务定义 + 对账/履约链角色）', () => {
+    expect(Object.keys(ENTITY_DESCRIPTIONS).sort()).toEqual([...ENTITY_NAMES].sort());
+    for (const name of ENTITY_NAMES) {
+      const desc = ENTITY_DESCRIPTIONS[name];
+      expect(typeof desc).toBe('string');
+      expect(desc.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('schema DTO 透出 entities[].description（治理 UI 数据源）', () => {
+    const json = JSON.parse(JSON.stringify(ontologySchemaJson()));
+    for (const e of json.entities as Array<{ name: string; description: string }>) {
+      expect(e.description).toBe(ENTITY_DESCRIPTIONS[e.name as OntologyEntityName]);
+    }
   });
 });

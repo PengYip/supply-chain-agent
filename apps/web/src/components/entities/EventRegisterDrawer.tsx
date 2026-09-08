@@ -10,6 +10,8 @@ interface Props {
   eventEntities: Array<{ name: string; label: string }>;
   /** 打开入口所在台账的实体类型（预选）。 */
   initialType: string;
+  /** 注册表实体说明（key=实体名，schema 端点透出；顶部显示所选类型说明）。 */
+  entityDescriptions?: Record<string, string>;
   onClose: () => void;
 }
 
@@ -38,7 +40,7 @@ function optionLabelOf(field: TradeEventFormField, option: string,
 
 /** 事件登记抽屉（表单入口第二个客户端）：字段由 create_trade_event inputSchema
  *  投影驱动，提交经 POST /api/trade-events 走后台会话与 L2 审批（同核销工作台）。 */
-export function EventRegisterDrawer({ eventEntities, initialType, onClose }: Props) {
+export function EventRegisterDrawer({ eventEntities, initialType, entityDescriptions, onClose }: Props) {
   const [formSchema, setFormSchema] = useState<TradeEventFormSchema | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [values, setValues] = useState<ValueMap>({ entityType: initialType, currency: '' });
@@ -146,6 +148,11 @@ export function EventRegisterDrawer({ eventEntities, initialType, onClose }: Pro
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+          {entityDescriptions?.[values['entityType'] ?? ''] && (
+            <div className="mb-3 rounded border border-line bg-surface/40 px-3 py-2 text-xs leading-5 text-ink-soft">
+              {entityDescriptions[values['entityType'] ?? '']}
+            </div>
+          )}
           {loadError && (
             <div className="rounded-lg border border-danger/30 bg-danger/5 p-3 text-sm text-danger">{loadError}</div>
           )}

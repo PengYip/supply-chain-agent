@@ -1,6 +1,8 @@
 export interface OntologyEntitySchemaDTO {
   name: string;
   label: string;
+  /** 注册表说明性文字（业务定义 + 对账/履约链角色；治理 UI 四处落位的数据源）。 */
+  description: string;
   /** 注册表派生（static=4 静态 / event=7 事件）；事件清单以此为 SSOT，禁止前端硬编码。 */
   phase: 'static' | 'event';
   ownFields: string[];
@@ -140,4 +142,88 @@ export function fetchOntologyNeighbors(
 ): Promise<NeighborsResultDTO> {
   const params = new URLSearchParams({ type, id, depth: String(depth) });
   return request<NeighborsResultDTO>(`/api/ontology/graph/neighbors?${params.toString()}`);
+}
+
+// ---------------------------------------------------------------------------
+// 主数据登记表单（2026-09-08）：字段/必填/描述全部来自服务端注册表反射投影
+// （GET /api/ontology/master-data/schema），提交走 POST /api/ontology/master-data
+// 直写 trade_facts（写入边界 insertTradeFact，createdBy=manual）。
+// ---------------------------------------------------------------------------
+
+export interface MasterDataFormFieldDTO {
+  name: string;
+  kind: 'string' | 'number' | 'enum';
+  required: boolean;
+  description: string;
+}
+
+export interface MasterDataTypeFormDTO {
+  name: string;
+  label: string;
+  description: string;
+  fields: MasterDataFormFieldDTO[];
+}
+
+export interface MasterDataFormSchemaDTO {
+  types: MasterDataTypeFormDTO[];
+}
+
+export interface MasterDataSubmitResult {
+  id: string;
+  entityType: string;
+}
+
+/** 字段级校验错误（服务端 invalid_body / invalid_master_data 投影）。 */
+export interface MasterDataFieldErrors {
+  formErrors: string[];
+  fieldErrors: Record<string, string[]>;
+}
+
+export class MasterDataValidationError extends Error {
+  readonly detail: MasterDataFieldErrors;
+  constructor(detail: MasterDataFieldErrors) {
+    super('校验失败，请检查标红字段');
+    this.detail = detail;
+  }
+}
+
+export function fetchMasterDataFormSchema(): Promise<MasterDataFormSchemaDTO> {
+  return request<MasterDataFormSchemaDTO>('/api/ontology/master-data/schema');
+}
+
+export async function submitMasterData(
+  input: Record<string, string | number>,
+): Promise<MasterDataSubmitResult> {
+  let res: Response;
+  try {
+    res = await fetch('/api/ontology/master-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(input),
+    });
+  } catch {
+    throw new Error('网络错误，请稍后重试');
+  }
+  if (!res.ok) {
+    let message = `请求失败（${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: string; detail?: MasterDataFieldErrors | string };
+      if (data?.error === 'invalid_body' || data?.error === 'invalid_master_data') {
+        const detail = (data.detail ?? { formErrors: [], fieldErrors: {} }) as MasterDataFieldErrors;
+        throw new MasterDataValidationError({
+          formErrors: detail.formErrors ?? [],
+          fieldErrors: detail.fieldErrors ?? {},
+        });
+      }
+      if (data?.error) {
+        message = typeof data.detail === 'string' ? `${data.error}：${data.detail}` : data.error;
+      }
+    } catch (e) {
+      if (e instanceof MasterDataValidationError) throw e;
+      /* 非 JSON 响应，保留状态码消息 */
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as MasterDataSubmitResult;
 }

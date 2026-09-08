@@ -83,7 +83,8 @@ export interface TradeEventFormFieldDTO {
   formDefault?: unknown;
 }
 
-function unwrapField(sch: z.ZodTypeAny): { inner: z.ZodTypeAny; required: boolean } {
+/** zod 字段解包：穿透 Optional/Nullable 得到内层与必填性（表单投影共用，masterData 同构复用）。 */
+export function unwrapField(sch: z.ZodTypeAny): { inner: z.ZodTypeAny; required: boolean } {
   let inner = sch;
   let required = true;
   while (inner instanceof z.ZodOptional || inner instanceof z.ZodNullable) {
@@ -93,7 +94,8 @@ function unwrapField(sch: z.ZodTypeAny): { inner: z.ZodTypeAny; required: boolea
   return { inner, required };
 }
 
-function fieldKind(inner: z.ZodTypeAny): 'string' | 'number' | 'enum' | null {
+/** 字段种类判定（表单投影共用，masterData 同构复用）。 */
+export function fieldKind(inner: z.ZodTypeAny): 'string' | 'number' | 'enum' | null {
   if (inner instanceof z.ZodEnum || inner instanceof z.ZodNativeEnum) return 'enum';
   if (inner instanceof z.ZodNumber) return 'number';
   if (inner instanceof z.ZodString) return 'string';
