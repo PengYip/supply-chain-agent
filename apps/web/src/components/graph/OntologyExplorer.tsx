@@ -10,6 +10,7 @@ import {
 } from '../../api/ontology';
 import type { GraphEdge, GraphNode, InspectTarget, Subgraph } from '../../hooks/useGraph';
 import { GraphCanvas } from './GraphCanvas';
+import { EntityDetailDrawer } from '../entities/EntityDetailDrawer';
 import { ONTOLOGY_EDGE_LEGEND, edgeLabel } from './businessTypes';
 
 export interface OntologyAnchorJump {
@@ -46,6 +47,14 @@ function toGraphEdge(e: NeighborEdgeDTO): GraphEdge {
     props: e.params,
     confidence: null,
   };
+}
+
+/** 节点可开的实体详情(台账抽屉)：带本体类型且非血缘 Document(D7, 无详情端点语义)才可开。 */
+function detailTarget(n: GraphNode): { type: string; id: string } | null {
+  const t = n.props?.['__type'];
+  const id = n.props?.['__id'];
+  if (typeof t !== 'string' || typeof id !== 'string' || t === 'Document') return null;
+  return { type: t, id };
 }
 
 const EDGE_PARAM_LABELS: Record<string, string> = {
@@ -85,6 +94,7 @@ export function OntologyExplorer({ initialAnchor }: Props) {
   const [lineage, setLineage] = useState<NeighborsResultDTO['lineage'] | null>(null);
   const [truncated, setTruncated] = useState(false);
   const [selected, setSelected] = useState<InspectTarget | null>(null);
+  const [detail, setDetail] = useState<{ type: string; id: string } | null>(null);
   const [hoverEdge, setHoverEdge] = useState<GraphEdge | null>(null);
   const expandedRef = useRef<Set<string>>(new Set());
 
@@ -311,13 +321,24 @@ export function OntologyExplorer({ initialAnchor }: Props) {
       {selected && (
         <div className="max-h-48 overflow-y-auto border-t border-line bg-white px-3 py-2 text-sm">
           {selected.type === 'node' ? (
-            <div>
-              <div className="font-medium text-ink">{selected.node.name}</div>
-              <div className="mt-0.5 text-xs text-ink-soft">
-                {String(selected.node.props?.['__type'] ?? selected.node.kind)}
-                {' / '}
-                {String(selected.node.props?.['__id'] ?? selected.node.elementId)}
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="font-medium text-ink">{selected.node.name}</div>
+                <div className="mt-0.5 text-xs text-ink-soft">
+                  {String(selected.node.props?.['__type'] ?? selected.node.kind)}
+                  {' / '}
+                  {String(selected.node.props?.['__id'] ?? selected.node.elementId)}
+                </div>
               </div>
+              {detailTarget(selected.node) && (
+                <button
+                  type="button"
+                  onClick={() => setDetail(detailTarget(selected.node))}
+                  className="h-7 shrink-0 rounded border border-line px-2 text-xs text-ink-soft transition-colors hover:border-primary/40 hover:text-primary"
+                >
+                  查看详情
+                </button>
+              )}
             </div>
           ) : (
             <div>
@@ -328,6 +349,15 @@ export function OntologyExplorer({ initialAnchor }: Props) {
             </div>
           )}
         </div>
+      )}
+      {detail && (
+        <EntityDetailDrawer
+          type={detail.type}
+          typeLabel={entities?.find((e) => e.name === detail.type)?.label ?? detail.type}
+          ownFields={entities?.find((e) => e.name === detail.type)?.ownFields ?? []}
+          entityId={detail.id}
+          onClose={() => setDetail(null)}
+        />
       )}
     </div>
   );
