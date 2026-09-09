@@ -185,3 +185,13 @@ export const ChangeMasterDataInputSchema = z.object({
 ## 分期与规模预估
 
 单 PR 可完成（Task 1-7 顺序执行，估 0.5-1 天）。Task 5（归一投影）是唯一有设计余地的任务，若聚合口径与 spec §5 有偏差，以 spec 为准回改。
+
+## Phase 2（独立排期，本期不实施）：Agent 辅助商品主数据匹配/注册
+
+设计定稿见 spec §11。开工前置：Phase 1 全部落地（attributes 袋是自动注册的承载前提）。任务拆解（届时按此细化）：
+
+- **Task A1**：`match_goods` L1 工具——输入 documentId 或品名/规格文本，四通道打分（商品码精确 → 归一键精确 → pgvector 向量召回+reranker → LLM 判定兜底），返回候选+分数+证据。先登记 tool-inventory.json（五道门：inventory/registry/gate/contract/scenario）。
+- **Task A2**：`register_goods` L2 工具——预填注册（name/spec/commodityCode/attributes 从单据抽取），走 insertTradeFact 写入边界 + 审批中心；attributes 受控约束照常生效。
+- **Task A3**：文档确认流挂候选提议（复用绑定工作台"候选+确认"模式；高置信自动关联记 confidence/confirmationSource）。
+- **Task A4**：别名反馈闭环（确认→attributes 落别名；纠正→负样本）+ 定期"未匹配商品清单"物化报告。
+- 估期：A1+A2 约半天；A3+A4 约一天。

@@ -104,3 +104,20 @@ repo 层新增 `supersedeTradeFact(ctx, {...}, userId?)`：双后端事务（SQL
 - **normalizeName 陷阱**：文档图谱 Party 节点仍按归一企业名键（与本体 Counterparty 是两套键空间）——既有现状，本项不改动、不合并（决策 #3 的延伸）。
 - **payload 无 schema 演进问题**：uscc/attributes 进 payload，旧事实缺字段读侧容忍（fields 渲染空）。
 - **商品袋键名失控（v1 无模板期）**：自由键可能不规范（"牌号"vs"材质牌号"）。缓解：登记表单键输入给常用键建议；v2 品类模板上线后写入侧拒模板外新键，历史数据走 supersede 换代收敛。
+
+## 11. 后续路线（Phase 2，本期不实施）：Agent 辅助商品主数据匹配/注册
+
+人工维护商品主数据工作量过大；文档管线已抽取品名/规格，pgvector 召回+reranker、候选工作台模式、L2 审批链、attributes 袋全部就位。设计原则：**匹配优先、注册兜底、注册必过人工**。
+
+三档动作（风险/自动化递增）：
+1. **匹配（L1 只读）**：单据商品描述 → 主数据检索打分，四通道从硬到软：商品码精确 → 归一键（品名+规格）精确 → 向量召回（pgvector 嵌入"品名+规格+类别"+ reranker，解决"热轧卷板 vs 热轧板卷"异写）→ LLM 语义判定兜底（只产生候选提议）。输出候选+分数+证据字段。
+2. **关联（低风险写，软门控）**：高置信候选自动把单据/文档图节点挂到既有 TradeGoods，记 confidence + confirmationSource='auto'。
+3. **注册（SSOT 写，L2 必审）**：无候选 → `register_goods` L2 工具，name/spec/commodityCode/attributes 全部从单据抽取预填 → 审批中心批准 → insertTradeFact 写入边界。错误主数据会全链扩散，这道人工门不能省。
+
+触发点：① 文档确认流自动挂候选（绑定工作台"候选+确认"交互模式复用）；② 对话（"把这批收货单上的商品匹配到主数据"，`match_goods` L1 + `register_goods` L2）；③ 定期物化任务出"未匹配商品清单"报告。
+
+反馈闭环：人工确认→别名落 attributes（匹配率随积累上升）；纠正→负样本。冷启动期"提议预填"占大头（人工从敲字段降为点批准），全自动注册比例随别名/向量积累上升。
+
+工具面：`match_goods`（L1）/ `register_goods`（L2，走 insertTradeFact 写入边界 + 审批链）——实施前先登记 tool-inventory.json（五道门）。attributes 受控约束对 Agent 预填同样生效（32 条/标量/键长）。
+
+依赖与顺序：**Phase 1（主体身份+商品属性袋）先行**——没有 attributes 袋，Agent 从单据抽取的品类异构属性无处落。实施规模预估：A 段（两个工具+词表登记，约半天）→ B 段（确认流候选+向量通道，约一天）→ C 段（别名闭环+报告，按需）。
