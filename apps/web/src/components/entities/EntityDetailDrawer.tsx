@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { clsx } from 'clsx';
 import { getEntityDetail, type EntityDetailResult } from '../../api/ontology';
+import { edgeLabel } from '../graph/businessTypes';
+import { formatEdgeParams } from '../graph/OntologyExplorer';
 
 interface Props {
   type: string;
@@ -135,6 +137,27 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
                 )}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* 本体关系(核销/分摊/红冲溯源等带参边；P4 关系入口补全的可见性配套) */}
+        {detail && detail.relations.length > 0 && (
+          <div className="border-b border-line px-4 py-3">
+            <div className="mb-2 text-xs font-medium text-ink-soft">本体关系（最新业务口径）</div>
+            <div className="space-y-1">
+              {detail.relations.map((r) => (
+                <div key={r.edgeId} className="flex items-center gap-2 rounded border border-line bg-white px-2 py-1.5 text-sm">
+                  <span className="font-medium text-ink">{edgeLabel(r.relation)}</span>
+                  <span className="text-xs text-ink-soft">{r.direction === 'out' ? '→' : '←'}</span>
+                  <span className="min-w-0 truncate text-ink" title={`${r.counterpart.type}:${r.counterpart.id}`}>
+                    {r.counterpart.label}
+                  </span>
+                  <span className="ml-auto text-xs text-ink-soft">
+                    {formatEdgeParams(r.params) || r.validAt?.slice(0, 10) || ''}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

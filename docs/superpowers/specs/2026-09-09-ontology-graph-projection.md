@@ -162,3 +162,26 @@ MATCH path = (red:InvoiceEvent)-[:REVERSE_ORIGIN*1..3]->(blue:InvoiceEvent) RETU
 - **测试**：graphSync 2 例（EVIDENCE 边建立/未确认单据 skippedEvidence）、
   neighborsMultiAnchor 1 例（事实锚点 EVIDENCE 展开）、tables FACT_COLS 列断言更新、
   G_ENTITY mock kind 修正。全量 server 1779 / web 113 / lint 0 错误。
+
+## P4 实施记录（2026-09-09，本体关系创建入口补全）
+
+- **`link_ontology` L2 工具**（`ontology/linkTools.ts`）：覆盖此前无入口的 6 种关系
+  （ALLOCATE_TO/REVERSE_ORIGIN/FEEDS_INTO/CORRESPONDS_TO/TRIGGERS/PROVIDE）。
+  校验链=事实行存在 → 连接对白名单（relationDef/isRelationPairAllowed）→ params 走
+  注册表关系 strict schema → insertOntologyEdge 唯一写入边界；REVERSE_ORIGIN 附加
+  语义校验（红冲方逆向负数/原票正向）。WRITE_OFF/OFFSET_SETTLE 刻意不在词表
+  （整单守恒归核销工作台，描述显式引导）。落边后 fire-and-forget 图投影。
+- **治理登记全链**（新工具五道门）：tool-inventory.json 条目（inventory bijection 门禁）
+  → roleToolRegistry 挂载（needsApproval）→ TRADER_CTX_TOOL_NAMES →
+  permissionGate L2 → contextContract TOOL_CONTEXT_CONTRACTS → settlement 场景
+  SCENARIO_TOOLS。policy.maxToolsMountedPerScenario 11→12（正式提帽，理由见
+  inventory version 2026-09-09）。
+- **详情关系区**：`projection.ts` EntityDetail 增 `relations[]`（本行为端点的边，
+  双向、对端业务键标签、最新业务口径、上限 50），合同/事实/单据源三分支全接；
+  前端 `EntityDetailDrawer` 增「本体关系」区块（edgeLabel + 方向箭头 + 对端 +
+  参数摘要）——建好的边在台账即可核对，不必开穿透图。
+- **测试**：linkTools 7 例（词表引导/分摊落边/红冲方向校验/连接对白名单/合同锚点
+  缺失/strict params 整单拒绝/PROVIDE 主数据端点）+ projection 关系用例（双向+
+  对端标签解析）。全套 server 1787 / web 113 / lint 0 错误。
+- 至此 8 种本体关系全部具备产品创建入口（核销工作台 2 + link_ontology 6），
+  验收指南中"六种关系需 SQL 种子"的边界声明作废。

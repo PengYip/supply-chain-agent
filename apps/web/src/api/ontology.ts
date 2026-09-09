@@ -88,10 +88,21 @@ export function listEntities(
   return request<EntityListResult>(`/api/ontology/entities/${encodeURIComponent(type)}${qs ? `?${qs}` : ''}`);
 }
 
+/** 台账详情关系条目(方向相对本行；P4 关系入口补全的可见性配套)。 */
+export interface EntityRelationDTO {
+  edgeId: string;
+  relation: string;
+  direction: 'out' | 'in';
+  counterpart: { type: string; id: string; label: string; resolved: boolean };
+  params: Record<string, unknown>;
+  validAt: string | null;
+}
+
 export interface EntityDetailResult {
   entity: ProjectedEntity;
   timeline: ProjectedEntity[];
   netAmount: number | null;
+  relations: EntityRelationDTO[];
   asOf: { mode: 'business' | 'system'; at: string };
 }
 

@@ -234,6 +234,13 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
   },
+  // 2026-09-09 P4 本体关系登记: 对话结构化输入(连接对白名单 + 关系 strict params
+  // 双闸) -> output 'raw' / injection 'safe'; 返回边 id 短句 -> budget 'full'。
+  // 落 ontology_edges SSOT -> signal 'env', persist 'business'。L2 软门控。
+  link_ontology: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'business', risk: { level: 'L2', injection: 'safe' },
+  },
 };
 
 /** True iff a contract exists for the given tool name. */

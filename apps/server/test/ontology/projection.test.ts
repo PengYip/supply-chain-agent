@@ -244,3 +244,46 @@ describe('projection: entity detail as-of + REVERSE_ORIGIN netting', () => {
     expect(d!.netAmount).toBeNull();
   });
 });
+
+describe('projection: EntityDetail.relations (P4 关系可见性配套)', () => {
+  it('returns edges touching the fact, both directions, with counterpart labels', async () => {
+    insertContract('C1', 'HT-1', '采购');
+    const svc = await insertTradeFact(ctx, {
+      entityType: 'ServiceCostEvent',
+      payload: { eventBizType: '正向', amount: 15_000, currency: 'CNY', costType: '物流' },
+      validAt: '2026-06-01', createdBy: 'test',
+    }, 'u1');
+    const pay = await insertTradeFact(ctx, {
+      entityType: 'PaymentEvent',
+      payload: { eventBizType: '正向', amount: 15_000, currency: 'CNY', payType: '预付' },
+      validAt: '2026-06-02', createdBy: 'test',
+    }, 'u1');
+    await insertOntologyEdge(ctx, {
+      relation: 'ALLOCATE_TO', fromType: 'ServiceCostEvent', fromId: svc,
+      toType: 'TradeContract', toId: 'C1',
+      params: { amount: 15_000, method: '金额' }, validAt: '2026-06-01', createdBy: 'test',
+    }, 'u1');
+    await insertOntologyEdge(ctx, {
+      relation: 'TRIGGERS', fromType: 'ServiceCostEvent', fromId: svc,
+      toType: 'PaymentEvent', toId: pay,
+      params: {}, validAt: '2026-06-02', createdBy: 'test',
+    }, 'u1');
+
+    const d = await getProjectedEntityDetail(ctx, 'ServiceCostEvent', svc, {}, 'u1');
+    expect(d!.relations).toHaveLength(2);
+    const alloc = d!.relations.find((r) => r.relation === 'ALLOCATE_TO')!;
+    expect(alloc.direction).toBe('out');
+    expect(alloc.counterpart).toMatchObject({ type: 'TradeContract', id: 'C1', label: 'HT-1', resolved: true });
+    expect(alloc.params).toMatchObject({ amount: 15_000 });
+
+    const trg = d!.relations.find((r) => r.relation === 'TRIGGERS')!;
+    expect(trg.direction).toBe('out');
+    expect(trg.counterpart.type).toBe('PaymentEvent');
+
+    // 反向视角: 合同详情能看到入边, 对端标签=服务费业务键(costType 无业务键则 id)
+    const dc = await getProjectedEntityDetail(ctx, 'TradeContract', 'C1', {}, 'u1');
+    expect(dc!.relations).toHaveLength(1);
+    expect(dc!.relations[0]).toMatchObject({ relation: 'ALLOCATE_TO', direction: 'in' });
+    expect(dc!.relations[0]!.counterpart.type).toBe('ServiceCostEvent');
+  });
+});

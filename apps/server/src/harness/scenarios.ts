@@ -47,7 +47,7 @@ const QA: readonly string[] = [
   'gather_settlement_evidence',
 ] as const;
 
-/** 结算态: 取证 -> 计算确认 -> 额度核对 -> 事件登记/核销/冲抵. */
+/** 结算态: 取证 -> 计算确认 -> 额度核对 -> 事件登记/核销/冲抵/关系登记. */
 const SETTLEMENT: readonly string[] = [
   ...CORE,
   'gather_settlement_evidence',
@@ -56,6 +56,7 @@ const SETTLEMENT: readonly string[] = [
   'create_writeoff',
   'create_offset',
   'create_trade_event',
+  'link_ontology',
 ] as const;
 
 export const SCENARIO_TOOLS: Record<Scenario, readonly string[]> = {

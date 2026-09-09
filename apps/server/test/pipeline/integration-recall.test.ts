@@ -282,9 +282,10 @@ describe('integration: document-entry -> hybrid recall chain', () => {
     // confirm_settlement + load_skill(Skill 化, 2026-08-28)
     // + create_writeoff/create_offset(核销工作台, 2026-09-07 Item 5)
     // + create_trade_event(事件登记, 2026-09-08)
-    // = 22 live trader tools; 2026-08-28 tool-inventory methodology env-gates
+    // + link_ontology(本体关系登记, 2026-09-09 P4)
+    // = 23 live trader tools; 2026-08-28 tool-inventory methodology env-gates
     // execute_code behind CUBE_SANDBOX_ENABLED (default off).
-    const expected = 22 + (isCubeSandboxEnabled() ? 1 : 0);
+    const expected = 23 + (isCubeSandboxEnabled() ? 1 : 0);
     expect(names).toHaveLength(expected);
     expect(names).toContain('recall_documents');
     expect(names).toContain('ingest_document');

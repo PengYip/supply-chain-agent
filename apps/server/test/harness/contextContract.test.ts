@@ -39,6 +39,8 @@ const EXPECTED_TOOLS = [
   'create_offset',
   // 2026-09-08: trade event registration L2 tool
   'create_trade_event',
+  // 2026-09-09 P4: ontology relation registration L2 tool
+  'link_ontology',
 ] as const;
 
 describe('tool-context contract registry', () => {

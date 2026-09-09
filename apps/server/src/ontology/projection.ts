@@ -279,8 +279,23 @@ export interface EntityDetail {
   timeline: ProjectedEntity[];
   /** 时间线金额合计(无金额实体为 null)——红冲负数自动轧差(docx 6.2) */
   netAmount: number | null;
+  /** 本行作为端点的本体关系边(最新业务口径, 双向, 上限 50)——P4 关系入口补全的
+   *  可见性配套: 建好的核销/分摊/红冲边在台账详情即可核对, 不必开穿透图。 */
+  relations: EntityRelationRef[];
   asOf: { mode: AsOfMode; at: string };
 }
+
+/** 台账详情关系条目(方向相对本行)。 */
+export interface EntityRelationRef {
+  edgeId: string;
+  relation: string;
+  direction: 'out' | 'in';
+  counterpart: { type: string; id: string; label: string; resolved: boolean };
+  params: Record<string, unknown>;
+  validAt: string | null;
+}
+
+const RELATION_CAP = 50;
 
 /** 红冲溯源闭包(docx 5.4)：root + REVERSE_ORIGIN 边双向可达 facts，全部经同一 as-of 谓词过滤。 */
 async function reverseOriginCluster(
@@ -348,7 +363,9 @@ export async function getProjectedEntityDetail(
 
   if (type === 'TradeContract') {
     const entity = await findContractRowById(ctx, id, uid);
-    return entity ? { entity, timeline: [], netAmount: null, asOf } : null;
+    if (!entity) return null;
+    const relations = await listEntityRelations(ctx, type, id, uid);
+    return { entity, timeline: [], netAmount: null, relations, asOf };
   }
 
   // 事件实体：trade_facts 优先；收发两类再探 documents(收发依据单据行)
@@ -361,16 +378,65 @@ export async function getProjectedEntityDetail(
     const amounts = cluster
       .map((f) => f.payload['amount'])
       .filter((v): v is number => typeof v === 'number');
+    const relations = await listEntityRelations(ctx, type, id, uid);
     return {
       entity: factToEntity(fact),
       timeline,
       netAmount: amounts.length > 0 ? amounts.reduce((a, b) => a + b, 0) : null,
+      relations,
       asOf,
     };
   }
   if (type === 'GoodsReceiptEvent' || type === 'GoodsDeliveryEvent') {
     const entity = await findDocRowById(ctx, id, type, uid);
-    return entity ? { entity, timeline: [], netAmount: null, asOf } : null;
+    if (!entity) return null;
+    const relations = await listEntityRelations(ctx, type, id, uid);
+    return { entity, timeline: [], netAmount: null, relations, asOf };
   }
   return null;
+}
+
+/** 本行作为端点的本体关系边(最新业务口径) + 对端展示名解析。 */
+export async function listEntityRelations(
+  ctx: DbContext, entityType: string, id: string, uid: string,
+): Promise<EntityRelationRef[]> {
+  const edges = await listOntologyEdgesAsOf(
+    ctx, asOfBusinessTime(new Date().toISOString()), {}, uid);
+  const touching = edges.filter((e) =>
+    (e.fromType === entityType && e.fromId === id) || (e.toType === entityType && e.toId === id));
+  const out: EntityRelationRef[] = [];
+  for (const e of touching.slice(0, RELATION_CAP)) {
+    const isOut = e.fromType === entityType && e.fromId === id;
+    const cType = isOut ? e.toType : e.fromType;
+    const cId = isOut ? e.toId : e.fromId;
+    out.push({
+      edgeId: e.id,
+      relation: e.relation,
+      direction: isOut ? 'out' : 'in',
+      counterpart: await resolveCounterpartLabel(ctx, cType, cId, uid),
+      params: e.params,
+      validAt: e.validAt,
+    });
+  }
+  return out;
+}
+
+/** 对端展示名：事实行走业务键、合同走台账合同号、收发单据源走单据类型。 */
+async function resolveCounterpartLabel(
+  ctx: DbContext, type: string, id: string, uid: string,
+): Promise<EntityRelationRef['counterpart']> {
+  if (type === 'TradeContract') {
+    const row = await findContractRowById(ctx, id, uid);
+    if (row) return { type, id, label: row.label, resolved: true };
+  } else {
+    const fact = await getTradeFactById(ctx, id, uid);
+    if (fact && fact.entityType === type) {
+      return { type, id, label: factToEntity(fact).label, resolved: true };
+    }
+    if (type === 'GoodsReceiptEvent' || type === 'GoodsDeliveryEvent') {
+      const doc = await findDocRowById(ctx, id, type, uid);
+      if (doc) return { type, id, label: doc.label, resolved: true };
+    }
+  }
+  return { type, id, label: id, resolved: false };
 }
