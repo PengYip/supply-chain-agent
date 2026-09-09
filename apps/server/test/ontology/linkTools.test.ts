@@ -115,7 +115,7 @@ describe('link_ontology execute', () => {
   it('PROVIDE：对手方主数据 -> 服务费（对端为事实 id）', async () => {
     const cp = await insertTradeFact(ctx, {
       entityType: 'Counterparty',
-      payload: { name: '唐山物流有限公司', role: '服务商' },
+      payload: { uscc: '91130000MA0A0000XB', name: '唐山物流有限公司', role: '服务商' },
       validAt: '2026-01-01', createdBy: 'test',
     }, 'u1');
     const s = await insertFact('ServiceCostEvent',

@@ -13,6 +13,8 @@ export type MasterDataType = (typeof MASTER_DATA_TYPES)[number];
 
 // inputSchema SSOT：端点与表单投影共用同一 zod（路由叠加 strict）；
 // 各实体自己的必填约束由端点预检 entitySchema(strict) 权威执行，这里字段全可选（并集）。
+// attributes（TradeGoods 受控袋）经此处透传，词汇边界（键长/值标量）与条数上限
+// （superRefine）由端点预检 entitySchema('TradeGoods') 权威执行。
 export const CreateMasterDataInputSchema = z.object({
   entityType: z.enum(MASTER_DATA_TYPES).describe('主数据类型（商品/交易对手/内部组织）'),
   validAt: z.string().min(1).optional().describe('业务生效时间 ISO 日期（如 2026-06-25）；缺省=登记时刻'),
@@ -20,7 +22,18 @@ export const CreateMasterDataInputSchema = z.object({
   commodityCode: z.string().min(1).optional().describe('商品码（仅商品必填）；v1 开放词汇自由填写，业务确认后收敛为闭枚举自动收紧'),
   spec: z.string().optional().describe('规格品位（仅商品，选填）'),
   unit: z.string().optional().describe('计量单位（仅商品，选填，如 吨）'),
+  attributes: z.record(z.string().min(1), z.union([z.string(), z.number()]))
+    .optional()
+    .describe('自定义属性 KV 袋（仅商品，选填；受控约束见注册表）'),
+  uscc: z.string().min(1).optional().describe('统一社会信用代码（仅交易对手必填；主体归一锚）'),
   role: z.string().optional().describe('角色（仅交易对手必填）：供应商/客户/服务商'),
+  address: z.string().optional().describe('注册地址（仅交易对手，选填）'),
+  bankAccount: z.string().optional().describe('收款账号（仅交易对手，选填；敏感信息前端脱敏展示）'),
+  bankName: z.string().optional().describe('开户行（仅交易对手，选填）'),
+  legalRepresentative: z.string().optional().describe('法定代表人（仅交易对手，选填）'),
+  registeredCapital: z.string().optional().describe('注册资本（仅交易对手，选填）'),
+  establishedDate: z.string().optional().describe('成立日期（仅交易对手，选填）'),
+  businessScope: z.string().optional().describe('经营范围（仅交易对手，选填）'),
   code: z.string().optional().describe('组织编码（仅内部组织，选填）'),
 });
 
@@ -61,17 +74,21 @@ export function masterDataFormSchemaJson(): { types: MasterDataTypeFormDTO[] } {
       name: t,
       label: ENTITY_LABELS[t],
       description: ENTITY_DESCRIPTIONS[t],
-      fields: Object.entries(ONTOLOGY_ENTITIES[t].shape).map(([name, sch]) => {
-        const { inner, required } = unwrapField(sch);
-        const kind = fieldKind(inner);
-        if (!kind) throw new Error(`masterData: unsupported field type for form projection: ${t}.${name}`);
-        return {
-          name,
-          kind,
-          required,
-          description: inner.description ?? sch.description ?? '',
-        };
-      }),
+      fields: Object.entries(ONTOLOGY_ENTITIES[t].shape)
+        .map(([name, sch]) => {
+          const { inner, required } = unwrapField(sch);
+          const kind = fieldKind(inner);
+          // spec 决策 #8: record 袋（TradeGoods.attributes）不进字段投影
+          // （fieldKind 不支持 record），录入/展示由前端键值编辑区承载。
+          if (!kind) return null;
+          return {
+            name,
+            kind,
+            required,
+            description: inner.description ?? sch.description ?? '',
+          };
+        })
+        .filter((f): f is MasterDataFormFieldDTO => f !== null),
     })),
   };
 }

@@ -42,14 +42,25 @@ export const ONTOLOGY_ENTITIES: Record<OntologyEntityName, z.ZodObject<z.ZodRawS
     currency: Currency.optional(),
   }),
   TradeGoods: z.object({
-    name: z.string().min(1).describe('商品名'),
+    name: z.string().min(1).describe('品名(品类族聚合键, 如"螺纹钢"/"YJV 电力电缆"; SKU 粒度=品名+规格一条事实)'),
     commodityCode: z.string().min(1).describe('商品码; v1 开放词汇(COMMODITY_CODES), 收敛后转闭枚举'),
-    spec: z.string().optional().describe('规格品位(分层待业务确认, 备忘 §7)'),
+    spec: z.string().optional().describe('规格品位(规范化串: v1 人工填经 normalizeSpec 归一, v2 品类模板派生 canonicalSpec)'),
     unit: z.string().optional().describe('计量单位'),
+    attributes: z.record(z.string().min(1).max(40), z.union([z.string(), z.number()]))
+      .optional()
+      .describe('品类异构属性受控袋: 标量 KV(键非空<=40字, 值 string/number, 条数<=32 见写入边界); 品类模板硬门禁属 v2; 不进表单投影(决策 #8), 录入走键值编辑区'),
   }),
   Counterparty: z.object({
-    name: z.string().min(1).describe('企业名(归一化, 与图 Party 同源)'),
+    uscc: z.string().min(1).describe('统一社会信用代码(主体归一锚: 主体同一性=uscc, 名字只是随时间变化的属性值; v1 仅非空校验)'),
+    name: z.string().min(1).describe('企业名(现行名; 更名=supersede 换代, 台账按 uscc 归一, 旧名进 formerNames)'),
     role: z.string().describe('角色(开放: 供应商/客户/服务商, docx: 交易对手含服务商)'),
+    address: z.string().optional().describe('注册地址'),
+    bankAccount: z.string().optional().describe('收款账号(敏感信息: 前端展示脱敏)'),
+    bankName: z.string().optional().describe('开户行'),
+    legalRepresentative: z.string().optional().describe('法定代表人'),
+    registeredCapital: z.string().optional().describe('注册资本'),
+    establishedDate: z.string().optional().describe('成立日期'),
+    businessScope: z.string().optional().describe('经营范围'),
   }),
   OrgUnit: z.object({
     name: z.string().min(1).describe('内部组织名'),
@@ -201,6 +212,21 @@ const amountCurrencyPairRule = (v: Record<string, unknown>, ctx: z.RefinementCtx
   }
 };
 
+// TradeGoods.attributes 受控袋条数上限（spec §3 v1 软约束；品类模板硬门禁属 v2）。
+export const GOODS_ATTRIBUTES_CAP = 32;
+
+const goodsAttributesRule = (v: Record<string, unknown>, ctx: z.RefinementCtx) => {
+  const attrs = v['attributes'];
+  if (attrs != null && typeof attrs === 'object'
+    && Object.keys(attrs as Record<string, unknown>).length > GOODS_ATTRIBUTES_CAP) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['attributes'],
+      message: `attributes 受控袋最多 ${GOODS_ATTRIBUTES_CAP} 条(品类异构属性软约束, v2 品类模板门禁)`,
+    });
+  }
+};
+
 /** 实体 phase（注册表派生：static=4 静态 / event=7 事件）。前端表单入口/台账按此
  *  区分登记面，禁止在 web 硬编码事件类型清单——新增实体只改本文件。 */
 export type EntityPhase = 'static' | 'event';
@@ -214,6 +240,8 @@ export function entityPhase(name: OntologyEntityName): EntityPhase {
  *  仓储持久化 parse 后的规范值，DB 内 payload 字段恒 ⊆ 注册表词汇。 */
 export function entitySchema(name: OntologyEntityName): z.ZodTypeAny {
   const base = ONTOLOGY_ENTITIES[name].strict();
+  // TradeGoods: attributes 受控袋条数规则叠加(词汇在 schema, 规则在写入边界, 同事件金额模式)。
+  if (name === 'TradeGoods') return base.superRefine(goodsAttributesRule);
   if (!EVENT_ENTITY_NAMES.includes(name)) return base;
   const withAmountRule = base.superRefine(eventAmountRule);
   if (AMOUNT_CURRENCY_PAIRED_EVENTS.includes(name)) {
@@ -229,7 +257,8 @@ export function entityFieldNames(name: OntologyEntityName): Set<string> {
 }
 
 // ---------------------------------------------------------------------------
-// 关系（docx §5：4 核心 + 4 辅助 = 8 类型 / 14 连接对；带参是一等公民）
+// 关系（docx §5：4 核心 + 4 辅助 = 8 类型 / 14 连接对；spec 2026-09-09 主体身份
+// 增 PARENT_OF(1 对) + DELIVERED_AS(2 对) => 10 类型 / 17 连接对。带参是一等公民）
 // ---------------------------------------------------------------------------
 
 const NO_PARAMS = z.object({}).strict().describe('无参关系');
@@ -322,6 +351,26 @@ export const ONTOLOGY_RELATIONS: ReadonlyArray<OntologyRelationDef> = [
     pairs: [{ from: 'Counterparty', to: 'ServiceCostEvent' }],
     params: NO_PARAMS,
   },
+  {
+    name: 'PARENT_OF',
+    description: '主体层级(spec 2026-09-09 主体身份 §2): 母子公司 Counterparty->Counterparty; 持股比例/备注挂关系 params 不挂节点; 穿透/治理经 link_ontology 登记。',
+    pairs: [{ from: 'Counterparty', to: 'Counterparty' }],
+    params: z.object({
+      ratio: z.number().min(0).max(1).optional().describe('持股比例(0-1 小数, 与 ALLOCATE_TO.ratio 同构)'),
+      note: z.string().optional().describe('备注(如 控股/全资)'),
+    }).strict(),
+  },
+  {
+    name: 'DELIVERED_AS',
+    description: '实际交付(spec 2026-09-09 决策 #10): 收/发货事件实际交付的商品 SKU——合同只约品类时 SKU 随第一次实际收货生长; batch 承载到货批次, 与 attributes.厂号构成食安追溯链。',
+    pairs: [
+      { from: 'GoodsReceiptEvent', to: 'TradeGoods' },
+      { from: 'GoodsDeliveryEvent', to: 'TradeGoods' },
+    ],
+    params: z.object({
+      batch: z.string().optional().describe('到货批次(如 巴西 SIF 厂号批次; 食安追溯)'),
+    }).strict(),
+  },
 ];
 
 export function relationDef(name: string): OntologyRelationDef {
@@ -342,7 +391,7 @@ export function isRelationPairAllowed(name: string, from: string, to: string): b
 
 export function ontologySchemaJson() {
   return {
-    version: '2026-09-07',
+    version: '2026-09-09',
     enums: {
       PayType: PayType.options,
       EventBizType: EventBizType.options,

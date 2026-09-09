@@ -75,19 +75,41 @@ describe('ontology registry', () => {
     });
   });
 
-  it('8 relation types / 14 pairs, endpoints all valid entity names', () => {
-    expect(ONTOLOGY_RELATIONS).toHaveLength(8);
+  it('10 relation types / 17 pairs (docx 8 + spec 2026-09-09 PARENT_OF/DELIVERED_AS)', () => {
+    expect(ONTOLOGY_RELATIONS).toHaveLength(10);
     const names = ONTOLOGY_RELATIONS.map((r) => r.name);
-    expect(new Set(names).size).toBe(8);
+    expect(new Set(names).size).toBe(10);
     expect(names).toEqual(expect.arrayContaining(
       ['ALLOCATE_TO', 'OFFSET_SETTLE', 'WRITE_OFF', 'REVERSE_ORIGIN',
-       'FEEDS_INTO', 'CORRESPONDS_TO', 'TRIGGERS', 'PROVIDE']));
+       'FEEDS_INTO', 'CORRESPONDS_TO', 'TRIGGERS', 'PROVIDE',
+       'PARENT_OF', 'DELIVERED_AS']));
     const pairs = ONTOLOGY_RELATIONS.flatMap((r) => r.pairs);
-    expect(pairs).toHaveLength(14);
+    expect(pairs).toHaveLength(17);
     for (const p of pairs) {
       expect(ENTITY_NAMES).toContain(p.from);
       expect(ENTITY_NAMES).toContain(p.to);
     }
+  });
+
+  it('PARENT_OF: 母子公司带参关系(spec 主体身份 §2)', () => {
+    expect(isRelationPairAllowed('PARENT_OF', 'Counterparty', 'Counterparty')).toBe(true);
+    expect(isRelationPairAllowed('PARENT_OF', 'Counterparty', 'InvoiceEvent')).toBe(false);
+    const params = relationDef('PARENT_OF').params;
+    expect(params.safeParse({}).success).toBe(true);
+    expect(params.safeParse({ ratio: 0.6 }).success).toBe(true);
+    expect(params.safeParse({ ratio: 0.6, note: '控股' }).success).toBe(true);
+    expect(params.safeParse({ ratio: 1.1 }).success).toBe(false); // ratio 0-1
+    expect(params.safeParse({ bogus: 1 }).success).toBe(false); // strict
+  });
+
+  it('DELIVERED_AS: 收/发货事件 -> 商品 SKU(spec 决策 #10, batch 食安追溯)', () => {
+    expect(isRelationPairAllowed('DELIVERED_AS', 'GoodsReceiptEvent', 'TradeGoods')).toBe(true);
+    expect(isRelationPairAllowed('DELIVERED_AS', 'GoodsDeliveryEvent', 'TradeGoods')).toBe(true);
+    expect(isRelationPairAllowed('DELIVERED_AS', 'GoodsReceiptEvent', 'TradeContract')).toBe(false);
+    const params = relationDef('DELIVERED_AS').params;
+    expect(params.safeParse({}).success).toBe(true);
+    expect(params.safeParse({ batch: 'SIF1234-20260909' }).success).toBe(true);
+    expect(params.safeParse({ other: 1 }).success).toBe(false); // strict
   });
 
   it('relation params are strict closed schemas', () => {
@@ -118,10 +140,75 @@ describe('ontology registry', () => {
   it('ontologySchemaJson is the frontend-consumable projection', () => {
     const json = JSON.parse(JSON.stringify(ontologySchemaJson()));
     expect(json.entities).toHaveLength(11);
-    expect(json.relations).toHaveLength(8);
+    expect(json.relations).toHaveLength(10);
     const contract = json.entities.find((e: { name: string }) => e.name === 'TradeContract');
     expect(contract.fields).toContain('contractNo');
     expect(json.enums.PayType).toEqual(['预付', '尾款', '进度款', '质保金']);
+  });
+
+  it('schema version 随注册表结构变更推进(spec 附A: 实施同步清单)', () => {
+    expect(ontologySchemaJson().version).toBe('2026-09-09');
+  });
+
+  it('Counterparty: uscc 主体归一锚必填, 附加属性全可选(spec §3)', () => {
+    const shape = ONTOLOGY_ENTITIES.Counterparty.shape;
+    expect(shape['uscc']).toBeDefined();
+    // uscc 在首字段(身份锚视觉位置)
+    expect(Object.keys(shape)[0]).toBe('uscc');
+    const optional = ['address', 'bankAccount', 'bankName', 'legalRepresentative',
+      'registeredCapital', 'establishedDate', 'businessScope'];
+    for (const f of optional) expect(shape[f]).toBeDefined();
+    // uscc/name 必填经 entitySchema(strict) 权威执行
+    expect(entitySchema('Counterparty').safeParse({ uscc: '91130000MA0A0000XA', name: '某钢铁', role: '供应商' }).success).toBe(true);
+    expect(entitySchema('Counterparty').safeParse({ name: '某钢铁', role: '供应商' }).success).toBe(false);
+    expect(entitySchema('Counterparty').safeParse({ uscc: '91130000MA0A0000XA', role: '供应商' }).success).toBe(false);
+    // 附加属性缺省合法; 未知字段 strict 拒绝
+    expect(entitySchema('Counterparty').safeParse({
+      uscc: '91130000MA0A0000XA', name: '某钢铁', role: '供应商',
+      address: '唐山市', bankAccount: '6222000011112222', bankName: '工行',
+      legalRepresentative: '张某', registeredCapital: '5000万', establishedDate: '2001-01-01',
+      businessScope: '钢材贸易',
+    }).success).toBe(true);
+    expect(entitySchema('Counterparty').safeParse({
+      uscc: '91130000MA0A0000XA', name: '某钢铁', role: '供应商', bogus: 1,
+    }).success).toBe(false);
+  });
+
+  it('TradeGoods.attributes: 受控标量 KV 袋(spec §3, 键<=40 字/值标量/条数<=32)', () => {
+    const legal = {
+      name: '螺纹钢', commodityCode: 'HRB400E',
+      attributes: { '牌号': 'HRB400E', '直径': '12mm', '定尺': '9m', '件重': 12 },
+    };
+    expect(entitySchema('TradeGoods').safeParse(legal).success).toBe(true);
+    // attributes 可选: 缺省合法
+    expect(entitySchema('TradeGoods').safeParse({ name: '螺纹钢', commodityCode: 'X' }).success).toBe(true);
+    // 键超 40 字拒绝
+    const longKey = 'k'.repeat(41);
+    expect(entitySchema('TradeGoods').safeParse({
+      name: '螺纹钢', commodityCode: 'X', attributes: { [longKey]: 'v' },
+    }).success).toBe(false);
+    // 空键拒绝
+    expect(entitySchema('TradeGoods').safeParse({
+      name: '螺纹钢', commodityCode: 'X', attributes: { '': 'v' },
+    }).success).toBe(false);
+    // 值为对象/数组拒绝(仅标量 string|number)
+    expect(entitySchema('TradeGoods').safeParse({
+      name: '螺纹钢', commodityCode: 'X', attributes: { '牌号': { nested: true } },
+    }).success).toBe(false);
+    expect(entitySchema('TradeGoods').safeParse({
+      name: '螺纹钢', commodityCode: 'X', attributes: { '牌号': ['Q235B'] },
+    }).success).toBe(false);
+    // 超 32 条拒绝(superRefine 写入边界叠加)
+    const big: Record<string, string> = {};
+    for (let i = 0; i < 33; i += 1) big[`k${i}`] = 'v';
+    expect(entitySchema('TradeGoods').safeParse({
+      name: '螺纹钢', commodityCode: 'X', attributes: big,
+    }).success).toBe(false);
+    const cap32: Record<string, string> = {};
+    for (let i = 0; i < 32; i += 1) cap32[`k${i}`] = 'v';
+    expect(entitySchema('TradeGoods').safeParse({
+      name: '螺纹钢', commodityCode: 'X', attributes: cap32,
+    }).success).toBe(true);
   });
 
   it('meaning URIs: mechanism ships empty, values must be URIs when attached', () => {

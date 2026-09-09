@@ -55,7 +55,16 @@ describe('GET /api/ontology/master-data/schema', () => {
     expect(byName.get('name')!.required).toBe(true);
     expect(byName.get('commodityCode')!.required).toBe(true);
     expect(byName.get('spec')!.required).toBe(false);
-    expect(byName.get('name')!.description).toContain('商品名');
+    expect(byName.get('name')!.description).toContain('品名');
+    // spec 决策 #8: attributes 袋不进表单投影(fieldKind 不支持 record), 录入走键值编辑区
+    expect(byName.has('attributes')).toBe(false);
+    // Counterparty: uscc 主体归一锚必填出现在投影(spec §3)
+    const party = body.types.find((t) => t.name === 'Counterparty')!;
+    const partyByName = new Map(party.fields.map((f) => [f.name, f]));
+    expect(partyByName.get('uscc')!.required).toBe(true);
+    expect(partyByName.get('name')!.required).toBe(true);
+    expect(partyByName.get('address')!.required).toBe(false);
+    expect(partyByName.get('bankAccount')!.required).toBe(false);
   });
 });
 
@@ -68,13 +77,13 @@ describe('POST /api/ontology/master-data', () => {
   it('401 without session', async () => {
     const app = new Hono<AuthEnv>();
     app.route('/api/ontology', ontologyRoute);
-    const res = await post(app, { entityType: 'Counterparty', name: '某钢铁', role: '供应商' });
+    const res = await post(app, { entityType: 'Counterparty', uscc: '91130000MA0A0000XA', name: '某钢铁', role: '供应商' });
     expect(res.status).toBe(401);
   });
 
   it('400 inputSchema strict：未知字段字段级报错，且不产生写入', async () => {
     const app = appAs('u1');
-    const res = await post(app, { entityType: 'Counterparty', name: '某钢铁', role: '供应商', phantomField: 1 });
+    const res = await post(app, { entityType: 'Counterparty', uscc: '91130000MA0A0000XA', name: '某钢铁', role: '供应商', phantomField: 1 });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string; detail: { fieldErrors: Record<string, string[]> } };
     expect(body.error).toBe('invalid_body');
@@ -92,22 +101,36 @@ describe('POST /api/ontology/master-data', () => {
     expect(Object.keys(body.detail.fieldErrors)).toContain('entityType');
   });
 
-  it('400 注册表语义预检：必填字段缺失（Counterparty 缺 name）字段级报错', async () => {
+  it('400 注册表语义预检：必填字段缺失（Counterparty 缺 uscc/name）字段级报错', async () => {
     const app = appAs('u1');
     const res = await post(app, { entityType: 'Counterparty', role: '供应商' });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string; detail: { fieldErrors: Record<string, string[]> } };
     expect(body.error).toBe('invalid_master_data');
     expect(Object.keys(body.detail.fieldErrors)).toContain('name');
+    expect(Object.keys(body.detail.fieldErrors)).toContain('uscc');
   });
 
   it('400 注册表语义预检：实体词汇外字段（Counterparty 带 commodityCode）整单拒绝', async () => {
     const app = appAs('u1');
-    const res = await post(app, { entityType: 'Counterparty', name: '某钢铁', role: '供应商', commodityCode: 'COAL' });
+    const res = await post(app, { entityType: 'Counterparty', uscc: '91130000MA0A0000XA', name: '某钢铁', role: '供应商', commodityCode: 'COAL' });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string; detail: { fieldErrors: Record<string, string[]> } };
     expect(body.error).toBe('invalid_master_data');
     expect(Object.keys(body.detail.fieldErrors)).toContain('commodityCode');
+  });
+
+  it('400 TradeGoods attributes 袋超限拒绝（spec §3 受控软约束写入边界生效）', async () => {
+    const app = appAs('u1');
+    const big: Record<string, string> = {};
+    for (let i = 0; i < 33; i += 1) big[`k${i}`] = 'v';
+    const res = await post(app, {
+      entityType: 'TradeGoods', name: '螺纹钢', commodityCode: 'HRB400E', attributes: big,
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; detail: { fieldErrors: Record<string, string[]> } };
+    expect(body.error).toBe('invalid_master_data');
+    expect(Object.keys(body.detail.fieldErrors)).toContain('attributes');
   });
 
   it('200 商品登记：v1 词汇为空编码自由填写，写入 createdBy=manual，台账列表刷新可见', async () => {
@@ -128,13 +151,33 @@ describe('POST /api/ontology/master-data', () => {
     expect(list.items[0]!.fields['commodityCode']).toBe('5500K');
   });
 
-  it('200 交易对手登记：validAt 归一 UTC ISO，用户隔离（他人不可见）', async () => {
+  it('200 商品登记带 attributes 袋：KV 原样入 payload（spec §3 品类异构属性）', async () => {
     const app = appAs('u1');
-    const res = await post(app, { entityType: 'Counterparty', name: '某矿业', role: '客户', validAt: '2026-06-25' });
+    const res = await post(app, {
+      entityType: 'TradeGoods', name: '螺纹钢', commodityCode: 'HRB400E',
+      spec: 'HRB400E Φ12mm 9m定尺', unit: '吨',
+      attributes: { '牌号': 'HRB400E', '直径': '12mm', '定尺': '9m', '件重': 12 },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { id: string };
+    const fact = await getTradeFactById(ctx, body.id, 'u1');
+    expect(fact?.payload['attributes']).toEqual({
+      '牌号': 'HRB400E', '直径': '12mm', '定尺': '9m', '件重': 12,
+    });
+  });
+
+  it('200 交易对手登记：uscc 必填、validAt 归一 UTC ISO、附加属性入 payload、用户隔离', async () => {
+    const app = appAs('u1');
+    const res = await post(app, {
+      entityType: 'Counterparty', uscc: '91130000MA0A0000XA', name: '某矿业', role: '客户',
+      validAt: '2026-06-25', bankAccount: '6222000011112222333', legalRepresentative: '张某',
+    });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { id: string };
     const fact = await getTradeFactById(ctx, body.id, 'u1');
     expect(fact?.validAt).toBe('2026-06-25T00:00:00.000Z');
+    expect(fact?.payload['uscc']).toBe('91130000MA0A0000XA');
+    expect(fact?.payload['bankAccount']).toBe('6222000011112222333');
     const other = await listProjectedEntities(ctx, 'Counterparty', {}, 'u2');
     expect(other.total).toBe(0);
   });
