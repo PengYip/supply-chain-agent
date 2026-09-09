@@ -264,7 +264,8 @@ export async function supersedeTradeFact(
          VALUES ($1,$2,$3,$4,$5,COALESCE($6, NOW()),$7,$8,$9)`,
         insertFactParams({ newId, entityType: input.next.entityType, canonical, validAt, invalidAt, ingestedAt, createdBy: input.next.createdBy, uid, documentId: input.next.documentId }),
       );
-      const updated = await client.query(FACT_UPDATE, updateParams);
+      // PG 侧占位经 numberPlaceholders 转 $n(? 是 jsonb 操作符, 不能透传)。
+      const updated = await client.query(numberPlaceholders(FACT_UPDATE), updateParams);
       if (updated.rowCount !== 1) {
         throw new Error(`supersede: 旧事实失效更新未命中(可能已被并发换代): ${input.prevFactId}`);
       }

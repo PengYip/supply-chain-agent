@@ -43,6 +43,7 @@ import { saveChunkVectors, vectorKnn, isVecReady } from '../../src/pipeline/db/v
 import { buildIngestDocumentTool } from '../../src/pipeline/tools/documentEntry.js';
 import { buildRecallDocumentsTool } from '../../src/pipeline/tools/recall.js';
 import { listProjectedEntities } from '../../src/ontology/projection.js';
+import { insertTradeFact, supersedeTradeFact, listTradeFactHistory } from '../../src/ontology/repo.js';
 import { DeterministicEmbedder } from '../../src/pipeline/embedder.js';
 import type { BlockModel } from '../../src/pipeline/types.js';
 
@@ -589,7 +590,7 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
       expect(byTable['ontology_edges']).toEqual(['id', 'relation', 'from_type', 'from_id',
         'to_type', 'to_id', 'params', 'valid_at', 'invalid_at', 'ingested_at', 'created_by', 'user_id']);
       expect(byTable['trade_facts']).toEqual(['id', 'entity_type', 'payload', 'valid_at',
-        'invalid_at', 'ingested_at', 'created_by', 'user_id']);
+        'invalid_at', 'ingested_at', 'created_by', 'user_id', 'document_id']); // document_id: P3 凭证据源 2026-09-09
     });
   });
 
@@ -607,6 +608,56 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
       expect(res.total).toBe(1);
       expect(res.items[0]!.fields['contractNo']).toBe('HT-PG-001');
       expect(res.items[0]!.fields['currency']).toBe('CNY');
+    });
+  });
+
+  // ---- 主体身份 supersede（2026-09-09）：PG 事务路径专用覆盖 -----------------
+  // SQLite 单测无法暴露 $n 占位/事务语义差异（dev 冒烟曾抓到 ? 占位透传 PG 的 500）。
+  describe.skipIf(!RUN_PG)('ontology supersede (PG lane)', () => {
+    // sca_test 跨跑不 truncate：每用例运行时生成唯一 uscc，断言不受历史行影响。
+    const uniqueUscc = () => `9113PGTEST${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    const PARTY = (uscc: string, name: string) => ({
+      entityType: 'Counterparty' as const,
+      payload: { uscc, name, role: '供应商' },
+      createdBy: 'master-data-change',
+    });
+
+    it('supersedeTradeFact 事务化换代：旧行失效+新行生效, 双时间轴正确', async () => {
+      const uscc = uniqueUscc();
+      const prevId = await insertTradeFact(ctx, {
+        ...PARTY(uscc, 'PG 冒烟甲公司'), validAt: '2026-01-01', createdBy: 'manual',
+      }, 'u1');
+      const { newId, prevInvalidAt } = await supersedeTradeFact(ctx, {
+        prevFactId: prevId,
+        next: { ...PARTY(uscc, 'PG 冒烟甲集团'), validAt: '2026-09-09' },
+      }, 'u1');
+      expect(newId).toMatch(/^TF-/);
+      expect(prevInvalidAt).toBe('2026-09-09T00:00:00.000Z');
+      const history = await listTradeFactHistory(ctx, { entityType: 'Counterparty', uscc }, 'u1');
+      expect(history).toHaveLength(2);
+      expect(history[0]!.invalidAt).toBe('2026-09-09T00:00:00.000Z');
+      expect(history[1]!.invalidAt).toBeNull();
+      expect(history[1]!.payload['name']).toBe('PG 冒烟甲集团');
+    });
+
+    it('uscc 不一致拒绝换代（零写入）', async () => {
+      const uscc = uniqueUscc();
+      const prevId = await insertTradeFact(ctx, {
+        ...PARTY(uscc, 'PG 冒烟乙公司'), validAt: '2026-01-01', createdBy: 'manual',
+      }, 'u1');
+      await expect(supersedeTradeFact(ctx, {
+        prevFactId: prevId,
+        next: {
+          entityType: 'Counterparty',
+          payload: { uscc: `${uscc}-OTHER`, name: '别家', role: '供应商' },
+          validAt: '2026-09-09', createdBy: 'master-data-change',
+        },
+      }, 'u1')).rejects.toThrow(/uscc/);
+      const history = await listTradeFactHistory(ctx, { entityType: 'Counterparty', uscc }, 'u1');
+      // 乙公司 uscc 不同不在组内；组内无新行、无失效。
+      expect(history).toHaveLength(1);
+      expect(history[0]!.payload['name']).toBe('PG 冒烟乙公司');
+      expect(history[0]!.invalidAt).toBeNull();
     });
   });
 });
