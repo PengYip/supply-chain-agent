@@ -42,7 +42,9 @@
 
 **Files:**
 - Edit: `apps/server/src/ontology/index.ts`
+- Create: `apps/server/src/ontology/goodsSpec.ts`（normalizeSpec 归一函数，决策 #9）
 - Edit: `apps/server/test/ontology/registry.test.ts`
+- Create: `apps/server/test/ontology/goodsSpec.test.ts`
 
 **Interfaces（产出，后续任务依赖）:**
 - `ONTOLOGY_ENTITIES.Counterparty` = `{ uscc: min(1), name: min(1), role: string, address?, bankAccount?, bankName?, legalRepresentative?, registeredCapital?, establishedDate?, businessScope? }`（uscc 在首字段，describe 注明主体归一锚；附加属性 v1 全可选 string，见 spec §3 附加属性表与三条边界）
@@ -55,6 +57,7 @@
 - [ ] 实现：改 index.ts 两处 + version 常量（TradeGoods 袋的 superRefine 放 entitySchema('TradeGoods') 分支，保持 ONTOLOGY_ENTITIES 纯 object 惯例——与事件金额规则同模式）
 - [ ] 全量 `npm test --workspace apps/server`——预期暴露连带断言（governance/ontologyEntities/schema DTO 快照若有），逐一按 spec §9 清单同步
 - [ ] 表单投影验证：masterDataFormSchemaJson 自动带出 Counterparty 附加属性（fieldKind string 直接过）——主数据抽屉注册字段零改动即渲染（注册表驱动红利，测试断言之）；TradeGoods.attributes 不进字段投影（record 不受 fieldKind 支持，录入走 Task 6 键值编辑区——设计如此）
+- [ ] `normalizeSpec()`（goodsSpec.ts）：归一函数（去首尾/内部空格、全半角、×/x/*统一、小写化），异写用例（"3×120+1×70"=="3*120+1*70"==" 3*120 + 1*70 "）；写入边界暂不强制调用（登记照存原文，Phase 2 匹配通道 2 的归一键依赖此函数比对双方归一值）
 
 ### Task 2: repo——supersedeTradeFact 换代函数
 

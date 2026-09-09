@@ -30,6 +30,13 @@
 | 变更操作 | 纯操作语义，无新表新列 | trade_facts 双时间轴既有 |
 | Counterparty 附加属性 | v1 全可选 string：`address` 地址 / `bankAccount` 收款账号 / `bankName` 开户行 / `legalRepresentative` 法定代表人 / `registeredCapital` 注册资本 / `establishedDate` 成立日期 / `businessScope` 经营范围 | payload，零 DDL |
 | TradeGoods.attributes | **受控标量 KV 袋**：`z.record(z.string().min(1), z.union([z.string(), z.number()])).optional()`——键非空≤40 字、值限 string/number、条数上限 32；品类异构属性（钢材牌号/煤炭发热量/化工纯度）免发版登记 | payload，零 DDL |
+| TradeGoods 规格语义 | `name`=品名（品类族，如"螺纹钢"/"YJV 电力电缆"——家族聚合键）；`spec`=规范化规格串（v1 人工填经 normalizeSpec 归一；v2 品类模板后由结构化属性键按序派生，canonicalSpec）；SKU 粒度=一条事实一个 品名+规格 组合 | payload，零 DDL |
+
+**规格与目录策略（决策 #9）**——钢材/电缆等品类规格组合成百上千，优雅处理 = 三个决策组合：
+
+1. **粒度落 SKU**：主数据一条 = 一个 品名+规格 组合（结算/对账就是对到规格的，价差大）；品类族聚合 = 按 name 分组呈现，不建"商品家族实体"（模型爆炸警告）。
+2. **规格结构化 + 规范串派生**：品类模板（v2）定义有序规格键（螺纹钢→牌号/直径/定尺；电缆→型号/芯数截面/电压等级；电缆愿意整串存一个键也行——拆多细模板定，模型只收标量袋），canonicalSpec=模板键按序 join 的派生串，从根上消灭同义写法；**v1 先落 `normalizeSpec()` 归一函数**（全半角/×x*/大小写/空格，normalizeName 的商品版）治异写。
+3. **目录按需生长，不预建**：规格组合成百上千 ≠ 维护量大——主数据是"见过的规格"集合，单据到达 → Phase 2 Agent 匹配（normalizeSpec+向量召回）命中挂接、未命中预填注册走 L2；人工只审批机器拿不准的长尾。
 
 **分对象策略（决策 #7 修订）**：附加属性对两类对象采取不同扩展方式，理由是属性结构本质不同——
 
@@ -89,6 +96,7 @@ repo 层新增 `supersedeTradeFact(ctx, {...}, userId?)`：双后端事务（SQL
 6. **timeline 扩展到 Counterparty**：名称史即时间线；详情抽屉"仅事件实体支持时间切片"的空态文案同步更新。
 7. **附加属性分对象策略**：Counterparty（同构）逐个进注册表；TradeGoods（异构）开受控标量 KV 袋。台账列/表单/搜索/治理全景的注册表驱动自动化对"注册字段"依然全自动；商品袋是文档化的、有边界的例外——它的治理分两步：v1 写入边界软约束（标量/条数/键长），v2 品类模板硬门禁（业务确认商品分层后，同 COMMODITY_CODES 收敛路径）。属性变更不单独建机制——supersede 整包快照 + 双时间轴统一承载任意属性的变更史。
 8. **商品袋不进表单投影，进键值编辑区**：masterDataFormSchemaJson 反射注册字段（fieldKind 不支持 record），attributes 的录入/展示由前端专用键值编辑区与"扩展属性"渲染区承载——这是开放袋的固有代价，限定在一个组件内。
+9. **规格落 SKU 粒度 + 规范串派生 + 目录按需生长**：钢材/电缆规格组合成百上千，预建目录不可维护；主数据=品名（家族键）+规范化规格串（v1 normalizeSpec 归一人工输入，v2 品类模板派生 canonicalSpec），目录由单据流按需生长（Phase 2 Agent 匹配/注册），人工只审批长尾。
 
 - `registry.test.ts`：ONTOLOGY_RELATIONS 长度 8→9、连接对 14→15；`ontologySchemaJson().version` 常量；TradeGoods.attributes 袋约束（键长/条数/标量值）。
 - `masterData.test / routes` 用例：uscc 必填后既有 Counterparty 用例补 uscc；TradeGoods 用例带 attributes（含超限/非标量拒绝负例）。
@@ -110,7 +118,7 @@ repo 层新增 `supersedeTradeFact(ctx, {...}, userId?)`：双后端事务（SQL
 人工维护商品主数据工作量过大；文档管线已抽取品名/规格，pgvector 召回+reranker、候选工作台模式、L2 审批链、attributes 袋全部就位。设计原则：**匹配优先、注册兜底、注册必过人工**。
 
 三档动作（风险/自动化递增）：
-1. **匹配（L1 只读）**：单据商品描述 → 主数据检索打分，四通道从硬到软：商品码精确 → 归一键（品名+规格）精确 → 向量召回（pgvector 嵌入"品名+规格+类别"+ reranker，解决"热轧卷板 vs 热轧板卷"异写）→ LLM 语义判定兜底（只产生候选提议）。输出候选+分数+证据字段。
+1. **匹配（L1 只读）**：单据商品描述 → 主数据检索打分，四通道从硬到软：商品码精确 → 归一键（normalizeSpec(品名)+normalizeSpec(规格)，决策 #9）精确 → 向量召回（pgvector 嵌入"品名+规格+类别"+ reranker，解决"热轧卷板 vs 热轧板卷"异写）→ LLM 语义判定兜底（只产生候选提议）。输出候选+分数+证据字段。
 2. **关联（低风险写，软门控）**：高置信候选自动把单据/文档图节点挂到既有 TradeGoods，记 confidence + confirmationSource='auto'。
 3. **注册（SSOT 写，L2 必审）**：无候选 → `register_goods` L2 工具，name/spec/commodityCode/attributes 全部从单据抽取预填 → 审批中心批准 → insertTradeFact 写入边界。错误主数据会全链扩散，这道人工门不能省。
 
