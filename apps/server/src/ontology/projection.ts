@@ -192,6 +192,8 @@ export function factToEntity(row: TradeFactRow): ProjectedEntity {
     label: businessKeyOf(row.payload) ?? row.id,
     fields: row.payload,
     source: 'trade_facts',
+    // P3 凭证据源: 来源单据 id 走 meta(非注册表实体字段, 详情抽屉单列展示)。
+    ...(row.documentId ? { meta: { documentId: row.documentId } } : {}),
     validAt: row.validAt,
     ingestedAt: row.ingestedAt,
   };

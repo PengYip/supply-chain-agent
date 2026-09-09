@@ -93,6 +93,41 @@ describe('getNeighbors cross-space hops (P2 multi-anchor lineage)', () => {
     expect(res.nodes.some((n) => n.entityType === 'TradeContract')).toBe(true);
   });
 
+  it('expands EVIDENCE provenance for a fact anchor carrying documentId (P3)', async () => {
+    const pid = await insertTradeFact(ctx, {
+      entityType: 'PaymentEvent',
+      payload: { eventBizType: '正向', amount: 300_000, currency: 'CNY', payType: '预付' },
+      validAt: '2026-06-20', createdBy: 'test', documentId: 'doc-uuid-7',
+    }, 'u1');
+    // findEntities: 事实节点(kind=PaymentEvent, name=TF id)命中 -> 以事件节点为 subject
+    graphRepoMocks.findEntities.mockImplementation(async (i: { kind?: string; name: string }) =>
+      i.kind === 'PaymentEvent' && i.name === pid
+        ? [{ elementId: 'e-payment', kind: 'PaymentEvent', name: pid, props: {} }]
+        : []);
+    graphRepoMocks.graphQuery.mockResolvedValue({
+      subject: { elementId: 'e-payment', kind: 'PaymentEvent', name: pid, props: {} },
+      nodes: [
+        { elementId: 'e-doc', kind: 'Document', name: 'doc-uuid-7', props: { docId: 'doc-uuid-7', docType: '付款申请单' } },
+      ],
+      edges: [
+        { elementId: 'ev-1', type: 'EVIDENCE', srcId: 'e-doc', dstId: 'e-payment', props: {}, confidence: 0 },
+      ],
+    });
+
+    const res = await getNeighbors(ctx, { type: 'PaymentEvent', id: pid, depth: 1 }, 'u1');
+
+    expect(res.lineage.available).toBe(true);
+    expect(res.lineage.subjectFound).toBe(true);
+    const doc = res.nodes.find((n) => n.entityType === 'Document');
+    expect(doc?.id).toBe('doc-uuid-7');
+    const edge = res.edges.find((e) => e.origin === 'lineage');
+    expect(edge).toMatchObject({
+      relation: 'EVIDENCE',
+      fromType: 'Document', fromId: 'doc-uuid-7',
+      toType: 'PaymentEvent', toId: pid,
+    });
+  });
+
   it('stops cross-space expansion at the node cap (scale guard)', async () => {
     const s = await seedCostToContract();
     graphRepoMocks.findEntities.mockResolvedValue([

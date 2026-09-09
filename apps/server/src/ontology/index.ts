@@ -141,7 +141,10 @@ export const ENTITY_DESCRIPTIONS: Record<OntologyEntityName, string> = {
 // ---------------------------------------------------------------------------
 
 export const DUAL_TIMELINE_FIELDS = ['validAt', 'invalidAt', 'ingestedAt'] as const;
-export const PROVENANCE_FIELDS = ['createdBy', 'sourceSpan', 'confidence'] as const;
+// documentId(2026-09-09 P3 凭证据源): trade_facts.document_id 列 + EVIDENCE 图边的
+// 溯源锚点。可选——登记时知道来源单据才填(对话上下文/表单手填); 单据未确认
+// (图上无 Document 节点)时投影跳过不报错。
+export const PROVENANCE_FIELDS = ['createdBy', 'sourceSpan', 'confidence', 'documentId'] as const;
 
 // 工具输入共享词汇（结构/溯源字段, Task 4 CI 门禁用）。新工具字段先进本表或实体 schema。
 export const SHARED_TOOL_FIELD_NAMES = [

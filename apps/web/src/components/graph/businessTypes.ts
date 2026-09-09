@@ -74,6 +74,7 @@ export const EDGE_LABELS: Record<string, string> = {
   TRIGGERS: '触发付款',
   PROVIDE: '提供服务',
   CONTAINS: '文档血缘',
+  EVIDENCE: '凭证溯源',
 };
 
 /** 边样式覆盖: binds(人工确认的绑定)与抽取级提及边视觉区分。 */
@@ -90,6 +91,8 @@ export const EDGE_STYLE_OVERRIDES: Record<string, { color: string; dashed: boole
   TRIGGERS: { color: '#94A3B8', dashed: true },
   PROVIDE: { color: '#94A3B8', dashed: true },
   CONTAINS: { color: '#64748B', dashed: true },
+  // EVIDENCE 凭证据源(spec 2026-09-09 P3): 单据 -> 事件事实, 溯源族灰虚线。
+  EVIDENCE: { color: '#64748B', dashed: true },
 };
 
 export function edgeLabel(type: string): string {

@@ -182,16 +182,26 @@ async function lineageSubjectElementId(
     return hits[0] ? { elementId: hits[0].elementId } : null;   // 不限 edgeKinds
   }
   if (type === 'GoodsReceiptEvent' || type === 'GoodsDeliveryEvent') {
+    // 收发双源: 单据源(docId)走 CONTAINS 批拆; 不命中继续落到下方事实分支
+    // (TF id 收发事实挂 documentId 走 EVIDENCE)。
     const doc = await findDocRowById(ctx, id, type, uid);
-    if (!doc) return null;
-    const hits = await findEntities({ kind: 'Document', name: doc.id, exact: true });
-    return hits[0] ? { elementId: hits[0].elementId, edgeKinds: ['CONTAINS'] } : null;
+    if (doc) {
+      const hits = await findEntities({ kind: 'Document', name: doc.id, exact: true });
+      if (hits[0]) return { elementId: hits[0].elementId, edgeKinds: ['CONTAINS'] };
+    }
+  }
+  // P3 凭证据源: 事实行挂 documentId -> 事件自身图节点的 EVIDENCE 邻域(原始单据)。
+  const fact = await getTradeFactById(ctx, id, uid);
+  if (fact?.documentId) {
+    const hits = await findEntities({ kind: type, name: id, exact: true });
+    return hits[0] ? { elementId: hits[0].elementId, edgeKinds: ['EVIDENCE'] } : null;
   }
   return null;
 }
 
-/** BFS 可达节点的桥解析(P2)：合同 -> Contract 图节点；收发单据源(documents 源,
- *  id=docId) -> Document 图节点。事实源(trade_facts)返回 null(无图桥)。 */
+/** BFS 可达节点的桥解析(P2/P3)：合同 -> Contract 图节点；收发单据源(documents 源,
+ *  id=docId) -> Document 图节点；事实行挂 documentId -> EVIDENCE 凭证据源展开。
+ *  无 documentId 的事实返回 null。 */
 async function midNodeLineageSubject(
   ctx: DbContext, n: NeighborNode, uid: string,
 ): Promise<{ elementId: string; id: string; type: string; edgeKinds?: string[] } | null> {
@@ -209,6 +219,15 @@ async function midNodeLineageSubject(
     const hits = await findEntities({ kind: 'Document', name: doc.id, exact: true });
     return hits[0]
       ? { elementId: hits[0].elementId, id: n.id, type: n.entityType, edgeKinds: ['CONTAINS'] }
+      : null;
+  }
+  // P3 凭证据源: 事实节点挂 documentId -> 事件自身图节点的 EVIDENCE 邻域
+  // (原始单据, 一跳即到磅单/发票)。事件图节点由 graphSync 投影保证存在。
+  const fact = await getTradeFactById(ctx, n.id, uid);
+  if (fact?.documentId) {
+    const hits = await findEntities({ kind: n.entityType, name: n.id, exact: true });
+    return hits[0]
+      ? { elementId: hits[0].elementId, id: n.id, type: n.entityType, edgeKinds: ['EVIDENCE'] }
       : null;
   }
   return null;
@@ -234,7 +253,11 @@ interface MergeAcc {
   edgeIds: Set<string>;
 }
 
-/** 把一个图节点(subject)的邻域并入结果：文档节点 + lineage 边，键去重。 */
+/** 把一个图节点(subject)的邻域并入结果：Document 节点 + lineage 边，键去重。
+ *  邻居按 kind 映射(Document=docId, 其余=实体名)，但只有 Document 进画布
+ *  (D7 单据邻域口径)；边保留条件 = 两端均落在 {主体} ∪ Document 内——
+ *  EVIDENCE(单据-事件)/CONTAINS(单据谱系)/executes(合同-单据) 全部覆盖，
+ *  Party/Commodity 等旁支邻接不进穿透画布。 */
 async function mergeLineageNeighborhood(
   result: OntologyNeighbors,
   acc: MergeAcc,
@@ -247,13 +270,18 @@ async function mergeLineageNeighborhood(
     direction: 'both',
     ...(subject.edgeKinds ? { edgeKinds: subject.edgeKinds } : {}),
   });
-  // elementId -> 业务 id 映射(合同侧 = 台账 id, 文档侧 = docId)
-  const infoByElementId = new Map<string, { id: string; type: string }>([
-    [subject.elementId, { id: subject.id, type: subject.type }],
-  ]);
+  // elementId -> 业务 id 映射(主体 = 调用方给定; Document = docId; 其余 = 节点名)
+  const subjectInfo = { id: subject.id, type: subject.type };
+  const infoByElementId = new Map<string, { id: string; type: string }>();
   for (const n of res.nodes) {
+    infoByElementId.set(
+      n.elementId,
+      n.kind === 'Document'
+        ? { id: docIdOfGraphNode(n), type: 'Document' }
+        : { id: n.name, type: n.kind },
+    );
+    if (n.kind !== 'Document') continue;   // 非单据邻接不进穿透画布
     const docId = docIdOfGraphNode(n);
-    infoByElementId.set(n.elementId, { id: docId, type: 'Document' });
     const key = `Document:${docId}`;
     if (acc.docKeys.has(key)) continue;
     acc.docKeys.add(key);
@@ -268,21 +296,23 @@ async function mergeLineageNeighborhood(
       },
     });
   }
+  const docOrSubject = (x: { id: string; type: string } | undefined) =>
+    x && (x.type === 'Document' || (x.id === subject.id && x.type === subject.type));
   for (const e of res.edges) {
     const id = `lineage ${e.elementId}`;
     if (acc.edgeIds.has(id)) continue;
-    const from = infoByElementId.get(e.srcId);
-    const to = infoByElementId.get(e.dstId);
-    if (!from || !to) continue;   // 端点不在结果集(截断/异类)则弃边
+    const from = e.srcId === subject.elementId ? subjectInfo : infoByElementId.get(e.srcId);
+    const to = e.dstId === subject.elementId ? subjectInfo : infoByElementId.get(e.dstId);
+    if (!docOrSubject(from) || !docOrSubject(to)) continue;   // 端点不在结果集/非单据邻接则弃边
     acc.edgeIds.add(id);
     result.edges.push({
       id,
       relation: e.type,
       origin: 'lineage',
-      fromType: from.type,
-      fromId: from.id,
-      toType: to.type,
-      toId: to.id,
+      fromType: from!.type,
+      fromId: from!.id,
+      toType: to!.type,
+      toId: to!.id,
       params: e.props ?? {},
       validAt: null,
     });

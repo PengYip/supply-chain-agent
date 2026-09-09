@@ -138,3 +138,27 @@ MATCH path = (red:InvoiceEvent)-[:REVERSE_ORIGIN*1..3]->(blue:InvoiceEvent) RETU
   断言补 `bridgesExpanded: 0`。
 - 事实实体(TF id)节点仍不展开文档血缘——facts 无文档溯源字段，等
   create_trade_event 增加 documentId 溯源后补 EVIDENCE 边（P3 接缝）。
+
+## P3 实施记录（2026-09-09，凭证据源 EVIDENCE 全链）
+
+- **数据模型**：`PROVENANCE_FIELDS` 增 `documentId`；`trade_facts.document_id` 双后端
+  落列（SQLite CREATE + PRAGMA 守卫 ALTER；PG `ADD COLUMN IF NOT EXISTS` + drizzle
+  twin）；`repo.ts` TradeFactInput/Row/insert/行映射全链透传。
+- **写入面**：`create_trade_event` inputSchema 增可选 `documentId`（execute 解构摘出，
+  溯源列不进 strict 实体 payload）；表单路由 `POST /api/trade-events` 预检同款解构
+  （指令逐字透传给工具）。
+- **图投影**：`graphSync` 事实节点 props 带 documentId + 新增 `EVIDENCE` 边
+  `(:Document)-[:EVIDENCE]->(:事件节点)`；Document 图节点不存在（单据未确认）计
+  `skippedEvidence`（正常态，确认后下次同步自动补边），不算 failures。prune 收敛时
+  EVIDENCE 边随事件节点 DETACH 自动消亡，无悬空。
+- **穿透**：`neighbors.ts` 锚点层与跨空间逐跳层均增事实分支——挂 documentId 的事实
+  以自身图节点为 subject、`edgeKinds=['EVIDENCE']` 展开，一跳到原始单据；
+  `mergeLineageNeighborhood` 重构为 kind 感知映射（Document=docId、其余=实体名），
+  节点只并 Document（D7 单据邻域口径），边保留条件=两端落在 {主体} ∪ Document——
+  顺带修掉 P2 前合同邻域 Party/Quota 被误标 Document 的隐性问题。
+- **前端**：`EDGE_LABELS.EVIDENCE='凭证溯源'` + 灰虚线样式；`formatEdgeParams` 改
+  白名单制（过滤 edgeId/userId/validAt 投影元数据噪音，新增 role 标签）；台账详情
+  抽屉增「来源单据」行（meta.documentId）；`GraphSyncResultDTO.skippedEvidence`。
+- **测试**：graphSync 2 例（EVIDENCE 边建立/未确认单据 skippedEvidence）、
+  neighborsMultiAnchor 1 例（事实锚点 EVIDENCE 展开）、tables FACT_COLS 列断言更新、
+  G_ENTITY mock kind 修正。全量 server 1779 / web 113 / lint 0 错误。

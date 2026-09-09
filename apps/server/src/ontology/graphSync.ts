@@ -75,6 +75,9 @@ export interface GraphSyncResult {
   edgeCount: number;
   /** prune 收敛删除的陈旧事实节点数(truncated 时恒 0)。 */
   prunedCount: number;
+  /** 因 Document 图节点不存在(单据尚未确认)而跳过的 EVIDENCE 边数——
+   *  正常态非错误, 单据确认后下次同步自动补上。 */
+  skippedEvidence: number;
   truncated: boolean;
   failures: string[];
 }
@@ -93,7 +96,7 @@ const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
  */
 export async function syncOntologyGraph(deps: SyncOntologyGraphDeps): Promise<GraphSyncResult> {
   if (!isOntologyGraphConfigured()) {
-    return { status: 'skipped', nodeCount: 0, edgeCount: 0, prunedCount: 0, truncated: false, failures: [] };
+    return { status: 'skipped', nodeCount: 0, edgeCount: 0, prunedCount: 0, skippedEvidence: 0, truncated: false, failures: [] };
   }
   const io = deps.io ?? defaultGraphSyncIo;
   const cap = deps.cap ?? SYNC_ROW_CAP;
@@ -108,8 +111,10 @@ export async function syncOntologyGraph(deps: SyncOntologyGraphDeps): Promise<Gr
   const edgeSlice = edges.slice(0, cap);
 
   // 1. 事实节点 upsert: label=实体类型, name=TF id(name 唯一约束体系), 幂等 MERGE。
+  //    documentId 溯源列进节点 props(EVIDENCE 边的端点锚点)。
   const nodeIdByKey = new Map<string, string>(); // `${entityType}:${id}` -> elementId
   const keepByLabel = new Map<string, Set<string>>();
+  const factsWithDoc: TradeFactRow[] = [];
   for (const fact of factSlice) {
     const props: Record<string, unknown> = {
       ...fact.payload,
@@ -117,6 +122,7 @@ export async function syncOntologyGraph(deps: SyncOntologyGraphDeps): Promise<Gr
       validAt: fact.validAt,
       ingestedAt: fact.ingestedAt,
       createdBy: fact.createdBy,
+      ...(fact.documentId ? { documentId: fact.documentId } : {}),
     };
     try {
       const node = await io.createEntity({ kind: fact.entityType, name: fact.id, props });
@@ -126,8 +132,34 @@ export async function syncOntologyGraph(deps: SyncOntologyGraphDeps): Promise<Gr
         keep.add(fact.id);
         keepByLabel.set(fact.entityType, keep);
       }
+      if (fact.documentId) factsWithDoc.push(fact);
     } catch (e) {
       failures.push(`node ${fact.entityType}/${fact.id}: ${msg(e)}`);
+    }
+  }
+
+  // 2. EVIDENCE 凭证据源边(spec 2026-09-09 P3): (:Document)-[:EVIDENCE]->(:事件节点)。
+  //    单据节点只在已确认文档图上找(findEntities exact), 不存在 -> skippedEvidence
+  //    (正常态: 单据未确认, 确认后下次同步自动补边), 不计入 failures。
+  let skippedEvidence = 0;
+  for (const fact of factsWithDoc) {
+    const eventEl = nodeIdByKey.get(`${fact.entityType}:${fact.id}`);
+    if (!eventEl) continue;
+    try {
+      const docs = await io.findEntities({ kind: 'Document', name: fact.documentId!, exact: true });
+      const docEl = docs[0]?.elementId;
+      if (!docEl) {
+        skippedEvidence += 1;
+        continue;
+      }
+      await io.mergeEdge({
+        srcId: docEl,
+        dstId: eventEl,
+        kind: 'EVIDENCE',
+        props: {}, // 溯源语义在边型本身; 金额/时间在事件节点上, 悬浮层不展示噪音
+      });
+    } catch (e) {
+      failures.push(`evidence ${fact.entityType}/${fact.id}: ${msg(e)}`);
     }
   }
 
@@ -194,6 +226,7 @@ export async function syncOntologyGraph(deps: SyncOntologyGraphDeps): Promise<Gr
     nodeCount: nodeIdByKey.size,
     edgeCount,
     prunedCount,
+    skippedEvidence,
     truncated,
     failures,
   };

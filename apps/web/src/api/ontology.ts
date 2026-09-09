@@ -154,6 +154,8 @@ export interface GraphSyncResultDTO {
   nodeCount: number;
   edgeCount: number;
   prunedCount: number;
+  /** 因单据未确认(图上无 Document 节点)而跳过的 EVIDENCE 边数；确认后下次同步补上。 */
+  skippedEvidence?: number;
   truncated: boolean;
   failures: string[];
 }

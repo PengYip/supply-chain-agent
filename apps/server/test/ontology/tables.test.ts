@@ -10,7 +10,7 @@ beforeEach(() => {
 const EDGE_COLS = ['id', 'relation', 'from_type', 'from_id', 'to_type', 'to_id',
   'params', 'valid_at', 'invalid_at', 'ingested_at', 'created_by', 'user_id'];
 const FACT_COLS = ['id', 'entity_type', 'payload', 'valid_at', 'invalid_at',
-  'ingested_at', 'created_by', 'user_id'];
+  'ingested_at', 'created_by', 'user_id', 'document_id'];
 
 function tableCols(table: string): string[] {
   return (ctx.sqlite.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)

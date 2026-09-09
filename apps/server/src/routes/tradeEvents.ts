@@ -62,7 +62,8 @@ tradeEventsRoute.post('/', async (c) => {
 
   // 注册表语义预检（快速失败，省一次 LLM 轮次；权威校验仍在工具 execute/写入边界）：
   // entityType 判别 -> 实体 strict schema（含 逆向=负数金额规则）。
-  const { entityType, validAt, ...payload } = input;
+  // documentId 是溯源列(provenance)而非实体 payload——与工具 execute 同款解构摘出。
+  const { entityType, validAt, documentId, ...payload } = input;
   const entityCheck = entitySchema(entityType).safeParse(payload);
   if (!entityCheck.success) {
     return c.json({ error: 'invalid_event', detail: fieldLevelErrors(entityCheck.error) }, 400);

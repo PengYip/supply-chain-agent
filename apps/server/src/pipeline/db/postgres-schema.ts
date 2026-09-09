@@ -626,6 +626,8 @@ export const tradeFacts = pgTable(
     ingestedAt: timestamp('ingested_at', { withTimezone: true }).notNull().defaultNow(),
     createdBy: text('created_by').notNull(),
     userId: text('user_id').notNull().default(''),
+    // P3 凭证据源(2026-09-09): documents.id 溯源锚点; NULL=无来源单据。
+    documentId: text('document_id'),
   },
   (t) => ({
     typeIdx: index('idx_trade_facts_type').on(t.entityType, t.userId),

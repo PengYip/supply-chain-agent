@@ -284,6 +284,31 @@ describe('syncOntologyGraph', () => {
     expect(nodes.size).toBe(2);
   });
 
+  it('projects EVIDENCE edges for facts carrying documentId (P3 凭证据源)', async () => {
+    const pid = await insertFact('u1', { documentId: 'doc-uuid-9' });
+    const { io, nodes, edges } = makeFakeIo([{ kind: 'Document', name: 'doc-uuid-9' }]);
+    const res = await syncOntologyGraph({ ctx, userId: 'u1', io });
+    expect(res.status).toBe('ok');
+    expect(res.skippedEvidence).toBe(0);
+    // 节点 props 带溯源锚点
+    expect(nodes.get(`PaymentEvent:${pid}`)!.props['documentId']).toBe('doc-uuid-9');
+    // EVIDENCE 边: Document -> 事件节点
+    const ev = edges.find((e) => e.kind === 'EVIDENCE');
+    expect(ev).toBeDefined();
+    expect(ev!.srcId).toBe('el-seed-1');           // Document 桥节点
+    expect(ev!.dstId).toBe(nodes.get(`PaymentEvent:${pid}`)!.elementId);
+  });
+
+  it('counts skippedEvidence (not failures) when the document node is not in the graph', async () => {
+    await insertFact('u1', { documentId: 'doc-unconfirmed' });
+    const { io, edges } = makeFakeIo(); // 空图: 单据未确认
+    const res = await syncOntologyGraph({ ctx, userId: 'u1', io });
+    expect(res.status).toBe('ok');                 // 正常态, 非错误
+    expect(res.skippedEvidence).toBe(1);
+    expect(res.failures).toHaveLength(0);
+    expect(edges.find((e) => e.kind === 'EVIDENCE')).toBeUndefined();
+  });
+
   it('tolerates io failures per item: node failures are recorded, status is partial', async () => {
     await insertFact('u1');
     const boomIo: GraphSyncIo = {

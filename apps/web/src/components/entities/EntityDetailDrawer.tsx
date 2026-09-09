@@ -127,6 +127,12 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
                   <td className="py-1.5 text-xs text-ink-soft">ingestedAt</td>
                   <td className="py-1.5 text-xs text-ink-soft">{detail.entity.ingestedAt ?? '—'}</td>
                 </tr>
+                {detail.entity.meta?.documentId && (
+                  <tr className="border-t border-line/40">
+                    <td className="py-1.5 text-xs text-ink-soft">来源单据</td>
+                    <td className="py-1.5 text-xs text-ink">{detail.entity.meta.documentId}</td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

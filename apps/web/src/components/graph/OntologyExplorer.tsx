@@ -60,19 +60,22 @@ function detailTarget(n: GraphNode): { type: string; id: string } | null {
 const EDGE_PARAM_LABELS: Record<string, string> = {
   amount: '金额', ratio: '比例', method: '方式', batch: '批次',
   partial: '部分核销', reason: '原因', unitIndex: '序号', pages: '页码',
+  role: '角色',
 };
 
-/** 边参数摘要(spec: 金额/比例/方式)：hover 浮层与选中详情共用。 */
+/** 边参数摘要(spec: 金额/比例/方式)：hover 浮层与选中详情共用。
+ *  只展示已知业务参数(白名单)，过滤 edgeId/userId/validAt 等投影元数据噪音。 */
 export function formatEdgeParams(params: Record<string, unknown> | null | undefined): string {
   if (!params) return '';
   const parts: string[] = [];
   for (const [k, v] of Object.entries(params)) {
     if (v == null || v === '') continue;
+    if (!(k in EDGE_PARAM_LABELS)) continue;
     let text = String(v);
     if (k === 'ratio' && typeof v === 'number') text = `${Math.round(v * 100)}%`;
     if (k === 'amount' && typeof v === 'number') text = v.toLocaleString();
     if (k === 'partial') text = v ? '是' : '否';
-    parts.push(`${EDGE_PARAM_LABELS[k] ?? k} ${text}`);
+    parts.push(`${EDGE_PARAM_LABELS[k]} ${text}`);
   }
   return parts.join(' / ');
 }

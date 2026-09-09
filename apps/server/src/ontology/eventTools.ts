@@ -30,6 +30,7 @@ export const CreateTradeEventInputSchema = z.object({
   quantity: z.number().optional().describe('数量（收货/发货必填，如 100）'),
   unit: z.string().optional().describe('单位（收货/发货/结算必填，如 吨）'),
   settledQuantity: z.number().optional().describe('结算数量（SettlementEvent 必填，如 100）'),
+  documentId: z.string().min(1).optional().describe('来源单据 id（凭证据源：对话上下文/表单中有明确来源单据时传递，图上据此建立 单据-凭证溯源 边；没有就省略）'),
 });
 
 /** 表单 UX 默认值（服务端投影给表单入口；业务语义仍以注册表与写入边界为准）。 */
@@ -53,11 +54,13 @@ export function buildCreateTradeEventTool(deps: { ctx: DbContext; userId?: strin
       '数字或日期不精确时先向用户确认，不要猜测。' +
       '返回 { status: "ok", id, entityType } 或 { status: "invalid", detail }。',
     inputSchema: CreateTradeEventInputSchema,
-    execute: async ({ entityType, validAt, ...payload }) => {
+    execute: async ({ entityType, validAt, documentId, ...payload }) => {
       try {
         const id = await insertTradeFact(
           deps.ctx,
-          { entityType, payload, validAt, createdBy: 'create_trade_event' } as TradeFactInput,
+          // documentId 是溯源列(provenance), 不是实体 payload——strict 实体校验
+          // 会拒绝注册表外字段, 必须在解构层摘出。
+          { entityType, payload, validAt, createdBy: 'create_trade_event', documentId } as TradeFactInput,
           deps.userId,
         );
         // 落账成功后图投影 fire-and-forget(spec 2026-09-09): 永不阻塞登记主流程。

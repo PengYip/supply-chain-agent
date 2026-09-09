@@ -494,6 +494,15 @@ export function migrate(sqlite: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_trade_facts_ingested ON trade_facts(ingested_at);
   `);
 
+  // P3 凭证据源(2026-09-09 spec §EVIDENCE): trade_facts.document_id 溯源列。
+  // 存量库 guarded ALTER 补列(CREATE TABLE IF NOT EXISTS 不加列), 与上方模式一致。
+  {
+    const cols = sqlite.prepare('PRAGMA table_info(trade_facts)').all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'document_id')) {
+      try { sqlite.exec('ALTER TABLE trade_facts ADD COLUMN document_id TEXT'); } catch { /* concurrent */ }
+    }
+  }
+
   // P4: 种子冲突策略列(managed-wins)。NULL=纯种子行(boot 可覆写);非空=DB 优先。
   // 存量 dev 库补列, 同 guarded ALTER 模式(CREATE TABLE IF NOT EXISTS 不加列;
   // try/catch 兜并发初始化 "duplicate column name" -- 见 sessionStore.ts 51ef03c)。
@@ -1165,6 +1174,8 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_trade_facts_type ON trade_facts(entity_type, user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_trade_facts_valid ON trade_facts(valid_at)`,
     `CREATE INDEX IF NOT EXISTS idx_trade_facts_ingested ON trade_facts(ingested_at)`,
+    // P3 凭证据源(2026-09-09): 溯源列, 存量库 ADD COLUMN IF NOT EXISTS 幂等补列。
+    `ALTER TABLE trade_facts ADD COLUMN IF NOT EXISTS document_id TEXT`,
   ];
   try {
     for (const sql of statements) {

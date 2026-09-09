@@ -34,7 +34,7 @@ const insertContract = (id: string, contractNo: string) => {
 };
 
 const G_ENTITY = (elementId: string, name: string, props: Record<string, unknown> = {}) =>
-  ({ elementId, kind: props['batchRole'] ? 'Document' : 'Contract', name, props });
+  ({ elementId, kind: (props['docId'] || props['batchRole']) ? 'Document' : 'Contract', name, props });
 
 describe('getNeighbors lineage merge (mocked graph)', () => {
   it('contract anchor merges Neo4j document neighborhood keyed by docId', async () => {

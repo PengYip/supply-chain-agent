@@ -22,6 +22,8 @@ export interface TradeFactInput {
   invalidAt?: string | Date | null;
   ingestedAt?: string | Date;
   createdBy: string;
+  /** P3 凭证据源(2026-09-09): documents.id 溯源锚点; 可选, 图投影据此写 EVIDENCE 边。 */
+  documentId?: string | null;
 }
 
 export interface OntologyEdgeInput {
@@ -41,6 +43,8 @@ export interface TradeFactRow {
   id: string; entityType: string; payload: Record<string, unknown>;
   validAt: string; invalidAt: string | null; ingestedAt: string;
   createdBy: string; userId: string;
+  /** documents.id 溯源锚点; NULL=无来源单据。 */
+  documentId: string | null;
 }
 
 export interface OntologyEdgeRow {
@@ -51,7 +55,7 @@ export interface OntologyEdgeRow {
   createdBy: string; userId: string;
 }
 
-const FACT_COLS = 'id, entity_type, payload, valid_at, invalid_at, ingested_at, created_by, user_id';
+const FACT_COLS = 'id, entity_type, payload, valid_at, invalid_at, ingested_at, created_by, user_id, document_id';
 const EDGE_COLS = 'id, relation, from_type, from_id, to_type, to_id, params, valid_at, invalid_at, ingested_at, created_by, user_id';
 
 const parseJson = (raw: unknown): Record<string, unknown> => {
@@ -81,17 +85,17 @@ export async function insertTradeFact(
     const pg = ctx as PostgresDbContext;
     await pg.pool.query(
       `INSERT INTO trade_facts (${FACT_COLS})
-       VALUES ($1,$2,$3,$4,$5,COALESCE($6, NOW()),$7,$8)`,
+       VALUES ($1,$2,$3,$4,$5,COALESCE($6, NOW()),$7,$8,$9)`,
       [id, input.entityType, JSON.stringify(canonical), validAt, invalidAt,
-       ingestedAt, input.createdBy, uid],
+       ingestedAt, input.createdBy, uid, input.documentId ?? null],
     );
     return id;
   }
   ctx.sqlite.prepare(
-    `INSERT INTO trade_facts (id, entity_type, payload, valid_at, invalid_at, ingested_at, created_by, user_id)
-     VALUES (?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now')), ?, ?)`,
+    `INSERT INTO trade_facts (id, entity_type, payload, valid_at, invalid_at, ingested_at, created_by, user_id, document_id)
+     VALUES (?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now')), ?, ?, ?)`,
   ).run(id, input.entityType, JSON.stringify(canonical), validAt, invalidAt,
-    ingestedAt, input.createdBy, uid);
+    ingestedAt, input.createdBy, uid, input.documentId ?? null);
   return id;
 }
 
@@ -107,6 +111,7 @@ function factRowFrom(r: Record<string, unknown>, pg: boolean): TradeFactRow {
     ingestedAt: iso(r['ingested_at']) as string,
     createdBy: r['created_by'] as string,
     userId: r['user_id'] as string,
+    documentId: r['document_id'] == null ? null : String(r['document_id']),
   };
 }
 
