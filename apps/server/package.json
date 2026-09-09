@@ -14,6 +14,7 @@
     "backfill:embeddings": "tsx scripts/backfillEmbeddings.ts",
     "backfill:flows": "tsx scripts/backfillFlows.ts",
     "backfill:tags": "tsx scripts/backfillChunkTags.ts",
+    "seed:goods": "tsx scripts/seed-goods.ts",
     "eval:tools": "tsx eval/runToolEval.ts"
   },
   "dependencies": {

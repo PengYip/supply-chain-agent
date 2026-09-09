@@ -1,0 +1,9 @@
+[
+  { "name": "螺纹钢", "unit": "吨", "attributes": { "品类族": "建筑钢材" } },
+  { "name": "螺纹钢", "spec": "HRB400E Φ12mm 9m定尺", "unit": "吨", "attributes": { "牌号": "HRB400E", "直径": "12mm", "定尺": "9m" } },
+  { "name": "热轧卷板", "unit": "吨", "attributes": { "品类族": "板卷" } },
+  { "name": "电力电缆", "unit": "米", "attributes": { "品类族": "线缆" } },
+  { "name": "冻牛肉", "unit": "公斤", "attributes": { "品类族": "冻品" } },
+  { "name": "冻牛肉", "spec": "巴西 牛腩 冷分割 20kg/箱", "unit": "公斤", "attributes": { "部位": "牛腩", "产地": "巴西", "包装": "20kg/箱" } },
+  { "name": "动力煤", "unit": "吨", "attributes": { "品类族": "煤炭" } }
+]
