@@ -29,8 +29,15 @@
 | PARENT_OF 关系 | pairs `Counterparty→Counterparty`；params `{ ratio?: 0-1 持股比例, note?: string }` strict | ontology_edges，既有列 |
 | 变更操作 | 纯操作语义，无新表新列 | trade_facts 双时间轴既有 |
 | Counterparty 附加属性 | v1 全可选 string：`address` 地址 / `bankAccount` 收款账号 / `bankName` 开户行 / `legalRepresentative` 法定代表人 / `registeredCapital` 注册资本 / `establishedDate` 成立日期 / `businessScope` 经营范围 | payload，零 DDL |
+| TradeGoods.attributes | **受控标量 KV 袋**：`z.record(z.string().min(1), z.union([z.string(), z.number()])).optional()`——键非空≤40 字、值限 string/number、条数上限 32；品类异构属性（钢材牌号/煤炭发热量/化工纯度）免发版登记 | payload，零 DDL |
 
-附加属性三条设计边界：**(a)** 逐个进注册表（zod optional string），**不开放自由 KV 扩展袋**——台账列生成/主数据表单/搜索/治理全景全靠注册表 schema 驱动，开放袋绕过类型约束与词汇门禁；将来真需要，往 payload 加 optional record 也是向后兼容小改动。**(b)** 属性变更复用 supersede 模型，零新机制——一条事实=主体在时点上的属性快照，地址史/账号史=as-of 当时口径（change 端点整包提交，UI 预填现行值保证合并）。**(c)** `bankAccount` 属敏感信息，前端展示做脱敏（如 `6222****5678`）；多收款账号 v1 不支持（单值主账号），多值需 fieldKind 加 array 支持，勿为此建"账户实体"（docx 模型爆炸警告）。工商信息核心=统一社会信用代码，即 uscc 锚本身。
+**分对象策略（决策 #7 修订）**：附加属性对两类对象采取不同扩展方式，理由是属性结构本质不同——
+
+- **Counterparty 跨企业同构**（地址/账号/法人家家都有，键稳定）：逐个进注册表（zod optional string），不开放 KV 袋——开放无收益还绕过类型约束。
+- **TradeGoods 跨品类异构**（键随品类变）：固定字段必"字段爆炸或大面积空列"（稀疏列问题），开受控标量袋。v1 治理=写入边界软约束（标量/条数/键长）；**v2 品类模板门禁**——注册表加 `GOODS_CATEGORY_TEMPLATES`（品类→允许属性键/类型/单位），写入边界按品类校验键、表单按品类动态渲染，与 COMMODITY_CODES"开放词汇→业务确认收敛"同构（备忘 §7 商品分层本就待业务确认）。
+- 两条共同边界：**(a)** 属性变更复用 supersede 模型，零新机制——一条事实=主体在时点上的属性快照，地址史/账号史/属性变更史=as-of 当时口径（change 端点整包提交，UI 预填现行值保证合并）。**(b)** `bankAccount` 属敏感信息，前端展示脱敏（如 `6222****5678`）；多收款账号/多值属性 v1 不支持（单值标量），标量数组为 v2 选项（Neo4j props 兼容，无锁仓）。
+
+**TradeGoods 袋的隐藏技术约束（实施必做）**：Neo4j 节点 props 不接受嵌套对象——`graphSync` 的 payload 整包展平遇到嵌套 record 会投影报错。同步层必须把 attributes 展平为 `attr.<键>` 前缀 props（如 `attr.牌号='Q235B'`），见 plan Task 4b。
 
 明确不做（OUT）：OrgUnit 层级/部门树（另一需求）；对手方识别管线用 uscc 映射（更名后新单据自动归一，属解析管线后续）；RENAME 专有关系（决策 #2）；GraphRAG 主体卡。
 
@@ -80,12 +87,12 @@ repo 层新增 `supersedeTradeFact(ctx, {...}, userId?)`：双后端事务（SQL
 4. **为什么变更走 REST 不走 L2 工具**：master-data 既有先例（主数据非资金事实不走会话）；变更是确定性操作，无 LLM 翻译需求，直写端点 + zod strict 即可。
 5. **ratio 用 0-1 小数**：与 ALLOCATE_TO.ratio 同构。
 6. **timeline 扩展到 Counterparty**：名称史即时间线；详情抽屉"仅事件实体支持时间切片"的空态文案同步更新。
-7. **附加属性逐个进注册表，不开自由 KV 袋**：台账列/表单/搜索/治理全景全部注册表驱动（自动生效是本体的核心红利），开放袋会绕过类型约束与词汇门禁；长尾字段逐个补充是低成本操作，自由袋留作将来向后兼容的演进选项。属性变更不单独建机制——supersede 整包快照 + 双时间轴统一承载任意属性的变更史。
+7. **附加属性分对象策略**：Counterparty（同构）逐个进注册表；TradeGoods（异构）开受控标量 KV 袋。台账列/表单/搜索/治理全景的注册表驱动自动化对"注册字段"依然全自动；商品袋是文档化的、有边界的例外——它的治理分两步：v1 写入边界软约束（标量/条数/键长），v2 品类模板硬门禁（业务确认商品分层后，同 COMMODITY_CODES 收敛路径）。属性变更不单独建机制——supersede 整包快照 + 双时间轴统一承载任意属性的变更史。
+8. **商品袋不进表单投影，进键值编辑区**：masterDataFormSchemaJson 反射注册字段（fieldKind 不支持 record），attributes 的录入/展示由前端专用键值编辑区与"扩展属性"渲染区承载——这是开放袋的固有代价，限定在一个组件内。
 
-## 9. 既有断言/文案需同步的清单（实施时逐项核对）
-
-- `registry.test.ts`：ONTOLOGY_RELATIONS 长度 8→9、连接对 14→15；`ontologySchemaJson().version` 常量。
-- `masterData.test / routes` 用例：uscc 必填后既有 Counterparty 用例补 uscc。
+- `registry.test.ts`：ONTOLOGY_RELATIONS 长度 8→9、连接对 14→15；`ontologySchemaJson().version` 常量；TradeGoods.attributes 袋约束（键长/条数/标量值）。
+- `masterData.test / routes` 用例：uscc 必填后既有 Counterparty 用例补 uscc；TradeGoods 用例带 attributes（含超限/非标量拒绝负例）。
+- `graphSync` 展平：attributes 嵌套 record → `attr.<键>` props（Neo4j props 不收嵌套对象）；对 Counterparty/事件 payload 无 attributes 的路径零影响。
 - 前端 `businessTypes.ts` EDGE_LABELS：PARENT_OF=「母子公司」。
 - 治理全景（governance/ontologySchemaJson 驱动）：9 关系自动出现，无代码改动，验证即可。
 - `linkTools.test.ts`：词表断言 +PARENT_OF。
@@ -95,4 +102,5 @@ repo 层新增 `supersedeTradeFact(ctx, {...}, userId?)`：双后端事务（SQL
 - **存量无 uscc**：显示为独立主体并提示补录，不阻塞读路径；写入侧新事实强制必填。
 - **重名企业**：uscc 分流后天然解决；名字仅作展示与搜索。
 - **normalizeName 陷阱**：文档图谱 Party 节点仍按归一企业名键（与本体 Counterparty 是两套键空间）——既有现状，本项不改动、不合并（决策 #3 的延伸）。
-- **payload 无 schema 演进问题**：uscc 进 payload，旧事实缺字段读侧容忍（fields 渲染空）。
+- **payload 无 schema 演进问题**：uscc/attributes 进 payload，旧事实缺字段读侧容忍（fields 渲染空）。
+- **商品袋键名失控（v1 无模板期）**：自由键可能不规范（"牌号"vs"材质牌号"）。缓解：登记表单键输入给常用键建议；v2 品类模板上线后写入侧拒模板外新键，历史数据走 supersede 换代收敛。

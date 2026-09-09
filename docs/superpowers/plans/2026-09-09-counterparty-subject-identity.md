@@ -46,14 +46,15 @@
 
 **Interfaces（产出，后续任务依赖）:**
 - `ONTOLOGY_ENTITIES.Counterparty` = `{ uscc: min(1), name: min(1), role: string, address?, bankAccount?, bankName?, legalRepresentative?, registeredCapital?, establishedDate?, businessScope? }`（uscc 在首字段，describe 注明主体归一锚；附加属性 v1 全可选 string，见 spec §3 附加属性表与三条边界）
+- `ONTOLOGY_ENTITIES.TradeGoods` 增 `attributes?: z.record(z.string().min(1).max(40), z.union([z.string(), z.number()]))`——写入边界再叠加 superRefine：条数 ≤32（spec §3 受控袋软约束；品类模板门禁属 v2，本期不做）
 - `ONTOLOGY_RELATIONS` 增第 9 个：`{ name: 'PARENT_OF', pairs: [{from:'Counterparty',to:'Counterparty'}], params: z.object({ ratio: z.number().min(0).max(1).optional(), note: z.string().optional() }).strict() }`
 - `ontologySchemaJson().version` 更新（如 '2026-09-09'）
 
 **Steps:**
-- [ ] 失败测试：registry.test 断言 Counterparty.shape.uscc 存在且 required；附加属性字段存在且 optional；ONTOLOGY_RELATIONS toHaveLength(9)、pairs 15、PARENT_OF pair 白名单（isRelationPairAllowed('PARENT_OF','Counterparty','Counterparty') true / 反向同名对 true / Counterparty→InvoiceEvent false）；version 断言更新
-- [ ] 实现：改 index.ts 两处 + version 常量
+- [ ] 失败测试：registry.test 断言 Counterparty.shape.uscc 存在且 required；附加属性字段存在且 optional；TradeGoods.attributes 袋（合法键值过 / 键超 40 字拒 / 值为对象拒 / 超 32 条拒）；ONTOLOGY_RELATIONS toHaveLength(9)、pairs 15、PARENT_OF pair 白名单（isRelationPairAllowed('PARENT_OF','Counterparty','Counterparty') true / 反向同名对 true / Counterparty→InvoiceEvent false）；version 断言更新
+- [ ] 实现：改 index.ts 两处 + version 常量（TradeGoods 袋的 superRefine 放 entitySchema('TradeGoods') 分支，保持 ONTOLOGY_ENTITIES 纯 object 惯例——与事件金额规则同模式）
 - [ ] 全量 `npm test --workspace apps/server`——预期暴露连带断言（governance/ontologyEntities/schema DTO 快照若有），逐一按 spec §9 清单同步
-- [ ] 表单投影验证：masterDataFormSchemaJson 自动带出全部附加属性（fieldKind string 直接过）——主数据抽屉零改动即渲染（注册表驱动红利，测试断言之）
+- [ ] 表单投影验证：masterDataFormSchemaJson 自动带出 Counterparty 附加属性（fieldKind string 直接过）——主数据抽屉注册字段零改动即渲染（注册表驱动红利，测试断言之）；TradeGoods.attributes 不进字段投影（record 不受 fieldKind 支持，录入走 Task 6 键值编辑区——设计如此）
 
 ### Task 2: repo——supersedeTradeFact 换代函数
 
@@ -119,6 +120,19 @@ export const ChangeMasterDataInputSchema = z.object({
 - [ ] 实现（enum + description 两行）
 - [ ] 边界确认：relation/fromId/toId 均在 SHARED_TOOL_FIELD_NAMES（既有），toolOntologyMap 门禁零改动——跑 `test/ontology/toolOntologyMap.test.ts` + `test/harness/toolInventory.test.ts` 确认
 
+### Task 4b: graphSync 属性袋展平（TradeGoods.attributes 投影前置）
+
+**Files:**
+- Edit: `apps/server/src/ontology/graphSync.ts`
+- Edit: `apps/server/test/ontology/graphSync.test.ts`
+
+**背景（spec §3 隐藏技术约束）:** Neo4j 节点 props 不接受嵌套对象——payload.attributes 是嵌套 record，graphSync 现有 `...payload` 整包展平会把投影直接打挂。
+
+**Steps:**
+- [ ] 失败测试：带 attributes 的 TradeGoods 事实投影后，节点 props 出现 `attr.<键>` 扁平属性（如 `attr.牌号='Q235B'`）且 props 无嵌套 `attributes` 键；无 attributes 的事实 props 零变化
+- [ ] 实现：graphSync 组 props 时拆出 payload.attributes → 逐键 `props['attr.'+k]=v`（值已是标量）；其余 payload 照旧展平
+- [ ] 确认 EVIDENCE/关系边投影不受影响（边 props 来自 ontology_edges.params，恒标量）
+
 ### Task 5: 台账归一投影 + 名称史
 
 **Files:**
@@ -149,17 +163,18 @@ export const ChangeMasterDataInputSchema = z.object({
 
 **Files:**
 - Edit: `apps/web/src/api/ontology.ts`（ProjectedEntity 增可选 `invalidAt`——timeline 失效行标注用；`changeMasterData()` API client；EntityRelationDTO 不变）
-- Edit: `apps/web/src/components/entities/EntityDetailDrawer.tsx`（timeline 行：失效/曾用名标注；字段表 uscc 自然出现）
+- Edit: `apps/web/src/components/entities/EntityDetailDrawer.tsx`（timeline 行：失效/曾用名标注；字段表 uscc 自然出现；**「扩展属性」区**渲染 fields.attributes 键值对）
 - Edit: `apps/web/src/components/entities/EntitiesView.tsx`（Counterparty 行副标题显示曾用名；**「变更」入口**——详情/行操作打开主数据抽屉的 change 模式：预填现行值、提交走 POST /master-data/change。变更端点必须有 UI 入口，否则只能 curl）
 - Edit: `apps/web/src/components/graph/businessTypes.ts`（EDGE_LABELS + `PARENT_OF: '母子公司'`；样式灰虚线，同辅助关系族）
-- Edit: `apps/web/src/components/entities/MasterDataDrawer.tsx` 相关（uscc 字段由 schema 投影自动出现——验证即可；change 模式复用同抽屉，提交目标/预填不同）
+- Edit: `apps/web/src/components/entities/MasterDataDrawer.tsx` 相关（uscc 与 Counterparty 附加属性字段由 schema 投影自动出现——验证即可；TradeGoods 增**「自定义属性」键值编辑区**（增删行，键/值输入，提交并入 payload.attributes）；change 模式复用同抽屉，提交目标/预填不同）
 
 **Steps:**
 - [ ] 详情抽屉时间线行增加"曾用名"徽标（timeline 行带失效标记时）
 - [ ] 台账 Counterparty 行副标题显示曾用名（EntitiesView 现有 label 渲染旁，读取 fields.formerNames）
 - [ ] 台账/详情「变更主体信息」入口（change 模式抽屉）：预填现行 uscc/name/role/附加属性，提交后刷新列表
 - [ ] `bankAccount` 展示脱敏（`6222****5678` 式，台账字段表/表单回显统一走一个 mask helper）
-- [ ] web 测试：EventRegisterDrawer/MasterDataDrawer 既有用例补 uscc 字段（schema 投影新增必填会导致表单快照/提交用例需带 uscc）；change 模式提交用例
+- [ ] MasterDataDrawer「自定义属性」键值编辑区（TradeGoods）：增删行、键/值输入、超 32 条前端截停；详情抽屉「扩展属性」区渲染
+- [ ] web 测试：EventRegisterDrawer/MasterDataDrawer 既有用例补 uscc 字段（schema 投影新增必填会导致表单快照/提交用例需带 uscc）；change 模式提交用例；键值编辑区用例
 
 ### Task 7: 收尾验证 + 合并
 
