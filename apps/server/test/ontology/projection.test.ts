@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.js';
 import { listProjectedEntities, getProjectedEntityDetail } from '../../src/ontology/projection.js';
-import { insertTradeFact, insertOntologyEdge } from '../../src/ontology/repo.js';
+import { insertTradeFact, insertOntologyEdge, supersedeTradeFact, listTradeFactHistory } from '../../src/ontology/repo.js';
 
 let ctx: DbContext;
 beforeEach(() => {
@@ -285,5 +285,139 @@ describe('projection: EntityDetail.relations (P4 关系可见性配套)', () => 
     expect(dc!.relations).toHaveLength(1);
     expect(dc!.relations[0]).toMatchObject({ relation: 'ALLOCATE_TO', direction: 'in' });
     expect(dc!.relations[0]!.counterpart.type).toBe('ServiceCostEvent');
+  });
+});
+
+describe('projection: Counterparty 台账归一 + 名称史 (spec 主体身份 §5)', () => {
+  const party = (name: string, uscc: string, role = '供应商') => ({
+    entityType: 'Counterparty' as const,
+    payload: { uscc, name, role },
+  });
+
+  async function seedRenamedParty() {
+    // 1/1 登记「某钢铁有限公司」, 9/1 更名「某钢铁集团股份有限公司」(supersede 换代)
+    const oldId = await insertTradeFact(ctx, {
+      ...party('某钢铁有限公司', '91130000MA0A0000XA'),
+      validAt: '2026-01-01', ingestedAt: '2026-01-01', createdBy: 'manual',
+    }, 'u1');
+    const { newId } = await supersedeTradeFact(ctx, {
+      prevFactId: oldId,
+      next: {
+        ...party('某钢铁集团股份有限公司', '91130000MA0A0000XA'),
+        validAt: '2026-09-01', ingestedAt: '2026-09-01', createdBy: 'master-data-change',
+      },
+    }, 'u1');
+    return { oldId, newId };
+  }
+
+  it('更名后列表 1 组：label=现行名, formerNames 含旧名, meta.uscc', async () => {
+    const { newId } = await seedRenamedParty();
+    const res = await listProjectedEntities(ctx, 'Counterparty', {}, 'u1');
+    expect(res.total).toBe(1);
+    const row = res.items[0]!;
+    expect(row.id).toBe(newId);
+    expect(row.label).toBe('某钢铁集团股份有限公司');
+    expect(row.fields['formerNames']).toEqual(['某钢铁有限公司']);
+    expect(row.meta?.['uscc']).toBe('91130000MA0A0000XA');
+  });
+
+  it('q 搜旧名命中该组（现名与曾用名双通道）', async () => {
+    await seedRenamedParty();
+    const byOld = await listProjectedEntities(ctx, 'Counterparty', { q: '某钢铁有限' }, 'u1');
+    expect(byOld.total).toBe(1);
+    expect(byOld.items[0]!.label).toBe('某钢铁集团股份有限公司');
+    const byNew = await listProjectedEntities(ctx, 'Counterparty', { q: '集团股份' }, 'u1');
+    expect(byNew.total).toBe(1);
+    const byNone = await listProjectedEntities(ctx, 'Counterparty', { q: '不存在字样' }, 'u1');
+    expect(byNone.total).toBe(0);
+  });
+
+  it('详情：entity=现行事实, timeline=组内名称史(valid_at 升序, 失效行可辨)', async () => {
+    const { oldId, newId } = await seedRenamedParty();
+    const d = await getProjectedEntityDetail(ctx, 'Counterparty', newId, {}, 'u1');
+    expect(d).not.toBeNull();
+    expect(d!.entity.id).toBe(newId);
+    expect(d!.entity.label).toBe('某钢铁集团股份有限公司');
+    expect(d!.netAmount).toBeNull();
+    expect(d!.timeline).toHaveLength(2);
+    const [first, second] = d!.timeline;
+    expect(first!.label).toBe('某钢铁有限公司');
+    expect(first!.invalidAt).not.toBeNull(); // 失效行可辨 -> 前端曾用名徽标
+    expect(first!.validAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(second!.label).toBe('某钢铁集团股份有限公司');
+    expect(second!.invalidAt).toBeNull();
+    void oldId;
+  });
+
+  it('详情用旧事实 id 打开同样归一到现行主体（entity=现行事实）', async () => {
+    const { oldId, newId } = await seedRenamedParty();
+    const d = await getProjectedEntityDetail(ctx, 'Counterparty', oldId, {}, 'u1');
+    expect(d!.entity.id).toBe(newId);
+    expect(d!.entity.label).toBe('某钢铁集团股份有限公司');
+    expect(d!.timeline).toHaveLength(2);
+  });
+
+  it('更名前建的关系边仍在 relations（组内全部事实端点的边 union）', async () => {
+    const { oldId, newId } = await seedRenamedParty();
+    const svc = await insertTradeFact(ctx, {
+      entityType: 'ServiceCostEvent',
+      payload: { eventBizType: '正向', amount: 15_000, currency: 'CNY', costType: '物流' },
+      validAt: '2026-02-01', createdBy: 'test',
+    }, 'u1');
+    await insertOntologyEdge(ctx, {
+      relation: 'PROVIDE', fromType: 'Counterparty', fromId: oldId,
+      toType: 'ServiceCostEvent', toId: svc,
+      params: {}, validAt: '2026-02-01', createdBy: 'test',
+    }, 'u1');
+    // 用现行事实 id 打开详情: 更名前的边不丢
+    const d = await getProjectedEntityDetail(ctx, 'Counterparty', newId, {}, 'u1');
+    expect(d!.relations).toHaveLength(1);
+    expect(d!.relations[0]).toMatchObject({ relation: 'PROVIDE', direction: 'out' });
+    expect(d!.relations[0]!.counterpart.type).toBe('ServiceCostEvent');
+  });
+
+  it('无 uscc 的存量行保持独立行（不参与归一, 读路径容忍）', async () => {
+    // uscc 必填只约束写入边界; 存量无 uscc 行用直写 SQL 模拟旧数据(读侧容忍不报错)。
+    const legacy = (name: string, validAt: string) => {
+      ctx.sqlite.prepare(
+        `INSERT INTO trade_facts (id, entity_type, payload, valid_at, invalid_at, ingested_at, created_by, user_id, document_id)
+         VALUES (?, 'Counterparty', ?, ?, NULL, ?, 'manual', 'u1', NULL)`,
+      ).run(`TF-${name}`, JSON.stringify({ name, role: '供应商' }), validAt, validAt);
+    };
+    legacy('老数据甲', '2026-01-01T00:00:00.000Z');
+    legacy('老数据乙', '2026-01-02T00:00:00.000Z');
+    const res = await listProjectedEntities(ctx, 'Counterparty', {}, 'u1');
+    expect(res.total).toBe(2);
+    for (const row of res.items) {
+      expect(row.fields['formerNames']).toBeUndefined();
+      expect(row.meta?.['uscc']).toBeUndefined();
+    }
+  });
+
+  it('listTradeFactHistory：同 uscc 全部事实含失效行, valid_at 升序, 用户隔离', async () => {
+    const { oldId, newId } = await seedRenamedParty();
+    const rows = await listTradeFactHistory(ctx, { entityType: 'Counterparty', uscc: '91130000MA0A0000XA' }, 'u1');
+    expect(rows.map((r) => r.id)).toEqual([oldId, newId]);
+    expect(await listTradeFactHistory(ctx, { entityType: 'Counterparty', uscc: '91130000MA0A0000XA' }, 'u2')).toEqual([]);
+  });
+
+  it('多主体多代更名：各组独立归一（2 主体 3 事实 -> 2 组）', async () => {
+    const a1 = await insertTradeFact(ctx, {
+      ...party('甲公司一期', 'USCC-A'), validAt: '2026-01-01', ingestedAt: '2026-01-01', createdBy: 'manual',
+    }, 'u1');
+    await supersedeTradeFact(ctx, {
+      prevFactId: a1,
+      next: {
+        ...party('甲公司二期', 'USCC-A'),
+        validAt: '2026-05-01', ingestedAt: '2026-05-01', createdBy: 'master-data-change',
+      },
+    }, 'u1');
+    await insertTradeFact(ctx, {
+      ...party('乙公司', 'USCC-B'), validAt: '2026-02-01', ingestedAt: '2026-02-01', createdBy: 'manual',
+    }, 'u1');
+    const res = await listProjectedEntities(ctx, 'Counterparty', {}, 'u1');
+    expect(res.total).toBe(2);
+    const jia = res.items.find((r) => r.label === '甲公司二期')!;
+    expect(jia.fields['formerNames']).toEqual(['甲公司一期']);
   });
 });

@@ -138,6 +138,38 @@ export async function listTradeFactsAsOf(
   return rows.map((r) => factRowFrom(r, false));
 }
 
+/**
+ * 同主体（uscc）全部事实史（含失效行，valid_at 升序）——台账归一/名称史只读 helper
+ * （spec 主体身份 §5；双后端仅 SELECT，用户隔离与 list 一致）。
+ * uscc 存于 payload JSON：SQLite json_extract / PG ->> 双写法，缺 uscc 的行天然不命中。
+ */
+export async function listTradeFactHistory(
+  ctx: DbContext,
+  opts: { entityType: string; uscc: string },
+  userId?: string,
+): Promise<TradeFactRow[]> {
+  const uid = effectiveUserId(userId);
+  // uscc 存于 payload JSON：SQLite json_extract / PG ->> 双写法。
+  const usccCond = ctx.backend === 'postgres'
+    ? "payload->>'uscc' = ?"
+    : "json_extract(payload, '$.uscc') = ?";
+  const where = [`entity_type = ?`, "(user_id = ? OR user_id = '')", usccCond].join(' AND ');
+  const params = [opts.entityType, uid, opts.uscc];
+
+  if (ctx.backend === 'postgres') {
+    const pg = ctx as PostgresDbContext;
+    const res = await pg.pool.query(
+      `SELECT ${FACT_COLS} FROM trade_facts WHERE ${numberPlaceholders(where)} ORDER BY valid_at, id`,
+      params,
+    );
+    return (res.rows as Array<Record<string, unknown>>).map((r) => factRowFrom(r, true));
+  }
+  const rows = ctx.sqlite.prepare(
+    `SELECT ${FACT_COLS} FROM trade_facts WHERE ${where} ORDER BY valid_at, id`,
+  ).all(...params) as Array<Record<string, unknown>>;
+  return rows.map((r) => factRowFrom(r, false));
+}
+
 /** 按 id 单行读取(台账详情定位用)；用户隔离与 list 一致。 */
 export async function getTradeFactById(
   ctx: DbContext, id: string, userId?: string,

@@ -10,7 +10,10 @@ import type { DbContext, PostgresDbContext } from '../pipeline/db/client.js';
 import { effectiveUserId } from '../pipeline/db/repositories.js';
 import { asOfBusinessTime, numberPlaceholders, asOfSystemTime, normalizeIsoUtc, type AsOfPredicate } from './asof.js';
 import type { OntologyEntityName } from './index.js';
-import { listTradeFactsAsOf, getTradeFactById, listOntologyEdgesAsOf, type TradeFactRow } from './repo.js';
+import {
+  listTradeFactsAsOf, getTradeFactById, listTradeFactHistory, listOntologyEdgesAsOf,
+  type TradeFactRow,
+} from './repo.js';
 
 export type ProjectionSource = 'contract_ledger' | 'documents' | 'trade_facts';
 
@@ -19,12 +22,15 @@ export interface ProjectedEntity {
   entityType: OntologyEntityName;
   /** 展示名(第一列，非注册表驱动)：合同号/单据类型/业务键(invoiceNo 等) */
   label: string;
-  /** 注册表词汇内的字段(尽力映射；源缺失的字段不出现，前端渲染空) */
+  /** 注册表词汇内的字段(尽力映射；源缺失的字段不出现，前端渲染空)。
+   *  Counterparty 归一组附加 formerNames=[曾用名...](spec 主体身份 §5, 非注册表词汇)。 */
   fields: Record<string, unknown>;
   /** 溯源展示(documents 行携带 sourceUri/reviewStatus；其余源省略) */
   meta?: Record<string, string | null>;
   source: ProjectionSource;
   validAt: string | null;
+  /** 失效时点(null=现行事实)；timeline 失效行标注"曾用名"用(2026-09-09)。 */
+  invalidAt: string | null;
   ingestedAt: string | null;
 }
 
@@ -76,6 +82,7 @@ function mapContractRow(r: Record<string, unknown>): ProjectedEntity {
     },
     source: 'contract_ledger',
     validAt: null,
+    invalidAt: null,
     ingestedAt: normalizeLegacyDt(r['created_at']),
   };
 }
@@ -150,6 +157,7 @@ function mapDocRow(
     },
     source: 'documents',
     validAt: null,
+    invalidAt: null,
     ingestedAt: normalizeLegacyDt(r['created_at']),
   };
 }
@@ -195,6 +203,7 @@ export function factToEntity(row: TradeFactRow): ProjectedEntity {
     // P3 凭证据源: 来源单据 id 走 meta(非注册表实体字段, 详情抽屉单列展示)。
     ...(row.documentId ? { meta: { documentId: row.documentId } } : {}),
     validAt: row.validAt,
+    invalidAt: row.invalidAt,
     ingestedAt: row.ingestedAt,
   };
 }
@@ -206,11 +215,61 @@ async function listFacts(ctx: DbContext, type: OntologyEntityName, uid: string):
 }
 
 // ---------------------------------------------------------------------------
+// Counterparty 台账归一(spec 主体身份 §5)：按 payload.uscc 分组——主体同一性=uscc,
+// 名字只是随时间变化的属性值。每组一行: label=现行名, fields.formerNames=[曾用名...],
+// 排序按现行事实 ingestedAt。uscc 缺失的存量行保持独立行(读路径容忍, 提示补录)。
+// ---------------------------------------------------------------------------
+
+const nowIso = () => new Date().toISOString();
+
+/** 业务现行判定(与 asOfBusinessTime(now) 同语义的内存版): 当时为真=已生效且未失效。 */
+function isBusinessValidNow(row: TradeFactRow, at: string): boolean {
+  return row.validAt <= at && (row.invalidAt == null || row.invalidAt > at);
+}
+
+async function listCounterpartyGroups(ctx: DbContext, uid: string): Promise<ProjectedEntity[]> {
+  const now = nowIso();
+  // 含失效全集(系统时间 now = 全部已入库行), 内存按 uscc 归一; 行数口径沿 SOURCE_ROW_CAP 上限。
+  const rows = await listTradeFactsAsOf(ctx, asOfSystemTime(now), { entityType: 'Counterparty' }, uid);
+  const groups = new Map<string, TradeFactRow[]>();
+  for (const row of rows) {
+    const uscc = typeof row.payload['uscc'] === 'string' && row.payload['uscc'] !== ''
+      ? row.payload['uscc']
+      : `id:${row.id}`; // 无 uscc 存量行: 独立主体(独立分组键, 不与任何行合并)
+    const group = groups.get(uscc) ?? [];
+    group.push(row);
+    groups.set(uscc, group);
+  }
+  const out: ProjectedEntity[] = [];
+  for (const [uscc, group] of groups) {
+    // 现行事实 = 业务现行(理论上一组最多一条; 数据异常时取 ingestedAt 最新兜底)。
+    const validRows = group.filter((r) => isBusinessValidNow(r, now));
+    const current = [...validRows].sort((a, b) =>
+      b.ingestedAt.localeCompare(a.ingestedAt) || b.id.localeCompare(a.id))[0];
+    if (!current) continue; // 全组已失效且无换代(理论边界): 列表不显示
+    // 曾用名 = 组内已失效历史的 name(valid_at 升序); 未来才生效的行不算曾用名。
+    const formerNames = group
+      .filter((r) => r.id !== current.id && r.invalidAt != null && r.validAt <= now)
+      .sort((a, b) => a.validAt.localeCompare(b.validAt) || a.id.localeCompare(b.id))
+      .map((r) => r.payload['name'])
+      .filter((v): v is string => typeof v === 'string' && v !== '');
+    const base = factToEntity(current);
+    out.push({
+      ...base,
+      ...(uscc.startsWith('id:') ? {} : { meta: { ...base.meta, uscc } }),
+      fields: { ...current.payload, ...(formerNames.length > 0 ? { formerNames } : {}) },
+    });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // 统一入口：源收集 -> q 过滤 -> 排序 -> 内存分页
 // ---------------------------------------------------------------------------
 
 async function collectEntities(ctx: DbContext, type: OntologyEntityName, uid: string): Promise<ProjectedEntity[]> {
   if (type === 'TradeContract') return listContracts(ctx, uid);
+  if (type === 'Counterparty') return listCounterpartyGroups(ctx, uid); // 主体归一(spec §5)
   if (type === 'GoodsReceiptEvent' || type === 'GoodsDeliveryEvent') {
     const [docs, facts] = await Promise.all([
       listReceiptDeliveryDocs(ctx, type, uid),
@@ -218,7 +277,7 @@ async function collectEntities(ctx: DbContext, type: OntologyEntityName, uid: st
     ]);
     return [...docs, ...facts];
   }
-  // 其余 5 事件 + 手工登记静态主数据（TradeGoods/Counterparty/OrgUnit，POST
+  // 其余事件 + 手工登记静态主数据（TradeGoods/OrgUnit，POST
   // /api/ontology/master-data -> insertTradeFact）都以 trade_facts 为源。
   return listFacts(ctx, type, uid);
 }
@@ -368,6 +427,31 @@ export async function getProjectedEntityDetail(
     return { entity, timeline: [], netAmount: null, relations, asOf };
   }
 
+  // Counterparty 主体归一详情(spec 主体身份 §5)：entity=现行事实;
+  // timeline=组内名称史(含失效行, valid_at 升序, 失效行 invalidAt 可辨);
+  // relations=组内全部事实端点的边 union(cap 50)——更名前建的核销/分摊边不丢;
+  // netAmount=null(主体无金额口径)。
+  if (type === 'Counterparty') {
+    const requested = await getTradeFactById(ctx, id, uid);
+    if (!requested) return null;
+    const uscc = typeof requested.payload['uscc'] === 'string' && requested.payload['uscc'] !== ''
+      ? requested.payload['uscc']
+      : null;
+    const group = uscc
+      ? await listTradeFactHistory(ctx, { entityType: 'Counterparty', uscc }, uid)
+      : [requested];
+    const now = nowIso();
+    const current = group.filter((r) => isBusinessValidNow(r, now))
+      .sort((a, b) => b.ingestedAt.localeCompare(a.ingestedAt) || b.id.localeCompare(a.id))[0]
+      ?? requested; // 全组失效(历史 id 深链): 就地展示该行
+    const timeline = [...group]
+      .sort((a, b) => a.validAt.localeCompare(b.validAt) || a.id.localeCompare(b.id))
+      .map(factToEntity);
+    const relations = await listEntityRelationsForFacts(
+      ctx, 'Counterparty', group.map((r) => r.id), uid);
+    return { entity: factToEntity(current), timeline, netAmount: null, relations, asOf };
+  }
+
   // 事件实体：trade_facts 优先；收发两类再探 documents(收发依据单据行)
   const fact = await getTradeFactById(ctx, id, uid);
   if (fact) {
@@ -400,13 +484,25 @@ export async function getProjectedEntityDetail(
 export async function listEntityRelations(
   ctx: DbContext, entityType: string, id: string, uid: string,
 ): Promise<EntityRelationRef[]> {
+  return listEntityRelationsForFacts(ctx, entityType, [id], uid);
+}
+
+/** 组内多事实端点的边 union(cap 50, 边 id 去重)——Counterparty 归一组用：
+ *  更名前以旧事实 id 建的边与现行事实的边合并呈现(spec 主体身份 §5)。 */
+export async function listEntityRelationsForFacts(
+  ctx: DbContext, entityType: string, factIds: string[], uid: string,
+): Promise<EntityRelationRef[]> {
+  const ids = new Set(factIds);
   const edges = await listOntologyEdgesAsOf(
     ctx, asOfBusinessTime(new Date().toISOString()), {}, uid);
   const touching = edges.filter((e) =>
-    (e.fromType === entityType && e.fromId === id) || (e.toType === entityType && e.toId === id));
+    (e.fromType === entityType && ids.has(e.fromId)) || (e.toType === entityType && ids.has(e.toId)));
   const out: EntityRelationRef[] = [];
+  const seen = new Set<string>();
   for (const e of touching.slice(0, RELATION_CAP)) {
-    const isOut = e.fromType === entityType && e.fromId === id;
+    if (seen.has(e.id)) continue;
+    seen.add(e.id);
+    const isOut = e.fromType === entityType && ids.has(e.fromId);
     const cType = isOut ? e.toType : e.fromType;
     const cId = isOut ? e.toId : e.fromId;
     out.push({
