@@ -124,4 +124,77 @@ describe('link_ontology execute', () => {
     const out = await t.execute!({ relation: 'PROVIDE', fromId: cp, toId: s }, CALL);
     expect(out.status).toBe('ok');
   });
+
+  it('词表含 PARENT_OF/DELIVERED_AS（spec 主体身份 2026-09-09：10 关系中除核销/冲抵外全覆盖）', () => {
+    const t = buildLinkOntologyTool({ ctx, userId: 'u1' });
+    const shape = t.inputSchema.shape as { relation: { options: readonly string[] } };
+    expect(shape.relation.options).toContain('PARENT_OF');
+    expect(shape.relation.options).toContain('DELIVERED_AS');
+    expect(shape.relation.options).toHaveLength(8);
+  });
+
+  it('PARENT_OF：母公司 -> 子公司（Counterparty 事实对），ratio 落库', async () => {
+    const parent = await insertTradeFact(ctx, {
+      entityType: 'Counterparty',
+      payload: { uscc: '91130000MA0A0000XC', name: '某控股集团', role: '客户' },
+      validAt: '2026-01-01', createdBy: 'test',
+    }, 'u1');
+    const child = await insertTradeFact(ctx, {
+      entityType: 'Counterparty',
+      payload: { uscc: '91130000MA0A0000XD', name: '某钢铁子公司', role: '供应商' },
+      validAt: '2026-01-01', createdBy: 'test',
+    }, 'u1');
+    const t = buildLinkOntologyTool({ ctx, userId: 'u1' });
+    const out = await t.execute!({
+      relation: 'PARENT_OF', fromId: parent, toId: child, ratio: 0.6, note: '控股',
+    }, CALL);
+    expect(out.status).toBe('ok');
+    const edges = await listOntologyEdgesAsOf(ctx, asOfBusinessTime(new Date().toISOString()), { relation: 'PARENT_OF' }, 'u1');
+    expect(edges).toHaveLength(1);
+    expect(edges[0]).toMatchObject({
+      relation: 'PARENT_OF', fromType: 'Counterparty', fromId: parent,
+      toType: 'Counterparty', toId: child, createdBy: 'link_ontology',
+    });
+    expect(edges[0]!.params).toMatchObject({ ratio: 0.6, note: '控股' });
+  });
+
+  it('PARENT_OF 连接对白名单：Counterparty -> InvoiceEvent 拒绝', async () => {
+    const cp = await insertTradeFact(ctx, {
+      entityType: 'Counterparty',
+      payload: { uscc: '91130000MA0A0000XC', name: '某控股集团', role: '客户' },
+      validAt: '2026-01-01', createdBy: 'test',
+    }, 'u1');
+    const inv = await insertFact('InvoiceEvent',
+      { eventBizType: '正向', amount: 1, currency: 'CNY', invoiceNo: 'INV-P', invoiceType: '销项' });
+    const t = buildLinkOntologyTool({ ctx, userId: 'u1' });
+    const out = await t.execute!({ relation: 'PARENT_OF', fromId: cp, toId: inv }, CALL);
+    expect(out.status).toBe('invalid');
+    if (out.status !== 'invalid') return;
+    expect(out.detail).toContain('不允许');
+  });
+
+  it('DELIVERED_AS：收货事实 -> 商品 SKU 事实，batch 落库', async () => {
+    const receipt = await insertTradeFact(ctx, {
+      entityType: 'GoodsReceiptEvent',
+      payload: { eventBizType: '正向', quantity: 100, unit: '吨' },
+      validAt: '2026-06-01', createdBy: 'test',
+    }, 'u1');
+    const goods = await insertTradeFact(ctx, {
+      entityType: 'TradeGoods',
+      payload: { name: '螺纹钢', commodityCode: 'HRB400E', spec: 'HRB400E Φ12mm 9m定尺' },
+      validAt: '2026-06-01', createdBy: 'test',
+    }, 'u1');
+    const t = buildLinkOntologyTool({ ctx, userId: 'u1' });
+    const out = await t.execute!({
+      relation: 'DELIVERED_AS', fromId: receipt, toId: goods, batch: 'SIF1234-20260901',
+    }, CALL);
+    expect(out.status).toBe('ok');
+    const edges = await listOntologyEdgesAsOf(ctx, asOfBusinessTime(new Date().toISOString()), { relation: 'DELIVERED_AS' }, 'u1');
+    expect(edges).toHaveLength(1);
+    expect(edges[0]).toMatchObject({
+      relation: 'DELIVERED_AS', fromType: 'GoodsReceiptEvent', fromId: receipt,
+      toType: 'TradeGoods', toId: goods,
+    });
+    expect(edges[0]!.params).toMatchObject({ batch: 'SIF1234-20260901' });
+  });
 });

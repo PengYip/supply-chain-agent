@@ -1,7 +1,8 @@
 // 本体关系登记 L2 工具（2026-09-09 P4，spec 本体图谱投影 §关系入口补全）：
-// link_ontology。覆盖核销工作台之外的 6 种关系（ALLOCATE_TO 分摊 / REVERSE_ORIGIN
-// 红冲溯源 / FEEDS_INTO / CORRESPONDS_TO / TRIGGERS / PROVIDE）——此前这 6 种只有
-// repo 写入边界、无任何产品入口。WRITE_OFF/OFFSET_SETTLE 刻意不在本工具词表内
+// link_ontology。覆盖核销工作台之外的 8 种关系（ALLOCATE_TO 分摊 / REVERSE_ORIGIN
+// 红冲溯源 / FEEDS_INTO / CORRESPONDS_TO / TRIGGERS / PROVIDE，及主体身份 spec
+// 2026-09-09 增补的 PARENT_OF 母子公司 / DELIVERED_AS 实际交付）——这些关系此前
+// 只有 repo 写入边界、无对话入口。WRITE_OFF/OFFSET_SETTLE 刻意不在本工具词表内
 // （整单守恒语义归核销工作台 create_writeoff/create_offset，描述里显式引导）。
 // 校验链：事实行存在 -> 连接对白名单(relationDef/isRelationPairAllowed) ->
 // params 走注册表关系 strict schema -> insertOntologyEdge 唯一写入边界。
@@ -16,36 +17,43 @@ import { syncOntologyGraphSafe } from './graphSync.js';
 
 export const LINKABLE_RELATIONS = [
   'ALLOCATE_TO', 'REVERSE_ORIGIN', 'FEEDS_INTO', 'CORRESPONDS_TO', 'TRIGGERS', 'PROVIDE',
+  'PARENT_OF', 'DELIVERED_AS',
 ] as const;
 
 export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string }) {
   return tool({
     description:
-      '登记一条本体关系边（分摊/红冲溯源/结算依据/开票对应/触发付款/提供服务）。' +
+      '登记一条本体关系边（分摊/红冲溯源/结算依据/开票对应/触发付款/提供服务/母子公司/实际交付）。' +
       '当用户口述一条明确的关系时调用，例如"把这笔服务费分摊 15000 元到合同 HT-CG-2601" ' +
       '-> relation=ALLOCATE_TO, fromId=<服务费事实id>, toId=<台账合同行id>, amount=15000, method=金额；' +
-      '"这张红字发票冲的是 INV-001 那张蓝票" -> relation=REVERSE_ORIGIN, amount=<红冲金额>, reason=<原因>。' +
+      '"这张红字发票冲的是 INV-001 那张蓝票" -> relation=REVERSE_ORIGIN, amount=<红冲金额>, reason=<原因>；' +
+      '"A 公司是 B 公司的母公司, 持股 60%" -> relation=PARENT_OF, fromId=<母公司事实id>, ' +
+      'toId=<子公司事实id>, ratio=0.6（主体更名后旧事实 id 仍有效, 台账按 uscc 归一）；' +
+      '"这批收货实际到的是螺纹钢 HRB400E Φ12" -> relation=DELIVERED_AS, fromId=<收货事实id>, ' +
+      'toId=<商品事实id>, batch=<到货批次>。' +
       '边界：核销（票款匹配）用 create_writeoff、预付冲抵用 create_offset，本工具不受理；' +
       'fromId 必须是台账/穿透里的事实 id（TF- 开头）；toId 通常是事实 id，' +
       '仅 ALLOCATE_TO 的 toId 用台账合同行 id；' +
-      '连接对必须满足本体注册表（如 FEEDS_INTO 只允许 收/发货->结算），不符整单拒绝并返回原因；' +
+      '连接对必须满足本体注册表（如 PARENT_OF 只允许 交易对手->交易对手、' +
+      'DELIVERED_AS 只允许 收/发货->商品），不符整单拒绝并返回原因；' +
       'REVERSE_ORIGIN 要求红冲方为逆向（负数）发票、原票为正向；' +
       '参数必须匹配关系定义（分摊必须 amount+method，红冲必须 amount，辅助关系无参），' +
       '多余参数会被注册表 strict 校验拒绝。' +
       '数字或日期不精确时先向用户确认，不要猜测。' +
       '返回 { status: "ok", edgeId, relation } 或 { status: "invalid", detail }。',
     inputSchema: z.object({
-      relation: z.enum(LINKABLE_RELATIONS).describe('关系类型（6 类之一；核销/冲抵用 create_writeoff/create_offset）'),
+      relation: z.enum(LINKABLE_RELATIONS).describe('关系类型（8 类之一；核销/冲抵用 create_writeoff/create_offset）'),
       fromId: z.string().min(1).describe('起点实体 id（事实 id TF- 开头；台账列表/详情可复制）'),
       toId: z.string().min(1).describe('终点实体 id（事实 id；ALLOCATE_TO 用台账合同行 id）'),
       amount: z.number().optional().describe('关系金额（ALLOCATE_TO/REVERSE_ORIGIN 必填，如 15000）'),
-      ratio: z.number().min(0).max(1).optional().describe('分摊比例（仅 ALLOCATE_TO 选填，如 0.5）'),
+      ratio: z.number().min(0).max(1).optional().describe('比例（ALLOCATE_TO 分摊比例 / PARENT_OF 持股比例，选填，如 0.5）'),
       method: AllocateMethod.optional().describe('分摊方式（仅 ALLOCATE_TO 必填：金额/数量/重量/定额）'),
-      batch: z.string().optional().describe('批次标识（ALLOCATE_TO/OFFSET_SETTLE 族选填）'),
+      batch: z.string().optional().describe('批次标识（ALLOCATE_TO 族选填；DELIVERED_AS=到货批次，如 SIF 厂号批次）'),
       partial: z.boolean().optional().describe('部分核销标记（本工具词表内暂无核销关系，保留字段）'),
       reason: z.string().optional().describe('红冲原因（仅 REVERSE_ORIGIN 选填）'),
+      note: z.string().optional().describe('备注（仅 PARENT_OF 选填，如 控股/全资）'),
     }),
-    execute: async ({ relation, fromId, toId, amount, ratio, method, batch, partial, reason }) => {
+    execute: async ({ relation, fromId, toId, amount, ratio, method, batch, partial, reason, note }) => {
       try {
         // 1. 起点：必须是事实行（6 种关系的 from 全是事实实体）。
         const from = await getTradeFactById(deps.ctx, fromId, deps.userId);
@@ -96,6 +104,7 @@ export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string })
         if (batch !== undefined) params['batch'] = batch;
         if (partial !== undefined) params['partial'] = partial;
         if (reason !== undefined) params['reason'] = reason;
+        if (note !== undefined) params['note'] = note;
         const edgeId = await insertOntologyEdge(
           deps.ctx,
           {
