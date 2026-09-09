@@ -132,3 +132,33 @@ repo 层新增 `supersedeTradeFact(ctx, {...}, userId?)`：双后端事务（SQL
 工具面：`match_goods`（L1）/ `register_goods`（L2，走 insertTradeFact 写入边界 + 审批链）——实施前先登记 tool-inventory.json（五道门）。attributes 受控约束对 Agent 预填同样生效（32 条/标量/键长）。
 
 依赖与顺序：**Phase 1（主体身份+商品属性袋）先行**——没有 attributes 袋，Agent 从单据抽取的品类异构属性无处落。实施规模预估：A 段（两个工具+词表登记，约半天）→ B 段（确认流候选+向量通道，约一天）→ C 段（别名闭环+报告，按需）。
+
+## 12. 冷启动种子策略（Phase 1 落地时执行）
+
+要种，但只种**两层薄种子**，不种全量规格目录（按需生长原则不变；无交易历史的 SKU 在台账/穿透里是噪音）。种子的价值：匹配精确通道冷启动命中率、家族键归一对照表、品类模板（v2）挂载点、验收演示基线。
+
+| 层 | 内容 | 是否必种 |
+|---|---|---|
+| 品类族层 | 高频品类 name 级条目（螺纹钢/热轧卷板/电力电缆/冻牛肉/动力煤…，10-30 条），带 unit 与已知 commodityCode | **必种，业务确认名单**（= COMMODITY_CODES 收敛路径第一步） |
+| 高频 SKU 层 | 当前业务反复出现的具体规格（如 HRB400E Φ12/Φ14/Φ16/Φ18/Φ20/Φ25） | 可选，业务提供清单；没有则首单收货走"注册兜底+L2"自动生长 |
+
+机制（沿仓库既有惯例）：
+
+- 清单文件（JSON，业务确认）→ 种子脚本 runner，**仿 `backfill:embeddings` 先 `--dry-run` 再实跑**
+- 写入经 `insertTradeFact` 写入边界（zod 校验不绕过），`createdBy='seed'` 可识别；先例：`templateSeed.ts`（模板种子 managed-wins）与 trade_facts 早期种子写入方
+- 幂等：`normalizeSpec(name)+normalizeSpec(spec)` 去重，重复执行不增殖
+- 纠错：错误种子走 supersede 失效（换代模型天然覆盖），不删行
+- v2 衔接：品类族条目即品类模板挂载点
+
+清单骨架示例：
+
+```json
+[
+  {"name": "螺纹钢", "unit": "吨", "attributes": {"品类族": "建筑钢材"}},
+  {"name": "螺纹钢", "spec": "HRB400E Φ12mm 9m定尺", "unit": "吨",
+   "attributes": {"牌号": "HRB400E", "直径": "12mm", "定尺": "9m"}},
+  {"name": "冻牛肉", "unit": "公斤", "attributes": {"品类族": "冻品"}},
+  {"name": "冻牛肉", "spec": "巴西 牛腩 冷分割 20kg/箱", "unit": "公斤",
+   "attributes": {"部位": "牛腩", "产地": "巴西", "包装": "20kg/箱"}}
+]
+```

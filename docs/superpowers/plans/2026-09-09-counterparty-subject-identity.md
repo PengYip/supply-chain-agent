@@ -185,9 +185,30 @@ export const ChangeMasterDataInputSchema = z.object({
 - [ ] spec「实施记录」回填；`git push origin HEAD:<branch>` + `git push origin HEAD:main`（CI/CD 绿才算完成）
 - [ ] dev 冒烟：主数据登记（uscc 必填）→ 对话 link_ontology 建母子公司边 → 变更端点更名 → 台账归一/名称史/穿透 PARENT_OF 逐项过一遍（spec 验收路径）
 
+### Task 8: 冷启动种子脚本（spec §12）
+
+**Files:**
+- Create: `apps/server/scripts/seed-goods.ts`（runner，先 `--dry-run` 后实跑，沿 backfill:embeddings 惯例挂 package.json `seed:goods`）
+- Create: `apps/server/scripts/goods-seed.example.json`（清单骨架：品类族层 + 高频 SKU 层，spec §12 示例）
+- Edit: `apps/server/package.json`（scripts.seed:goods）
+- Create: `apps/server/test/ontology/goodsSeed.test.ts`
+
+**Interfaces:**
+```ts
+// seed-goods.ts --file <清单.json> [--dry-run]
+//   逐条经 insertTradeFact 写入边界（entityType=TradeGoods，createdBy='seed'），
+//   不绕过 zod 校验；幂等键 = normalizeSpec(name)+normalizeSpec(spec?|'')
+//   （重复执行跳过已存在行，不增殖）；--dry-run 只输出将写入的行数与样例。
+```
+
+**Steps:**
+- [ ] 失败测试：幂等（同清单跑两遍行数不变）；写入边界生效（非法 payload 拒绝且报告）；createdBy='seed'；dry-run 零写入
+- [ ] 实现 runner + example 清单；`npm run seed:goods --workspace apps/server -- --file ... --dry-run` 手册写进脚本头注释
+- [ ] 正式种子清单由**业务确认**后提供（品类族层必种，高频 SKU 层可选——spec §12）；本任务只交付脚本与骨架
+
 ## 分期与规模预估
 
-单 PR 可完成（Task 1-7 顺序执行，估 0.5-1 天）。Task 5（归一投影）是唯一有设计余地的任务，若聚合口径与 spec §5 有偏差，以 spec 为准回改。
+单 PR 可完成（Task 1-8 顺序执行，估 1-1.5 天）。Task 5（归一投影）是唯一有设计余地的任务，若聚合口径与 spec §5 有偏差，以 spec 为准回改。Task 8 的正式种子清单依赖业务确认（品类族层必种），脚本与骨架可先行交付。
 
 ## Phase 2（独立排期，本期不实施）：Agent 辅助商品主数据匹配/注册
 
