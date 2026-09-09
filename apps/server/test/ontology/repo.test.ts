@@ -3,7 +3,7 @@ import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.
 import { asOfBusinessTime, asOfSystemTime, normalizeIsoUtc } from '../../src/ontology/asof.js';
 import {
   insertTradeFact, insertOntologyEdge, listTradeFactsAsOf, listOntologyEdgesAsOf,
-  getTradeFactById,
+  getTradeFactById, supersedeTradeFact,
 } from '../../src/ontology/repo.js';
 
 let ctx: DbContext;
@@ -195,5 +195,116 @@ describe('getTradeFactById', () => {
     const hit = await getTradeFactById(ctx, id, 'u1');
     expect(hit?.payload['amount']).toBe(100);
     expect(await getTradeFactById(ctx, id, 'u2')).toBeNull();
+  });
+});
+
+describe('supersedeTradeFact (spec 主体身份 §4: 变更=同主体新事实+旧事实失效)', () => {
+  const PARTY = (name: string) => ({
+    entityType: 'Counterparty' as const,
+    payload: { uscc: '91130000MA0A0000XA', name, role: '供应商' },
+    createdBy: 'master-data-change',
+  });
+
+  it('happy path: 新事实生效 + 旧行 invalid_at=变更时点, 双时间轴正确', async () => {
+    const prevId = await insertTradeFact(ctx, {
+      ...PARTY('某钢铁有限公司'), validAt: '2026-01-01', createdBy: 'manual',
+    }, 'u1');
+    const changeAt = '2026-09-01T00:00:00.000Z';
+    const { newId, prevInvalidAt } = await supersedeTradeFact(ctx, {
+      prevFactId: prevId,
+      next: { ...PARTY('某钢铁集团股份有限公司'), validAt: changeAt },
+      validAt: changeAt,
+    }, 'u1');
+    expect(newId).toMatch(/^TF-/);
+    expect(prevInvalidAt).toBe(changeAt);
+
+    // 业务时间口径: 变更前看旧名, 之后看新名
+    const before = await listTradeFactsAsOf(ctx, asOfBusinessTime('2026-08-31T00:00:00.000Z'), { entityType: 'Counterparty' }, 'u1');
+    expect(before.map((r) => r.payload['name'])).toEqual(['某钢铁有限公司']);
+    const after = await listTradeFactsAsOf(ctx, asOfBusinessTime('2026-09-02T00:00:00.000Z'), { entityType: 'Counterparty' }, 'u1');
+    expect(after).toHaveLength(1);
+    expect(after[0]!.id).toBe(newId);
+    expect(after[0]!.payload['name']).toBe('某钢铁集团股份有限公司');
+    // 旧行保留(名称史=同 uscc 事实全集)
+    const prev = await getTradeFactById(ctx, prevId, 'u1');
+    expect(prev?.invalidAt).toBe(changeAt);
+    expect(prev?.payload['name']).toBe('某钢铁有限公司');
+    // 新行 createdBy=master-data-change 溯源
+    expect(after[0]!.createdBy).toBe('master-data-change');
+  });
+
+  it('uscc 不一致 throw 且零写入(防跨主体误换代)', async () => {
+    const prevId = await insertTradeFact(ctx, {
+      ...PARTY('某钢铁有限公司'), validAt: '2026-01-01',
+    }, 'u1');
+    await expect(supersedeTradeFact(ctx, {
+      prevFactId: prevId,
+      next: {
+        entityType: 'Counterparty',
+        payload: { uscc: '91130000MA0B0000XB', name: '别家公司', role: '供应商' },
+        validAt: '2026-09-01',
+      },
+    }, 'u1')).rejects.toThrow(/uscc/);
+    // 零写入: 无新事实, 旧行未失效
+    const rows = await listTradeFactsAsOf(ctx, asOfBusinessTime('2026-09-02T00:00:00.000Z'), {}, 'u1');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(prevId);
+    expect(rows[0]!.invalidAt).toBeNull();
+  });
+
+  it('prev 已失效 throw(不得二次换代)', async () => {
+    const prevId = await insertTradeFact(ctx, {
+      ...PARTY('某钢铁有限公司'), validAt: '2026-01-01', invalidAt: '2026-06-01',
+    }, 'u1');
+    await expect(supersedeTradeFact(ctx, {
+      prevFactId: prevId,
+      next: { ...PARTY('某钢铁集团有限公司'), validAt: '2026-09-01' },
+    }, 'u1')).rejects.toThrow(/失效|invalid/);
+  });
+
+  it('prev 不存在 throw', async () => {
+    await expect(supersedeTradeFact(ctx, {
+      prevFactId: 'TF-nope',
+      next: { ...PARTY('某钢铁有限公司'), validAt: '2026-09-01' },
+    }, 'u1')).rejects.toThrow();
+  });
+
+  it('其他用户不可见 throw(userId 口径同 getTradeFactById)', async () => {
+    const prevId = await insertTradeFact(ctx, {
+      ...PARTY('某钢铁有限公司'), validAt: '2026-01-01',
+    }, 'u1');
+    await expect(supersedeTradeFact(ctx, {
+      prevFactId: prevId,
+      next: { ...PARTY('某钢铁集团有限公司'), validAt: '2026-09-01' },
+    }, 'u2')).rejects.toThrow();
+  });
+
+  it('new payload 未过注册表校验 throw 且零写入(写入边界不绕过)', async () => {
+    const prevId = await insertTradeFact(ctx, {
+      ...PARTY('某钢铁有限公司'), validAt: '2026-01-01',
+    }, 'u1');
+    await expect(supersedeTradeFact(ctx, {
+      prevFactId: prevId,
+      next: {
+        entityType: 'Counterparty',
+        payload: { uscc: '91130000MA0A0000XA', name: '某钢铁有限公司', role: '供应商', bogus: 1 },
+        validAt: '2026-09-01',
+      },
+    }, 'u1')).rejects.toThrow();
+    expect((await listTradeFactsAsOf(ctx, asOfBusinessTime('2026-09-02T00:00:00.000Z'), {}, 'u1'))).toHaveLength(1);
+  });
+
+  it('entityType 不一致 throw', async () => {
+    const prevId = await insertTradeFact(ctx, {
+      ...PARTY('某钢铁有限公司'), validAt: '2026-01-01',
+    }, 'u1');
+    await expect(supersedeTradeFact(ctx, {
+      prevFactId: prevId,
+      next: {
+        entityType: 'TradeGoods',
+        payload: { uscc: '91130000MA0A0000XA', name: '某钢铁有限公司' },
+        validAt: '2026-09-01',
+      },
+    }, 'u1')).rejects.toThrow(/entityType|类型/);
   });
 });

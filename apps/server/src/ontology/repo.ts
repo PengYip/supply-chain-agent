@@ -160,6 +160,107 @@ export async function getTradeFactById(
 }
 
 // ---------------------------------------------------------------------------
+// supersede 换代(spec 主体身份 §4)：变更 = 同主体新事实 + 旧事实失效(一个事务)。
+// ---------------------------------------------------------------------------
+
+export interface SupersedeTradeFactInput {
+  prevFactId: string;
+  /** 新事实(payload 已含同主体 uscc)；经注册表 entitySchema strict 校验后落库。 */
+  next: TradeFactInput;
+  /** 换代生效时点(= 旧事实 invalid_at)；缺省 = next.validAt(调用方再缺省为登记时刻)。 */
+  validAt?: string | Date;
+}
+
+/** trade_facts INSERT 参数(双后端同序，ingested_at 占位走 COALESCE 缺省)。 */
+function insertFactParams(r: {
+  newId: string; entityType: string; canonical: Record<string, unknown>;
+  validAt: string; invalidAt: string | null; ingestedAt: string | null;
+  createdBy: string; uid: string; documentId?: string | null;
+}): unknown[] {
+  return [
+    r.newId, r.entityType, JSON.stringify(r.canonical), r.validAt, r.invalidAt,
+    r.ingestedAt, r.createdBy, r.uid, r.documentId ?? null,
+  ];
+}
+
+/**
+ * 事务内两步：INSERT 新事实 + UPDATE 旧行 invalid_at——任一步失败整批回滚
+ * (范式对齐 insertOntologyEdgesBatch：先全部校验再开事务)。
+ * 函数内再次强制(调用方前置校验之外的兜底)：
+ *   prev 存在且可见(userId 口径同 getTradeFactById) / prev.entityType === next.entityType
+ *   / prev.payload.uscc === next.payload.uscc(防跨主体误换代) / prev 未被失效过。
+ * 返回 { newId, prevInvalidAt }；前置不满足 throw（REST 层转 4xx）。
+ */
+export async function supersedeTradeFact(
+  ctx: DbContext, input: SupersedeTradeFactInput, userId?: string,
+): Promise<{ newId: string; prevInvalidAt: string }> {
+  const uid = effectiveUserId(userId);
+  const newId = rid('TF');
+  const changeAt = normalizeIsoUtc(input.validAt ?? input.next.validAt);
+  const validAt = normalizeIsoUtc(input.next.validAt);
+  const invalidAt = input.next.invalidAt == null ? null : normalizeIsoUtc(input.next.invalidAt);
+  const ingestedAt = input.next.ingestedAt == null ? null : normalizeIsoUtc(input.next.ingestedAt);
+
+  const prev = await getTradeFactById(ctx, input.prevFactId, userId);
+  if (!prev) throw new Error(`supersede: 旧事实不存在或不可见: ${input.prevFactId}`);
+  if (prev.entityType !== input.next.entityType) {
+    throw new Error(`supersede: entityType 不一致(prev=${prev.entityType}, next=${input.next.entityType})`);
+  }
+  // 校验期零 DB 写：新事实过注册表写入边界(strict + 语义规则)后再比 uscc。
+  const canonical = entitySchema(input.next.entityType).parse(input.next.payload);
+  if (prev.payload['uscc'] !== canonical['uscc']) {
+    throw new Error(
+      `supersede: uscc 不一致——不得跨主体换代` +
+      `(prev=${String(prev.payload['uscc'] ?? '<缺失>')}, next=${String(canonical['uscc'] ?? '<缺失>')})`,
+    );
+  }
+  if (prev.invalidAt != null) {
+    throw new Error(`supersede: 旧事实已失效(invalid_at=${prev.invalidAt}), 不得二次换代`);
+  }
+
+  const FACT_UPDATE =
+    `UPDATE trade_facts SET invalid_at = ? WHERE id = ? AND invalid_at IS NULL AND (user_id = ? OR user_id = '')`;
+  const updateParams = [changeAt, input.prevFactId, uid];
+
+  if (ctx.backend === 'postgres') {
+    const pg = ctx as PostgresDbContext;
+    const client = await pg.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO trade_facts (${FACT_COLS})
+         VALUES ($1,$2,$3,$4,$5,COALESCE($6, NOW()),$7,$8,$9)`,
+        insertFactParams({ newId, entityType: input.next.entityType, canonical, validAt, invalidAt, ingestedAt, createdBy: input.next.createdBy, uid, documentId: input.next.documentId }),
+      );
+      const updated = await client.query(FACT_UPDATE, updateParams);
+      if (updated.rowCount !== 1) {
+        throw new Error(`supersede: 旧事实失效更新未命中(可能已被并发换代): ${input.prevFactId}`);
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      try { await client.query('ROLLBACK'); } catch { /* 连接已坏, 无可回滚 */ }
+      throw err;
+    } finally {
+      client.release();
+    }
+  } else {
+    // better-sqlite3 事务要求同步函数体; 单条插入/更新本就是同步 prepare/run。
+    // 更新未命中时事务整体回滚(新事实不残留), 错误原样抛给上层转 4xx。
+    ctx.sqlite.transaction(() => {
+      ctx.sqlite.prepare(
+        `INSERT INTO trade_facts (id, entity_type, payload, valid_at, invalid_at, ingested_at, created_by, user_id, document_id)
+         VALUES (?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now')), ?, ?, ?)`,
+      ).run(...insertFactParams({ newId, entityType: input.next.entityType, canonical, validAt, invalidAt, ingestedAt, createdBy: input.next.createdBy, uid, documentId: input.next.documentId }));
+      const updated = ctx.sqlite.prepare(FACT_UPDATE).run(...updateParams);
+      if (updated.changes !== 1) {
+        throw new Error(`supersede: 旧事实失效更新未命中(可能已被并发换代): ${input.prevFactId}`);
+      }
+    })();
+  }
+  return { newId, prevInvalidAt: changeAt };
+}
+
+// ---------------------------------------------------------------------------
 // ontology_edges
 // ---------------------------------------------------------------------------
 
