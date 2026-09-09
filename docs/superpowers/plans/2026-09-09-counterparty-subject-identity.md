@@ -147,15 +147,17 @@ export const ChangeMasterDataInputSchema = z.object({
 ### Task 6: 前端呈现
 
 **Files:**
-- Edit: `apps/web/src/api/ontology.ts`（ProjectedEntity.fields.formerNames 为宽松读取；EntityRelationDTO 不变）
+- Edit: `apps/web/src/api/ontology.ts`（ProjectedEntity 增可选 `invalidAt`——timeline 失效行标注用；`changeMasterData()` API client；EntityRelationDTO 不变）
 - Edit: `apps/web/src/components/entities/EntityDetailDrawer.tsx`（timeline 行：失效/曾用名标注；字段表 uscc 自然出现）
+- Edit: `apps/web/src/components/entities/EntitiesView.tsx`（Counterparty 行副标题显示曾用名；**「变更」入口**——详情/行操作打开主数据抽屉的 change 模式：预填现行值、提交走 POST /master-data/change。变更端点必须有 UI 入口，否则只能 curl）
 - Edit: `apps/web/src/components/graph/businessTypes.ts`（EDGE_LABELS + `PARENT_OF: '母子公司'`；样式灰虚线，同辅助关系族）
-- Edit: `apps/web/src/components/entities/MasterDataDrawer.tsx` 相关（uscc 字段由 schema 投影自动出现——验证即可，表单零改动是验收项）
+- Edit: `apps/web/src/components/entities/MasterDataDrawer.tsx` 相关（uscc 字段由 schema 投影自动出现——验证即可；change 模式复用同抽屉，提交目标/预填不同）
 
 **Steps:**
 - [ ] 详情抽屉时间线行增加"曾用名"徽标（timeline 行带失效标记时）
 - [ ] 台账 Counterparty 行副标题显示曾用名（EntitiesView 现有 label 渲染旁，读取 fields.formerNames）
-- [ ] web 测试：EventRegisterDrawer/MasterDataDrawer 既有用例补 uscc 字段（schema 投影新增必填会导致表单快照/提交用例需带 uscc）
+- [ ] 台账/详情「变更主体信息」入口（change 模式抽屉）：预填现行 uscc/name/role，提交后刷新列表
+- [ ] web 测试：EventRegisterDrawer/MasterDataDrawer 既有用例补 uscc 字段（schema 投影新增必填会导致表单快照/提交用例需带 uscc）；change 模式提交用例
 
 ### Task 7: 收尾验证 + 合并
 

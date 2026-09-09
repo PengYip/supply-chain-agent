@@ -58,6 +58,7 @@ repo 层新增 `supersedeTradeFact(ctx, {...}, userId?)`：双后端事务（SQL
 - Counterparty 事实节点 props 自动带 uscc（graphSync payload 展平，**零改动**）。
 - 事实节点键保持 TF id；**v1 不做图上主体归一**（决策 #3）：归一是台账的呈现职责，穿透保持事实粒度。
 - PARENT_OF 经 link_ontology 登记后自动投影；前端 EDGE_LABELS 增中文标签。
+- **计数语义变化（消费方须知）**：`GET /api/ontology/counts` 的 Counterparty 计数将从"事实行数"变为"主体数"（归一分组口径），治理全景图该节点数字会变小——属预期口径修正；该路由复用 listProjectedEntities total，无独立 SQL 需改。
 
 ## 7. 写入路径与权限
 
