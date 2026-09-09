@@ -9,6 +9,7 @@ import { EntityDetailDrawer } from './EntityDetailDrawer';
 import { EventRegisterDrawer } from './EventRegisterDrawer';
 import { MasterDataDrawer } from './MasterDataDrawer';
 import { SelfPartyPanel } from '../parties/SelfPartyPanel';
+import { maskBankAccount } from '../../lib/mask';
 import type { GraphFocusTarget } from '../graph/focus';
 
 /** 实体台账(roadmap Item 3)：类型列表由注册表 schema 驱动，空源类型显示空态不报错。 */
@@ -31,6 +32,9 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
   // 主数据登记表单入口（商品/交易对手/内部组织，清单来自 master-data/schema 投影）。
   const [masterForm, setMasterForm] = useState<MasterDataTypeFormDTO[] | null>(null);
   const [masterRegisterOpen, setMasterRegisterOpen] = useState(false);
+  // 主体变更入口（spec 主体身份 §4，2026-09-09）：change 模式主数据抽屉，
+  // 预填现行事实 payload，提交走 POST /master-data/change（supersede 换代）。
+  const [changeRow, setChangeRow] = useState<ProjectedEntity | null>(null);
   // 己方主体管理抽屉（导航整合 2026-09-08）：原 /parties 视图并入本体台账，
   // 作为内部组织(OrgUnit)的己方名单管理入口；#/parties 深链经 parties=1 参数自动打开。
   const [partiesOpen, setPartiesOpen] = useState(route.params['parties'] === '1');
@@ -216,27 +220,50 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
                 <tbody>
                   {rows.map((row) => {
                     const negative = typeof row.fields['amount'] === 'number' && (row.fields['amount'] as number) < 0;
+                    const formerNames = Array.isArray(row.fields['formerNames'])
+                      ? (row.fields['formerNames'] as unknown[]).filter((v): v is string => typeof v === 'string')
+                      : [];
                     return (
                       <tr key={row.id} onClick={() => setDetailId(row.id)} className={clsx('cursor-pointer border-b border-line/60 last:border-b-0 hover:bg-surface/40')}>
-                        <td className="px-3 py-2 font-medium text-ink">{row.label}</td>
+                        <td className="px-3 py-2 font-medium text-ink">
+                          {row.label}
+                          {formerNames.length > 0 && (
+                            <div className="mt-0.5 text-xs font-normal text-ink-soft" title="曾用名（supersede 更名史）">
+                              曾用名：{formerNames.join('、')}
+                            </div>
+                          )}
+                        </td>
                         {active.ownFields.map((f) => {
                           const v = row.fields[f];
                           const isNegAmount = f === 'amount' && negative;
+                          // 敏感字段列脱敏（spec 主体身份 §3b，统一走 mask helper）
+                          const shown = f === 'bankAccount' ? maskBankAccount(v) : v;
                           return (
                             <td key={f} className={clsx('px-3 py-2 tabular-nums', isNegAmount ? 'text-danger' : 'text-ink')}>
-                              {v == null || v === '' ? '—' : String(v)}
+                              {shown == null || shown === '' ? '—' : String(shown)}
                             </td>
                           );
                         })}
                         <td className="px-3 py-2 text-xs text-ink-soft">{row.source}</td>
                         <td className="px-3 py-2 text-right">
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); askAgent(row); }}
-                            className="rounded border border-line px-2 py-0.5 text-xs text-ink-soft transition-colors hover:border-primary/40 hover:text-primary"
-                          >
-                            问 Agent
-                          </button>
+                          <div className="flex items-center justify-end gap-1.5">
+                            {activeMaster?.name === 'Counterparty' && (
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); setChangeRow(row); }}
+                                className="rounded border border-line px-2 py-0.5 text-xs text-ink-soft transition-colors hover:border-primary/40 hover:text-primary"
+                              >
+                                变更
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); askAgent(row); }}
+                              className="rounded border border-line px-2 py-0.5 text-xs text-ink-soft transition-colors hover:border-primary/40 hover:text-primary"
+                            >
+                              问 Agent
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -307,6 +334,14 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
         <MasterDataDrawer
           masterType={activeMaster}
           onClose={() => setMasterRegisterOpen(false)}
+          onSaved={() => { void load(); }}
+        />
+      )}
+      {changeRow && activeMaster && (
+        <MasterDataDrawer
+          masterType={activeMaster}
+          changeTarget={{ prevFactId: changeRow.id, current: changeRow.fields }}
+          onClose={() => setChangeRow(null)}
           onSaved={() => { void load(); }}
         />
       )}

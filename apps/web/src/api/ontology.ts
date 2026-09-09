@@ -62,6 +62,8 @@ export interface ProjectedEntity {
   meta?: Record<string, string | null>;
   source: 'contract_ledger' | 'documents' | 'trade_facts';
   validAt: string | null;
+  /** 失效时点(null=现行事实)；Counterparty 名称史时间线的"曾用名"行标注用(2026-09-09)。 */
+  invalidAt?: string | null;
   ingestedAt: string | null;
 }
 
@@ -223,7 +225,7 @@ export function fetchMasterDataFormSchema(): Promise<MasterDataFormSchemaDTO> {
 }
 
 export async function submitMasterData(
-  input: Record<string, string | number>,
+  input: Record<string, string | number | Record<string, string>>,
 ): Promise<MasterDataSubmitResult> {
   let res: Response;
   try {
@@ -257,4 +259,54 @@ export async function submitMasterData(
     throw new Error(message);
   }
   return (await res.json()) as MasterDataSubmitResult;
+}
+
+// ---------------------------------------------------------------------------
+// 主体变更（spec 主体身份 §4，2026-09-09）：supersede 换代——同主体新事实+旧事实
+// 失效（一个事务）。change 模式主数据抽屉的提交通道；payload 整包提交（决策 #7a）。
+// ---------------------------------------------------------------------------
+
+export interface ChangeMasterDataResult {
+  newId: string;
+  prevFactId: string;
+  invalidAt: string;
+}
+
+export async function changeMasterData(input: {
+  prevFactId: string;
+  payload: Record<string, string | number | Record<string, string>>;
+  validAt?: string;
+}): Promise<ChangeMasterDataResult> {
+  let res: Response;
+  try {
+    res = await fetch('/api/ontology/master-data/change', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(input),
+    });
+  } catch {
+    throw new Error('网络错误，请稍后重试');
+  }
+  if (!res.ok) {
+    let message = `请求失败（${res.status}）`;
+    try {
+      const data = (await res.json()) as { error?: string; detail?: MasterDataFieldErrors | string };
+      if (data?.error === 'invalid_body' || data?.error === 'invalid_master_data') {
+        const detail = (data.detail ?? { formErrors: [], fieldErrors: {} }) as MasterDataFieldErrors;
+        throw new MasterDataValidationError({
+          formErrors: detail.formErrors ?? [],
+          fieldErrors: detail.fieldErrors ?? {},
+        });
+      }
+      if (data?.error) {
+        message = typeof data.detail === 'string' ? `${data.error}：${data.detail}` : data.error;
+      }
+    } catch (e) {
+      if (e instanceof MasterDataValidationError) throw e;
+      /* 非 JSON 响应，保留状态码消息 */
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as ChangeMasterDataResult;
 }

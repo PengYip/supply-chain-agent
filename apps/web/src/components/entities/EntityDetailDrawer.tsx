@@ -3,6 +3,7 @@ import { clsx } from 'clsx';
 import { getEntityDetail, type EntityDetailResult } from '../../api/ontology';
 import { edgeLabel } from '../graph/businessTypes';
 import { formatEdgeParams } from '../graph/OntologyExplorer';
+import { maskBankAccount } from '../../lib/mask';
 
 interface Props {
   type: string;
@@ -47,6 +48,13 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
   useEffect(() => { void load(); }, [load]);
 
   const hasTimeline = detail != null && detail.timeline.length > 0;
+  // attributes 受控袋（TradeGoods，spec 决策 #8） -> 扩展属性键值区渲染。
+  const attributesEntries = Object.entries(
+    detail != null && detail.entity.fields['attributes'] != null
+      && typeof detail.entity.fields['attributes'] === 'object'
+      ? detail.entity.fields['attributes'] as Record<string, unknown>
+      : {},
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/30" role="dialog" aria-modal="true">
@@ -115,16 +123,36 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
             <div className="mb-2 text-xs font-medium text-ink-soft">字段（注册表口径）</div>
             <table className="w-full text-sm">
               <tbody>
-                {ownFields.map((f) => (
-                  <tr key={f} className="border-b border-line/40 last:border-b-0">
-                    <td className="w-32 py-1.5 text-xs text-ink-soft">{f}</td>
-                    <td className="py-1.5 tabular-nums text-ink">
-                      {detail.entity.fields[f] == null || detail.entity.fields[f] === ''
-                        ? '—'
-                        : String(detail.entity.fields[f])}
+                {ownFields.map((f) => {
+                  const raw = detail.entity.fields[f];
+                  // 敏感字段脱敏（spec 主体身份 §3b）：收款账号等统一走 mask helper。
+                  const shown = f === 'bankAccount' ? maskBankAccount(raw) : raw;
+                  return (
+                    <tr key={f} className="border-b border-line/40 last:border-b-0">
+                      <td className="w-32 py-1.5 text-xs text-ink-soft">{f}</td>
+                      <td className="py-1.5 tabular-nums text-ink">
+                        {shown == null || shown === '' ? '—' : String(shown)}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {/* 扩展属性区（spec 决策 #8）：attributes 受控袋的键值对渲染——
+                    自由键不进注册表字段表，此处单列展示。 */}
+                {attributesEntries.length > 0 && (
+                  <tr className="border-b border-line/40 last:border-b-0">
+                    <td className="w-32 py-1.5 align-top text-xs text-ink-soft">扩展属性</td>
+                    <td className="py-1.5">
+                      <div className="space-y-0.5">
+                        {attributesEntries.map(([k, v]) => (
+                          <div key={k} className="flex items-baseline gap-2 text-sm">
+                            <span className="text-ink-soft">{k}</span>
+                            <span className="tabular-nums text-ink">{String(v)}</span>
+                          </div>
+                        ))}
+                      </div>
                     </td>
                   </tr>
-                ))}
+                )}
                 <tr className="border-t border-line/40">
                   <td className="py-1.5 text-xs text-ink-soft">ingestedAt</td>
                   <td className="py-1.5 text-xs text-ink-soft">{detail.entity.ingestedAt ?? '—'}</td>
@@ -165,7 +193,7 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
         {detail && (
           <div className="px-4 py-3">
             <div className="mb-2 flex items-center justify-between">
-              <div className="text-xs font-medium text-ink-soft">时间线（as-of 切片，红冲负数红标）</div>
+              <div className="text-xs font-medium text-ink-soft">时间线（as-of 切片，红冲负数红标，交易对手为名称史）</div>
               {/* 数量-only 行（收/发货金额后置结算）无净额：显示 — 而非 0/NaN */}
               {hasTimeline && (
                 <div className="text-sm">
@@ -182,6 +210,8 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
                   const amount = row.fields['amount'];
                   const negative = typeof amount === 'number' && amount < 0;
                   const reverse = row.fields['eventBizType'] === '逆向';
+                  // supersede 换代失效行(spec 主体身份 §5)：Counterparty 名称史的曾用名。
+                  const former = row.invalidAt != null;
                   return (
                     <div
                       key={row.id}
@@ -195,6 +225,9 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
                       <span className={clsx('font-medium', negative ? 'text-danger' : 'text-ink')}>{row.label}</span>
                       {reverse && (
                         <span className="rounded border border-danger/30 bg-danger/10 px-1 text-xs text-danger">逆向</span>
+                      )}
+                      {former && (
+                        <span className="rounded border border-line bg-surface px-1 text-xs text-ink-soft">曾用名</span>
                       )}
                       {typeof amount === 'number' ? (
                         <span className={clsx('ml-auto tabular-nums', negative ? 'text-danger' : 'text-ink')}>
@@ -210,7 +243,7 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
               </div>
             ) : (
               <div className="rounded border border-line bg-surface/40 px-3 py-4 text-center text-xs text-ink-soft">
-                仅事件实体（本体事实源）支持时间切片；合同 / 单据投影无双时间轴。
+                事件实体=金额时间线，交易对手=名称变更史（更名/信息换代留痕）；合同 / 单据投影无双时间轴。
               </div>
             )}
           </div>
