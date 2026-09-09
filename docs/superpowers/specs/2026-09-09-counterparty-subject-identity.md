@@ -28,6 +28,9 @@
 | Counterparty.uscc | `z.string().min(1).describe('统一社会信用代码(主体归一锚)')` | payload（jsonb/TEXT），随既有列 |
 | PARENT_OF 关系 | pairs `Counterparty→Counterparty`；params `{ ratio?: 0-1 持股比例, note?: string }` strict | ontology_edges，既有列 |
 | 变更操作 | 纯操作语义，无新表新列 | trade_facts 双时间轴既有 |
+| Counterparty 附加属性 | v1 全可选 string：`address` 地址 / `bankAccount` 收款账号 / `bankName` 开户行 / `legalRepresentative` 法定代表人 / `registeredCapital` 注册资本 / `establishedDate` 成立日期 / `businessScope` 经营范围 | payload，零 DDL |
+
+附加属性三条设计边界：**(a)** 逐个进注册表（zod optional string），**不开放自由 KV 扩展袋**——台账列生成/主数据表单/搜索/治理全景全靠注册表 schema 驱动，开放袋绕过类型约束与词汇门禁；将来真需要，往 payload 加 optional record 也是向后兼容小改动。**(b)** 属性变更复用 supersede 模型，零新机制——一条事实=主体在时点上的属性快照，地址史/账号史=as-of 当时口径（change 端点整包提交，UI 预填现行值保证合并）。**(c)** `bankAccount` 属敏感信息，前端展示做脱敏（如 `6222****5678`）；多收款账号 v1 不支持（单值主账号），多值需 fieldKind 加 array 支持，勿为此建"账户实体"（docx 模型爆炸警告）。工商信息核心=统一社会信用代码，即 uscc 锚本身。
 
 明确不做（OUT）：OrgUnit 层级/部门树（另一需求）；对手方识别管线用 uscc 映射（更名后新单据自动归一，属解析管线后续）；RENAME 专有关系（决策 #2）；GraphRAG 主体卡。
 
@@ -77,6 +80,7 @@ repo 层新增 `supersedeTradeFact(ctx, {...}, userId?)`：双后端事务（SQL
 4. **为什么变更走 REST 不走 L2 工具**：master-data 既有先例（主数据非资金事实不走会话）；变更是确定性操作，无 LLM 翻译需求，直写端点 + zod strict 即可。
 5. **ratio 用 0-1 小数**：与 ALLOCATE_TO.ratio 同构。
 6. **timeline 扩展到 Counterparty**：名称史即时间线；详情抽屉"仅事件实体支持时间切片"的空态文案同步更新。
+7. **附加属性逐个进注册表，不开自由 KV 袋**：台账列/表单/搜索/治理全景全部注册表驱动（自动生效是本体的核心红利），开放袋会绕过类型约束与词汇门禁；长尾字段逐个补充是低成本操作，自由袋留作将来向后兼容的演进选项。属性变更不单独建机制——supersede 整包快照 + 双时间轴统一承载任意属性的变更史。
 
 ## 9. 既有断言/文案需同步的清单（实施时逐项核对）
 

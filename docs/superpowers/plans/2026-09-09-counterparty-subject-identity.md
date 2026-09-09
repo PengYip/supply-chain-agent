@@ -45,14 +45,15 @@
 - Edit: `apps/server/test/ontology/registry.test.ts`
 
 **Interfaces（产出，后续任务依赖）:**
-- `ONTOLOGY_ENTITIES.Counterparty` = `{ uscc: min(1), name: min(1), role: string }`（uscc 在首字段，describe 注明主体归一锚）
+- `ONTOLOGY_ENTITIES.Counterparty` = `{ uscc: min(1), name: min(1), role: string, address?, bankAccount?, bankName?, legalRepresentative?, registeredCapital?, establishedDate?, businessScope? }`（uscc 在首字段，describe 注明主体归一锚；附加属性 v1 全可选 string，见 spec §3 附加属性表与三条边界）
 - `ONTOLOGY_RELATIONS` 增第 9 个：`{ name: 'PARENT_OF', pairs: [{from:'Counterparty',to:'Counterparty'}], params: z.object({ ratio: z.number().min(0).max(1).optional(), note: z.string().optional() }).strict() }`
 - `ontologySchemaJson().version` 更新（如 '2026-09-09'）
 
 **Steps:**
-- [ ] 失败测试：registry.test 断言 Counterparty.shape.uscc 存在且 required；ONTOLOGY_RELATIONS toHaveLength(9)、pairs 15、PARENT_OF pair 白名单（isRelationPairAllowed('PARENT_OF','Counterparty','Counterparty') true / 反向同名对 true / Counterparty→InvoiceEvent false）；version 断言更新
+- [ ] 失败测试：registry.test 断言 Counterparty.shape.uscc 存在且 required；附加属性字段存在且 optional；ONTOLOGY_RELATIONS toHaveLength(9)、pairs 15、PARENT_OF pair 白名单（isRelationPairAllowed('PARENT_OF','Counterparty','Counterparty') true / 反向同名对 true / Counterparty→InvoiceEvent false）；version 断言更新
 - [ ] 实现：改 index.ts 两处 + version 常量
 - [ ] 全量 `npm test --workspace apps/server`——预期暴露连带断言（governance/ontologyEntities/schema DTO 快照若有），逐一按 spec §9 清单同步
+- [ ] 表单投影验证：masterDataFormSchemaJson 自动带出全部附加属性（fieldKind string 直接过）——主数据抽屉零改动即渲染（注册表驱动红利，测试断言之）
 
 ### Task 2: repo——supersedeTradeFact 换代函数
 
@@ -156,7 +157,8 @@ export const ChangeMasterDataInputSchema = z.object({
 **Steps:**
 - [ ] 详情抽屉时间线行增加"曾用名"徽标（timeline 行带失效标记时）
 - [ ] 台账 Counterparty 行副标题显示曾用名（EntitiesView 现有 label 渲染旁，读取 fields.formerNames）
-- [ ] 台账/详情「变更主体信息」入口（change 模式抽屉）：预填现行 uscc/name/role，提交后刷新列表
+- [ ] 台账/详情「变更主体信息」入口（change 模式抽屉）：预填现行 uscc/name/role/附加属性，提交后刷新列表
+- [ ] `bankAccount` 展示脱敏（`6222****5678` 式，台账字段表/表单回显统一走一个 mask helper）
 - [ ] web 测试：EventRegisterDrawer/MasterDataDrawer 既有用例补 uscc 字段（schema 投影新增必填会导致表单快照/提交用例需带 uscc）；change 模式提交用例
 
 ### Task 7: 收尾验证 + 合并
