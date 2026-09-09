@@ -53,7 +53,7 @@
 - `ontologySchemaJson().version` 更新（如 '2026-09-09'）
 
 **Steps:**
-- [ ] 失败测试：registry.test 断言 Counterparty.shape.uscc 存在且 required；附加属性字段存在且 optional；TradeGoods.attributes 袋（合法键值过 / 键超 40 字拒 / 值为对象拒 / 超 32 条拒）；ONTOLOGY_RELATIONS toHaveLength(9)、pairs 15、PARENT_OF pair 白名单（isRelationPairAllowed('PARENT_OF','Counterparty','Counterparty') true / 反向同名对 true / Counterparty→InvoiceEvent false）；version 断言更新
+- [ ] 失败测试：registry.test 断言 Counterparty.shape.uscc 存在且 required；附加属性字段存在且 optional；TradeGoods.attributes 袋（合法键值过 / 键超 40 字拒 / 值为对象拒 / 超 32 条拒）；ONTOLOGY_RELATIONS toHaveLength(10)、pairs 17、PARENT_OF 与 DELIVERED_AS 白名单（isRelationPairAllowed('PARENT_OF','Counterparty','Counterparty') true / ('DELIVERED_AS','GoodsReceiptEvent','TradeGoods') true / Counterparty→InvoiceEvent false）；version 断言更新
 - [ ] 实现：改 index.ts 两处 + version 常量（TradeGoods 袋的 superRefine 放 entitySchema('TradeGoods') 分支，保持 ONTOLOGY_ENTITIES 纯 object 惯例——与事件金额规则同模式）
 - [ ] 全量 `npm test --workspace apps/server`——预期暴露连带断言（governance/ontologyEntities/schema DTO 快照若有），逐一按 spec §9 清单同步
 - [ ] 表单投影验证：masterDataFormSchemaJson 自动带出 Counterparty 附加属性（fieldKind string 直接过）——主数据抽屉注册字段零改动即渲染（注册表驱动红利，测试断言之）；TradeGoods.attributes 不进字段投影（record 不受 fieldKind 支持，录入走 Task 6 键值编辑区——设计如此）
@@ -115,11 +115,11 @@ export const ChangeMasterDataInputSchema = z.object({
 ### Task 4: link_ontology 词表 + PARENT_OF
 
 **Files:**
-- Edit: `apps/server/src/ontology/linkTools.ts`（LINKABLE_RELATIONS + 'PARENT_OF'；description 补一句母子公司话术示例）
+- Edit: `apps/server/src/ontology/linkTools.ts`（LINKABLE_RELATIONS + 'PARENT_OF'、'DELIVERED_AS'；description 补母子公司/收发货挂 SKU 话术示例）
 - Edit: `apps/server/test/ontology/linkTools.test.ts`
 
 **Steps:**
-- [ ] 失败测试：词表含 PARENT_OF；对端 Counterparty 主数据事实建边 ok；ratio 参数落库；Counterparty→InvoiceEvent 拒绝
+- [ ] 失败测试：词表含 PARENT_OF/DELIVERED_AS；PARENT_OF 对端 Counterparty 主数据事实建边 ok；DELIVERED_AS 收发货事实→TradeGoods 建边 ok（batch 参数落库）；ratio 参数落库；Counterparty→InvoiceEvent 拒绝
 - [ ] 实现（enum + description 两行）
 - [ ] 边界确认：relation/fromId/toId 均在 SHARED_TOOL_FIELD_NAMES（既有），toolOntologyMap 门禁零改动——跑 `test/ontology/toolOntologyMap.test.ts` + `test/harness/toolInventory.test.ts` 确认
 
@@ -195,6 +195,6 @@ export const ChangeMasterDataInputSchema = z.object({
 
 - **Task A1**：`match_goods` L1 工具——输入 documentId 或品名/规格文本，四通道打分（商品码精确 → 归一键精确 → pgvector 向量召回+reranker → LLM 判定兜底），返回候选+分数+证据。先登记 tool-inventory.json（五道门：inventory/registry/gate/contract/scenario）。
 - **Task A2**：`register_goods` L2 工具——预填注册（name/spec/commodityCode/attributes 从单据抽取），走 insertTradeFact 写入边界 + 审批中心；attributes 受控约束照常生效。
-- **Task A3**：文档确认流挂候选提议（复用绑定工作台"候选+确认"模式；高置信自动关联记 confidence/confirmationSource）。
+- **Task A3**：文档确认流挂候选提议（复用绑定工作台"候选+确认"模式；高置信自动关联记 confidence/confirmationSource）。收货单确认顺带自动登记收货事实（GoodsReceiptEvent，单据源→事实源收敛），并自动写 DELIVERED_AS 边挂 SKU（决策 #10：SKU 随实际收货生长）。
 - **Task A4**：别名反馈闭环（确认→attributes 落别名；纠正→负样本）+ 定期"未匹配商品清单"物化报告。
 - 估期：A1+A2 约半天；A3+A4 约一天。

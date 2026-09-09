@@ -27,6 +27,7 @@
 |---|---|---|
 | Counterparty.uscc | `z.string().min(1).describe('统一社会信用代码(主体归一锚)')` | payload（jsonb/TEXT），随既有列 |
 | PARENT_OF 关系 | pairs `Counterparty→Counterparty`；params `{ ratio?: 0-1 持股比例, note?: string }` strict | ontology_edges，既有列 |
+| DELIVERED_AS 关系 | pairs `GoodsReceiptEvent→TradeGoods`、`GoodsDeliveryEvent→TradeGoods`；params `{ batch?: string }` strict——收/发货实际交付的商品 SKU（决策 #10：合同只约品类，SKU 随实际收货生长） | ontology_edges，既有列 |
 | 变更操作 | 纯操作语义，无新表新列 | trade_facts 双时间轴既有 |
 | Counterparty 附加属性 | v1 全可选 string：`address` 地址 / `bankAccount` 收款账号 / `bankName` 开户行 / `legalRepresentative` 法定代表人 / `registeredCapital` 注册资本 / `establishedDate` 成立日期 / `businessScope` 经营范围 | payload，零 DDL |
 | TradeGoods.attributes | **受控标量 KV 袋**：`z.record(z.string().min(1), z.union([z.string(), z.number()])).optional()`——键非空≤40 字、值限 string/number、条数上限 32；品类异构属性（钢材牌号/煤炭发热量/化工纯度）免发版登记 | payload，零 DDL |
@@ -97,12 +98,14 @@ repo 层新增 `supersedeTradeFact(ctx, {...}, userId?)`：双后端事务（SQL
 7. **附加属性分对象策略**：Counterparty（同构）逐个进注册表；TradeGoods（异构）开受控标量 KV 袋。台账列/表单/搜索/治理全景的注册表驱动自动化对"注册字段"依然全自动；商品袋是文档化的、有边界的例外——它的治理分两步：v1 写入边界软约束（标量/条数/键长），v2 品类模板硬门禁（业务确认商品分层后，同 COMMODITY_CODES 收敛路径）。属性变更不单独建机制——supersede 整包快照 + 双时间轴统一承载任意属性的变更史。
 8. **商品袋不进表单投影，进键值编辑区**：masterDataFormSchemaJson 反射注册字段（fieldKind 不支持 record），attributes 的录入/展示由前端专用键值编辑区与"扩展属性"渲染区承载——这是开放袋的固有代价，限定在一个组件内。
 9. **规格落 SKU 粒度 + 规范串派生 + 目录按需生长**：钢材/电缆规格组合成百上千，预建目录不可维护；主数据=品名（家族键）+规范化规格串（v1 normalizeSpec 归一人工输入，v2 品类模板派生 canonicalSpec），目录由单据流按需生长（Phase 2 Agent 匹配/注册），人工只审批长尾。
+10. **合同不约定规格的场景（品类/SKU 双层挂接）**：钢材/电缆合同常只约品类与约数（"螺纹钢约5000吨，规格以实际收货为准"）——合同签订零主数据动作，**SKU 的诞生时点=第一次实际收货**；履约与商品的归属由 `DELIVERED_AS` 带参关系承载（收/发货事件→TradeGoods），品类锚 v1=TradeGoods.name 家族键 + 合同 fields 品种字段（归一化聚合），v2 模板键转正。单据源收货（Document 表示）v1 不挂 SKU（ontology_edges 端点限 11 实体），Phase 2"收货确认→自动登记收货事实"后自然并入。台账呈现：合同详情按 SKU 分组小计收发数量。对账分层：合同级守恒 R1 照旧（约数+容差，SQL 对账桥），SKU 级价差结算留 v2。
 
-- `registry.test.ts`：ONTOLOGY_RELATIONS 长度 8→9、连接对 14→15；`ontologySchemaJson().version` 常量；TradeGoods.attributes 袋约束（键长/条数/标量值）。
+## 附A. 既有断言/文案需同步的清单（实施时逐项核对）
+- `registry.test.ts`：ONTOLOGY_RELATIONS 长度 8→10、连接对 14→17（PARENT_OF 1 对 + DELIVERED_AS 2 对）；`ontologySchemaJson().version` 常量；TradeGoods.attributes 袋约束（键长/条数/标量值）。
 - `masterData.test / routes` 用例：uscc 必填后既有 Counterparty 用例补 uscc；TradeGoods 用例带 attributes（含超限/非标量拒绝负例）。
 - `graphSync` 展平：attributes 嵌套 record → `attr.<键>` props（Neo4j props 不收嵌套对象）；对 Counterparty/事件 payload 无 attributes 的路径零影响。
-- 前端 `businessTypes.ts` EDGE_LABELS：PARENT_OF=「母子公司」。
-- 治理全景（governance/ontologySchemaJson 驱动）：9 关系自动出现，无代码改动，验证即可。
+- 前端 `businessTypes.ts` EDGE_LABELS：PARENT_OF=「母子公司」、DELIVERED_AS=「实际交付」。
+- 治理全景（governance/ontologySchemaJson 驱动）：10 关系自动出现，无代码改动，验证即可。
 - `linkTools.test.ts`：词表断言 +PARENT_OF。
 
 ## 10. 风险与取舍
