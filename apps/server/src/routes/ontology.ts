@@ -12,10 +12,11 @@ import {
 } from '../ontology/index.js';
 import { listProjectedEntities, getProjectedEntityDetail } from '../ontology/projection.js';
 import { getNeighbors } from '../ontology/neighbors.js';
-import { insertTradeFact } from '../ontology/repo.js';
+import { insertTradeFact, supersedeTradeFact } from '../ontology/repo.js';
 import { syncOntologyGraph, syncOntologyGraphSafe } from '../ontology/graphSync.js';
 import {
-  CreateMasterDataInputSchema, commodityCodeGateError, masterDataFormSchemaJson,
+  CreateMasterDataInputSchema, ChangeMasterDataInputSchema,
+  commodityCodeGateError, masterDataFormSchemaJson,
 } from '../ontology/masterData.js';
 import { fieldLevelErrors } from '../lib/zodFieldErrors.js';
 
@@ -101,6 +102,61 @@ ontologyRoute.post('/master-data', async (c) => {
   } catch (e) {
     console.error('[ontology] master-data write failed:', errDetail(e));
     return c.json({ error: 'master-data write failed', detail: errDetail(e) }, 500);
+  }
+});
+
+/** POST /master-data/change — 主体变更换代端点（spec 主体身份 §4，2026-09-09）。
+ *  语义：事务内 INSERT 同主体新事实 + UPDATE 旧行 invalid_at（supersedeTradeFact
+ *  唯一写入边界）；前置校验 prev 可见/entityType 一致/uscc 一致/未失效过。
+ *  直写（同 POST /master-data 先例：主数据非资金事实不走 agent 会话不加 L2 工具），
+ *  createdBy='master-data-change' 审计。失败映射：supersede 前置校验类 400
+ *  （prev 不存在 404），未知 500。 */
+ontologyRoute.post('/master-data/change', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+
+  let json: unknown;
+  try { json = await c.req.json(); } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+  const parsed = ChangeMasterDataInputSchema.strict().safeParse(json);
+  if (!parsed.success) {
+    return c.json({ error: 'invalid_body', detail: fieldLevelErrors(parsed.error) }, 400);
+  }
+  const { prevFactId, payload, validAt } = parsed.data;
+
+  // 注册表权威预检（快速失败）：Counterparty strict schema（必填/词汇边界, 字段级报错）。
+  const entityCheck = entitySchema('Counterparty').safeParse(payload);
+  if (!entityCheck.success) {
+    return c.json({ error: 'invalid_master_data', detail: fieldLevelErrors(entityCheck.error) }, 400);
+  }
+
+  try {
+    const { newId, prevInvalidAt } = await supersedeTradeFact(
+      getDbContext(),
+      {
+        prevFactId,
+        next: {
+          entityType: 'Counterparty',
+          payload,
+          validAt: validAt ?? new Date(),
+          createdBy: 'master-data-change',
+        },
+      },
+      user.id,
+    );
+    // 换代成功后图投影 fire-and-forget: 永不阻塞变更主流程。
+    void syncOntologyGraphSafe(getDbContext(), user.id);
+    return c.json({ newId, prevFactId, invalidAt: prevInvalidAt }, 201);
+  } catch (e) {
+    const detail = errDetail(e);
+    // supersede 前置校验类错误（prev 不可见/类型不一致/uscc 不一致/已失效）转 4xx。
+    if (detail.startsWith('supersede:')) {
+      if (detail.includes('不存在或不可见')) return c.json({ error: 'supersede_prev_not_found', detail }, 404);
+      return c.json({ error: 'supersede_rejected', detail }, 400);
+    }
+    console.error('[ontology] master-data change failed:', detail);
+    return c.json({ error: 'master-data change failed', detail }, 500);
   }
 });
 

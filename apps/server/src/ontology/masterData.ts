@@ -37,6 +37,16 @@ export const CreateMasterDataInputSchema = z.object({
   code: z.string().optional().describe('组织编码（仅内部组织，选填）'),
 });
 
+// 变更换代输入（spec 主体身份 §4，2026-09-09）：主体变更=同主体新事实+旧事实失效。
+// payload 直接复用注册表 Counterparty schema（SSOT，不复制字段定义；词汇/strict
+// 权威校验由端点预检 entitySchema('Counterparty') 执行）——整包提交（决策 #7a：
+// 一条事实=主体在时点上的属性快照，UI 预填现行值保证合并）。
+export const ChangeMasterDataInputSchema = z.object({
+  prevFactId: z.string().min(1).describe('被换代事实 id（台账详情可复制，TF- 开头）'),
+  payload: ONTOLOGY_ENTITIES['Counterparty'].strict().describe('主体新属性快照（整包提交；uscc 必须与现行事实一致，防跨主体误换代；strict 拒绝注册表外键）'),
+  validAt: z.string().min(1).optional().describe('变更生效时间 ISO 日期（如 2026-09-01）；缺省=登记时刻'),
+});
+
 /** 商品码门禁：词汇非空时强制 ∈ COMMODITY_CODES；空词汇（v1 开放，业务未确认）自由填写，
  *  转闭枚举后自动收紧。vocabulary 参数默认注册表词汇，测试可注入。 */
 export function commodityCodeGateError(

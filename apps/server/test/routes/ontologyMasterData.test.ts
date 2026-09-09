@@ -10,7 +10,7 @@ vi.mock('../../src/pipeline/db/dbBackend.js', async (importOriginal) => {
 });
 const { ontologyRoute } = await import('../../src/routes/ontology.js');
 const { listProjectedEntities } = await import('../../src/ontology/projection.js');
-const { getTradeFactById } = await import('../../src/ontology/repo.js');
+const { getTradeFactById, insertTradeFact } = await import('../../src/ontology/repo.js');
 const { commodityCodeGateError } = await import('../../src/ontology/masterData.js');
 
 function appAs(userId: string) {
@@ -192,5 +192,122 @@ describe('commodityCodeGateError（词汇非空时收紧，空词汇 v1 自由�
     const vocab = ['煤炭', '铁矿石'];
     expect(commodityCodeGateError('煤炭', vocab)).toBeNull();
     expect(commodityCodeGateError('原油', vocab)).not.toBeNull();
+  });
+});
+
+describe('POST /api/ontology/master-data/change (spec 主体身份 §4: supersede 换代直写端点)', () => {
+  const post = (app: Hono<AuthEnv>, body: unknown) =>
+    app.request('http://test/api/ontology/master-data/change', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+
+  const seedParty = async (name: string, uscc = '91130000MA0A0000XA') =>
+    insertTradeFact(ctx, {
+      entityType: 'Counterparty',
+      payload: { uscc, name, role: '供应商', address: '唐山市' },
+      validAt: '2026-01-01', createdBy: 'manual',
+    }, 'u1');
+
+  it('401 without session', async () => {
+    const app = new Hono<AuthEnv>();
+    app.route('/api/ontology', ontologyRoute);
+    const res = await post(app, { prevFactId: 'TF-x', payload: { uscc: 'U', name: 'N', role: '供应商' } });
+    expect(res.status).toBe(401);
+  });
+
+  it('201 happy path 更名：旧行 invalid_at=变更时点, 台账只显示新名, createdBy=master-data-change', async () => {
+    const prevId = await seedParty('某钢铁有限公司');
+    const app = appAs('u1');
+    const res = await post(app, {
+      prevFactId: prevId,
+      payload: { uscc: '91130000MA0A0000XA', name: '某钢铁集团股份有限公司', role: '供应商', address: '唐山市' },
+      validAt: '2026-09-01',
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { newId: string; prevFactId: string; invalidAt: string };
+    expect(body.prevFactId).toBe(prevId);
+    expect(body.newId).toMatch(/^TF-/);
+    expect(body.invalidAt).toBe('2026-09-01T00:00:00.000Z');
+
+    // 旧行失效、新行生效
+    const prev = await getTradeFactById(ctx, prevId, 'u1');
+    expect(prev?.invalidAt).toBe('2026-09-01T00:00:00.000Z');
+    const next = await getTradeFactById(ctx, body.newId, 'u1');
+    expect(next?.createdBy).toBe('master-data-change');
+    expect(next?.payload['name']).toBe('某钢铁集团股份有限公司');
+
+    // 台账(业务时间 now)只剩新名一行
+    const list = await listProjectedEntities(ctx, 'Counterparty', {}, 'u1');
+    expect(list.total).toBe(1);
+    expect(list.items[0]!.label).toBe('某钢铁集团股份有限公司');
+    expect(list.items[0]!.id).toBe(body.newId);
+  });
+
+  it('400 uscc 不一致：防跨主体误换代, 零写入(旧行未失效, 无新行)', async () => {
+    const prevId = await seedParty('某钢铁有限公司');
+    const app = appAs('u1');
+    const res = await post(app, {
+      prevFactId: prevId,
+      payload: { uscc: '91130000MA0B0000XB', name: '别家公司', role: '供应商' },
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; detail: string };
+    expect(body.error).toBe('supersede_rejected');
+    expect(body.detail).toContain('uscc');
+    const list = await listProjectedEntities(ctx, 'Counterparty', {}, 'u1');
+    expect(list.total).toBe(1);
+    expect(list.items[0]!.id).toBe(prevId);
+  });
+
+  it('404 prev 不存在或他人不可见', async () => {
+    await seedParty('某钢铁有限公司');
+    const app = appAs('u1');
+    const res = await post(app, {
+      prevFactId: 'TF-nope',
+      payload: { uscc: '91130000MA0A0000XA', name: '某钢铁有限公司', role: '供应商' },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('400 已失效事实不得二次换代', async () => {
+    const prevId = await insertTradeFact(ctx, {
+      entityType: 'Counterparty',
+      payload: { uscc: '91130000MA0A0000XA', name: '某钢铁有限公司', role: '供应商' },
+      validAt: '2026-01-01', invalidAt: '2026-06-01', createdBy: 'manual',
+    }, 'u1');
+    const app = appAs('u1');
+    const res = await post(app, {
+      prevFactId: prevId,
+      payload: { uscc: '91130000MA0A0000XA', name: '某钢铁集团有限公司', role: '供应商' },
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('supersede_rejected');
+  });
+
+  it('400 payload 携带注册表外键：strict 输入层字段级报错（词汇/必填权威校验在 entitySchema 预检）', async () => {
+    const prevId = await seedParty('某钢铁有限公司');
+    const app = appAs('u1');
+    const res = await post(app, {
+      prevFactId: prevId,
+      payload: { uscc: '91130000MA0A0000XA', name: '某钢铁有限公司', role: '供应商', commodityCode: 'X' },
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; detail: { fieldErrors: Record<string, string[]> } };
+    expect(body.error).toBe('invalid_body');
+    expect(Object.keys(body.detail.fieldErrors)).toContain('commodityCode');
+  });
+
+  it('400 payload 缺必填（role：payload=注册表 schema，必填在输入层字段级报错）', async () => {
+    const prevId = await seedParty('某钢铁有限公司');
+    const app = appAs('u1');
+    const res = await post(app, {
+      prevFactId: prevId,
+      payload: { uscc: '91130000MA0A0000XA', name: '某钢铁集团有限公司' },
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; detail: { fieldErrors: Record<string, string[]> } };
+    expect(body.error).toBe('invalid_body');
+    expect(Object.keys(body.detail.fieldErrors)).toContain('role');
   });
 });
