@@ -31,7 +31,7 @@ export function AppShell({
   const navItem = NAV_ITEM_MAP[currentView];
 
   return (
-    <div className="flex h-screen overflow-hidden bg-surface">
+    <div className="flex h-screen w-full overflow-hidden bg-surface">
       <AppNav
         current={currentView}
         onNavigate={onNavigate}
