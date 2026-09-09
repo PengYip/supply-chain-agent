@@ -122,6 +122,42 @@ describe('syncOntologyGraph', () => {
     expect(String(node!.props['validAt'])).toContain('2026-06-20');
   });
 
+  it('TradeGoods attributes 袋展平为 attr.<键> 扁平 props（Neo4j props 不收嵌套对象, spec §3 隐藏约束）', async () => {
+    const gid = await insertTradeFact(ctx, {
+      entityType: 'TradeGoods',
+      payload: {
+        name: '螺纹钢', commodityCode: 'HRB400E', spec: 'HRB400E Φ12mm 9m定尺',
+        attributes: { '牌号': 'HRB400E', '直径': '12mm', '件重': 12 },
+      },
+      validAt: '2026-06-20', createdBy: 'test',
+    }, 'u1');
+    const { io, nodes } = makeFakeIo();
+    const res = await syncOntologyGraph({ ctx, userId: 'u1', io });
+    expect(res.status).toBe('ok');
+    const node = nodes.get(`TradeGoods:${gid}`);
+    expect(node).toBeDefined();
+    // 袋内键 -> attr. 前缀标量 props（含 number 值）
+    expect(node!.props['attr.牌号']).toBe('HRB400E');
+    expect(node!.props['attr.直径']).toBe('12mm');
+    expect(node!.props['attr.件重']).toBe(12);
+    // 嵌套 attributes 键不得出现在节点 props
+    expect(node!.props['attributes']).toBeUndefined();
+    // 其余 payload 字段照旧展平
+    expect(node!.props['name']).toBe('螺纹钢');
+    expect(node!.props['commodityCode']).toBe('HRB400E');
+  });
+
+  it('无 attributes 的事实 props 零变化（展平路径对既有 payload 无副作用）', async () => {
+    const pid = await insertFact('u1');
+    const { io, nodes } = makeFakeIo();
+    await syncOntologyGraph({ ctx, userId: 'u1', io });
+    const node = nodes.get(`PaymentEvent:${pid}`)!;
+    expect(Object.keys(node.props).sort()).toEqual([
+      'amount', 'createdBy', 'currency', 'eventBizType', 'ingestedAt',
+      'payType', 'userId', 'validAt',
+    ]);
+  });
+
   it('projects ontology_edges to typed parametric relationships (WRITE_OFF)', async () => {
     const pid = await insertFact('u1');
     const iid = await insertTradeFact(ctx, {
