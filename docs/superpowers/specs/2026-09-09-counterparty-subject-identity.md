@@ -179,3 +179,14 @@ repo 层新增 `supersedeTradeFact(ctx, {...}, userId?)`：双后端事务（SQL
 | 8 | 冷启动种子 | `src/ontology/goodsSeed.ts` + `scripts/seed-goods.ts`（--file/--dry-run，沿 backfill 惯例挂 `seed:goods`）+ `goods-seed.example.json` 骨架；幂等键 normalizeSpec(name)+normalizeSpec(spec)；写入经 insertTradeFact（createdBy='seed'，共享域）；缺 commodityCode 以归一键合成占位码（v1 开放词汇）；正式名单待业务确认 |
 
 验证：仓库根 build / lint / test 全绿（server 249 文件 1836 用例、web 18 文件 117 用例）；本地种子 CLI 三连冒烟（dry-run → 实跑 → 重跑 skipped=7）通过。
+
+### 13.1 dev 冒烟（10.10.0.2，sha 3b4372b）与冒烟驱动的两处修复
+
+验收路径逐项通过：主数据登记（缺 uscc 400；Counterparty/TradeGoods+attributes 200）→ 对话 link_ontology 建 PARENT_OF（L2 审批单→批准→落边，params {ratio:0.6, note:控股}）→ change 端点更名（201；跨主体 400；prev 不存在 404；二次换代 400）→ 台账归一（2 主体组、label=现行名、formerNames=[旧名]、meta.uscc）→ 搜索旧名命中组 → 详情（entity=现行事实、timeline 两行失效行可辨、relations=组内 union 含更名前的 PARENT_OF、netAmount=null）→ counts 口径（Counterparty=2 主体数而非 4 事实行）。
+
+冒烟暴露并已修复（均合入本分支）：
+
+1. **场景路由回归（harness，非本体模块，P3 引入）**：`agent.ts` 在追加 role='user' 的 `<agent_status>` 快照后才做场景检测，快照文本恒含「复核」命中 ENTRY_RE——对话每回合被收窄到 entry 工具集，settlement 写工具（link_ontology/create_trade_event/create_writeoff/create_offset/manage_quota/confirm_settlement）与 qa 读工具（graph_query 等）自 P3 部署起在对话路径永不可见（模型只能升级工单）。修复：检测输入改回真实对话尾部 `lastUserText(messages)`；回归测试 `scenarioDetection.regression.test.ts`（快照注入不影响 settlement/entry 路由）。
+2. **supersedeTradeFact PG 分支**：UPDATE 语句 `?` 占位未转 `$n` 透传 node-postgres → 语法错误 500（SQLite 测试无法暴露）。修复 + `postgres.integration.test.ts` 增 ontology supersede PG lane（事务化换代/uscc 防线，唯一 uscc 保证跨跑幂等）；顺带补 P3 漏同步的 trade_facts 列断言（document_id）。
+
+冒烟数据（e2e 账号下 4 条事实/1 条边/3 审批单/2 会话/1 登录态）已清理。
