@@ -46,8 +46,10 @@ export function seedIdempotencyKey(name: string, spec?: string): string {
 export async function seedGoodsMasterData(opts: GoodsSeedOptions): Promise<GoodsSeedResult> {
   const { ctx, items, dryRun = false } = opts;
   // 既有商品全集（含失效行不影响：失效行仍是"见过的规格"，重复种子仍应跳过）。
+  // 系统时点取远期常量=「已知全集」：Windows 时钟粒度 ~15ms，new Date() 会在
+  // 同毫秒窗口内读漏刚插入的行（2026-09-09 全量测试偶发复现）。
   const existing = await listTradeFactsAsOf(
-    ctx, asOfSystemTime(new Date().toISOString()), { entityType: 'TradeGoods' }, opts.userId ?? '',
+    ctx, asOfSystemTime('9999-12-31T23:59:59.999Z'), { entityType: 'TradeGoods' }, opts.userId ?? '',
   );
   const seen = new Set(existing.map((r) => seedIdempotencyKey(
     String(r.payload['name'] ?? ''), typeof r.payload['spec'] === 'string' ? r.payload['spec'] : undefined,

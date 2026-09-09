@@ -459,7 +459,10 @@ export async function runStream({ messages, role, auditTraceId, model, deps, use
   // 阶段3 场景挂载(tool-inventory methodology): 按当前用户消息把本回合可见
   // 工具收窄到 场景集 ∪ CORE; 检测保守(无命中/涉及模板维护 -> 'all' 不收窄)。
   // prepareStep 的末步 activeTools:[] 覆盖本值, 收尾行为不变。
-  const scenario = scenarioOverride ?? detectScenario(lastUserText(messagesForModel));
+  // 检测输入必须是真实对话尾部(messages): <agent_status> 快照在其后注入且
+  // role='user', 若用 messagesForModel, 场景检测会读快照文本(恒含"复核"命中
+  // entry), settlement 写工具/qa 读工具将永远不可见(2026-09-09 冒烟回归)。
+  const scenario = scenarioOverride ?? detectScenario(lastUserText(messages));
   const scenarioTools = scenarioActiveTools(scenario, Object.keys(tools));
   return streamText({
     // Chat Completions API (.chat) -- DeepSeek's Responses-API compatibility

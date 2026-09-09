@@ -27,7 +27,7 @@ describe('seedGoodsMasterData (spec §12 冷启动种子)', () => {
     expect(res.inserted).toBe(3);
     expect(res.skipped).toBe(0);
     expect(res.failed).toEqual([]);
-    const rows = await listTradeFactsAsOf(ctx, asOfSystemTime(new Date().toISOString()), { entityType: 'TradeGoods' });
+    const rows = await listTradeFactsAsOf(ctx, asOfSystemTime('9999-12-31T23:59:59.999Z'), { entityType: 'TradeGoods' });
     expect(rows).toHaveLength(3);
     expect(rows.every((r) => r.createdBy === 'seed')).toBe(true);
     expect(rows.every((r) => r.userId === '')).toBe(true);
@@ -40,7 +40,7 @@ describe('seedGoodsMasterData (spec §12 冷启动种子)', () => {
     const again = await seedGoodsMasterData({ ctx, items: LIST, userId: '' });
     expect(again.inserted).toBe(0);
     expect(again.skipped).toBe(3);
-    const rows = await listTradeFactsAsOf(ctx, asOfSystemTime(new Date().toISOString()), { entityType: 'TradeGoods' });
+    const rows = await listTradeFactsAsOf(ctx, asOfSystemTime('9999-12-31T23:59:59.999Z'), { entityType: 'TradeGoods' });
     expect(rows).toHaveLength(3);
   });
 
@@ -72,7 +72,7 @@ describe('seedGoodsMasterData (spec §12 冷启动种子)', () => {
     expect(res.inserted).toBe(1);
     expect(res.failed).toHaveLength(2);
     expect(res.failed.every((f) => f.error.length > 0)).toBe(true);
-    const rows = await listTradeFactsAsOf(ctx, asOfSystemTime(new Date().toISOString()), { entityType: 'TradeGoods' });
+    const rows = await listTradeFactsAsOf(ctx, asOfSystemTime('9999-12-31T23:59:59.999Z'), { entityType: 'TradeGoods' });
     expect(rows).toHaveLength(1);
     expect(rows[0]!.payload['name']).toBe('合法品');
   });
@@ -80,7 +80,7 @@ describe('seedGoodsMasterData (spec §12 冷启动种子)', () => {
   it('缺 commodityCode 的条目以归一键合成占位码（spec §12 清单样例不含编码仍可种子）', async () => {
     const res = await seedGoodsMasterData({ ctx, items: [{ name: '螺纹钢', unit: '吨' }], userId: '' });
     expect(res.inserted).toBe(1);
-    const rows = await listTradeFactsAsOf(ctx, asOfSystemTime(new Date().toISOString()), { entityType: 'TradeGoods' });
+    const rows = await listTradeFactsAsOf(ctx, asOfSystemTime('9999-12-31T23:59:59.999Z'), { entityType: 'TradeGoods' });
     expect(rows).toHaveLength(1);
     expect(typeof rows[0]!.payload['commodityCode']).toBe('string');
     expect(rows[0]!.payload['commodityCode']).toContain('螺纹钢'.toLowerCase());
@@ -91,7 +91,7 @@ describe('seedGoodsMasterData (spec §12 冷启动种子)', () => {
     expect(res.inserted).toBe(3);
     expect(res.failed).toEqual([]);
     expect(res.samples.length).toBeGreaterThan(0);
-    const rows = await listTradeFactsAsOf(ctx, asOfSystemTime(new Date().toISOString()), { entityType: 'TradeGoods' });
+    const rows = await listTradeFactsAsOf(ctx, asOfSystemTime('9999-12-31T23:59:59.999Z'), { entityType: 'TradeGoods' });
     expect(rows).toHaveLength(0);
   });
 

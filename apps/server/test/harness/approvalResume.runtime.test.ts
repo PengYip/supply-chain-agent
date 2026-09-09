@@ -91,7 +91,9 @@ async function seedDoc() {
     { text: 'seeded' },
   ]);
   const result = await runStream({
-    messages: [{ role: 'user', content: '录入' }],
+    // 消息需命中 ENTRY_RE（如 录入这/打标签）：场景路由按真实用户消息检测
+    // （scenarioDetection.regression.test），裸"录入"无关键词会保守归 qa。
+    messages: [{ role: 'user', content: '录入这份合同' }],
     role: 'trader',
     auditTraceId: 't-seed',
     sessionId: 'rt-seed',
