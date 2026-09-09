@@ -1,7 +1,7 @@
 # 企业主体身份与层级：Counterparty 主体锚、更名史与父子关系
 
 日期: 2026-09-09
-状态: 已评审待实施（排期未定；实施计划见 `docs/superpowers/plans/2026-09-09-counterparty-subject-identity.md`）
+状态: 已实施（Phase 1，Task 1-8；实施记录见文末 §13；Phase 2 见 §11 未实施）
 上游:
 - 《贸易企业全链路数据本体建设落地方案》docx §3（实体定稿）/ §5（关系定稿）/ §6.2（正向/逆向统一语义）
 - 本体基座: `docs/superpowers/plans/2026-09-07-ontology-foundation.md`（已落地 main）
@@ -162,3 +162,20 @@ repo 层新增 `supersedeTradeFact(ctx, {...}, userId?)`：双后端事务（SQL
    "attributes": {"部位": "牛腩", "产地": "巴西", "包装": "20kg/箱"}}
 ]
 ```
+
+## 13. 实施记录（Phase 1，2026-09-09）
+
+分支 `PengYip/counterparty-subject-identity` 逐任务 TDD 落地，全程零 DDL、零新工具、零 tool-inventory 变更。
+
+| Task | 交付 | 关键落点 |
+|---|---|---|
+| 1 | 注册表扩展 + normalizeSpec | `ontology/index.ts`：Counterparty uscc 首字段必填 + 7 个可选附加属性；TradeGoods.attributes 受控袋（键≤40 字/标量值/≤32 条 superRefine）；PARENT_OF/DELIVERED_AS 关系（10 类型/17 对）；schema version 2026-09-09。`ontology/goodsSpec.ts` normalizeSpec（NFKC/去空白/乘号族统一/小写）。`masterData.ts` 输入 schema 增字段；attributes 不进表单投影（决策 #8，跳过 record） |
+| 2 | supersedeTradeFact | `ontology/repo.ts`：INSERT 新事实 + UPDATE 旧行 invalid_at 双后端事务（PG pool.connect BEGIN/COMMIT；SQLite transaction）；兜底校验 prev 可见/entityType 一致/uscc 一致/未失效过；失效更新未命中整批回滚 |
+| 3 | POST /master-data/change | `routes/ontology.ts` + `masterData.ts` ChangeMasterDataInputSchema（payload 复用注册表 Counterparty strict schema，整包提交）；supersede 前置校验 400 / prev 不存在 404；createdBy='master-data-change'。`lib/zodFieldErrors.ts` 多段路径取叶子字段名 |
+| 4 | link_ontology 词表 | LINKABLE_RELATIONS 6→8（+PARENT_OF/DELIVERED_AS），描述补母子公司/收发挂 SKU 话术与 ratio/note/batch 参数；contextContract/permissionGate/scenarios/roleToolRegistry 仅登记工具名（既有），零改动；toolOntologyMap/toolInventory 测试通过（工具面零变化） |
+| 4b | 图投影展平 | `graphSync.ts`：payload.attributes 拆为 `attr.<键>` 标量 props（Neo4j props 不收嵌套对象）；无袋事实 props 零变化；边 props（ontology_edges.params）恒标量不受影响 |
+| 5 | 台账归一投影 | `projection.ts`：collectEntities('Counterparty') 按 uscc 内存分组（无 uscc 存量行独立分组），现行事实作行 + fields.formerNames + meta.uscc；详情 entity=现行事实、timeline=组内名称史（invalidAt 可辨）、relations=组内事实端点边 union（cap 50）；ProjectedEntity 增 invalidAt；repo 增 listTradeFactHistory（json_extract / payload->> 双写法）；counts 路由 Counterparty 计数随归一口径（spec §6 预期修正） |
+| 6 | 前端呈现 | 台账 Counterparty 行副标题曾用名 + 行级「变更」入口；MasterDataDrawer change 模式（预填现行值、uscc 只读、bankAccount 掩码回显未改还原原值、生效时间可选）与 TradeGoods 键值编辑区（增删行/32 条截停/重复键拦截）；详情抽屉时间线「曾用名」徽标 + 「扩展属性」键值区 + 空态文案更新（事件实体=金额时间线，交易对手=名称史）；EDGE_LABELS PARENT_OF=母子公司 / DELIVERED_AS=实际交付（灰虚线）；`lib/mask.ts` 统一脱敏 helper |
+| 8 | 冷启动种子 | `src/ontology/goodsSeed.ts` + `scripts/seed-goods.ts`（--file/--dry-run，沿 backfill 惯例挂 `seed:goods`）+ `goods-seed.example.json` 骨架；幂等键 normalizeSpec(name)+normalizeSpec(spec)；写入经 insertTradeFact（createdBy='seed'，共享域）；缺 commodityCode 以归一键合成占位码（v1 开放词汇）；正式名单待业务确认 |
+
+验证：仓库根 build / lint / test 全绿（server 249 文件 1836 用例、web 18 文件 117 用例）；本地种子 CLI 三连冒烟（dry-run → 实跑 → 重跑 skipped=7）通过。
