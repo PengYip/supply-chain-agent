@@ -150,6 +150,18 @@ repo 层新增 `supersedeTradeFact(ctx, {...}, userId?)`：双后端事务（SQL
 
 验证：仓库根 build/lint/test 全绿（server 252 文件 1860 用例、web 18 文件 117 用例）。
 
+### 11.2 dev 冒烟（10.10.0.2，sha 31dd8e8）与冒烟驱动的 Phase 1 缺陷修复
+
+验收路径逐项通过：对话 match_goods（三通道无候选，suggestion=register）→ register_goods 提交（L2 审批单 → 批准 → 落 trade_facts，createdBy='register_goods'，attributes 受控袋透传，缺商品码以归一键合成占位码）→ 再 match_goods（0.95 归一键精确命中，suggestion=match）→ 台账商品 payload 含 attributes → 穿透节点 `attr.<键>` 展平核对（attr.牌号/attr.厚度，name=TF id）。
+
+场景路由边界确认（非缺陷）：settlement 收窄按"当前用户消息"检测，含「对账/结算」词汇的回合才可见 register_goods；无词汇回合模型按设计降级（不可见 → escalate_to_human 工单，不猜测）。
+
+冒烟暴露并已修复（随波次一合入）：
+
+1. **graphSync payload.name 覆盖 MERGE 键（Phase 1 缺陷）**：TradeGoods/Counterparty/OrgUnit 的 payload 含 `name` 键，展平时随 props 回写，`ON CREATE SET` 把节点 MERGE 键 `name=TF id`（spec §2.1）覆盖成品名/企业名——prune 按 TF id keep 集找不到节点，每次同步误删新建节点（商品/对手方事实节点在图上永不落地），且同 payload name 的多事实（重名/换代史）触发 name 唯一约束冲突（2026-09-09 冒烟的 partial projection 报错同根因）。修复：展平时把 `payload.name` 与 attributes 一并摘出；测试断言同步修正。
+
+冒烟数据（PG 事实/会话/审批单/用户 + Neo4j 节点）已清理。
+
 **波次二遗留（届时另立计划）**：向量召回通道（商品嵌入+pgvector 检索+reranker，解决"热轧卷板 vs 热轧板卷"异写）；确认流候选自动挂接（绑定工作台"候选+确认"模式）；别名反馈闭环（人工确认→别名落 attributes）；未匹配商品定期报告。
 
 ## 12. 冷启动种子策略（Phase 1 落地时执行）
