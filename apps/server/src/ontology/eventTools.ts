@@ -30,6 +30,8 @@ export const CreateTradeEventInputSchema = z.object({
   quantity: z.number().optional().describe('数量（收货/发货必填，如 100）'),
   unit: z.string().optional().describe('单位（收货/发货/结算必填，如 吨）'),
   settledQuantity: z.number().optional().describe('结算数量（SettlementEvent 必填，如 100）'),
+  counterpartyId: z.string().min(1).optional().describe('交易对手事实 id（仅收货/发货，spec 决策 #11：事件对手显式化；从台账复制 TF- 事实 id，可省略后置经 link_ontology 补 TRADING_WITH 边）'),
+  titleTransfer: z.string().min(1).optional().describe('货权转移口径（仅收货/发货，spec 决策 #11：发货即转/签收转/验收转/到岸转；不确定时先问用户，不要猜测）'),
   documentId: z.string().min(1).optional().describe('来源单据 id（凭证据源：对话上下文/表单中有明确来源单据时传递，图上据此建立 单据-凭证溯源 边；没有就省略）'),
 });
 

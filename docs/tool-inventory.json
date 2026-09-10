@@ -1,9 +1,9 @@
 {
-  "version": "2026-09-09",
+  "version": "2026-09-10",
   "methodology": "docs/tool-design-methodology.md",
   "description": "工具清单 SSOT。新增/删除/合并工具必须先改本清单（含 whenToUse/boundary/rationale），再改 registry；apps/server/test/harness/toolInventory.test.ts 断言两侧一致。",
   "policy": {
-    "maxToolsMountedPerScenario": 12,
+    "maxToolsMountedPerScenario": 14,
     "requiresWhenToUse": true,
     "requiresBoundary": true,
     "statusVocabulary": [
@@ -24,6 +24,7 @@
       "血缘绑定",
       "结算核销",
       "事件登记",
+      "商品主数据",
       "平台治理"
     ],
     "groupMeaning": {
@@ -32,6 +33,7 @@
       "血缘绑定": "凭证-合同绑定闭环与图谱实体/业务关系（背靠背/项目/修订）维护",
       "结算核销": "结算取证、结算确认落账、票款核销与预付冲抵",
       "事件登记": "对话登记本体事件事实到 trade_facts（付款/收款/收货/发货/发票/结算/服务费）",
+      "商品主数据": "商品主数据匹配/注册闭环（spec §11 Phase 2）：match_goods 只读匹配优先，register_goods L2 注册兜底必过审批",
       "平台治理": "工具面元能力与治理配置：HITL 求助、技能加载、沙盒计算、模板词表/额度维护"
     }
   },
@@ -289,6 +291,28 @@
       "whenToUse": "对话登记单条本体事件事实（付款/收款/收货/发货/发票/结算/服务费）到 trade_facts：用户口述业务事实（金额/币种/业务时间/方向类型）时调用，落库后台账与穿透图即时可见。",
       "boundary": "L2 需审批中心批准；一次一条事实，不做核销/冲抵（用 create_writeoff/create_offset）；字段组合必须满足本体注册表（如发票必须 invoiceNo/invoiceType、付款必须 payType），不符整单拒绝并返回原因；收/发货可仅数量登记（amount 与 currency 同缺同在，结算价后置），其余事件金额+币种必填；逆向=负数金额语义由写入边界强制；不接受自由文本数字与日期。",
       "rationale": "trade_facts 此前零生产写入方（仅种子/测试），事件登记是对话核心价值主张（自然语言->受治理可审计写入）的落地；词汇/语义规则全部复用本体注册表，未来表单入口复用同一工具后端。"
+    },
+    {
+      "name": "match_goods",
+      "layer": "感知",
+      "level": "L1",
+      "group": "商品主数据",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "商品主数据匹配（匹配优先）：单据或对话出现商品描述、要确定对应哪条既有主数据时调用，按商品码精确/品名+规格归一键精确/名称包含三通道打分，返回候选+分数+命中通道+suggestion。",
+      "boundary": "只读不写；只对现行（未失效）商品事实匹配，用户隔离；suggestion=\"match\"（有 score>=0.95 候选）时应挂接既有商品、不得 register_goods 重复建档；suggestion=\"register\" 才走注册兜底；向量召回通道属波次二，异写（热轧卷板 vs 热轧板卷）v1 靠归一键+人工。",
+      "rationale": "spec §11 Phase 2（2026-09-10 波次一）：人工维护商品主数据工作量过大，Agent 匹配让目录按需生长；归一键通道复用 normalizeSpec（决策 #9），候选证据化保证可审计。"
+    },
+    {
+      "name": "register_goods",
+      "layer": "执行",
+      "level": "L2",
+      "group": "商品主数据",
+      "status": "active",
+      "mount": "always",
+      "whenToUse": "商品主数据注册兜底（L2 需审批中心批准）：match_goods 确认无高置信候选（suggestion=\"register\"）后，把单据抽取的品名/规格/商品码/品类属性注册为 TradeGoods 主数据。",
+      "boundary": "调用前必须先 match_goods 确认无匹配，避免重复建档（归一键与既有商品相同仍会落库但 detail 软提示疑似重复——重名不同规格合法）；attributes 只收标量键值对（键<=40字、值 string/number、最多 32 条，超限整单拒绝）；写入必经 insertTradeFact 注册表校验；缺商品码以归一键合成占位码。",
+      "rationale": "错误主数据会全链扩散，注册必过人工是 spec §11 的硬设计；与 create_trade_event 同构的对话登记模式（写入边界+审批链+图投影 fire-and-forget），attributes 受控袋让品类异构属性免发版登记。"
     },
     {
       "name": "link_ontology",

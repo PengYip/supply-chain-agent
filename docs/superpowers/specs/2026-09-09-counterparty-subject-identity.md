@@ -1,7 +1,7 @@
 # 企业主体身份与层级：Counterparty 主体锚、更名史与父子关系
 
 日期: 2026-09-09
-状态: 已实施（Phase 1，Task 1-8；实施记录见文末 §13；Phase 2 见 §11 未实施）
+状态: 已实施（Phase 1，Task 1-8；实施记录见文末 §13；Phase 2 波次一已实施，见 §11 末实施记录；向量召回/确认流候选/别名闭环/未匹配报告留波次二）
 上游:
 - 《贸易企业全链路数据本体建设落地方案》docx §3（实体定稿）/ §5（关系定稿）/ §6.2（正向/逆向统一语义）
 - 本体基座: `docs/superpowers/plans/2026-09-07-ontology-foundation.md`（已落地 main）
@@ -135,6 +135,22 @@ repo 层新增 `supersedeTradeFact(ctx, {...}, userId?)`：双后端事务（SQL
 工具面：`match_goods`（L1）/ `register_goods`（L2，走 insertTradeFact 写入边界 + 审批链）——attributes 受控约束对 Agent 预填同样生效（32 条/标量/键长）。**实施计划：`plans/2026-09-10-four-flows-wave1.md`（波次一：本节 Task A1/A2 + 决策 #11 + 恒等式自洽；向量召回/确认流候选/别名闭环留波次二）。**
 
 依赖与顺序：**Phase 1（主体身份+商品属性袋）先行**——没有 attributes 袋，Agent 从单据抽取的品类异构属性无处落。实施规模预估：A 段（两个工具+词表登记，约半天）→ B 段（确认流候选+向量通道，约一天）→ C 段（别名闭环+报告，按需）。
+
+### 11.1 实施记录（波次一，2026-09-10）
+
+分支 `PengYip/four-flows-wave1` 逐任务 TDD 落地（plan: `plans/2026-09-10-four-flows-wave1.md`），零 DDL。
+
+| 交付 | 落点 |
+|---|---|
+| 决策 #11：TRADING_WITH 关系（第 11 关系/19 对，params `{role: 上游/下游}` strict）+ 收/发货 payload 可选 `counterpartyId`/`titleTransfer`（经 create_trade_event inputSchema 透传，不解构溯源列）；link_ontology 词表 8→9（+TRADING_WITH，inputSchema 增 role）；web EDGE_LABELS「交易对手」灰虚线 | `ontology/index.ts`（schema version 2026-09-10）、`ontology/eventTools.ts`、`ontology/linkTools.ts`、`apps/web/src/components/graph/businessTypes.ts` |
+| §14 backlog#1：confirm_settlement 算术自洽硬校验（`totalAmount ≈ settledQuantity × basePrice + Σadjustments`，容差 0.005；basePrice 缺省跳过）——**只拒绝不改写**，不满足返回 `{status:'invalid', detail 含差异值}` 零落库 | `pipeline/tools/settlementTools.ts` |
+| §11 匹配优先：`match_goods` L1——三通道打分（商品码精确 1.0 / 归一键精确 0.95 / 名称双向包含 0.6），候选去重按分排序 cap 10，suggestion≥0.95→match 否则→register；纯 SQL 检索现行（未失效）TradeGoods 事实，用户隔离，无 Neo4j/向量依赖 | `ontology/goodsMatch.ts`（新增） |
+| §11 注册兜底：`register_goods` L2（needsApproval）——写入必经 insertTradeFact（createdBy='register_goods'，attributes 受控袋对 Agent 预填同样生效），缺商品码以归一键合成占位码（goodsSeed 同款），归一键重复仍落库但 detail 软提示"疑似重复"（重名不同规格合法），图投影 fire-and-forget | `ontology/goodsRegisterTool.ts`（新增） |
+| 五道门登记：tool-inventory version 2026-09-10 + **场景帽 12→14**（结算域 +2 工具的显式决策）+ 新分组「商品主数据」；roleToolRegistry 挂载（trader 23→25）；permissionGate（L1/L2）；contextContract 两契约（match_goods 读 L1 persist business；register_goods 同 create_trade_event 模式）；scenarios：settlement +2、qa +match_goods；toolOntologyMap 映射两工具（词汇门禁：字段∈TradeGoods 实体 ∪ 双时间轴共享词汇） | `docs/tool-inventory.json`、`harness/{roleToolRegistry,permissionGate,contextContract,scenarios}.ts`、`ontology/toolOntologyMap.ts` |
+
+验证：仓库根 build/lint/test 全绿（server 252 文件 1860 用例、web 18 文件 117 用例）。
+
+**波次二遗留（届时另立计划）**：向量召回通道（商品嵌入+pgvector 检索+reranker，解决"热轧卷板 vs 热轧板卷"异写）；确认流候选自动挂接（绑定工作台"候选+确认"模式）；别名反馈闭环（人工确认→别名落 attributes）；未匹配商品定期报告。
 
 ## 12. 冷启动种子策略（Phase 1 落地时执行）
 

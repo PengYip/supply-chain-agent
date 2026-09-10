@@ -5,6 +5,8 @@
 //     确认, 确认通过后落 settlement_records 台账(金额锚点)。
 // 分工边界(有意为之): 数值计算由 LLM 完成(用户实测准确), 本模块不做算术、
 // 不改写任何提交数字; 确定性保证来自 L2 人工确认 + 凭证溯源 id 落库。
+// 例外(2026-09-10): confirm_settlement 增算术自洽硬校验——只校验恒等式成立与否,
+// 不产生/修正任何数字(方法论 §10.5 恒等式交叉验证的落地, spec §14 backlog#1)。
 import { tool } from 'ai';
 import { z } from 'zod';
 import type { DbContext } from '../db/client.js';
@@ -136,7 +138,9 @@ export function buildConfirmSettlementTool(deps: SettlementToolDeps) {
       '把用户已确认的结算结果写入结算台账(L2 操作: 调用需附带人工授权, 注册处 needsApproval)。' +
       '什么时候用: 已调用 gather_settlement_evidence 取证、按合同条款算出结算、并把完整结果' +
       '(数量/单价/奖罚/总额/依据)展示给用户、用户明确说"确认/没问题/就这样结"之后, 调用一次。' +
-      '边界: 不校验算术(数值以你向用户展示并被确认的为准); 不修改已确认记录(修正=确认一条新行); ' +
+      '边界: 提交前服务端做算术自洽硬校验(totalAmount ≈ settledQuantity × basePrice + Σadjustments, ' +
+      '容差 0.005; basePrice 为 null 跳过), 不满足返回 invalid 且不落库——只拒绝不改写, 请核对后修正再提交; ' +
+      '不修改已确认记录(修正=确认一条新行); ' +
       '重复调用会产生重复台账行, 一次确认只调用一次; 没有合同台账时拒绝。' +
       '返回: {status, settlementId, record}。',
     inputSchema: z.object({
@@ -171,6 +175,27 @@ export function buildConfirmSettlementTool(deps: SettlementToolDeps) {
       const unknownFlowIds = input.basisFlowIds.filter((id) => !flowIdSet.has(id));
       if (unknownFlowIds.length > 0) {
         return err(`basisFlowIds 含非本合同流水: ${unknownFlowIds.join(', ')}(请以 gather_settlement_evidence 返回为准)`);
+      }
+
+      // 算术自洽硬校验(方法论 §10.5 "立即可做", spec §14 backlog#1, 2026-09-10):
+      // totalAmount ≈ settledQuantity × basePrice + Σadjustments.amount, 容差 0.005。
+      // 只拒绝不改写——不自动修正任何数字, 由模型/用户核对后重新确认。
+      // basePrice 为 null(合同未约定价格)时恒等式不可判, 跳过校验; adjustments
+      // 缺省为空数组, 对应项自然为 0。
+      if (input.basePrice != null) {
+        const adjustSum = input.adjustments.reduce((sum, a) => sum + a.amount, 0);
+        const expected = input.settledQuantity * input.basePrice + adjustSum;
+        const delta = input.totalAmount - expected;
+        if (Math.abs(delta) > 0.005) {
+          return {
+            status: 'invalid' as const,
+            detail:
+              `算术自洽校验失败: totalAmount=${input.totalAmount} 与 ` +
+              `settledQuantity(${input.settledQuantity}) × basePrice(${input.basePrice}) + Σadjustments(${adjustSum}) ` +
+              `= ${expected} 相差 ${Number(delta.toFixed(6))}(容差 0.005)。` +
+              '只拒绝不改写: 请核对取证数据与计算过程后重新提交确认, 本工具不会自动修正数字。',
+          };
+        }
       }
 
       const settlementId = await insertSettlementRecord(

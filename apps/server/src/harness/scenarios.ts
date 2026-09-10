@@ -37,7 +37,7 @@ const ENTRY: readonly string[] = [
   'list_binding_proposals',
 ] as const;
 
-/** 问答态: 检索/台账/图谱读 + 关系维护(背靠背/修订是高频对话动作). */
+/** 问答态: 检索/台账/图谱读 + 关系维护(背靠背/修订是高频对话动作) + 商品匹配(L1 读). */
 const QA: readonly string[] = [
   ...CORE,
   'graph_query',
@@ -45,9 +45,10 @@ const QA: readonly string[] = [
   'link_entities',
   'link_documents',
   'gather_settlement_evidence',
+  'match_goods',
 ] as const;
 
-/** 结算态: 取证 -> 计算确认 -> 额度核对 -> 事件登记/核销/冲抵/关系登记. */
+/** 结算态: 取证 -> 计算确认 -> 额度核对 -> 事件登记/核销/冲抵/关系登记/商品匹配注册. */
 const SETTLEMENT: readonly string[] = [
   ...CORE,
   'gather_settlement_evidence',
@@ -57,6 +58,8 @@ const SETTLEMENT: readonly string[] = [
   'create_offset',
   'create_trade_event',
   'link_ontology',
+  'match_goods',
+  'register_goods',
 ] as const;
 
 export const SCENARIO_TOOLS: Record<Scenario, readonly string[]> = {

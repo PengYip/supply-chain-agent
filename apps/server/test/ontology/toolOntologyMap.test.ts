@@ -12,9 +12,10 @@ beforeEach(() => {
 });
 
 describe('toolOntologyMap vocabulary gate', () => {
-  it('maps exactly the five L2 tools (3 roadmap demo + 2 writeoff workbench)', () => {
+  it('maps exactly the 8 ontology-domain tools (3 roadmap demo + 2 writeoff workbench + 1 event + 2 goods master-data)', () => {
     expect(Object.keys(toolOntologyMap).sort()).toEqual(
-      ['bind_document', 'create_entity', 'create_offset', 'create_trade_event', 'create_writeoff', 'link_entities']);
+      ['bind_document', 'create_entity', 'create_offset', 'create_trade_event', 'create_writeoff',
+       'link_entities', 'match_goods', 'register_goods']);
   });
 
   it('mapped tools are actually mounted for trader', () => {

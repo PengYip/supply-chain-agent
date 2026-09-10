@@ -17,6 +17,8 @@ import { buildGatherSettlementEvidenceTool, buildConfirmSettlementTool } from '.
 import { buildCreateWriteoffTool, buildCreateOffsetTool } from '../ontology/writeoffTools.js';
 import { buildCreateTradeEventTool } from '../ontology/eventTools.js';
 import { buildLinkOntologyTool } from '../ontology/linkTools.js';
+import { buildMatchGoodsTool } from '../ontology/goodsMatch.js';
+import { buildRegisterGoodsTool } from '../ontology/goodsRegisterTool.js';
 import type { DbContext } from '../pipeline/db/client.js';
 import type { ExtractionDeps } from '../pipeline/extraction.js';
 import type { ClassifierDeps } from '../pipeline/classifier.js';
@@ -99,7 +101,7 @@ const BASE_TOOLS_FOR_ROLE: Record<Role, GatedTool[]> = {
 // though constructing their instances requires a DbContext (see getToolsForRole).
 // query_contract is listed here too: after the BASE removal above its name would
 // otherwise drop out of listToolNames (it is still always registered for trader).
-const TRADER_CTX_TOOL_NAMES = ['query_business', 'ingest_document', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'link_documents', 'manage_template', 'manage_quota', 'gather_settlement_evidence', 'confirm_settlement', 'create_writeoff', 'create_offset', 'create_trade_event', 'link_ontology'] as const;
+const TRADER_CTX_TOOL_NAMES = ['query_business', 'ingest_document', 'bind_document', 'recall_documents', 'execute_code', 'inspect_extraction', 'create_entity', 'link_entities', 'graph_query', 'graph_find_entity', 'present_document_review', 'update_document_fields', 'list_binding_proposals', 'link_documents', 'manage_template', 'manage_quota', 'gather_settlement_evidence', 'confirm_settlement', 'create_writeoff', 'create_offset', 'create_trade_event', 'link_ontology', 'match_goods', 'register_goods'] as const;
 
 export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
   const base: GatedTool[] = (BASE_TOOLS_FOR_ROLE[role] ?? []).map((t) => ({ ...t }));
@@ -171,6 +173,13 @@ export function getToolsForRole(role: Role, deps?: HarnessDeps): GatedTool[] {
         // link_ontology is L2 (2026-09-09 P4): 对话登记本体关系边(分摊/红冲溯源/
         // 辅助链), 核销/冲抵仍归工作台工具; execute 走连接对白名单 + 关系 strict params。
         { ...buildLinkOntologyTool({ ctx, userId }), name: 'link_ontology', needsApproval: true },
+        // match_goods is L1 (2026-09-10 四流波次一, spec §11 Phase 2): 商品主数据
+        // 匹配优先(三通道打分, 只读), register_goods 前必经。
+        { ...buildMatchGoodsTool({ ctx, userId }), name: 'match_goods' },
+        // register_goods is L2 (2026-09-10 四流波次一, spec §11 Phase 2): 商品主数据
+        // 注册兜底, needsApproval 走审批中心; execute 经 insertTradeFact 写入边界
+        // (attributes 受控袋对 Agent 预填同样生效)。
+        { ...buildRegisterGoodsTool({ ctx, userId }), name: 'register_goods', needsApproval: true },
       );
       // execute_code is L1: run Python in an isolated CubeSandbox microVM.
       // Env-gated: absent from the toolset unless the deployment opted in

@@ -125,12 +125,58 @@ describe('link_ontology execute', () => {
     expect(out.status).toBe('ok');
   });
 
-  it('词表含 PARENT_OF/DELIVERED_AS（spec 主体身份 2026-09-09：10 关系中除核销/冲抵外全覆盖）', () => {
+  it('词表含 PARENT_OF/DELIVERED_AS（spec 主体身份 2026-09-09：11 关系中除核销/冲抵外全覆盖）', () => {
     const t = buildLinkOntologyTool({ ctx, userId: 'u1' });
     const shape = t.inputSchema.shape as { relation: { options: readonly string[] } };
     expect(shape.relation.options).toContain('PARENT_OF');
     expect(shape.relation.options).toContain('DELIVERED_AS');
-    expect(shape.relation.options).toHaveLength(8);
+    expect(shape.relation.options).toContain('TRADING_WITH');
+    expect(shape.relation.options).toHaveLength(9);
+  });
+
+  it('TRADING_WITH：收/发货事件 -> 交易对手（spec 决策 #11 事件对手显式化），role 落库', async () => {
+    const receipt = await insertTradeFact(ctx, {
+      entityType: 'GoodsReceiptEvent',
+      payload: { eventBizType: '正向', quantity: 100, unit: '吨' },
+      validAt: '2026-06-01', createdBy: 'test',
+    }, 'u1');
+    const cp = await insertTradeFact(ctx, {
+      entityType: 'Counterparty',
+      payload: { uscc: '91130000MA0A0000XE', name: '某矿业集团', role: '供应商' },
+      validAt: '2026-01-01', createdBy: 'test',
+    }, 'u1');
+    const t = buildLinkOntologyTool({ ctx, userId: 'u1' });
+    const out = await t.execute!({
+      relation: 'TRADING_WITH', fromId: receipt, toId: cp, role: '上游',
+    }, CALL);
+    expect(out.status).toBe('ok');
+    const edges = await listOntologyEdgesAsOf(ctx, asOfBusinessTime(new Date().toISOString()), { relation: 'TRADING_WITH' }, 'u1');
+    expect(edges).toHaveLength(1);
+    expect(edges[0]).toMatchObject({
+      relation: 'TRADING_WITH', fromType: 'GoodsReceiptEvent', fromId: receipt,
+      toType: 'Counterparty', toId: cp, createdBy: 'link_ontology',
+    });
+    expect(edges[0]!.params).toMatchObject({ role: '上游' });
+  });
+
+  it('TRADING_WITH 缺 role / 非法 role 被注册表 strict params 拒绝（整单拒绝零落库）', async () => {
+    const delivery = await insertTradeFact(ctx, {
+      entityType: 'GoodsDeliveryEvent',
+      payload: { eventBizType: '正向', quantity: 50, unit: '吨' },
+      validAt: '2026-06-02', createdBy: 'test',
+    }, 'u1');
+    const cp = await insertTradeFact(ctx, {
+      entityType: 'Counterparty',
+      payload: { uscc: '91130000MA0A0000XF', name: '某钢厂', role: '客户' },
+      validAt: '2026-01-01', createdBy: 'test',
+    }, 'u1');
+    const t = buildLinkOntologyTool({ ctx, userId: 'u1' });
+    const missing = await t.execute!({ relation: 'TRADING_WITH', fromId: delivery, toId: cp }, CALL);
+    expect(missing.status).toBe('invalid');
+    const badRole = await t.execute!({ relation: 'TRADING_WITH', fromId: delivery, toId: cp, role: '平行' as never }, CALL);
+    expect(badRole.status).toBe('invalid');
+    const edges = await listOntologyEdgesAsOf(ctx, asOfBusinessTime(new Date().toISOString()), { relation: 'TRADING_WITH' }, 'u1');
+    expect(edges).toHaveLength(0);
   });
 
   it('PARENT_OF：母公司 -> 子公司（Counterparty 事实对），ratio 落库', async () => {

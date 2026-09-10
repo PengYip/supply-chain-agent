@@ -75,20 +75,34 @@ describe('ontology registry', () => {
     });
   });
 
-  it('10 relation types / 17 pairs (docx 8 + spec 2026-09-09 PARENT_OF/DELIVERED_AS)', () => {
-    expect(ONTOLOGY_RELATIONS).toHaveLength(10);
+  it('11 relation types / 19 pairs (docx 8 + spec 2026-09-09 PARENT_OF/DELIVERED_AS + 决策 #11 TRADING_WITH)', () => {
+    expect(ONTOLOGY_RELATIONS).toHaveLength(11);
     const names = ONTOLOGY_RELATIONS.map((r) => r.name);
-    expect(new Set(names).size).toBe(10);
+    expect(new Set(names).size).toBe(11);
     expect(names).toEqual(expect.arrayContaining(
       ['ALLOCATE_TO', 'OFFSET_SETTLE', 'WRITE_OFF', 'REVERSE_ORIGIN',
        'FEEDS_INTO', 'CORRESPONDS_TO', 'TRIGGERS', 'PROVIDE',
-       'PARENT_OF', 'DELIVERED_AS']));
+       'PARENT_OF', 'DELIVERED_AS', 'TRADING_WITH']));
     const pairs = ONTOLOGY_RELATIONS.flatMap((r) => r.pairs);
-    expect(pairs).toHaveLength(17);
+    expect(pairs).toHaveLength(19);
     for (const p of pairs) {
       expect(ENTITY_NAMES).toContain(p.from);
       expect(ENTITY_NAMES).toContain(p.to);
     }
+  });
+
+  it('TRADING_WITH: 收/发货事件 -> 交易对手(spec 决策 #11, 事件对手显式化)', () => {
+    expect(isRelationPairAllowed('TRADING_WITH', 'GoodsReceiptEvent', 'Counterparty')).toBe(true);
+    expect(isRelationPairAllowed('TRADING_WITH', 'GoodsDeliveryEvent', 'Counterparty')).toBe(true);
+    // 白名单只放行事件->对手方: 事件->商品走 DELIVERED_AS, 不混用
+    expect(isRelationPairAllowed('TRADING_WITH', 'GoodsReceiptEvent', 'TradeGoods')).toBe(false);
+    expect(isRelationPairAllowed('TRADING_WITH', 'Counterparty', 'Counterparty')).toBe(false);
+    const params = relationDef('TRADING_WITH').params;
+    expect(params.safeParse({ role: '上游' }).success).toBe(true);
+    expect(params.safeParse({ role: '下游' }).success).toBe(true);
+    expect(params.safeParse({}).success).toBe(false); // role 必填
+    expect(params.safeParse({ role: '平行' }).success).toBe(false); // 闭枚举
+    expect(params.safeParse({ role: '上游', bogus: 1 }).success).toBe(false); // strict
   });
 
   it('PARENT_OF: 母子公司带参关系(spec 主体身份 §2)', () => {
@@ -140,14 +154,14 @@ describe('ontology registry', () => {
   it('ontologySchemaJson is the frontend-consumable projection', () => {
     const json = JSON.parse(JSON.stringify(ontologySchemaJson()));
     expect(json.entities).toHaveLength(11);
-    expect(json.relations).toHaveLength(10);
+    expect(json.relations).toHaveLength(11);
     const contract = json.entities.find((e: { name: string }) => e.name === 'TradeContract');
     expect(contract.fields).toContain('contractNo');
     expect(json.enums.PayType).toEqual(['预付', '尾款', '进度款', '质保金']);
   });
 
   it('schema version 随注册表结构变更推进(spec 附A: 实施同步清单)', () => {
-    expect(ontologySchemaJson().version).toBe('2026-09-09');
+    expect(ontologySchemaJson().version).toBe('2026-09-10');
   });
 
   it('Counterparty: uscc 主体归一锚必填, 附加属性全可选(spec §3)', () => {
@@ -209,6 +223,30 @@ describe('ontology registry', () => {
     expect(entitySchema('TradeGoods').safeParse({
       name: '螺纹钢', commodityCode: 'X', attributes: cap32,
     }).success).toBe(true);
+  });
+
+  it('收/发货 payload 增 counterpartyId/titleTransfer 可选字段(spec 决策 #11)', () => {
+    for (const t of ['GoodsReceiptEvent', 'GoodsDeliveryEvent'] as const) {
+      // 缺省合法(向后兼容既有事实)
+      expect(entitySchema(t).safeParse(
+        { eventBizType: '正向', quantity: 100, unit: '吨' }).success).toBe(true);
+      // 新字段携带合法, 经 strict 写入边界不拒绝
+      expect(entitySchema(t).safeParse({
+        eventBizType: '正向', quantity: 100, unit: '吨',
+        counterpartyId: 'TF-cp-1', titleTransfer: '发货即转',
+      }).success).toBe(true);
+      // 空串拒绝(min(1))
+      expect(entitySchema(t).safeParse({
+        eventBizType: '正向', quantity: 100, unit: '吨', counterpartyId: '',
+      }).success).toBe(false);
+      expect(entitySchema(t).safeParse({
+        eventBizType: '正向', quantity: 100, unit: '吨', titleTransfer: '',
+      }).success).toBe(false);
+    }
+    // 非收/发货事件不扩此词汇(strict 快速失败)
+    expect(entitySchema('SettlementEvent').safeParse({
+      eventBizType: '正向', amount: 1, currency: 'CNY', titleTransfer: '发货即转',
+    }).success).toBe(false);
   });
 
   it('meaning URIs: mechanism ships empty, values must be URIs when attached', () => {

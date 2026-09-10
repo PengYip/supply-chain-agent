@@ -241,6 +241,22 @@ export const TOOL_CONTEXT_CONTRACTS: Readonly<Record<string, ToolContextContract
     output: 'raw', budget: 'full', signal: 'env',
     persist: 'business', risk: { level: 'L2', injection: 'safe' },
   },
+  // 2026-09-10 四流波次一(spec §11 Phase 2)商品主数据匹配: 只读三通道打分,
+  // 返回台账主数据候选(结构化短字段, 非文档原文) -> output 'raw' / injection 'safe'。
+  // 候选上限 10 有界 -> budget 'full'。只读 -> signal 'counter' / L1,
+  // persist 'business'(读取 trade_facts)。
+  match_goods: {
+    output: 'raw', budget: 'full', signal: 'counter',
+    persist: 'business', risk: { level: 'L1', injection: 'safe' },
+  },
+  // 2026-09-10 四流波次一(spec §11 Phase 2)商品主数据注册兜底: 对话结构化输入
+  // (注册表 strict zod + attributes 受控袋 + L2 审批三闸) -> output 'raw' /
+  // injection 'safe'; 返回事实 id 短句 -> budget 'full'。落 trade_facts SSOT ->
+  // signal 'env', persist 'business'。同 create_trade_event 模式。
+  register_goods: {
+    output: 'raw', budget: 'full', signal: 'env',
+    persist: 'business', risk: { level: 'L2', injection: 'safe' },
+  },
 };
 
 /** True iff a contract exists for the given tool name. */

@@ -75,6 +75,8 @@ registerPermission('create_writeoff', 'L2'); // 2026-09-07 Item 5: 票款核销�
 registerPermission('create_offset', 'L2'); // 2026-09-07 Item 5: 预付冲抵落边（工作台提交，需审批）
 registerPermission('create_trade_event', 'L2'); // 2026-09-08: 本体事件登记落 trade_facts（对话登记，需审批）
 registerPermission('link_ontology', 'L2'); // 2026-09-09 P4: 本体关系登记落 ontology_edges（对话登记，需审批）
+registerPermission('match_goods', 'L1'); // 2026-09-10 四流波次一: 商品主数据匹配（只读三通道打分）
+registerPermission('register_goods', 'L2'); // 2026-09-10 四流波次一: 商品主数据注册兜底落 trade_facts（需审批）
 // L3: no registered tools -- money/irreversible operations are not executable
 // in-system. Human-in-the-loop goes through escalate_to_human tickets
 // (sessionStore pending approvals + /api/approval/callback resume).

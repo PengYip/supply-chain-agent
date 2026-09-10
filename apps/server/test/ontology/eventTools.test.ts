@@ -69,6 +69,27 @@ describe('create_trade_event execute', () => {
     expect(out.detail).toContain('currency');
   });
 
+  it('收/发货事件带 counterpartyId/titleTransfer 透传 payload(spec 决策 #11)', async () => {
+    const t = buildCreateTradeEventTool({ ctx, userId: 'u1' });
+    const out = await t.execute!({
+      entityType: 'GoodsDeliveryEvent', eventBizType: '正向',
+      validAt: '2026-06-26', quantity: 80, unit: '吨',
+      counterpartyId: 'TF-cp-9', titleTransfer: '签收转',
+    }, { toolCallId: 'call_test_6', messages: [] } as never);
+    expect(out.status).toBe('ok');
+    if (out.status !== 'ok') return;
+    const row = await getTradeFactById(ctx, out.id, 'u1');
+    expect(row?.payload).toMatchObject({
+      counterpartyId: 'TF-cp-9', titleTransfer: '签收转', quantity: 80, unit: '吨',
+    });
+    // inputSchema 投影自动带出两字段(表单入口共用同一 SSOT)
+    const shape = t.inputSchema.shape as Record<string, { isOptional: () => boolean }>;
+    expect(shape['counterpartyId']).toBeDefined();
+    expect(shape['titleTransfer']).toBeDefined();
+    expect(shape['counterpartyId']!.isOptional()).toBe(true);
+    expect(shape['titleTransfer']!.isOptional()).toBe(true);
+  });
+
   it('工具描述声明收/发货数量-only 登记路径', () => {
     const t = buildCreateTradeEventTool({ ctx });
     expect(t.description).toContain('数量');

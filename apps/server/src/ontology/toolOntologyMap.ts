@@ -35,6 +35,14 @@ export const toolOntologyMap: Readonly<Record<string, ToolOntologyMapping>> = {
     entities: ['GoodsReceiptEvent', 'GoodsDeliveryEvent', 'SettlementEvent', 'InvoiceEvent', 'PaymentEvent', 'CollectionEvent', 'ServiceCostEvent'],
     note: '事件登记(2026-09-08): entityType 判别键属共享词汇, 其余字段=7 事件实体自有词汇, validAt 属双时间轴共享词汇',
   },
+  match_goods: {
+    entities: ['TradeGoods'],
+    note: '商品主数据匹配(2026-09-10 波次一, spec §11): name/spec/commodityCode 全部属 TradeGoods 自有词汇; 只读 L1',
+  },
+  register_goods: {
+    entities: ['TradeGoods'],
+    note: '商品主数据注册兜底(2026-09-10 波次一, spec §11): name/commodityCode/spec/unit/attributes 属 TradeGoods 自有词汇, validAt 属双时间轴共享词汇; attributes 受控袋由写入边界 superRefine 强制',
+  },
 };
 
 const SHARED = new Set<string>(SHARED_TOOL_FIELD_NAMES);

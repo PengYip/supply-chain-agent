@@ -41,6 +41,9 @@ const EXPECTED_TOOLS = [
   'create_trade_event',
   // 2026-09-09 P4: ontology relation registration L2 tool
   'link_ontology',
+  // 2026-09-10 四流波次一: goods master-data match (L1) / register (L2) tools
+  'match_goods',
+  'register_goods',
 ] as const;
 
 describe('tool-context contract registry', () => {

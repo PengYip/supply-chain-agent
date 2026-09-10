@@ -122,19 +122,20 @@ describe('gather_settlement_evidence', () => {
 });
 
 describe('confirm_settlement(L2, 落 settlement_records)', () => {
-  it('确认路径: 校验依据流水归属 -> 落台账, 返回 record', async () => {
+  it('确认路径: 算术自洽 + 校验依据流水归属 -> 落台账, 返回 record', async () => {
     await upsertContractLedgerEntry(ctx, ledger('HT-1'));
     const doc = await createDocumentStub(ctx, { sourceUri: 'file:///gdc.pdf', docType: '轨道衡称重单' });
     const flowId = await seedMassFlow(ctx, doc.docId, '轨道衡称重单', 3357460);
 
     const t = buildConfirmSettlementTool({ ctx, userId: '' });
+    // 算术自洽: 3357.46 * 850 + (-1234.5) = 2852606.5
     const r = (await t.execute!({
       contractNo: 'HT-1',
       settledQuantity: 3357.46,
       quantityUnit: '吨',
       basePrice: 850,
       currency: 'CNY',
-      totalAmount: 2853841,
+      totalAmount: 2852606.5,
       adjustments: [{ label: '水分扣重', amount: -1234.5 }],
       basisFlowIds: [flowId],
       basisExtractionIds: [],
@@ -149,6 +150,46 @@ describe('confirm_settlement(L2, 落 settlement_records)', () => {
     expect(rows[0]!.settledQuantity).toBe(3357.46);
     expect(rows[0]!.basisFlowIds).toEqual([flowId]);
     expect(rows[0]!.adjustments).toEqual([{ label: '水分扣重', amount: -1234.5 }]);
+  });
+
+  it('算术自洽通过: 调整项正负混合(totalAmount=qty×price+Σadjustments)', async () => {
+    await upsertContractLedgerEntry(ctx, ledger('HT-1'));
+    const t = buildConfirmSettlementTool({ ctx, userId: '' });
+    // 100 * 500 + (-2000) + 300 = 48300
+    const r = (await t.execute!({
+      contractNo: 'HT-1', settledQuantity: 100, quantityUnit: '吨', basePrice: 500,
+      currency: 'CNY', totalAmount: 48300,
+      adjustments: [{ label: '水分扣重', amount: -2000 }, { label: '硫分奖罚', amount: 300 }],
+      basisFlowIds: [], basisExtractionIds: [], notes: null,
+    }, execOpts)) as any;
+    expect(r.status).toBe('ok');
+  });
+
+  it('算术自洽硬校验: 总额与算式差超容差 -> 拒绝且 detail 含差异值(只拒绝不改写)', async () => {
+    await upsertContractLedgerEntry(ctx, ledger('HT-1'));
+    const t = buildConfirmSettlementTool({ ctx, userId: '' });
+    const r = (await t.execute!({
+      contractNo: 'HT-1', settledQuantity: 100, quantityUnit: '吨', basePrice: 500,
+      currency: 'CNY', totalAmount: 50500, // 算式 100*500=50000, 差 500
+      adjustments: [], basisFlowIds: [], basisExtractionIds: [], notes: null,
+    }, execOpts)) as any;
+    expect(r.status).toBe('invalid');
+    expect(r.detail).toContain('算术自洽校验失败');
+    expect(r.detail).toContain('500');
+    // 只拒绝不改写: 零落库
+    const { listSettlementRecords } = await import('../../src/pipeline/db/repositories.js');
+    expect(await listSettlementRecords(ctx, 'HT-1')).toHaveLength(0);
+  });
+
+  it('basePrice 为 null 跳过算术校验照常确认(合同未约定价格)', async () => {
+    await upsertContractLedgerEntry(ctx, ledger('HT-1'));
+    const t = buildConfirmSettlementTool({ ctx, userId: '' });
+    const r = (await t.execute!({
+      contractNo: 'HT-1', settledQuantity: 100, quantityUnit: '吨', basePrice: null,
+      currency: null, totalAmount: 99999, // 无基准价, 恒等式不可判 -> 不校验
+      adjustments: [], basisFlowIds: [], basisExtractionIds: [], notes: null,
+    }, execOpts)) as any;
+    expect(r.status).toBe('ok');
   });
 
   it('无台账 -> error(结算必须挂在已有合同上)', async () => {

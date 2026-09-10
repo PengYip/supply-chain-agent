@@ -72,6 +72,8 @@ export const ONTOLOGY_ENTITIES: Record<OntologyEntityName, z.ZodObject<z.ZodRawS
     currency: Currency.optional().describe('币种; 与 amount 同缺同在'),
     quantity: z.number().optional().describe('数量'),
     unit: z.string().optional(),
+    counterpartyId: z.string().min(1).optional().describe('交易对手事实 id(spec 决策 #11 事件对手显式化; TRADING_WITH 边的提前声明口径, 可后置经 link_ontology 补边)'),
+    titleTransfer: z.string().min(1).optional().describe('货权转移口径(spec 决策 #11: 发货即转/签收转/验收转/到岸转, v1 开放文本 v2 收敛枚举; 货权与物理解耦, 发货即转的在途也属我方存货口径)'),
   }),
   GoodsDeliveryEvent: z.object({
     eventBizType: EventBizType.describe('发货(含销售退货); 逆向=负数金额'),
@@ -79,6 +81,8 @@ export const ONTOLOGY_ENTITIES: Record<OntologyEntityName, z.ZodObject<z.ZodRawS
     currency: Currency.optional().describe('币种; 与 amount 同缺同在'),
     quantity: z.number().optional(),
     unit: z.string().optional(),
+    counterpartyId: z.string().min(1).optional().describe('交易对手事实 id(spec 决策 #11 事件对手显式化; TRADING_WITH 边的提前声明口径, 可后置经 link_ontology 补边)'),
+    titleTransfer: z.string().min(1).optional().describe('货权转移口径(spec 决策 #11: 发货即转/签收转/验收转/到岸转, v1 开放文本 v2 收敛枚举; 货权与物理解耦, 发货即转的在途也属我方存货口径)'),
   }),
   SettlementEvent: z.object({
     eventBizType: EventBizType.describe('结算(采购/销售/补差); 补差/冲减走逆向负数'),
@@ -258,7 +262,8 @@ export function entityFieldNames(name: OntologyEntityName): Set<string> {
 
 // ---------------------------------------------------------------------------
 // 关系（docx §5：4 核心 + 4 辅助 = 8 类型 / 14 连接对；spec 2026-09-09 主体身份
-// 增 PARENT_OF(1 对) + DELIVERED_AS(2 对) => 10 类型 / 17 连接对。带参是一等公民）
+// 增 PARENT_OF(1 对) + DELIVERED_AS(2 对)；spec 决策 #11 增 TRADING_WITH(2 对)
+// => 11 类型 / 19 连接对。带参是一等公民）
 // ---------------------------------------------------------------------------
 
 const NO_PARAMS = z.object({}).strict().describe('无参关系');
@@ -371,6 +376,17 @@ export const ONTOLOGY_RELATIONS: ReadonlyArray<OntologyRelationDef> = [
       batch: z.string().optional().describe('到货批次(如 巴西 SIF 厂号批次; 食安追溯)'),
     }).strict(),
   },
+  {
+    name: 'TRADING_WITH',
+    description: '交易对手(spec 2026-09-09 决策 #11): 收/发货事件的交易对手显式化——穿透不再依赖 绑定->合同->对手方 推导链; role 区分上游(供货给我方)/下游(我方发往)。',
+    pairs: [
+      { from: 'GoodsReceiptEvent', to: 'Counterparty' },
+      { from: 'GoodsDeliveryEvent', to: 'Counterparty' },
+    ],
+    params: z.object({
+      role: z.enum(['上游', '下游']).describe('对手方位: 收货(上游发货给我方)=上游, 发货(我方发往下游)=下游'),
+    }).strict(),
+  },
 ];
 
 export function relationDef(name: string): OntologyRelationDef {
@@ -391,7 +407,7 @@ export function isRelationPairAllowed(name: string, from: string, to: string): b
 
 export function ontologySchemaJson() {
   return {
-    version: '2026-09-09',
+    version: '2026-09-10',
     enums: {
       PayType: PayType.options,
       EventBizType: EventBizType.options,

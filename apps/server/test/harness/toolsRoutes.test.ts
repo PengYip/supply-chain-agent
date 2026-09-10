@@ -24,7 +24,7 @@ describe('GET /api/tools/inventory', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.source).toBe('docs/tool-inventory.json');
-    expect(body.version).toBe('2026-09-09');
+    expect(body.version).toBe('2026-09-10');
     const byName = new Map<string, {
       status: string; group?: string; registry: { mounted: boolean }; removalPlan?: string;
     }>(body.tools.map((t: { name: string }) => [t.name, t]));
