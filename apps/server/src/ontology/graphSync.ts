@@ -114,11 +114,15 @@ export async function syncOntologyGraph(deps: SyncOntologyGraphDeps): Promise<Gr
   //    documentId 溯源列进节点 props(EVIDENCE 边的端点锚点)。
   //    TradeGoods.attributes 受控袋是嵌套 record, Neo4j 节点 props 不收嵌套对象
   //    (spec §3 隐藏约束) -> 拆出逐键展平为 attr.<键> 标量 props, 原嵌套键不投影。
+  //    payload 的 name 键必须从 props 摘出: name 是 MERGE 键(=TF id, spec §2.1),
+  //    若随 payload 展平回写, 品名/企业名(TradeGoods/Counterparty/OrgUnit)会覆盖
+  //    TF id -> prune 按 keep(TF id)找不到节点把它删掉, 且同 payload name 的多事实
+  //    会触发 name 唯一约束冲突(2026-09-10 dev 冒烟暴露)。
   const nodeIdByKey = new Map<string, string>(); // `${entityType}:${id}` -> elementId
   const keepByLabel = new Map<string, Set<string>>();
   const factsWithDoc: TradeFactRow[] = [];
   for (const fact of factSlice) {
-    const { attributes, ...flatPayload } = fact.payload;
+    const { attributes, name: _payloadName, ...flatPayload } = fact.payload;
     const props: Record<string, unknown> = {
       ...flatPayload,
       ...(attributes != null && typeof attributes === 'object'

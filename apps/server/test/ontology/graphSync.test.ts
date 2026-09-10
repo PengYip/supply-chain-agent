@@ -142,8 +142,12 @@ describe('syncOntologyGraph', () => {
     expect(node!.props['attr.件重']).toBe(12);
     // 嵌套 attributes 键不得出现在节点 props
     expect(node!.props['attributes']).toBeUndefined();
-    // 其余 payload 字段照旧展平
-    expect(node!.props['name']).toBe('螺纹钢');
+    // 其余 payload 字段照旧展平; 但 payload 的 name 键必须摘出——name 是 MERGE 键
+    // (=TF id, spec §2.1), 随 props 回写会被品名覆盖 -> prune 按 TF id keep 集
+    // 找不到节点把新建节点删掉, 同 payload name 多事实还会触发 name 唯一约束
+    // 冲突(2026-09-10 dev 冒烟暴露的 Phase 1 缺陷)。
+    expect(node!.props['name']).toBeUndefined();
+    expect(node!.name).toBe(gid); // 节点键保持 TF id
     expect(node!.props['commodityCode']).toBe('HRB400E');
   });
 
