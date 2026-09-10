@@ -219,7 +219,7 @@ describe('buildFlowPanel (spec §15)', () => {
     expect(transit.quantity).toEqual({ value: 1642.54, unit: '吨' });
   });
 
-  it('告警-超合同发货期: 凭证日期超交货期', async () => {
+  it('告警-超合同发货期: 凭证日期超交货期, 红圈同步标到泳道节点', async () => {
     await seedLedger('OVERDUE-1', 'u1', { 数量: 20000, 单位: '吨', 交货期: '2026-06-30' });
     await seedFlow({ contractNo: 'OVERDUE-1', direction: 'in', docType: '轨道衡称重单', voucherDate: '2026-07-05', ...t(100) });
     const p = (await buildFlowPanel(ctx, 'OVERDUE-1', 'u1'))!;
@@ -228,6 +228,31 @@ describe('buildFlowPanel (spec §15)', () => {
     expect(alert!.message).toContain('2026-07-05');
     expect(alert!.message).toContain('2026-06-30');
     expect(alert!.evidenceIds.length).toBeGreaterThan(0);
+    // 红圈联动: 被告警覆盖的里程碑 status=abnormal + milestoneKeys 指路
+    const receipt = p.goods.find((m) => m.key === 'receipt')!;
+    expect(receipt.status).toBe('abnormal');
+    expect(alert!.milestoneKeys).toContain('receipt');
+  });
+
+  it('告警-超合同发货期: 「合同发货期」区间字段 + 中文凭证日期归一(dev 冒烟回归)', async () => {
+    // 2026-09-10 dev 冒烟 GMNH-JBKZ-20250303HNWH: 台账字段名是「合同发货期」
+    // (区间中文), 发货单凭证日期是 "2025年3月21日" 且无 canonical 量。
+    await seedLedger('OVERDUE-2', 'u1', {
+      数量: '20000吨±10%', 合同发货期: '2025年3月1日至2025年3月20日',
+    });
+    await seedFlow({ contractNo: 'OVERDUE-2', direction: 'in', docType: '发货单', voucherDate: '2025年3月21日', quantityTon: 3357.46, quantityValue: 3357.46 });
+    await seedFlow({ contractNo: 'OVERDUE-2', direction: 'in', docType: '轨道衡称重单', voucherDate: '2025-03-21', ...t(3357.46) });
+    const p = (await buildFlowPanel(ctx, 'OVERDUE-2', 'u1'))!;
+    const alert = p.alerts.find((a) => a.code === 'delivery-overdue');
+    expect(alert).toBeDefined();
+    expect(alert!.message).toContain('2025-03-21');
+    expect(alert!.message).toContain('2025-03-20');
+    // 中文日期在里程碑上归一为 ISO
+    expect(p.goods.find((m) => m.key === 'upstream-ship')!.date).toBe('2025-03-21');
+    // 无 canonical 的预告行按 quantity_ton 兜底展示(证据=流水 id), 不影响进度口径
+    expect(p.goods.find((m) => m.key === 'upstream-ship')!.quantity).toEqual({ value: 3357.46, unit: '吨' });
+    // 预告==实重: 在途不双计
+    expect(p.goods.find((m) => m.key === 'in-transit')!.status).toBe('pending');
   });
 
   it('告警-水尺差超短溢装容差: 超 3% 告警, 容差内与无水尺不告警', async () => {
@@ -256,6 +281,7 @@ describe('buildFlowPanel (spec §15)', () => {
     }, 'u1');
     const p = (await buildFlowPanel(ctx, 'MISMATCH-1', 'u1'))!;
     expect(p.alerts.find((a) => a.code === 'invoice-funds-mismatch')?.message).toContain('有款无票');
+    expect(p.funds.find((m) => m.key === 'paid')!.status).toBe('abnormal');
 
     await seedLedger('MISMATCH-2', 'u1');
     await insertTradeFact(ctx, {

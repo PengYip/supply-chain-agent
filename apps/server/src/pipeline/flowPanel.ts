@@ -133,15 +133,30 @@ function fieldText(entry: ContractLedgerEntry, keys: readonly string[]): string 
   return null;
 }
 
-const massKg = (flows: readonly ExecutionFlowRow[]): number =>
-  flows.reduce((s, f) => s + (f.quantityDimension === 'mass' && f.quantityCanonical != null ? f.quantityCanonical : 0), 0);
-
 const tons = (kg: number): number => Math.round(kg / 1000 * 100) / 100;
 
-function latestDate(flows: readonly ExecutionFlowRow[]): string | null {
-  const ds = flows.map((f) => datePrefix(f.voucherDate)).filter((d) => d !== '').sort();
-  return ds.length > 0 ? ds[ds.length - 1]! : null;
+const massKg = (flows: readonly ExecutionFlowRow[]): number =>
+  flows.reduce((s, f) => s + flowKg(f), 0);
+
+/** 行质量(千克): canonical 优先; quantity_ton 列本身就是吨(物化层既有口径),
+ *  无 canonical 时兜底——count 量纲行不混入。 */
+function flowKg(f: ExecutionFlowRow): number {
+  if (f.quantityDimension === 'mass' && f.quantityCanonical != null) return f.quantityCanonical;
+  if (f.quantityDimension !== 'count' && f.quantityTon != null) return f.quantityTon * 1000;
+  return 0;
 }
+
+/** 凭证日期归一为 ISO(台账日期常见中文写法"2025年3月21日"; 区间取最早日, 保守判定)。 */
+function flowDate(f: ExecutionFlowRow): string | null {
+  const raw = f.voucherDate?.trim();
+  if (!raw) return null;
+  return parseCnDate(raw)?.min ?? null;
+}
+
+const latestDate = (flows: readonly ExecutionFlowRow[]): string | null => {
+  const ds = flows.map(flowDate).filter((d): d is string => d !== null).sort();
+  return ds.length > 0 ? ds[ds.length - 1]! : null;
+};
 
 /** 金额按币种分组合计(净占用/进销项共用)。 */
 function sumAmountsByCurrency(rows: Array<{ amount: number | null; currency: string | null }>): Map<string, number> {
@@ -168,9 +183,11 @@ function flowRows(flows: readonly ExecutionFlowRow[]): FlowPanelBreakdownRow[] {
     label: [f.docType, datePrefix(f.voucherDate)].filter(Boolean).join(' ') || shortId(f.id),
     quantity: f.quantityDimension === 'mass' && f.quantityCanonical != null
       ? { value: tons(f.quantityCanonical), unit: '吨' }
-      : (f.quantityValue != null && f.unit ? { value: f.quantityValue, unit: f.unit } : null),
+      : (f.quantityDimension !== 'count' && f.quantityTon != null
+        ? { value: f.quantityTon, unit: '吨' }
+        : (f.quantityValue != null && f.unit ? { value: f.quantityValue, unit: f.unit } : null)),
     amount: f.amount != null ? { value: f.amount, currency: 'CNY' } : null,
-    date: datePrefix(f.voucherDate) || null,
+    date: flowDate(f),
     evidenceIds: [f.id],
     documentId: f.documentId,
   }));
@@ -548,13 +565,14 @@ export async function buildFlowPanel(
     return all.filter((m) => m.evidenceIds.some((id) => ids.has(id))).map((m) => m.key);
   };
 
-  // 1) 超合同发货期: 台账交货期可解析且存在更晚的货物流凭证/事件日期。
-  const deadlineText = fieldText(entry, ['合同交货期', '交货日期', '交货期', '供货期限', '履约期限']);
+  // 1) 超合同发货期: 台账交货/发货期可解析且存在更晚的货物流凭证日期。
+  //    字段名候选按台账实际抽取词汇(「合同发货期」「交货期」均常见), 空值跳过。
+  const deadlineText = fieldText(entry, ['合同交货期', '交货日期', '交货期', '合同发货期', '发货期', '供货期限', '履约期限']);
   const deadline = deadlineText ? parseCnDate(deadlineText)?.max : null;
   if (deadline) {
     const offenders = goodsFlows
-      .map((f) => ({ id: f.id, d: datePrefix(f.voucherDate) }))
-      .filter((x) => x.d !== '' && x.d > deadline)
+      .map((f) => ({ id: f.id, d: flowDate(f) }))
+      .filter((x): x is { id: string; d: string } => x.d !== null && x.d > deadline)
       .map((x) => ({ ...x, src: 'flow' as const }));
     if (offenders.length > 0) {
       const worst = offenders.map((x) => x.d).sort().pop()!;
