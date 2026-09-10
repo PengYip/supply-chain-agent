@@ -132,7 +132,7 @@ repo 层新增 `supersedeTradeFact(ctx, {...}, userId?)`：双后端事务（SQL
 
 反馈闭环：人工确认→别名落 attributes（匹配率随积累上升）；纠正→负样本。冷启动期"提议预填"占大头（人工从敲字段降为点批准），全自动注册比例随别名/向量积累上升。
 
-工具面：`match_goods`（L1）/ `register_goods`（L2，走 insertTradeFact 写入边界 + 审批链）——实施前先登记 tool-inventory.json（五道门）。attributes 受控约束对 Agent 预填同样生效（32 条/标量/键长）。
+工具面：`match_goods`（L1）/ `register_goods`（L2，走 insertTradeFact 写入边界 + 审批链）——attributes 受控约束对 Agent 预填同样生效（32 条/标量/键长）。**实施计划：`plans/2026-09-10-four-flows-wave1.md`（波次一：本节 Task A1/A2 + 决策 #11 + 恒等式自洽；向量召回/确认流候选/别名闭环留波次二）。**
 
 依赖与顺序：**Phase 1（主体身份+商品属性袋）先行**——没有 attributes 袋，Agent 从单据抽取的品类异构属性无处落。实施规模预估：A 段（两个工具+词表登记，约半天）→ B 段（确认流候选+向量通道，约一天）→ C 段（别名闭环+报告，按需）。
 
