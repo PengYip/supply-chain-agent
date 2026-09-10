@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { AuthEnv } from '../lib/auth-middleware.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
 import { searchContractLedger } from '../pipeline/db/repositories.js';
+import { buildFlowPanel } from '../pipeline/flowPanel.js';
 
 export const contractsRoute = new Hono<AuthEnv>();
 
@@ -21,6 +22,22 @@ const searchSchema = z.object({
 function errDetail(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
+
+/** GET /:contractNo/flow-panel — 对账面板聚合(spec 2026-09-09 §15)。L1 只读:
+ *  四泳道里程碑 + alerts + netPosition, 全部数字带证据 id, 绝不写库。 */
+contractsRoute.get('/:contractNo/flow-panel', async (c) => {
+  const user = c.get('user')!;
+  const contractNo = c.req.param('contractNo').trim();
+  if (contractNo === '') return c.json({ error: 'invalid contractNo' }, 400);
+  try {
+    const panel = await buildFlowPanel(getDbContext(), contractNo, user.id);
+    if (!panel) return c.json({ error: 'contract not found' }, 404);
+    return c.json(panel);
+  } catch (e) {
+    console.error('[contracts] flow-panel failed:', errDetail(e));
+    return c.json({ error: 'flow-panel failed', detail: errDetail(e) }, 500);
+  }
+});
 
 /** GET /search?q=&limit= — 台账模糊搜索(编号/买方/卖方/标题), 分组字段 matchedField。 */
 contractsRoute.get('/search', async (c) => {
