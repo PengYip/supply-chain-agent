@@ -4,6 +4,7 @@ import { getEntityDetail, type EntityDetailResult } from '../../api/ontology';
 import { edgeLabel } from '../graph/businessTypes';
 import { formatEdgeParams } from '../graph/OntologyExplorer';
 import { maskBankAccount } from '../../lib/mask';
+import { ContractFlowPanel } from '../ledger/ContractFlowPanel';
 
 interface Props {
   type: string;
@@ -116,6 +117,15 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
           {loading && <span className="text-xs text-ink-soft">加载中...</span>}
           {error && <span className="text-xs text-danger">{error}</span>}
         </div>
+
+        {/* 合同台账详情首屏: 四流对账面板(spec §15)——货/权/款/票泳道+告警+钻取。
+            仅 TradeContract 且台账行带 contractNo 时渲染; 面板自带加载/错误态。 */}
+        {type === 'TradeContract' && typeof detail?.entity.fields['contractNo'] === 'string'
+          && (detail.entity.fields['contractNo'] as string) !== '' && (
+          <div className="border-b border-line px-3 py-3">
+            <ContractFlowPanel contractNo={detail!.entity.fields['contractNo'] as string} />
+          </div>
+        )}
 
         {/* 字段表 */}
         {detail && (
