@@ -241,3 +241,23 @@ repo 层新增 `supersedeTradeFact(ctx, {...}, userId?)`：双后端事务（SQL
 **架构注意事项（差异核对中发现）**：背靠背链 correlates/relates/amends 走 graph_links 体系（图谱投影），本体四流关系走 ontology_edges 体系——**两套关系空间并存**；Phase 3 货权链设计时需统一评估（环检测查询会横跨两套空间）。文档幕1 的"link_entities 建背靠背边"对应前者，四流桥边对应后者。
 
 **总原则对齐确认**：文档 §7"增量落在现有工具面与 Neo4j，不动数据库 schema 骨架"与本 spec 全部三个 Phase 的零 DDL 设计完全一致；文档 §6"已有"清单（六向流水不双计/绑定溯源/L1-L2-L3/清单 SSOT/结算双工具）经核对全部仍然成立。
+
+## 15. 对账面板：合同四流泳道可视化（产品设计，待排期）
+
+需求：紧凑可视化面板，展现当前合同的 货/权/款/票 在 上游/我方/下游 各节点的进度与状态——即方法论 §10.4"对账面板与三级钻取"的泳道化产品形态。
+
+**布局（紧凑，整块高约 300px，嵌合同详情抽屉首屏）**：四条泳道共享一条节点轴（上游 → 在途 → 我方 → 下游）——
+
+- 货泳道：上游发运 → 在途 → 我方收货(实称) → 库存/拆分 → 我方发货 → 下游签收；点标注数量（吨/米）与日期；数据源 bindings + execution_flows（预告/实重不双计）✅ 已上线
+- 权泳道：货权归属色带（上游/我方/下游）+ 转移时点 ✕（titleTransfer 口径 + 货转单 EVIDENCE）——依赖 Phase 1.5（titleTransfer），上线前按合同交货条款渲染"约定口径"并标注待货权凭证
+- 款泳道：付出（预付/进度/尾款）+ 收到 + 净占用（先收后付为负）——PaymentEvent/CollectionEvent
+- 票泳道：进项（已收/未收，金额）+ 销项（已开/未开）+ 核销状态——InvoiceEvent + WRITE_OFF
+- 告警条：超合同发货期 / 水尺差超短溢装容差 / 票款不齐——红圈同步标在泳道节点上（"上游发货事件"测试对话中的人工升级，未来即此处的自动告警）
+
+状态点语义：实心=已完成 / 琥珀=进行中 / 空心=未发生 / 红圈=异常。**三级钻取**：点状态点 → 明细抽屉（逐笔构成）→ 原始凭证（凭证 id 直达）——方法论 §10.4"每个数字三步点到证据"。
+
+**后端**：`GET /api/contracts/:contractNo/flow-panel`（L1 只读聚合）——SQL 聚合 bindings/execution_flows/settlement_records/trade_facts + ontology_edges 核销 completeness，输出四泳道里程碑数组 + alerts + netPosition（已付/已收/净占用、进/销项）。
+
+**两个前置**：① PaymentEvent/CollectionEvent/InvoiceEvent payload 增可选 `contractNo`（SHARED_TOOL_FIELD_NAMES 已含，注册表+create_trade_event inputSchema 小改，登记时带上即可按合同聚合款/票）；② 权泳道依赖 Phase 1.5 titleTransfer。背靠背对偶合同以 correlates 相互切换（chip）。
+
+**分期**：面板 v1 = 货/款/票三泳道 + 告警条（前置①半天 + 聚合端点 + 面板组件约 1-1.5 天，建议并入 four-flows-wave1 分支实施）；权泳道随 Phase 1.5 自动点亮。bankAccount 等敏感属性展示沿用 `lib/mask.ts` 脱敏。
