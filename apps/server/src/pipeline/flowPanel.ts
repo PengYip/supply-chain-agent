@@ -15,7 +15,7 @@ import { computeExecutionProgress } from './executionProgress.js';
 import { flowNodeTier } from '../domain/tradeSemantics.js';
 import { parseCnDate } from './bindingProposal.js';
 import { normalizeName } from '../graph/normalize.js';
-import { listTradeFactsAsOf, listOntologyEdgesAsOf, type TradeFactRow, type OntologyEdgeRow } from '../ontology/repo.js';
+import { listTradeFactsAsOf, listOntologyEdgesAsOf, type TradeFactRow } from '../ontology/repo.js';
 import { asOfBusinessTime } from '../ontology/asof.js';
 import { listContractLedgerRefs } from '../ontology/projection.js';
 
@@ -74,6 +74,8 @@ export interface FlowPanelAlert {
   level: 'warn' | 'info';
   message: string;
   evidenceIds: string[];
+  /** 红圈联动: 被本告警覆盖的泳道里程碑 key(spec §15 告警同步标在节点上)。 */
+  milestoneKeys: string[];
 }
 
 export interface FlowPanelContractRef { contractNo: string; displayContractNo: string; title: string }
@@ -539,6 +541,12 @@ export async function buildFlowPanel(
 
   // ---- 告警(超发货期 / 水尺差超容差 / 票款不齐) ---------------------------
   const alerts: FlowPanelAlert[] = [];
+  /** 告警 -> 泳道节点红圈: 按证据 id 交集定位被告警覆盖的里程碑。 */
+  const keysByEvidence = (evidenceIds: string[]): string[] => {
+    const ids = new Set(evidenceIds);
+    const all = [...goods, ...titleMilestones, ...funds, ...invoice];
+    return all.filter((m) => m.evidenceIds.some((id) => ids.has(id))).map((m) => m.key);
+  };
 
   // 1) 超合同发货期: 台账交货期可解析且存在更晚的货物流凭证/事件日期。
   const deadlineText = fieldText(entry, ['合同交货期', '交货日期', '交货期', '供货期限', '履约期限']);
@@ -555,6 +563,7 @@ export async function buildFlowPanel(
         code: 'delivery-overdue', level: 'warn',
         message: `履约凭证 ${worst} 超合同交货期 ${deadline}（超 ${days} 天）`,
         evidenceIds: offenders.map((x) => x.id),
+        milestoneKeys: keysByEvidence(offenders.map((x) => x.id)),
       });
     }
   }
@@ -574,6 +583,7 @@ export async function buildFlowPanel(
         code: 'draft-survey-tolerance', level: 'warn',
         message: `水尺 ${tons(surveyKg).toLocaleString()} 吨 vs 实收 ${tons(weighKg).toLocaleString()} 吨，差 ${(ratio * 100).toFixed(2)}% 超短溢装容差 ${tolerance * 100}%（建议核查计量与索赔时效）`,
         evidenceIds: [...surveyIn, ...weighIn].map((f) => f.id),
+        milestoneKeys: keysByEvidence([...surveyIn, ...weighIn].map((f) => f.id)),
       });
     }
   }
@@ -586,14 +596,21 @@ export async function buildFlowPanel(
       code: 'invoice-funds-mismatch', level: 'warn',
       message: '票款不齐: 本合同已有付款/收款事实但无发票登记（有款无票）',
       evidenceIds: [...payments, ...collections].map((f) => f.id),
+      milestoneKeys: ['paid', 'received'],
     });
   } else if (invoiceAbs > EPSILON && payments.length + collections.length === 0) {
     alerts.push({
       code: 'invoice-funds-mismatch', level: 'warn',
       message: '票款不齐: 本合同已有发票事实但无付款/收款登记（有票无款）',
       evidenceIds: invoices.map((f) => f.id),
+      milestoneKeys: ['invoice-in', 'invoice-out'],
     });
   }
+
+  // 红圈联动后置标记(spec §15): 被任一告警覆盖的里程碑 status -> abnormal。
+  const alertedKeys = new Set(alerts.flatMap((a) => a.milestoneKeys));
+  const markAbnormal = (ms: FlowPanelMilestone[]): FlowPanelMilestone[] =>
+    ms.map((m) => (alertedKeys.has(m.key) && m.status !== 'pending' ? { ...m, status: 'abnormal' as const } : m));
 
   // ---- 背靠背对偶(graph_links correlates, 仅 confirmed) -------------------
   const linkKey = (k: string): string => normalizeName(normalizeContractNo(k));
@@ -632,15 +649,15 @@ export async function buildFlowPanel(
     basis: progress.basis ? { quantity: progress.basis.quantity, unit: progress.basis.unit } : null,
     progress: progress.progress,
     progressReason: progress.reason ?? null,
-    goods,
+    goods: markAbnormal(goods),
     title: {
       currentHolder,
       note: titleNotes.length > 0 ? titleNotes.join('；') : null,
       transferPoints,
-      milestones: titleMilestones,
+      milestones: markAbnormal(titleMilestones),
     },
-    funds,
-    invoice,
+    funds: markAbnormal(funds),
+    invoice: markAbnormal(invoice),
     alerts,
     netPosition: { currencies, invoices: invoiceCurrencies },
     correlates,
