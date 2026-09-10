@@ -32,6 +32,7 @@ export const CreateTradeEventInputSchema = z.object({
   settledQuantity: z.number().optional().describe('结算数量（SettlementEvent 必填，如 100）'),
   counterpartyId: z.string().min(1).optional().describe('交易对手事实 id（仅收货/发货，spec 决策 #11：事件对手显式化；从台账复制 TF- 事实 id，可省略后置经 link_ontology 补 TRADING_WITH 边）'),
   titleTransfer: z.string().min(1).optional().describe('货权转移口径（仅收货/发货，spec 决策 #11：发货即转/签收转/验收转/到岸转；不确定时先问用户，不要猜测）'),
+  contractNo: z.string().min(1).optional().describe('关联合同号（仅付款/收款/发票，spec §15 前置①：款/票按合同归属供对账面板聚合；收发货不要填——归属走绑定/分摊边，填了会被拒绝）'),
   documentId: z.string().min(1).optional().describe('来源单据 id（凭证据源：对话上下文/表单中有明确来源单据时传递，图上据此建立 单据-凭证溯源 边；没有就省略）'),
 });
 
@@ -53,6 +54,7 @@ export function buildCreateTradeEventTool(deps: { ctx: DbContext; userId?: strin
       '结算价后置补登；数量冲正的逆向同样无需金额），提供金额时正向必须正数、逆向必须负数；' +
       '其余事件 amount+currency 必填；' +
       '逆向事件金额必须为负数（写入边界强制）；' +
+      '付款/收款/发票登记时若能确定所属合同，带上 contractNo（对账面板按合同聚合款/票）；' +
       '数字或日期不精确时先向用户确认，不要猜测。' +
       '返回 { status: "ok", id, entityType } 或 { status: "invalid", detail }。',
     inputSchema: CreateTradeEventInputSchema,

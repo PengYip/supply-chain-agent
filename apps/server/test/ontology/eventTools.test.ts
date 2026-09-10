@@ -95,4 +95,32 @@ describe('create_trade_event execute', () => {
     expect(t.description).toContain('数量');
     expect(t.description).toContain('后置');
   });
+
+  it('付款事件带 contractNo 透传 payload(spec §15 前置①: 按合同聚合款/票)', async () => {
+    const t = buildCreateTradeEventTool({ ctx, userId: 'u1' });
+    const out = await t.execute!({
+      entityType: 'PaymentEvent', eventBizType: '正向', amount: 500_000,
+      currency: 'CNY', validAt: '2026-06-25', payType: '预付',
+      contractNo: 'GMNH-JBKZ-20250303HNWH',
+    }, { toolCallId: 'call_test_7', messages: [] } as never);
+    expect(out.status).toBe('ok');
+    if (out.status !== 'ok') return;
+    const row = await getTradeFactById(ctx, out.id, 'u1');
+    expect(row?.payload).toMatchObject({ contractNo: 'GMNH-JBKZ-20250303HNWH', payType: '预付' });
+    // inputSchema 投影自动带出(表单入口共用同一 SSOT), 可选
+    const shape = t.inputSchema.shape as Record<string, { isOptional: () => boolean }>;
+    expect(shape['contractNo']).toBeDefined();
+    expect(shape['contractNo']!.isOptional()).toBe(true);
+  });
+
+  it('收/发货事件带 contractNo -> invalid(strict 注册表拒绝, 归属走绑定/分摊边)', async () => {
+    const t = buildCreateTradeEventTool({ ctx, userId: 'u1' });
+    const out = await t.execute!({
+      entityType: 'GoodsReceiptEvent', eventBizType: '正向',
+      validAt: '2026-06-25', quantity: 10, unit: '吨', contractNo: 'X',
+    }, { toolCallId: 'call_test_8', messages: [] } as never);
+    expect(out.status).toBe('invalid');
+    if (out.status !== 'invalid') return;
+    expect(out.detail).toContain('contractNo');
+  });
 });

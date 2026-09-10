@@ -97,18 +97,21 @@ export const ONTOLOGY_ENTITIES: Record<OntologyEntityName, z.ZodObject<z.ZodRawS
     currency: Currency,
     invoiceNo: z.string().min(1).describe('发票号'),
     invoiceType: z.string().describe('进项/销项/服务费(开放)'),
+    contractNo: z.string().min(1).optional().describe('关联合同号(归一主键口径; 对账面板按合同聚合款/票, spec 2026-09-09 §15 前置①)'),
   }),
   PaymentEvent: z.object({
     eventBizType: EventBizType.describe('付款(预付/尾款/进度款/退款); 退款=逆向负数'),
     amount: z.number(),
     currency: Currency,
     payType: PayType.describe('流程分支开关(docx §6.1): 预付免票先行, 其余强依赖结算+发票'),
+    contractNo: z.string().min(1).optional().describe('关联合同号(归一主键口径; 对账面板按合同聚合款/票, spec 2026-09-09 §15 前置①)'),
   }),
   CollectionEvent: z.object({
     eventBizType: EventBizType.describe('收款(预收/回款/退款); 退款=逆向负数'),
     amount: z.number(),
     currency: Currency,
     collectionType: z.string().optional().describe('预收/回款(开放, 非闭枚举)'),
+    contractNo: z.string().min(1).optional().describe('关联合同号(归一主键口径; 对账面板按合同聚合款/票, spec 2026-09-09 §15 前置①)'),
   }),
   ServiceCostEvent: z.object({
     eventBizType: EventBizType.describe('第三方服务费; 费用冲减=逆向负数'),
@@ -407,7 +410,7 @@ export function isRelationPairAllowed(name: string, from: string, to: string): b
 
 export function ontologySchemaJson() {
   return {
-    version: '2026-09-10',
+    version: '2026-09-10-flowpanel',
     enums: {
       PayType: PayType.options,
       EventBizType: EventBizType.options,

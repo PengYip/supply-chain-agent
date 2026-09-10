@@ -161,7 +161,25 @@ describe('ontology registry', () => {
   });
 
   it('schema version 随注册表结构变更推进(spec 附A: 实施同步清单)', () => {
-    expect(ontologySchemaJson().version).toBe('2026-09-10');
+    expect(ontologySchemaJson().version).toBe('2026-09-10-flowpanel');
+  });
+
+  it('款/票事件 payload 可选 contractNo(spec §15 前置①: 按合同聚合款/票)', () => {
+    // 三个事件实体登记 contractNo; 缺省合法(可选), 收/发货不收(归属走绑定/分摊边)。
+    const minimal: Record<string, Record<string, unknown>> = {
+      PaymentEvent: { eventBizType: '正向', amount: 100, currency: 'CNY', payType: '预付' },
+      CollectionEvent: { eventBizType: '正向', amount: 100, currency: 'CNY' },
+      InvoiceEvent: { eventBizType: '正向', amount: 100, currency: 'CNY', invoiceNo: 'INV-1', invoiceType: '进项' },
+    };
+    for (const t of ['PaymentEvent', 'CollectionEvent', 'InvoiceEvent'] as const) {
+      expect(ONTOLOGY_ENTITIES[t].shape['contractNo'], t).toBeDefined();
+      expect(entitySchema(t).safeParse(minimal[t]!).success, t).toBe(true);
+      expect(entitySchema(t).safeParse({ ...minimal[t]!, contractNo: 'GMNH-JBKZ-20250303HNWH' }).success, t).toBe(true);
+    }
+    // 收/发货 payload 不收 contractNo(strict 快速失败)
+    expect(entitySchema('GoodsReceiptEvent').safeParse({
+      eventBizType: '正向', quantity: 10, unit: '吨', contractNo: 'X',
+    }).success).toBe(false);
   });
 
   it('Counterparty: uscc 主体归一锚必填, 附加属性全可选(spec §3)', () => {
