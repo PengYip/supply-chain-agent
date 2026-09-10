@@ -87,6 +87,8 @@ export interface FlowPanelResult {
   displayContractNo: string;
   /** 合同标题(台账 title 字段); 权泳道键名为 title, 二者并存故此处改名。 */
   contractTitle: string;
+  /** 台账「金额」字段解析(款/票泳道总进度的分母); 解析不出为 null, 不推算。 */
+  contractAmount: number | null;
   asOf: string;
   basis: { quantity: number; unit: string } | null;
   progress: number | null;
@@ -131,6 +133,17 @@ function fieldText(entry: ContractLedgerEntry, keys: readonly string[]): string 
     if (v !== undefined && String(v).trim() !== '') return String(v).trim();
   }
   return null;
+}
+
+/** 台账金额解析(款/票泳道总进度的分母): 纯数/千分位/「万元」写法; 解析不出 null 不猜。 */
+function parseContractAmount(entry: ContractLedgerEntry): number | null {
+  const text = fieldText(entry, ['金额', '合同金额', '总金额', '价税合计', '含税总价']);
+  if (!text) return null;
+  const m = /^([0-9][0-9,]*(?:\.[0-9]+)?)(万元|元)?$/.exec(text);
+  if (!m) return null;
+  const n = Number(m[1]!.replace(/,/g, ''));
+  if (!Number.isFinite(n)) return null;
+  return m[2] === '万元' ? n * 10000 : n;
 }
 
 const tons = (kg: number): number => Math.round(kg / 1000 * 100) / 100;
@@ -663,6 +676,7 @@ export async function buildFlowPanel(
     contractNo: entry.contractNo,
     displayContractNo: entry.displayContractNo,
     contractTitle: entry.title,
+    contractAmount: parseContractAmount(entry),
     asOf,
     basis: progress.basis ? { quantity: progress.basis.quantity, unit: progress.basis.unit } : null,
     progress: progress.progress,

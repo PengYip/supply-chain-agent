@@ -59,6 +59,8 @@ export interface FlowPanelResponse {
   contractNo: string;
   displayContractNo: string;
   contractTitle: string;
+  /** 台账「金额」字段解析(款/票泳道总进度的分母); 解析不出为 null。 */
+  contractAmount: number | null;
   asOf: string;
   basis: { quantity: number; unit: string } | null;
   progress: number | null;

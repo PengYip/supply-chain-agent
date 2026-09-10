@@ -144,6 +144,19 @@ describe('buildFlowPanel (spec §15)', () => {
       expect(panel.basis).toEqual({ quantity: 20000, unit: '吨' });
       expect(panel.progress).not.toBeNull();
       expect(panel.progress!).toBeCloseTo(3357.46 / 20000, 4);
+      // 合同额透出(款/票泳道的总进度分母), 来自台账「金额」字段
+      expect(panel.contractAmount).toBe(4000000);
+    });
+
+    it('合同额缺失或带「万」单位: 解析不出为 null, 万单位折算', async () => {
+      // 主场景合同无变化; 另起无金额合同 + 万元写法合同
+      await seedLedger('NOAMT-1', 'u1');
+      const p1 = (await buildFlowPanel(ctx, 'NOAMT-1', 'u1'))!;
+      expect(p1.contractAmount).toBeNull();
+
+      await seedLedger('WAN-1', 'u1', { 金额: '400万元' });
+      const p2 = (await buildFlowPanel(ctx, 'WAN-1', 'u1'))!;
+      expect(p2.contractAmount).toBe(4000000);
     });
 
     it('货泳道: 上游发运/我方收货(实称) 数字+证据 id, 预告实重不双计, 在途未发生', () => {

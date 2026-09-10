@@ -41,6 +41,76 @@ const fmtAmt = (n: number): string =>
   Math.abs(n) >= 10000
     ? `${(n / 10000).toLocaleString('zh-CN', { maximumFractionDigits: 1 })}万`
     : n.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+const fmtPct = (pct: number): string => `${(pct * 100).toFixed(2).replace(/\.00$/, '')}%`;
+
+/** 单条进度: 当前/总量 + 比例条(无总量时只显数值, 不猜分母)。 */
+function MiniBar({
+  label, value, total, fmt, unit,
+}: {
+  label: string;
+  value: number;
+  total: number | null;
+  fmt: (n: number) => string;
+  unit?: string;
+}) {
+  const pct = total != null && total > 0 ? Math.min(1, Math.max(0, value / total)) : null;
+  const text = `${fmt(value)}${total != null ? ` / ${fmt(total)}` : ''}${unit ? ` ${unit}` : ''}`;
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <span className="shrink-0 text-[10px] text-ink-soft">{label}</span>
+      <span className="h-1.5 w-24 shrink-0 overflow-hidden rounded-full bg-line/70" aria-hidden>
+        <span className="block h-full rounded-full bg-primary/70" style={{ width: pct != null ? `${pct * 100}%` : '0%' }} />
+      </span>
+      <span className="min-w-0 truncate text-[10px] tabular-nums text-ink" title={text}>
+        {text}
+        {pct != null && <span className="ml-0.5 text-ink-soft">（{fmtPct(pct)}）</span>}
+      </span>
+    </span>
+  );
+}
+
+/** 各流进度摘要(当前/总进度): 货=收货/合同量, 款=已付·已收/合同额, 票=进项·销项/合同额。 */
+function ProgressStrip({ panel }: { panel: FlowPanelResponse }) {
+  const amt = panel.contractAmount;
+  const cur = panel.netPosition.currencies[0];
+  const inv = panel.netPosition.invoices[0];
+  const curCode = cur?.currency ?? 'CNY';
+  const invCode = inv?.currency ?? curCode;
+  const receiptQty = panel.goods.find((m) => m.key === 'receipt')?.quantity ?? null;
+  const moneyFmt = (n: number) => fmtAmt(n);
+  const invFmt = (n: number) => fmtAmt(n);
+  return (
+    <div className="space-y-1 border-b border-line px-3 py-2" data-testid="flow-progress">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span className={clsx('flex h-4 w-4 shrink-0 items-center justify-center rounded text-[10px] font-semibold', LANE_ACCENT.goods)}>货</span>
+        {panel.progress != null && panel.basis ? (
+          receiptQty ? (
+            <MiniBar label="已收" value={receiptQty.value} total={panel.basis.quantity} fmt={fmtQty} unit={panel.basis.unit} />
+          ) : (
+            <span className="text-[10px] tabular-nums text-ink">进度 {fmtPct(panel.progress)}</span>
+          )
+        ) : (
+          <span className="text-[10px] text-ink-soft" title={panel.progressReason ?? undefined}>
+            暂无收货{panel.progressReason ? `（${panel.progressReason}）` : ''}
+          </span>
+        )}
+      </div>
+      <div className="flex min-w-0 items-center gap-3">
+        <span className={clsx('flex h-4 w-4 shrink-0 items-center justify-center rounded text-[10px] font-semibold', LANE_ACCENT.funds)}>款</span>
+        <MiniBar label="已付" value={cur?.paid ?? 0} total={amt} fmt={moneyFmt} unit={curCode} />
+        <MiniBar label="已收" value={cur?.received ?? 0} total={amt} fmt={moneyFmt} />
+      </div>
+      <div className="flex min-w-0 items-center gap-3">
+        <span className={clsx('flex h-4 w-4 shrink-0 items-center justify-center rounded text-[10px] font-semibold', LANE_ACCENT.invoice)}>票</span>
+        <MiniBar label="进项" value={inv?.inAmount ?? 0} total={amt} fmt={invFmt} unit={invCode} />
+        <MiniBar label="销项" value={inv?.outAmount ?? 0} total={amt} fmt={invFmt} />
+      </div>
+      {amt == null && (
+        <div className="text-[9px] text-ink-soft">款/票分母缺合同额（台账无「金额」字段），只显当前值</div>
+      )}
+    </div>
+  );
+}
 
 interface PreviewDoc { name: string; minioKey: string; docId: string | null }
 
@@ -70,9 +140,9 @@ function Dot({
           m.status === 'abnormal' && 'ring-2 ring-danger/30',
         )}
       />
-      <span className="w-16 truncate text-center text-[9px] leading-3 text-ink-soft/90">{m.label}</span>
+      <span className="w-20 truncate text-center text-[10px] leading-3.5 text-ink-soft/90">{m.label}</span>
       {(m.quantity != null || m.amount != null || m.date != null) && (
-        <span className="w-16 truncate text-center text-[9px] leading-3 tabular-nums text-ink" title={tip}>
+        <span className="w-20 truncate text-center text-[10px] leading-3.5 tabular-nums text-ink" title={tip}>
           {m.quantity ? `${fmtQty(m.quantity.value)}${m.quantity.unit === '吨' ? 't' : m.quantity.unit}` : ''}
           {m.amount ? `${m.quantity ? ' ' : ''}${fmtAmt(m.amount.value)}` : ''}
           {m.date ? ` ${m.date.slice(5)}` : ''}
@@ -253,27 +323,16 @@ export function ContractFlowPanel({ contractNo }: { contractNo: string }) {
     { key: 'funds', label: '款', milestones: panel.funds },
     { key: 'invoice', label: '票', milestones: panel.invoice },
   ];
-  const pct = panel.progress != null ? (panel.progress * 100).toFixed(2) : null;
   const net = panel.netPosition.currencies[0];
 
   return (
     <div className="relative rounded-lg border border-line bg-white" data-testid="flow-panel">
-      {/* 头部: 标题 + 进度 + 净占用 + 背靠背对偶 chips */}
+      {/* 头部: 标题 + 净占用 + 背靠背对偶 chips(各流进度见下方摘要条) */}
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-1.5">
         <span className="text-xs font-semibold text-ink">对账面板</span>
         <span className="font-mono text-[11px] text-ink-soft">{panel.displayContractNo}</span>
-        {pct != null && panel.basis && (
-          <span className="text-[11px] tabular-nums text-ink-soft">
-            进度 <span className="font-medium text-ink">{pct}%</span>
-            （执行 {panel.goods.find((m) => m.key === 'receipt')?.quantity
-              ? `${fmtQty(panel.goods.find((m) => m.key === 'receipt')!.quantity!.value)} ${panel.basis.unit}`
-              : '—'} / {fmtQty(panel.basis.quantity)}{panel.basis.unit}）
-          </span>
-        )}
-        {pct == null && panel.progressReason && (
-          <span className="text-[11px] text-ink-soft" title="合同台账缺「数量/单位」基准或量纲不对齐">
-            进度—（{panel.progressReason}）
-          </span>
+        {panel.contractTitle && (
+          <span className="min-w-0 max-w-48 truncate text-[11px] text-ink-soft" title={panel.contractTitle}>{panel.contractTitle}</span>
         )}
         {net && (
           <span className="text-[11px] tabular-nums text-ink-soft">
@@ -302,6 +361,9 @@ export function ContractFlowPanel({ contractNo }: { contractNo: string }) {
           </span>
         )}
       </div>
+
+      {/* 各流进度摘要(当前/总进度) */}
+      <ProgressStrip panel={panel} />
 
       {/* 告警条(红圈同步标在泳道节点上) */}
       {panel.alerts.length > 0 && (

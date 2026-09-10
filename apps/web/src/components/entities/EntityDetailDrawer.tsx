@@ -59,7 +59,8 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/30" role="dialog" aria-modal="true">
-      <div className="h-full w-[520px] max-w-[90vw] overflow-y-auto bg-white shadow-lg">
+      {/* 合同抽屉加宽(spec §15 对账面板首屏): 四泳道×节点轴在 520px 下不可读。 */}
+      <div className={clsx('h-full overflow-y-auto bg-white shadow-lg max-w-[95vw]', type === 'TradeContract' ? 'w-[880px]' : 'w-[520px] max-w-[90vw]')}>
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
           <div>
             <div className="text-sm font-medium text-ink">{typeLabel}详情</div>

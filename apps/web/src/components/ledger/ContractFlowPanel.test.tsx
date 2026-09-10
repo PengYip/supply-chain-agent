@@ -37,6 +37,7 @@ function fixture(overrides: Partial<FlowPanelResponse> = {}): FlowPanelResponse 
     contractNo: 'GMNH-1',
     displayContractNo: 'GMNH-JBKZ-20250303HNWH',
     contractTitle: '焦炭购销合同',
+    contractAmount: 4000000,
     asOf: '2026-09-10T00:00:00.000Z',
     basis: { quantity: 20000, unit: '吨' },
     progress: 3357.46 / 20000,
@@ -99,9 +100,12 @@ describe('ContractFlowPanel (spec §15)', () => {
     for (const node of ['上游', '在途', '我方', '下游']) {
       expect(screen.getByTestId(`axis-${node}`)).toBeTruthy();
     }
-    // 进度 16.79% + 收货数字(千分位; 收货/库存两节点同量, 断言存在即可)
+    // 各流进度摘要(当前/总进度): 货 16.79% + 3,357.46/20,000 吨; 款/票对合同额
     expect(screen.getByText(/16\.79%/)).toBeTruthy();
     expect(screen.getAllByText(/3,357\.46/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/50万 \/ 400万/)).toBeTruthy();
+    expect(screen.getByText(/20万 \/ 400万/)).toBeTruthy();
+    expect(screen.getByText(/30万 \/ 400万/)).toBeTruthy();
     // 告警条
     expect(screen.getByText(/超合同交货期/)).toBeTruthy();
     // 净占用(已付−已收=30万; 文本拆在多个 span, 进项 30万 同值, 断言存在即可)
