@@ -289,3 +289,19 @@ repo 层新增 `supersedeTradeFact(ctx, {...}, userId?)`：双后端事务（SQL
 **两个前置**：① PaymentEvent/CollectionEvent/InvoiceEvent payload 增可选 `contractNo`（SHARED_TOOL_FIELD_NAMES 已含，注册表+create_trade_event inputSchema 小改，登记时带上即可按合同聚合款/票）；② 权泳道依赖 Phase 1.5 titleTransfer。背靠背对偶合同以 correlates 相互切换（chip）。
 
 **分期**：面板 v1 = 货/款/票三泳道 + 告警条（前置①半天 + 聚合端点 + 面板组件约 1-1.5 天，建议并入 four-flows-wave1 分支实施）；权泳道随 Phase 1.5 自动点亮。bankAccount 等敏感属性展示沿用 `lib/mask.ts` 脱敏。
+
+### 15.1 实施记录（2026-09-10，分支 `PengYip/contract-flow-panel`）
+
+逐任务 TDD 落地，零 DDL、零新工具、tool-inventory 零变更（面板是 L1 REST 聚合端点，非工具面）。
+
+| 交付 | 落点 |
+|---|---|
+| 前置①：PaymentEvent/CollectionEvent/InvoiceEvent payload 可选 `contractNo`（create_trade_event inputSchema 同步透出；收/发货 strict 拒绝——归属走绑定/分摊边）；schema version 2026-09-10-flowpanel | `ontology/index.ts`、`ontology/eventTools.ts` |
+| 聚合端点 `GET /api/contracts/:contractNo/flow-panel`（L1 只读、绝不写库）：`buildFlowPanel` SQL 聚合 contract_ledger/execution_flows/settlement_records/trade_facts + ontology_edges（ALLOCATE_TO 挂合同事件 / WRITE_OFF 核销 completeness 按边计一次）；输出四泳道里程碑数组 + alerts + netPosition（按币种 已付/已收/净占用、进/销项）；全部数字带 evidenceIds，派生数字注明口径（在途=预告−实收/决策 #11c、库存=收发差），缺数据输出 null/reason 零推算补数 | `pipeline/flowPanel.ts`（新增）、`routes/contracts.ts` |
+| 货泳道：复用 `computeExecutionProgress`（预告/实重不双计）出基准/进度；六节点（上游发运/在途/我方收货实称/库存拆分/我方发货/下游签收）按方向×层级独立合计（证据=流水 id） | 同上 |
+| 权泳道：titleTransfer 转移时点（titleTransferAt ?? validAt）+ 归属色带（上游/我方/下游）；无口径→currentHolder=null 提示"待货权凭证"，不猜；发货即转→在途属我方（决策 #11）注记 | 同上 |
+| 三告警：超合同交货期（台账交货期 parseCnDate，凭证日期越界）；水尺差超短溢装容差（流入水尺 vs 实收，台账短溢装条款缺省 ±3%）；票款不齐（有款无票/有票无款，v1 确定性规则）。告警经 `milestoneKeys` 证据交集定位泳道节点，被告警覆盖的里程碑 status→abnormal（红圈联动在端点层做完，前端哑渲染） | 同上 |
+| 前端 `ContractFlowPanel`（嵌 `EntityDetailDrawer` 首屏，TradeContract 且带 contractNo 时渲染）：四泳道×节点轴，状态点 实心=完成/琥珀=进行中/空心=未发生/红圈=异常；权泳道色带+转移✕（发货即转画在途列）；告警条；三级钻取 点状态点→明细抽屉（逐笔构成+证据 id）→FilePreviewModal 原始凭证（documents 映射 minioKey 直达）；背靠背 correlates chip 面板内互切（换合同号重拉）。api/flowPanel.ts 镜像 DTO | `apps/web/src/api/flowPanel.ts`、`apps/web/src/components/ledger/ContractFlowPanel.tsx`、`components/entities/EntityDetailDrawer.tsx` |
+| 契约细节：合同标题字段名 `contractTitle`（避让权泳道键 `title`）； correlates 匹配经 normalizeContractNo+normalizeName 双归一；合同台账按用户隔离，他用户不可见即 404 | `pipeline/flowPanel.ts` |
+
+验证：仓库根 build/lint/test 全绿（server 254 文件 1882 用例、web 19 文件 123 用例）。dev 冒烟（GMNH-JBKZ-20250303HNWH）见分支合并记录。
