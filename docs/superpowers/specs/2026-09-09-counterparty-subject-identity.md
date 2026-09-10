@@ -193,3 +193,22 @@ repo 层新增 `supersedeTradeFact(ctx, {...}, userId?)`：双后端事务（SQL
 2. **supersedeTradeFact PG 分支**：UPDATE 语句 `?` 占位未转 `$n` 透传 node-postgres → 语法错误 500（SQLite 测试无法暴露）。修复 + `postgres.integration.test.ts` 增 ontology supersede PG lane（事务化换代/uscc 防线，唯一 uscc 保证跨跑幂等）；顺带补 P3 漏同步的 trade_facts 列断言（document_id）。
 
 冒烟数据（e2e 账号下 4 条事实/1 条边/3 审批单/2 会话/1 登录态）已清理。
+
+## 13. Phase 3 提案：CargoLot 批次对象与四流分离（对齐方法论 §4.2，本期不实施）
+
+上游文档《供应链贸易智能化与风控的本体方法论》§4.2：真实贸易链 5-6 主体（矿方 A→贸易商 B(我方)→贸易商 C→钢厂 D），同一船 3 万吨矿，物理/货权/合同/资金/票据五张拓扑各不相同；多对多靠"分配桥边+守恒校验"。
+
+**四流对照现状**：资金拓扑（Payment/Collection+WRITE_OFF/OFFSET_SETTLE+TRADING_WITH）✅；票据拓扑（Invoice+CORRESPONDS_TO/REVERSE_ORIGIN）✅；合同拓扑（correlates 链+变长穿透）✅；货权拓扑（收发货事件+titleTransfer+DELIVERED_AS）◐ 待 Phase 1；**批次拓扑 ❌——批次目前只是 DELIVERED_AS.batch 字符串参数，不是对象**。
+
+**缺口补法（仍零 DDL，注册表扩展）**：
+
+- 新实体 `CargoLot`（第 12 实体）：`{ lotNo, goodsId(锚 TradeGoods), qty, unit, category?, vessel?, location?, status, parentLotId? }`——拆分保留原批次、新批次带父缘（方法论 §4.1 SplitCargoLot 模式）；存 trade_facts（entity_type=CargoLot）
+- 转移边 `TRANSFER_LOT`（CargoLot→CargoLot）：params `{ qty, 对价合同, fromParty, toParty }` strict——货转单/放货单作 EVIDENCE 凭证挂边；收/发货事件经 DELIVERED_AS 反挂批次
+- 守恒挂桥（对账桥新增规则）：批次流出合计 ≤ 流入合计，超限即异常——方法论 §4.2"守恒规则挂在桥上"
+- 分摊/核销既有能力对齐：支付分摊边（WRITE_OFF 多对多+部分）✅、发票核销边 ✅、票↔批次粒度关联随批次对象补齐
+
+**证据边界（必须写明的口径）**：五张拓扑在 B 系统中的完整度取决于 B 持有的证据——A→B、B→C 两段合同与 B 侧款/票/权事件天然在系统内；**C→D 段不可见**，除非 C 的合同/单据作为凭证上传（背靠背实务中货转单链条通常经手我方）。这与方法论"source-backed 映射"原则一致：每条流记到证据所及，链外段以对手方主数据补齐，不虚构。
+
+**风控价值（方法论 §4.3）**：四流显式建模后，融资性/循环贸易（闭环结构+货权流与资金流拓扑背离）从"人肉对账发现不了"变为"可计算的图查询"——correlates/TRADING_WITH 图上找环 + 四流拓扑比对；专项风控查询与告警属 Phase 3 交付物。
+
+**依赖与顺序**：Phase 1（主体身份+DELIVERED_AS/titleTransfer）先行；Phase 2（Agent 商品匹配）受益于批次锚定；Phase 3 独立成 PR，估期 1-2 天（注册表+对账桥规则+台账/穿透呈现）。
