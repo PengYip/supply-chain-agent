@@ -49,11 +49,12 @@
 **Interfaces（产出，后续任务依赖）:**
 - `ONTOLOGY_ENTITIES.Counterparty` = `{ uscc: min(1), name: min(1), role: string, address?, bankAccount?, bankName?, legalRepresentative?, registeredCapital?, establishedDate?, businessScope? }`（uscc 在首字段，describe 注明主体归一锚；附加属性 v1 全可选 string，见 spec §3 附加属性表与三条边界）
 - `ONTOLOGY_ENTITIES.TradeGoods` 增 `attributes?: z.record(z.string().min(1).max(40), z.union([z.string(), z.number()]))`——写入边界再叠加 superRefine：条数 ≤32（spec §3 受控袋软约束；品类模板门禁属 v2，本期不做）
-- `ONTOLOGY_RELATIONS` 增第 9 个：`{ name: 'PARENT_OF', pairs: [{from:'Counterparty',to:'Counterparty'}], params: z.object({ ratio: z.number().min(0).max(1).optional(), note: z.string().optional() }).strict() }`
+- `ONTOLOGY_RELATIONS` 增第 9、10、11 个：PARENT_OF（Counterparty→Counterparty，params ratio?/note?）、DELIVERED_AS（Goods{Receipt,Delivery}Event→TradeGoods，params batch?）、TRADING_WITH（Goods{Receipt,Delivery}Event→Counterparty，params { role: 上游/下游 } strict）——均 .strict()
+- `ONTOLOGY_ENTITIES.GoodsReceiptEvent/GoodsDeliveryEvent` payload 增可选 `counterpartyId`（对手方事实 id，TRADING_WITH 锚）与 `titleTransfer`（货权口径，v1 开放文本）——eventTools/表单投影自动带出，零表单代码
 - `ontologySchemaJson().version` 更新（如 '2026-09-09'）
 
 **Steps:**
-- [ ] 失败测试：registry.test 断言 Counterparty.shape.uscc 存在且 required；附加属性字段存在且 optional；TradeGoods.attributes 袋（合法键值过 / 键超 40 字拒 / 值为对象拒 / 超 32 条拒）；ONTOLOGY_RELATIONS toHaveLength(10)、pairs 17、PARENT_OF 与 DELIVERED_AS 白名单（isRelationPairAllowed('PARENT_OF','Counterparty','Counterparty') true / ('DELIVERED_AS','GoodsReceiptEvent','TradeGoods') true / Counterparty→InvoiceEvent false）；version 断言更新
+- [ ] 失败测试：registry.test 断言 Counterparty.shape.uscc 存在且 required；附加属性字段存在且 optional；TradeGoods.attributes 袋（合法键值过 / 键超 40 字拒 / 值为对象拒 / 超 32 条拒）；ONTOLOGY_RELATIONS toHaveLength(11)、pairs 19、PARENT_OF/DELIVERED_AS/TRADING_WITH 白名单（isRelationPairAllowed('PARENT_OF','Counterparty','Counterparty') true / ('DELIVERED_AS','GoodsReceiptEvent','TradeGoods') true / Counterparty→InvoiceEvent false）；version 断言更新
 - [ ] 实现：改 index.ts 两处 + version 常量（TradeGoods 袋的 superRefine 放 entitySchema('TradeGoods') 分支，保持 ONTOLOGY_ENTITIES 纯 object 惯例——与事件金额规则同模式）
 - [ ] 全量 `npm test --workspace apps/server`——预期暴露连带断言（governance/ontologyEntities/schema DTO 快照若有），逐一按 spec §9 清单同步
 - [ ] 表单投影验证：masterDataFormSchemaJson 自动带出 Counterparty 附加属性（fieldKind string 直接过）——主数据抽屉注册字段零改动即渲染（注册表驱动红利，测试断言之）；TradeGoods.attributes 不进字段投影（record 不受 fieldKind 支持，录入走 Task 6 键值编辑区——设计如此）
@@ -119,7 +120,7 @@ export const ChangeMasterDataInputSchema = z.object({
 - Edit: `apps/server/test/ontology/linkTools.test.ts`
 
 **Steps:**
-- [ ] 失败测试：词表含 PARENT_OF/DELIVERED_AS；PARENT_OF 对端 Counterparty 主数据事实建边 ok；DELIVERED_AS 收发货事实→TradeGoods 建边 ok（batch 参数落库）；ratio 参数落库；Counterparty→InvoiceEvent 拒绝
+- [ ] 失败测试：词表含 PARENT_OF/DELIVERED_AS/TRADING_WITH；PARENT_OF 对端 Counterparty 主数据事实建边 ok；DELIVERED_AS 收发货事实→TradeGoods 建边 ok（batch 参数落库）；ratio 参数落库；Counterparty→InvoiceEvent 拒绝
 - [ ] 实现（enum + description 两行）
 - [ ] 边界确认：relation/fromId/toId 均在 SHARED_TOOL_FIELD_NAMES（既有），toolOntologyMap 门禁零改动——跑 `test/ontology/toolOntologyMap.test.ts` + `test/harness/toolInventory.test.ts` 确认
 
@@ -168,7 +169,7 @@ export const ChangeMasterDataInputSchema = z.object({
 - Edit: `apps/web/src/api/ontology.ts`（ProjectedEntity 增可选 `invalidAt`——timeline 失效行标注用；`changeMasterData()` API client；EntityRelationDTO 不变）
 - Edit: `apps/web/src/components/entities/EntityDetailDrawer.tsx`（timeline 行：失效/曾用名标注；字段表 uscc 自然出现；**「扩展属性」区**渲染 fields.attributes 键值对）
 - Edit: `apps/web/src/components/entities/EntitiesView.tsx`（Counterparty 行副标题显示曾用名；**「变更」入口**——详情/行操作打开主数据抽屉的 change 模式：预填现行值、提交走 POST /master-data/change。变更端点必须有 UI 入口，否则只能 curl）
-- Edit: `apps/web/src/components/graph/businessTypes.ts`（EDGE_LABELS + `PARENT_OF: '母子公司'`；样式灰虚线，同辅助关系族）
+- Edit: `apps/web/src/components/graph/businessTypes.ts`（EDGE_LABELS + `PARENT_OF: '母子公司'`、`TRADING_WITH: '交易对手'`、`DELIVERED_AS: '实际交付'`；样式灰虚线，同辅助关系族）
 - Edit: `apps/web/src/components/entities/MasterDataDrawer.tsx` 相关（uscc 与 Counterparty 附加属性字段由 schema 投影自动出现——验证即可；TradeGoods 增**「自定义属性」键值编辑区**（增删行，键/值输入，提交并入 payload.attributes）；change 模式复用同抽屉，提交目标/预填不同）
 
 **Steps:**
