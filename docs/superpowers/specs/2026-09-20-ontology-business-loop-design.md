@@ -192,7 +192,21 @@ INVOICE_MATCH。
 
 ## 实施记录
 
-### Wave 3（2026-09-20 完成，终审 MERGE_READY）
+### Wave 4（2026-09-20 完成，终审 MERGE_READY——业务闭环收官）
+
+- **T1 聚合+金标准+W3 打磨**（306728e）+ 修复轮（4b49dc3）：`ontology/gaps.ts`
+  computeGaps 四组 11 项；金标准数字逐字断言（终审独立复算全对）；R20 双口径（⑦⑨
+  非预付付款净/⑧⑩全净）；R18 全局口径 tile①；R19 缺输入 null+missingInputs；侧别
+  无法判定"值照算+标注"；EPSILON 近零归零；W3 五打磨（白名单/page/uscc/简介 strip/
+  L2 整句）同 commit 清偿。
+- **T2 REST**（9d01448）：GET /api/ontology/gaps（挂既有 requireAuth 路由，位于
+  /entities/:type 之前无遮蔽），4 用例含端到端数字。
+- **T3 前端**（980b833，designer 通道）：GapsPanel（四 tiles/四组折叠/checks/projectNo
+  过滤/待登记弱化态），挂 OntologyView 第三 tab 零顶层导航膨胀；5 冒烟测试。
+- **终审 5 Minor 全可推迟**：resolveByNo 缓存（数据增长后加）、paymentsNonPrepay 死
+  防御注记、mis tile ??0 留意、④⑥ 负值"预收/超收"角标（Wave 5）、page 参数 inventory
+  boundary 文案顺手补。
+- **验收**：server 1940+ / web 128 全绿；合并 main + push（CI/CD 部署）+ dev 冒烟。
 
 - **T1 本体读三值**（cac9373）：query_business entity 增 ontology/neighbors/writeoff
   （内联直调三个只读函数，错误不抛）；factId 入共享词表（R17；指纹值不变——共享词表
