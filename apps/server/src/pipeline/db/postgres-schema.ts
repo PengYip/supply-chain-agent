@@ -607,6 +607,8 @@ export const ontologyEdges = pgTable(
     ingestedAt: timestamp('ingested_at', { withTimezone: true }).notNull().defaultNow(),
     createdBy: text('created_by').notNull(),
     userId: text('user_id').notNull().default(''),
+    // business-loop Wave 1(2026-09-20): 行级模型版本标记(spec 决策 #3); NULL=2026-09-20 前写入。
+    schemaVersion: text('schema_version'),
   },
   (t) => ({
     relIdx: index('idx_ontology_edges_relation').on(t.relation, t.userId),
@@ -628,6 +630,8 @@ export const tradeFacts = pgTable(
     userId: text('user_id').notNull().default(''),
     // P3 凭证据源(2026-09-09): documents.id 溯源锚点; NULL=无来源单据。
     documentId: text('document_id'),
+    // business-loop Wave 1(2026-09-20): 行级模型版本标记(spec 决策 #3); NULL=2026-09-20 前写入。
+    schemaVersion: text('schema_version'),
   },
   (t) => ({
     typeIdx: index('idx_trade_facts_type').on(t.entityType, t.userId),

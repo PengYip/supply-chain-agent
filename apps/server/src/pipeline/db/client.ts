@@ -503,6 +503,15 @@ export function migrate(sqlite: Database.Database): void {
     }
   }
 
+  // business-loop Wave 1(2026-09-20): 两表 schema_version 行级模型版本标记(spec 决策 #3)。
+  // 沿 document_id 守卫 ALTER 模式(CREATE TABLE IF NOT EXISTS 不加列, 新旧库统一走此)。
+  for (const tbl of ['ontology_edges', 'trade_facts']) {
+    const cols = sqlite.prepare(`PRAGMA table_info(${tbl})`).all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'schema_version')) {
+      try { sqlite.exec(`ALTER TABLE ${tbl} ADD COLUMN schema_version TEXT`); } catch { /* concurrent */ }
+    }
+  }
+
   // P4: 种子冲突策略列(managed-wins)。NULL=纯种子行(boot 可覆写);非空=DB 优先。
   // 存量 dev 库补列, 同 guarded ALTER 模式(CREATE TABLE IF NOT EXISTS 不加列;
   // try/catch 兜并发初始化 "duplicate column name" -- 见 sessionStore.ts 51ef03c)。
@@ -1176,6 +1185,10 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_trade_facts_ingested ON trade_facts(ingested_at)`,
     // P3 凭证据源(2026-09-09): 溯源列, 存量库 ADD COLUMN IF NOT EXISTS 幂等补列。
     `ALTER TABLE trade_facts ADD COLUMN IF NOT EXISTS document_id TEXT`,
+    // business-loop Wave 1(2026-09-20): 两表 schema_version 行级模型版本标记
+    // (spec 决策 #3)。CREATE TABLE 不带此列, 新旧库统一走幂等补列。
+    `ALTER TABLE ontology_edges ADD COLUMN IF NOT EXISTS schema_version TEXT`,
+    `ALTER TABLE trade_facts ADD COLUMN IF NOT EXISTS schema_version TEXT`,
   ];
   try {
     for (const sql of statements) {

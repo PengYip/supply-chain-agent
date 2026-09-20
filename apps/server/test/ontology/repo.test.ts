@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.js';
 import { asOfBusinessTime, asOfSystemTime, normalizeIsoUtc } from '../../src/ontology/asof.js';
+import { ONTOLOGY_SCHEMA_VERSION } from '../../src/ontology/index.js';
 import {
   insertTradeFact, insertOntologyEdge, listTradeFactsAsOf, listOntologyEdgesAsOf,
   getTradeFactById, supersedeTradeFact,
@@ -306,5 +307,41 @@ describe('supersedeTradeFact (spec 主体身份 §4: 变更=同主体新事实+�
         validAt: '2026-09-01',
       },
     }, 'u1')).rejects.toThrow(/entityType|类型/);
+  });
+});
+
+describe('schema_version stamping (business-loop wave1)', () => {
+  it('stamps facts with current registry version by default', async () => {
+    const id = await insertTradeFact(ctx, {
+      entityType: 'ServiceCostEvent',
+      payload: { eventBizType: '正向', amount: 100, currency: 'CNY', costType: '物流' },
+      validAt: '2026-09-20T00:00:00Z', createdBy: 't',
+    });
+    const row = await getTradeFactById(ctx, id);
+    expect(row?.schemaVersion).toBe(ONTOLOGY_SCHEMA_VERSION);
+  });
+
+  it('accepts explicit schemaVersion override (backfill historical version)', async () => {
+    const id = await insertTradeFact(ctx, {
+      entityType: 'ServiceCostEvent',
+      payload: { eventBizType: '正向', amount: 100, currency: 'CNY', costType: '物流' },
+      validAt: '2026-09-01T00:00:00Z', createdBy: 'backfill',
+      schemaVersion: '2026-09-10-flowpanel',
+    });
+    const row = await getTradeFactById(ctx, id);
+    expect(row?.schemaVersion).toBe('2026-09-10-flowpanel');
+  });
+
+  it('stamps edges with current registry version', async () => {
+    const edgeId = await insertOntologyEdge(ctx, {
+      relation: 'ALLOCATE_TO',
+      fromType: 'ServiceCostEvent', fromId: 'TF-x',
+      toType: 'TradeContract', toId: 'CL-1',
+      params: { amount: 1, method: '金额' },
+      validAt: '2026-09-20T00:00:00Z', createdBy: 't',
+    });
+    const edges = await listOntologyEdgesAsOf(
+      ctx, asOfSystemTime('2026-09-21T00:00:00Z'), { relation: 'ALLOCATE_TO' });
+    expect(edges.find((e) => e.id === edgeId)?.schemaVersion).toBe(ONTOLOGY_SCHEMA_VERSION);
   });
 });

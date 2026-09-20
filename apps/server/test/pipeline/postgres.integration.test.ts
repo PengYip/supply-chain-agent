@@ -588,9 +588,18 @@ describe.skipIf(!RUN_PG)('Postgres backend (pgvector + FTS ts_rank)', () => {
         (byTable[r.table_name] ??= []).push(r.column_name);
       }
       expect(byTable['ontology_edges']).toEqual(['id', 'relation', 'from_type', 'from_id',
-        'to_type', 'to_id', 'params', 'valid_at', 'invalid_at', 'ingested_at', 'created_by', 'user_id']);
+        'to_type', 'to_id', 'params', 'valid_at', 'invalid_at', 'ingested_at', 'created_by', 'user_id', 'schema_version']);
       expect(byTable['trade_facts']).toEqual(['id', 'entity_type', 'payload', 'valid_at',
-        'invalid_at', 'ingested_at', 'created_by', 'user_id', 'document_id']); // document_id: P3 凭证据源 2026-09-09
+        'invalid_at', 'ingested_at', 'created_by', 'user_id', 'document_id', 'schema_version']); // document_id: P3 凭证据源 2026-09-09; schema_version: business-loop wave1
+    });
+
+    it('ontology tables carry schema_version column (business-loop wave1)', async () => {
+      const res = await ctx.pool.query(
+        `SELECT table_name FROM information_schema.columns
+          WHERE table_schema = 'public' AND column_name = 'schema_version'
+            AND table_name IN ('trade_facts', 'ontology_edges')`);
+      expect(res.rows.map((r: { table_name: string }) => r.table_name).sort())
+        .toEqual(['ontology_edges', 'trade_facts']);
     });
   });
 

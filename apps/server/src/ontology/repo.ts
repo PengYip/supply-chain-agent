@@ -5,6 +5,7 @@ import type { DbContext, PostgresDbContext } from '../pipeline/db/client.js';
 import { effectiveUserId } from '../pipeline/db/repositories.js';
 import {
   entitySchema, relationDef, isRelationPairAllowed,
+  ONTOLOGY_SCHEMA_VERSION,
   type OntologyEntityName,
 } from './index.js';
 import { normalizeIsoUtc, numberPlaceholders, type AsOfPredicate } from './asof.js';
@@ -24,6 +25,8 @@ export interface TradeFactInput {
   createdBy: string;
   /** P3 凭证据源(2026-09-09): documents.id 溯源锚点; 可选, 图投影据此写 EVIDENCE 边。 */
   documentId?: string | null;
+  /** 行级模型版本(血缘标记, spec 决策 #3): 缺省=当前注册表版本, 回填可指定历史版本。 */
+  schemaVersion?: string;
 }
 
 export interface OntologyEdgeInput {
@@ -37,6 +40,8 @@ export interface OntologyEdgeInput {
   invalidAt?: string | Date | null;
   ingestedAt?: string | Date;
   createdBy: string;
+  /** 行级模型版本(血缘标记, spec 决策 #3): 缺省=当前注册表版本, 回填可指定历史版本。 */
+  schemaVersion?: string;
 }
 
 export interface TradeFactRow {
@@ -45,6 +50,8 @@ export interface TradeFactRow {
   createdBy: string; userId: string;
   /** documents.id 溯源锚点; NULL=无来源单据。 */
   documentId: string | null;
+  /** 行级模型版本; NULL=2026-09-20 前写入的存量行。 */
+  schemaVersion: string | null;
 }
 
 export interface OntologyEdgeRow {
@@ -53,10 +60,12 @@ export interface OntologyEdgeRow {
   params: Record<string, unknown>;
   validAt: string; invalidAt: string | null; ingestedAt: string;
   createdBy: string; userId: string;
+  /** 行级模型版本; NULL=2026-09-20 前写入的存量行。 */
+  schemaVersion: string | null;
 }
 
-const FACT_COLS = 'id, entity_type, payload, valid_at, invalid_at, ingested_at, created_by, user_id, document_id';
-const EDGE_COLS = 'id, relation, from_type, from_id, to_type, to_id, params, valid_at, invalid_at, ingested_at, created_by, user_id';
+const FACT_COLS = 'id, entity_type, payload, valid_at, invalid_at, ingested_at, created_by, user_id, document_id, schema_version';
+const EDGE_COLS = 'id, relation, from_type, from_id, to_type, to_id, params, valid_at, invalid_at, ingested_at, created_by, user_id, schema_version';
 
 const parseJson = (raw: unknown): Record<string, unknown> => {
   if (typeof raw === 'string') {
@@ -80,22 +89,23 @@ export async function insertTradeFact(
   const invalidAt = input.invalidAt == null ? null : normalizeIsoUtc(input.invalidAt);
   const ingestedAt = input.ingestedAt == null ? null : normalizeIsoUtc(input.ingestedAt);
   const uid = effectiveUserId(userId);
+  const schemaVersion = input.schemaVersion ?? ONTOLOGY_SCHEMA_VERSION;
 
   if (ctx.backend === 'postgres') {
     const pg = ctx as PostgresDbContext;
     await pg.pool.query(
       `INSERT INTO trade_facts (${FACT_COLS})
-       VALUES ($1,$2,$3,$4,$5,COALESCE($6, NOW()),$7,$8,$9)`,
+       VALUES ($1,$2,$3,$4,$5,COALESCE($6, NOW()),$7,$8,$9,$10)`,
       [id, input.entityType, JSON.stringify(canonical), validAt, invalidAt,
-       ingestedAt, input.createdBy, uid, input.documentId ?? null],
+       ingestedAt, input.createdBy, uid, input.documentId ?? null, schemaVersion],
     );
     return id;
   }
   ctx.sqlite.prepare(
-    `INSERT INTO trade_facts (id, entity_type, payload, valid_at, invalid_at, ingested_at, created_by, user_id, document_id)
-     VALUES (?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now')), ?, ?, ?)`,
+    `INSERT INTO trade_facts (id, entity_type, payload, valid_at, invalid_at, ingested_at, created_by, user_id, document_id, schema_version)
+     VALUES (?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now')), ?, ?, ?, ?)`,
   ).run(id, input.entityType, JSON.stringify(canonical), validAt, invalidAt,
-    ingestedAt, input.createdBy, uid, input.documentId ?? null);
+    ingestedAt, input.createdBy, uid, input.documentId ?? null, schemaVersion);
   return id;
 }
 
@@ -112,6 +122,7 @@ function factRowFrom(r: Record<string, unknown>, pg: boolean): TradeFactRow {
     createdBy: r['created_by'] as string,
     userId: r['user_id'] as string,
     documentId: r['document_id'] == null ? null : String(r['document_id']),
+    schemaVersion: r['schema_version'] == null ? null : String(r['schema_version']),
   };
 }
 
@@ -208,10 +219,11 @@ function insertFactParams(r: {
   newId: string; entityType: string; canonical: Record<string, unknown>;
   validAt: string; invalidAt: string | null; ingestedAt: string | null;
   createdBy: string; uid: string; documentId?: string | null;
+  schemaVersion: string;
 }): unknown[] {
   return [
     r.newId, r.entityType, JSON.stringify(r.canonical), r.validAt, r.invalidAt,
-    r.ingestedAt, r.createdBy, r.uid, r.documentId ?? null,
+    r.ingestedAt, r.createdBy, r.uid, r.documentId ?? null, r.schemaVersion,
   ];
 }
 
@@ -232,6 +244,7 @@ export async function supersedeTradeFact(
   const validAt = normalizeIsoUtc(input.next.validAt);
   const invalidAt = input.next.invalidAt == null ? null : normalizeIsoUtc(input.next.invalidAt);
   const ingestedAt = input.next.ingestedAt == null ? null : normalizeIsoUtc(input.next.ingestedAt);
+  const schemaVersion = input.next.schemaVersion ?? ONTOLOGY_SCHEMA_VERSION;
 
   const prev = await getTradeFactById(ctx, input.prevFactId, userId);
   if (!prev) throw new Error(`supersede: 旧事实不存在或不可见: ${input.prevFactId}`);
@@ -261,8 +274,8 @@ export async function supersedeTradeFact(
       await client.query('BEGIN');
       await client.query(
         `INSERT INTO trade_facts (${FACT_COLS})
-         VALUES ($1,$2,$3,$4,$5,COALESCE($6, NOW()),$7,$8,$9)`,
-        insertFactParams({ newId, entityType: input.next.entityType, canonical, validAt, invalidAt, ingestedAt, createdBy: input.next.createdBy, uid, documentId: input.next.documentId }),
+         VALUES ($1,$2,$3,$4,$5,COALESCE($6, NOW()),$7,$8,$9,$10)`,
+        insertFactParams({ newId, entityType: input.next.entityType, canonical, validAt, invalidAt, ingestedAt, createdBy: input.next.createdBy, uid, documentId: input.next.documentId, schemaVersion }),
       );
       // PG 侧占位经 numberPlaceholders 转 $n(? 是 jsonb 操作符, 不能透传)。
       const updated = await client.query(numberPlaceholders(FACT_UPDATE), updateParams);
@@ -281,9 +294,9 @@ export async function supersedeTradeFact(
     // 更新未命中时事务整体回滚(新事实不残留), 错误原样抛给上层转 4xx。
     ctx.sqlite.transaction(() => {
       ctx.sqlite.prepare(
-        `INSERT INTO trade_facts (id, entity_type, payload, valid_at, invalid_at, ingested_at, created_by, user_id, document_id)
-         VALUES (?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now')), ?, ?, ?)`,
-      ).run(...insertFactParams({ newId, entityType: input.next.entityType, canonical, validAt, invalidAt, ingestedAt, createdBy: input.next.createdBy, uid, documentId: input.next.documentId }));
+        `INSERT INTO trade_facts (id, entity_type, payload, valid_at, invalid_at, ingested_at, created_by, user_id, document_id, schema_version)
+         VALUES (?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now')), ?, ?, ?, ?)`,
+      ).run(...insertFactParams({ newId, entityType: input.next.entityType, canonical, validAt, invalidAt, ingestedAt, createdBy: input.next.createdBy, uid, documentId: input.next.documentId, schemaVersion }));
       const updated = ctx.sqlite.prepare(FACT_UPDATE).run(...updateParams);
       if (updated.changes !== 1) {
         throw new Error(`supersede: 旧事实失效更新未命中(可能已被并发换代): ${input.prevFactId}`);
@@ -310,6 +323,7 @@ interface PreparedEdgeRow {
   ingestedAt: string | null;
   createdBy: string;
   uid: string;
+  schemaVersion: string;
 }
 
 // 写入边界: 关系存在 + 连接对合法 + params 走关系的 strict schema
@@ -334,18 +348,20 @@ function prepareEdgeRow(input: OntologyEdgeInput, userId?: string): PreparedEdge
     ingestedAt: input.ingestedAt == null ? null : normalizeIsoUtc(input.ingestedAt),
     createdBy: input.createdBy,
     uid: effectiveUserId(userId),
+    schemaVersion: input.schemaVersion ?? ONTOLOGY_SCHEMA_VERSION,
   };
 }
 
 const PG_EDGE_INSERT = `INSERT INTO ontology_edges (${EDGE_COLS})
-   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10, NOW()),$11,$12)`;
+   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10, NOW()),$11,$12,$13)`;
 const SQLITE_EDGE_INSERT = `INSERT INTO ontology_edges (id, relation, from_type, from_id, to_type, to_id, params,
-      valid_at, invalid_at, ingested_at, created_by, user_id)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now')), ?, ?)`;
+      valid_at, invalid_at, ingested_at, created_by, user_id, schema_version)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now')), ?, ?, ?)`;
 
 const edgeRowParams = (r: PreparedEdgeRow) => [
   r.id, r.relation, r.fromType, r.fromId, r.toType, r.toId,
   r.paramsJson, r.validAt, r.invalidAt, r.ingestedAt, r.createdBy, r.uid,
+  r.schemaVersion,
 ];
 
 export async function insertOntologyEdge(
@@ -411,6 +427,7 @@ export async function listOntologyEdgesAsOf(
     ingestedAt: iso(r['ingested_at']) as string,
     createdBy: r['created_by'] as string,
     userId: r['user_id'] as string,
+    schemaVersion: r['schema_version'] == null ? null : String(r['schema_version']),
   });
 
   if (ctx.backend === 'postgres') {
