@@ -86,8 +86,8 @@
 
 - `query_business` 增本体数据源（实体台账 listProjectedEntities / 穿透 getNeighbors /
   核销余额 getWriteoffOverview），沿其既有"结构化统一读入口"定位扩 resource 类型
-- `ontologySchemaJson()` 注入对话 system prompt（实体/关系/枚举词汇，让模型知道
-  能登记什么、能查什么）
+- 有界本体词汇节（`buildOntologyVocabSection`，模块加载期静态消费注册表常量——
+  与注册表零漂移）注入 system prompt 尾部；枚举词汇由工具 inputSchema 承载
 - 不新增写工具（Wave 1 已把 14 关系全量入 link_ontology / 核销工作台）
 
 ### Wave 4 报表闭环（断点 5）
@@ -192,7 +192,19 @@ INVOICE_MATCH。
 
 ## 实施记录
 
-### Wave 2（2026-09-20 完成，分支 PengYip/tools-grouping，五任务全评审通过）
+### Wave 3（2026-09-20 完成，终审 MERGE_READY）
+
+- **T1 本体读三值**（cac9373）：query_business entity 增 ontology/neighbors/writeoff
+  （内联直调三个只读函数，错误不抛）；factId 入共享词表（R17；指纹值不变——共享词表
+  不进 schema 投影）。
+- **T2 词汇节**（d94a2be）：`buildOntologyVocabSection()` 模块加载期静态生成（≤25 行，
+  12 实体+17 关系+工具引导），置于 skill 索引后；与注册表常量同源零漂移；inventory
+  口径同步。
+- **终审 7 Minor 全可推迟**：#1 关系简介"首句截 30 字"对 wave1/2 六关系截断失义（Wave 4
+  改 strip 出处注记）、#2 entityType 白名单校验、#3 ontology 分页参数、#4 uscc 剔除
+  注记、#5 L2 标注整句化、#6 换行（本次已修）、#7 spec 措辞（本次已修）。
+
+
 
 - **T1 ALLOCATE_TO 数量归属**（f745f35）：params 放宽 {amount?, quantity?, method, batch?}
   （W2-D，不用 superRefine 保 ZodObject 类型）；版本 '2026-09-20-loop-v3'；R8 口径下
