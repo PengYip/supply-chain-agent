@@ -116,6 +116,7 @@ export const ONTOLOGY_ENTITIES: Record<OntologyEntityName, z.ZodObject<z.ZodRawS
     settledQuantity: z.number().optional().describe('结算数量(settlement_records.settled_quantity 同源)'),
     unit: z.string().optional(),
     settlementType: z.string().optional().describe('结算类型(开放: 周期/批次/最终/补差)'),
+    contractNo: z.string().min(1).optional().describe('关联合同号(归一主键口径; 对账/勾稽按合同聚合, R10 2026-09-20)'),
   }),
   InvoiceEvent: z.object({
     eventBizType: EventBizType.describe('发票(进项/销项/服务费); 红冲=逆向负数+REVERSE_ORIGIN 边'),

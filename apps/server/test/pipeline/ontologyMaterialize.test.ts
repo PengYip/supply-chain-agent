@@ -153,9 +153,9 @@ describe('materializeSettlementRecord (business-loop wave2)', () => {
     expect(r1.factId).not.toBeNull();
     const facts = await factsOf('SettlementEvent');
     expect(facts).toHaveLength(1);
-    expect(facts[0]!.payload).toMatchObject({ amount: 900000, currency: 'CNY', settledQuantity: 620 });
-    // 注册表 SSOT: SettlementEvent 无 contractNo 词汇、ALLOCATE_TO 白名单不收 SettlementEvent——
-    // 结算事实经 contract_ledger_id 溯源(settlement_records 侧), 本体内无合同挂接。
+    expect(facts[0]!.payload).toMatchObject({ amount: 900000, currency: 'CNY', settledQuantity: 620, contractNo: 'HT-1' });
+    // R10(2026-09-20): SettlementEvent 已补 contractNo 词汇——结算事实经 payload.contractNo 归属合同;
+    // ALLOCATE_TO 白名单仍不收 SettlementEvent, 无归属边。
     expect(await edgesOf('ALLOCATE_TO')).toHaveLength(0);
     const wb = ctx.sqlite.prepare('SELECT ontology_fact_id AS f FROM settlement_records WHERE id = ?').get('SR-1') as { f: string };
     expect(wb.f).toBe(r1.factId);

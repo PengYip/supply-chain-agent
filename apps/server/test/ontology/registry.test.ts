@@ -151,6 +151,12 @@ describe('ontology registry', () => {
     expect(ONTOLOGY_SCHEMA_VERSION).toBe('2026-09-20-loop-v3');
   });
 
+  it('R10: SettlementEvent accepts optional contractNo', () => {
+    expect(() => entitySchema('SettlementEvent').parse({
+      eventBizType: '正向', amount: 100, currency: 'CNY', contractNo: 'HT-1',
+    })).not.toThrow();
+  });
+
   it('TRADING_WITH: 收/发货事件 -> 交易对手(spec 决策 #11, 事件对手显式化)', () => {
     expect(isRelationPairAllowed('TRADING_WITH', 'GoodsReceiptEvent', 'Counterparty')).toBe(true);
     expect(isRelationPairAllowed('TRADING_WITH', 'GoodsDeliveryEvent', 'Counterparty')).toBe(true);

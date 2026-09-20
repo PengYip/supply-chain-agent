@@ -43,6 +43,7 @@ import { refreshExecutionFlowsForDocument } from '../pipeline/executionFlow.js';
 import { commitDocumentGraph, syncDocumentTypeToGraph } from '../pipeline/graphCommit.js';
 import { buildIngestDeps, defaultEmbedder } from '../pipeline/ingestModel.js';
 import { reconcileVectorizationAfterDocTypeChange } from '../pipeline/vectorReconcile.js';
+import { materializeDocumentOntologySafe } from '../pipeline/ontologyMaterialize.js';
 import { getModalityHint } from '../pipeline/modalityHints.js';
 import { renderPdfPages } from '../pipeline/pdfRender.js';
 import {
@@ -155,6 +156,8 @@ reviewRoute.post('/:docId/review', async (c) => {
       } catch (e) {
         console.warn('[executionFlow] 修正后重建执行流水失败:', docId, (e as Error).message);
       }
+      // 实体化钩子: 修正/重建流水后 fire-and-forget 消费待实体化流水(永不阻塞)。
+      void materializeDocumentOntologySafe(ctx(), docId, user.id);
     } else if (confirm) {
       // Confirm-as-is: flip reviewStatus to 'confirmed' (previously a dead
       // state — this makes it reachable), then commit the derived entities/
@@ -163,6 +166,8 @@ reviewRoute.post('/:docId/review', async (c) => {
       // is persisted as documents.graph_status and surfaced on the snapshot.
       await setReviewOutcome(ctx(), docId, 'confirmed', 'manual', user.id);
       await commitDocumentGraph(ctx(), docId, user.id);
+      // 实体化钩子: 确认路径成功后 fire-and-forget 产本体事实(修正分支走 3a 钩子兜)。
+      void materializeDocumentOntologySafe(ctx(), docId, user.id);
       snapshot = await getReviewSnapshot(ctx(), docId, user.id);
       if (!snapshot) {
         return c.json({ ok: false, error: 'document_or_extraction_not_found' }, 404);
@@ -500,6 +505,8 @@ reviewRoute.patch('/:docId/type', async (c) => {
     // 失败不得告警吞掉(与修正钩子的 warn-only 语义不同)。skipped 透传跳过原因
     // (F2: 白名单外 / 方向判不出 / 无 confirmed 绑定)。
     const { materialized, skipped } = await refreshExecutionFlowsForDocument(ctx(), docId, user.id);
+    // 实体化钩子: 类型修正重建流水后 fire-and-forget 消费待实体化流水(永不阻塞)。
+    void materializeDocumentOntologySafe(ctx(), docId, user.id);
     // 向量回溯(spec 2026-08-27 选择性向量化): 对齐向量库与新类型——可向量化补
     // 嵌入, 不可向量化清空。reconcile 契约永不抛出; 这层 try 与图同步同款兜底。
     let vectorization;
@@ -767,6 +774,8 @@ reviewRoute.post('/:docId/review-batch', async (c) => {
               ge instanceof Error ? ge.message : String(ge),
             );
           }
+          // 实体化钩子: 逐条确认成功后 fire-and-forget 产本体事实(永不阻塞整批)。
+          void materializeDocumentOntologySafe(ctx(), a.docId, user.id);
           out.push({ docId: a.docId, ok: true });
         } catch (e) {
           out.push({ docId: a.docId, ok: false, error: e instanceof Error ? e.message : String(e) });

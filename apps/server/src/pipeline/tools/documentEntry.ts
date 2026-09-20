@@ -76,6 +76,7 @@ import { generateBindingProposals, type BindingRoute } from '../bindingProposal.
 import { ancestorChain, matchEdgeRule } from '../templateGuard.js';
 import { listActiveEdgeRules } from '../db/repositories.js';
 import { materializeExecutionFlow, refreshExecutionFlowsForDocument, getEffectiveSelfPartyNames } from '../executionFlow.js';
+import { materializeDocumentOntologySafe } from '../ontologyMaterialize.js';
 import { deriveContractType, type ContractTypeDerivation } from '../../domain/contractType.js';
 import type { ContractType } from '../../domain/tradeSemantics.js';
 import { proposeProjectMemberships } from '../projectProposal.js';
@@ -2557,6 +2558,8 @@ export function buildBindDocumentTool(deps: ToolDeps) {
         } catch (e) {
           console.warn('[executionFlow] 绑定确认物化执行流水失败:', (e as Error).message);
         }
+        // 实体化钩子: 绑定确认(既有建议确认)后 fire-and-forget 消费待实体化流水。
+        void materializeDocumentOntologySafe(deps.ctx, documentId, deps.userId);
         const linkRes = linkDocumentToContract(contractNo, documentId);
         return {
           ok: true as const, bindingId: existing.id, contractNo, documentId,
@@ -2582,6 +2585,8 @@ export function buildBindDocumentTool(deps: ToolDeps) {
       } catch (e) {
         console.warn('[executionFlow] 绑定确认物化执行流水失败:', (e as Error).message);
       }
+      // 实体化钩子: 新建 confirmed 绑定后 fire-and-forget 消费待实体化流水。
+      void materializeDocumentOntologySafe(deps.ctx, documentId, deps.userId);
       // T8 deviation (per cross-task directive): bind extends the existing
       // link_document — also reflect the binding in the in-memory contract graph.
       const linkRes = linkDocumentToContract(contractNo, documentId);

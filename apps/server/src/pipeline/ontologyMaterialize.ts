@@ -213,6 +213,7 @@ export async function materializeSettlementRecord(
     amount: record.total_amount,
     currency: record.currency ?? 'CNY',
     ...(record.settled_quantity != null ? { settledQuantity: record.settled_quantity } : {}),
+    ...(record.contract_no ? { contractNo: record.contract_no } : {}),
   };
   const validAt = new Date();
   const factId = await insertTradeFact(ctx, {

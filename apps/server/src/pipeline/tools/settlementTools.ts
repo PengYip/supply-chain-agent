@@ -19,6 +19,7 @@ import {
   insertSettlementRecord,
 } from '../db/repositories.js';
 import { computeExecutionProgress } from '../executionProgress.js';
+import { materializeSettlementRecordSafe } from '../ontologyMaterialize.js';
 
 export interface SettlementToolDeps {
   ctx: DbContext;
@@ -213,6 +214,21 @@ export function buildConfirmSettlementTool(deps: SettlementToolDeps) {
           basisExtractionIds: input.basisExtractionIds,
           notes: input.notes,
           createdBy: 'agent',
+        },
+        userId,
+      );
+      // 实体化钩子: 结算确认落账后 fire-and-forget 产 SettlementEvent 事实(永不阻塞)。
+      void materializeSettlementRecordSafe(
+        ctx,
+        {
+          id: settlementId,
+          contract_no: input.contractNo,
+          contract_ledger_id: ledger.documentId,
+          settled_quantity: input.settledQuantity,
+          quantity_unit: input.quantityUnit,
+          currency: input.currency,
+          total_amount: input.totalAmount,
+          user_id: userId,
         },
         userId,
       );
