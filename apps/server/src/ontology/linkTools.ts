@@ -60,8 +60,8 @@ export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string })
       relation: z.enum(LINKABLE_RELATIONS).describe('关系类型（14 类之一；核销/冲抵用 create_writeoff/create_offset）'),
       fromId: z.string().min(1).describe('起点实体 id（事实 id TF- 开头或合同台账行 id；台账列表/详情可复制）'),
       toId: z.string().min(1).describe('终点实体 id（事实 id；ALLOCATE_TO/合同起点关系用台账合同行 id）'),
-      quantity: z.number().optional().describe('数量（STOCK_OFFSET 库存核减 / INVOICE_MATCH 票票配比必填，如 400 吨）'),
-      amount: z.number().optional().describe('关系金额（ALLOCATE_TO/REVERSE_ORIGIN 必填，如 15000）'),
+      quantity: z.number().optional().describe('数量（ALLOCATE_TO 数量归属 / STOCK_OFFSET 库存核减 / INVOICE_MATCH 票票配比必填，如 400 吨）'),
+      amount: z.number().optional().describe('关系金额（REVERSE_ORIGIN 必填；ALLOCATE_TO 金额归属时必填，与 quantity 二选一）'),
       ratio: z.number().min(0).max(1).optional().describe('比例（ALLOCATE_TO 分摊比例 / PARENT_OF 持股比例，选填，如 0.5）'),
       method: AllocateMethod.optional().describe('分摊方式（仅 ALLOCATE_TO 必填：金额/数量/重量/定额）'),
       batch: z.string().optional().describe('批次标识（ALLOCATE_TO 族选填；DELIVERED_AS=到货批次，如 SIF 厂号批次；STOCK_OFFSET 核减批次可选）'),
@@ -106,6 +106,10 @@ export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string })
         // 3. 连接对白名单（注册表 SSOT，逐字对应 docx §5）；自环边一律拒绝。
         if (fromId === toId) {
           return { status: 'invalid' as const, detail: '起点与终点相同，拒绝自环边' };
+        }
+        // R8 运行时守卫：ALLOCATE_TO 至少 amount 或 quantity 其一（注册表不硬拦, 写入方保证）。
+        if (relation === 'ALLOCATE_TO' && amount === undefined && quantity === undefined) {
+          return { status: 'invalid' as const, detail: 'ALLOCATE_TO 须 amount 或 quantity 其一' };
         }
         if (!isRelationPairAllowed(relation, fromType, toType)) {
           const def = relationDef(relation);
