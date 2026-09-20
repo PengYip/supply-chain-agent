@@ -43,6 +43,8 @@ export interface GapsReport {
 
 const EPSILON = 0.005;
 const R2 = (n: number): number => Math.round(n * 100) / 100;
+/** 近零判断: |x| < EPSILON 视为噪声归 0 展示(对齐 writeoff.ts 口径)。 */
+const nearZero = (x: number): boolean => Math.abs(x) < EPSILON;
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
@@ -87,9 +89,18 @@ function mkAgg(id: string, contractNo: string, side: 'buy' | 'sell' | null): Con
   };
 }
 
-/** 某口径缺输入 -> 该项 null + missingInputs 标注(R19), 不造数。 */
-function withMissing(amt: number, inputs: string[]): { amt: number | null; missingInputs?: string[] } {
-  return inputs.length > 0 ? { amt: null, missingInputs: inputs } : { amt: R2(amt) };
+/** 某口径缺输入 -> 该项 null + missingInputs 标注(R19), 不造数。
+ *  sideUnknown 为侧别无法判定的合同号列表——口径缺但数据在, 值照算、missingInputs
+ *  非空提示口径不完整(不置 null)。 */
+function annotateSide(
+  value: number,
+  baseMissing: string[],
+  sideUnknown: string[],
+): { amt: number | null; missingInputs?: string[] } {
+  const note = sideUnknown.length > 0 ? `合同侧别无法判定: ${sideUnknown.join('/')}` : null;
+  const inputs = baseMissing.length > 0 ? [...baseMissing, ...(note ? [note] : [])] : [];
+  if (inputs.length > 0) return { amt: null, missingInputs: inputs }; // 真缺输入 -> null(R19)
+  return note ? { amt: R2(value), missingInputs: [note] } : { amt: R2(value) }; // 仅口径缺 -> 值照算+标注
 }
 
 /**
@@ -235,26 +246,15 @@ export async function computeGaps(
     }
   }
 
-  // 11 项勾稽。
-  const item = (
-    code: string, label: string, sideLabel: string,
-    compute: { qty?: () => number | null; amt?: () => { amt: number | null; missingInputs?: string[] } },
-  ): GapItem => {
-    const basis = `${code} ${label}`;
-    const missingQty = compute.qty?.() ?? null;
-    const missingAmt = compute.amt?.() ?? null;
-    return {
-      code, label,
-      ...(missingQty === null ? {} : { qty: R2(missingQty) }),
-      ...(missingAmt?.amt === null ? { amt: null, missingInputs: missingAmt.missingInputs } : missingAmt ? { amt: missingAmt.amt } : {}),
-      basis: `${code} ${sideLabel}`,
-    };
-  };
+  // W4-R1: 侧别无法判定的合同(contract_type 开放词不命中销/采购)计入 sideUnknown——
+  // 其数据不在侧向合计内; 相关侧向项 missingInputs 提示口径不完整(值照算, 不置 null)。
+  const sideUnknown = [...aggs.values()].filter((a) => a.side === null).map((a) => a.contractNo);
 
+  // 11 项勾稽。
   const items: GapItem[] = [];
   const checks: string[] = [];
 
-  // ① 已采购未销售(全局口径 R18)
+  // ① 已采购未销售(全局口径 R18, 不需侧别)
   {
     const qtyInputs = all.allReceiptQtyMissing ? ['收货数量'] : [];
     if (all.allDeliveryQtyMissing) qtyInputs.push('发货数量');
@@ -268,65 +268,67 @@ export async function computeGaps(
   }
   // ② 已收货未结算(购侧)
   {
-    const miss = all.buyReceiptAmtMissing ? ['购收金额'] : [];
-    const r = withMissing(all.buyReceiptAmt - all.buySettlement, miss);
-    items.push({ code: '②', label: '已收货未结算', ...(r.amt === null ? { amt: null, missingInputs: r.missingInputs } : { amt: r.amt }), basis: 'Σ购收amt − Σ购结算' });
-    if (r.amt !== null) checks.push(`② ${fmt(r.amt)} = Σ购收amt ${fmt(all.buyReceiptAmt)} − Σ购结算 ${fmt(all.buySettlement)}`);
+    const r = annotateSide(all.buyReceiptAmt - all.buySettlement, all.buyReceiptAmtMissing ? ['购收金额'] : [], sideUnknown);
+    items.push({ code: '②', label: '已收货未结算', ...(r.amt === null ? { amt: null, missingInputs: r.missingInputs } : { amt: r.amt, ...(r.missingInputs ? { missingInputs: r.missingInputs } : {}) }), basis: 'Σ购收amt − Σ购结算' });
+    if (r.amt !== null && !r.missingInputs) checks.push(`② ${fmt(r.amt)} = Σ购收amt ${fmt(all.buyReceiptAmt)} − Σ购结算 ${fmt(all.buySettlement)}`);
   }
   // ③ 已发货未结算(销侧)
   {
-    const miss = all.sellDeliveryAmtMissing ? ['销发金额'] : [];
-    const r = withMissing(all.sellDeliveryAmt - all.sellSettlement, miss);
-    items.push({ code: '③', label: '已发货未结算', ...(r.amt === null ? { amt: null, missingInputs: r.missingInputs } : { amt: r.amt }), basis: 'Σ销发amt − Σ销结算' });
-    if (r.amt !== null) checks.push(`③ ${fmt(r.amt)} = Σ销发amt ${fmt(all.sellDeliveryAmt)} − Σ销结算 ${fmt(all.sellSettlement)}`);
+    const r = annotateSide(all.sellDeliveryAmt - all.sellSettlement, all.sellDeliveryAmtMissing ? ['销发金额'] : [], sideUnknown);
+    items.push({ code: '③', label: '已发货未结算', ...(r.amt === null ? { amt: null, missingInputs: r.missingInputs } : { amt: r.amt, ...(r.missingInputs ? { missingInputs: r.missingInputs } : {}) }), basis: 'Σ销发amt − Σ销结算' });
+    if (r.amt !== null && !r.missingInputs) checks.push(`③ ${fmt(r.amt)} = Σ销发amt ${fmt(all.sellDeliveryAmt)} − Σ销结算 ${fmt(all.sellSettlement)}`);
   }
   // ④ 结算未收(销侧)
   {
-    const r = withMissing(all.sellSettlement - all.sellCollections, []);
-    items.push({ code: '④', label: '结算未收', amt: r.amt, basis: 'Σ销结算 − Σ收款' });
-    checks.push(`④ ${fmt(r.amt ?? 0)} = Σ销结算 ${fmt(all.sellSettlement)} − Σ收款 ${fmt(all.sellCollections)}`);
+    const r = annotateSide(all.sellSettlement - all.sellCollections, [], sideUnknown);
+    items.push({ code: '④', label: '结算未收', ...(r.amt === null ? { amt: null, missingInputs: r.missingInputs } : { amt: r.amt, ...(r.missingInputs ? { missingInputs: r.missingInputs } : {}) }), basis: 'Σ销结算 − Σ收款' });
+    if (r.amt !== null && !r.missingInputs) checks.push(`④ ${fmt(r.amt)} = Σ销结算 ${fmt(all.sellSettlement)} − Σ收款 ${fmt(all.sellCollections)}`);
   }
   // ⑤ 发货未收(销侧)
   {
-    const r = withMissing(all.sellDeliveryAmt - all.sellCollections, all.sellDeliveryAmtMissing ? ['销发金额'] : []);
-    items.push({ code: '⑤', label: '发货未收', ...(r.amt === null ? { amt: null, missingInputs: r.missingInputs } : { amt: r.amt }), basis: 'Σ销发amt − Σ收款' });
-    if (r.amt !== null) checks.push(`⑤ ${fmt(r.amt)} = Σ销发amt ${fmt(all.sellDeliveryAmt)} − Σ收款 ${fmt(all.sellCollections)}`);
+    const r = annotateSide(all.sellDeliveryAmt - all.sellCollections, all.sellDeliveryAmtMissing ? ['销发金额'] : [], sideUnknown);
+    items.push({ code: '⑤', label: '发货未收', ...(r.amt === null ? { amt: null, missingInputs: r.missingInputs } : { amt: r.amt, ...(r.missingInputs ? { missingInputs: r.missingInputs } : {}) }), basis: 'Σ销发amt − Σ收款' });
+    if (r.amt !== null && !r.missingInputs) checks.push(`⑤ ${fmt(r.amt)} = Σ销发amt ${fmt(all.sellDeliveryAmt)} − Σ收款 ${fmt(all.sellCollections)}`);
   }
   // ⑥ 开票未收(销侧)
   {
-    const r = withMissing(all.sellInvoicesOut - all.sellCollections, []);
-    items.push({ code: '⑥', label: '开票未收', amt: r.amt, basis: '净销项 − Σ收款' });
-    checks.push(`⑥ ${fmt(r.amt ?? 0)} = 净销项 ${fmt(all.sellInvoicesOut)} − Σ收款 ${fmt(all.sellCollections)}`);
+    const r = annotateSide(all.sellInvoicesOut - all.sellCollections, [], sideUnknown);
+    items.push({ code: '⑥', label: '开票未收', ...(r.amt === null ? { amt: null, missingInputs: r.missingInputs } : { amt: r.amt, ...(r.missingInputs ? { missingInputs: r.missingInputs } : {}) }), basis: '净销项 − Σ收款' });
+    if (r.amt !== null && !r.missingInputs) checks.push(`⑥ ${fmt(r.amt)} = 净销项 ${fmt(all.sellInvoicesOut)} − Σ收款 ${fmt(all.sellCollections)}`);
   }
   // ⑦ 结算未付(购侧, 结算口径; 只抵非预付付款——原型金标准)
   {
-    const r = withMissing(all.buySettlement - all.buyPaymentsNonPrepay, []);
-    items.push({ code: '⑦', label: '结算未付', amt: r.amt, basis: 'Σ购结算 − Σ非预付付款' });
-    checks.push(`⑦ ${fmt(r.amt ?? 0)} = Σ购结算 ${fmt(all.buySettlement)} − Σ非预付付款 ${fmt(all.buyPaymentsNonPrepay)}`);
+    const r = annotateSide(all.buySettlement - all.buyPaymentsNonPrepay, [], sideUnknown);
+    items.push({ code: '⑦', label: '结算未付', ...(r.amt === null ? { amt: null, missingInputs: r.missingInputs } : { amt: r.amt, ...(r.missingInputs ? { missingInputs: r.missingInputs } : {}) }), basis: 'Σ购结算 − Σ非预付付款' });
+    if (r.amt !== null && !r.missingInputs) checks.push(`⑦ ${fmt(r.amt)} = Σ购结算 ${fmt(all.buySettlement)} − Σ非预付付款 ${fmt(all.buyPaymentsNonPrepay)}`);
   }
   // ⑧ 收货未付(购侧)
   {
-    const r = withMissing(all.buyReceiptAmt - all.buyPayments, all.buyReceiptAmtMissing ? ['购收金额'] : []);
-    items.push({ code: '⑧', label: '收货未付', ...(r.amt === null ? { amt: null, missingInputs: r.missingInputs } : { amt: r.amt }), basis: 'Σ购收amt − Σ付款净' });
-    if (r.amt !== null) checks.push(`⑧ ${fmt(r.amt)} = Σ购收amt ${fmt(all.buyReceiptAmt)} − Σ付款净 ${fmt(all.buyPayments)}`);
+    const r = annotateSide(all.buyReceiptAmt - all.buyPayments, all.buyReceiptAmtMissing ? ['购收金额'] : [], sideUnknown);
+    items.push({ code: '⑧', label: '收货未付', ...(r.amt === null ? { amt: null, missingInputs: r.missingInputs } : { amt: r.amt, ...(r.missingInputs ? { missingInputs: r.missingInputs } : {}) }), basis: 'Σ购收amt − Σ付款净' });
+    if (r.amt !== null && !r.missingInputs) checks.push(`⑧ ${fmt(r.amt)} = Σ购收amt ${fmt(all.buyReceiptAmt)} − Σ付款净 ${fmt(all.buyPayments)}`);
   }
   // ⑨ 收票未付(购侧; ⑨=⑦)
   {
-    const r = withMissing(all.buyInvoicesIn - all.buyPaymentsNonPrepay, []);
-    items.push({ code: '⑨', label: '收票未付', amt: r.amt, basis: 'Σ进项 − Σ非预付付款' });
-    checks.push(`⑨ ${fmt(r.amt ?? 0)} = Σ进项 ${fmt(all.buyInvoicesIn)} − Σ非预付付款 ${fmt(all.buyPaymentsNonPrepay)}`);
+    const r = annotateSide(all.buyInvoicesIn - all.buyPaymentsNonPrepay, [], sideUnknown);
+    items.push({ code: '⑨', label: '收票未付', ...(r.amt === null ? { amt: null, missingInputs: r.missingInputs } : { amt: r.amt, ...(r.missingInputs ? { missingInputs: r.missingInputs } : {}) }), basis: 'Σ进项 − Σ非预付付款' });
+    if (r.amt !== null && !r.missingInputs) checks.push(`⑨ ${fmt(r.amt)} = Σ进项 ${fmt(all.buyInvoicesIn)} − Σ非预付付款 ${fmt(all.buyPaymentsNonPrepay)}`);
   }
-  // ⑩ 付无票(错配)
+  // ⑩ 付无票(错配; EPSILON 近零归 0 展示)
   {
-    const r = withMissing(Math.abs(all.buyPayments - all.buyInvoicesIn), []);
-    items.push({ code: '⑩', label: '付无票', amt: r.amt, basis: '|付款净 − Σ进项|' });
-    checks.push(`⑩ ${fmt(r.amt ?? 0)} = |付款净 ${fmt(all.buyPayments)} − Σ进项 ${fmt(all.buyInvoicesIn)}|`);
+    const raw = Math.abs(all.buyPayments - all.buyInvoicesIn);
+    const shown = nearZero(raw) ? 0 : raw;
+    const r = annotateSide(shown, [], sideUnknown);
+    items.push({ code: '⑩', label: '付无票', ...(r.amt === null ? { amt: null, missingInputs: r.missingInputs } : { amt: r.amt, ...(r.missingInputs ? { missingInputs: r.missingInputs } : {}) }), basis: '|付款净 − Σ进项|' });
+    if (r.amt !== null && !r.missingInputs) checks.push(`⑩ ${fmt(r.amt)} = |付款净 ${fmt(all.buyPayments)} − Σ进项 ${fmt(all.buyInvoicesIn)}|`);
   }
-  // ⑪ 收无票(错配)
+  // ⑪ 收无票(错配; EPSILON 近零归 0 展示)
   {
-    const r = withMissing(Math.abs(all.sellCollections - all.sellInvoicesOut), []);
-    items.push({ code: '⑪', label: '收无票', amt: r.amt, basis: '|Σ收款 − 净销项|' });
-    checks.push(`⑪ ${fmt(r.amt ?? 0)} = |Σ收款 ${fmt(all.sellCollections)} − 净销项 ${fmt(all.sellInvoicesOut)}|`);
+    const raw = Math.abs(all.sellCollections - all.sellInvoicesOut);
+    const shown = nearZero(raw) ? 0 : raw;
+    const r = annotateSide(shown, [], sideUnknown);
+    items.push({ code: '⑪', label: '收无票', ...(r.amt === null ? { amt: null, missingInputs: r.missingInputs } : { amt: r.amt, ...(r.missingInputs ? { missingInputs: r.missingInputs } : {}) }), basis: '|Σ收款 − 净销项|' });
+    if (r.amt !== null && !r.missingInputs) checks.push(`⑪ ${fmt(r.amt)} = |Σ收款 ${fmt(all.sellCollections)} − 净销项 ${fmt(all.sellInvoicesOut)}|`);
   }
 
   const stockItems = items.filter((i) => ['①', '②', '③'].includes(i.code));

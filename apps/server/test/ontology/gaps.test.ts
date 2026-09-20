@@ -176,4 +176,55 @@ describe('computeGaps golden numbers (wave4, prototype reportGaps 复现)', () =
     expect(item('⑦').amt).toBe(900_000);
     expect(item('③').amt).toBe(0);
   });
+
+  it('侧别无法判定合同: 侧向项值照算 + missingInputs 标注合同号(W4-R1)', async () => {
+    await seedGolden();
+    // 追加 contract_type='框架'(开放词不命中销/采购)的合同 + 收货事实
+    insertContract('CL-U', 'CON-FW', '框架');
+    const rcpt = await insertTradeFact(ctx, {
+      entityType: 'GoodsReceiptEvent',
+      payload: { eventBizType: '正向', quantity: 100, amount: 999, currency: 'CNY', unit: '吨' },
+      validAt: '2026-09-08T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    await insertOntologyEdge(ctx, {
+      relation: 'ALLOCATE_TO', fromType: 'GoodsReceiptEvent', fromId: rcpt,
+      toType: 'TradeContract', toId: 'CL-U',
+      params: { quantity: 100, method: '数量' }, validAt: '2026-09-08T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    const rep = await computeGaps(ctx, {}, 'u1');
+    const item = (code: string) => rep.groups.flatMap((g) => g.items).find((i) => i.code === code)!;
+    // ② 值照算(未知侧收货不计入购侧合计, 保持 756,000), 但 missingInputs 提示口径缺
+    expect(item('②').amt).toBe(756_000);
+    expect(item('②').missingInputs?.some((m) => m.includes('CON-FW'))).toBe(true);
+    // ① 全局 qty 不受侧别影响(1600+100−390=1310, R18 全局口径)
+    expect(item('①').qty).toBe(1310);
+  });
+
+  it('EPSILON 近零: ⑩ 差 0.001 -> 展示 0(W4-R1)', async () => {
+    insertContract('CL-NZ', 'CON-NZ', '采购');
+    const rcpt = await insertTradeFact(ctx, {
+      entityType: 'GoodsReceiptEvent',
+      payload: { eventBizType: '正向', quantity: 100, amount: 1000, currency: 'CNY' },
+      validAt: '2026-09-01T00:00:00Z', createdBy: 't',
+    }, 'u1');
+    await insertOntologyEdge(ctx, {
+      relation: 'ALLOCATE_TO', fromType: 'GoodsReceiptEvent', fromId: rcpt,
+      toType: 'TradeContract', toId: 'CL-NZ',
+      params: { quantity: 100, method: '数量' }, validAt: '2026-09-01T00:00:00Z', createdBy: 't',
+    }, 'u1');
+    await insertTradeFact(ctx, {
+      entityType: 'InvoiceEvent',
+      payload: { eventBizType: '正向', amount: 999.999, currency: 'CNY', invoiceNo: 'INV-NZ', invoiceType: '进项', contractNo: 'CON-NZ' },
+      validAt: '2026-09-02T00:00:00Z', createdBy: 't',
+    }, 'u1');
+    await insertTradeFact(ctx, {
+      entityType: 'PaymentEvent',
+      payload: { eventBizType: '正向', amount: 1000, currency: 'CNY', payType: '尾款', contractNo: 'CON-NZ' },
+      validAt: '2026-09-03T00:00:00Z', createdBy: 't',
+    }, 'u1');
+    const rep = await computeGaps(ctx, {}, 'u1');
+    const item = (code: string) => rep.groups.flatMap((g) => g.items).find((i) => i.code === code)!;
+    // ⑩ = |1000 − 999.999| = 0.001 < EPSILON -> 展示 0
+    expect(item('⑩').amt).toBe(0);
+  });
 });
