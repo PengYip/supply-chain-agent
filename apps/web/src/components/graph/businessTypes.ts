@@ -76,6 +76,7 @@ export const EDGE_LABELS: Record<string, string> = {
   PARENT_OF: '母子公司',
   DELIVERED_AS: '实际交付',
   TRADING_WITH: '交易对手',
+  BELONGS_TO: '归属项目',
   CONTAINS: '文档血缘',
   EVIDENCE: '凭证溯源',
 };
@@ -97,6 +98,7 @@ export const EDGE_STYLE_OVERRIDES: Record<string, { color: string; dashed: boole
   PARENT_OF: { color: '#94A3B8', dashed: true },
   DELIVERED_AS: { color: '#94A3B8', dashed: true },
   TRADING_WITH: { color: '#94A3B8', dashed: true },
+  BELONGS_TO: { color: '#94A3B8', dashed: true },
   CONTAINS: { color: '#64748B', dashed: true },
   // EVIDENCE 凭证据源(spec 2026-09-09 P3): 单据 -> 事件事实, 溯源族灰虚线。
   EVIDENCE: { color: '#64748B', dashed: true },

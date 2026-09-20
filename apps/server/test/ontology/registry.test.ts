@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   ONTOLOGY_ENTITIES, ENTITY_NAMES, ENTITY_LABELS, ENTITY_DESCRIPTIONS,
-  entitySchema, entityFieldNames, type OntologyEntityName,
+  entitySchema, entityFieldNames, entityPhase, type OntologyEntityName,
   ONTOLOGY_RELATIONS, relationDef, isRelationPairAllowed,
   PayType, EventBizType, AllocateMethod, COMMODITY_CODES, MEANING_URIS,
   DUAL_TIMELINE_FIELDS, PROVENANCE_FIELDS, ontologySchemaJson,
@@ -13,9 +13,9 @@ import {
 const FINGERPRINT_PATH = fileURLToPath(new URL('./registry-fingerprint.json', import.meta.url));
 
 describe('ontology registry', () => {
-  it('11 entities: 4 static + 7 events, exact names', () => {
+  it('12 entities: 5 static + 7 events, exact names', () => {
     expect(ENTITY_NAMES).toEqual([
-      'TradeContract', 'TradeGoods', 'Counterparty', 'OrgUnit',
+      'TradeContract', 'TradeGoods', 'Counterparty', 'OrgUnit', 'TradeProject',
       'GoodsReceiptEvent', 'GoodsDeliveryEvent', 'SettlementEvent',
       'InvoiceEvent', 'PaymentEvent', 'CollectionEvent', 'ServiceCostEvent',
     ]);
@@ -78,20 +78,31 @@ describe('ontology registry', () => {
     });
   });
 
-  it('11 relation types / 19 pairs (docx 8 + spec 2026-09-09 PARENT_OF/DELIVERED_AS + 决策 #11 TRADING_WITH)', () => {
-    expect(ONTOLOGY_RELATIONS).toHaveLength(11);
+  it('12 relation types / 20 pairs (docx 8 + spec 2026-09-09 PARENT_OF/DELIVERED_AS + 决策 #11 TRADING_WITH + wave1 BELONGS_TO)', () => {
+    expect(ONTOLOGY_RELATIONS).toHaveLength(12);
     const names = ONTOLOGY_RELATIONS.map((r) => r.name);
-    expect(new Set(names).size).toBe(11);
+    expect(new Set(names).size).toBe(12);
     expect(names).toEqual(expect.arrayContaining(
       ['ALLOCATE_TO', 'OFFSET_SETTLE', 'WRITE_OFF', 'REVERSE_ORIGIN',
        'FEEDS_INTO', 'CORRESPONDS_TO', 'TRIGGERS', 'PROVIDE',
-       'PARENT_OF', 'DELIVERED_AS', 'TRADING_WITH']));
+       'PARENT_OF', 'DELIVERED_AS', 'TRADING_WITH', 'BELONGS_TO']));
     const pairs = ONTOLOGY_RELATIONS.flatMap((r) => r.pairs);
-    expect(pairs).toHaveLength(19);
+    expect(pairs).toHaveLength(20);
     for (const p of pairs) {
       expect(ENTITY_NAMES).toContain(p.from);
       expect(ENTITY_NAMES).toContain(p.to);
     }
+  });
+
+  it('TradeProject is static phase; projectNo/name required', () => {
+    expect(entityPhase('TradeProject')).toBe('static');
+    expect(() => entitySchema('TradeProject').parse({ projectNo: 'PRJ-2025-039', name: '动力煤年度采购' })).not.toThrow();
+    expect(() => entitySchema('TradeProject').parse({ name: '缺编号' } as never)).toThrow();
+  });
+
+  it('BELONGS_TO allows contract -> project only', () => {
+    expect(isRelationPairAllowed('BELONGS_TO', 'TradeContract', 'TradeProject')).toBe(true);
+    expect(isRelationPairAllowed('BELONGS_TO', 'TradeProject', 'TradeContract')).toBe(false);
   });
 
   it('TRADING_WITH: 收/发货事件 -> 交易对手(spec 决策 #11, 事件对手显式化)', () => {
@@ -156,8 +167,8 @@ describe('ontology registry', () => {
 
   it('ontologySchemaJson is the frontend-consumable projection', () => {
     const json = JSON.parse(JSON.stringify(ontologySchemaJson()));
-    expect(json.entities).toHaveLength(11);
-    expect(json.relations).toHaveLength(11);
+    expect(json.entities).toHaveLength(12);
+    expect(json.relations).toHaveLength(12);
     const contract = json.entities.find((e: { name: string }) => e.name === 'TradeContract');
     expect(contract.fields).toContain('contractNo');
     expect(json.enums.PayType).toEqual(['预付', '尾款', '进度款', '质保金']);

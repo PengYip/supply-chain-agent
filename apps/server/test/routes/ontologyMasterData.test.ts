@@ -38,7 +38,7 @@ describe('GET /api/ontology/master-data/schema', () => {
     expect(res.status).toBe(401);
   });
 
-  it('表单投影反射注册表：3 类静态主数据，字段含必填/描述/标签', async () => {
+  it('表单投影反射注册表：4 类静态主数据，字段含必填/描述/标签', async () => {
     const res = await appAs('u1').request('http://test/api/ontology/master-data/schema');
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -47,7 +47,7 @@ describe('GET /api/ontology/master-data/schema', () => {
         fields: Array<{ name: string; kind: string; required: boolean; description: string }>;
       }>;
     };
-    expect(body.types.map((t) => t.name)).toEqual(['TradeGoods', 'Counterparty', 'OrgUnit']);
+    expect(body.types.map((t) => t.name)).toEqual(['TradeGoods', 'Counterparty', 'OrgUnit', 'TradeProject']);
     const goods = body.types.find((t) => t.name === 'TradeGoods')!;
     expect(goods.label).toBe('商品');
     expect(goods.description.length).toBeGreaterThan(0);

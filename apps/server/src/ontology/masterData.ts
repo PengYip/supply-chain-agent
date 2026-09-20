@@ -1,4 +1,4 @@
-// 主数据登记（2026-09-08）：商品/交易对手/内部组织 3 类静态实体的表单入口共享后端。
+// 主数据登记（2026-09-08）：商品/交易对手/内部组织/贸易项目 4 类静态实体的表单入口共享后端。
 // 直接端点写入（不走 agent 会话、不加 L2 工具）：主数据非资金事实，审批暂不要求；
 // 唯一写入边界仍是 insertTradeFact（注册表 strict zod + createdBy='manual' 溯源），
 // 禁止任何直写 SQL。字段词汇=注册表静态实体 schema（与事件登记 inputSchema 同构）。
@@ -8,7 +8,7 @@ import {
 } from './index.js';
 import { unwrapField, fieldKind } from './eventTools.js';
 
-export const MASTER_DATA_TYPES = ['TradeGoods', 'Counterparty', 'OrgUnit'] as const;
+export const MASTER_DATA_TYPES = ['TradeGoods', 'Counterparty', 'OrgUnit', 'TradeProject'] as const;
 export type MasterDataType = (typeof MASTER_DATA_TYPES)[number];
 
 // inputSchema SSOT：端点与表单投影共用同一 zod（路由叠加 strict）；
@@ -16,7 +16,7 @@ export type MasterDataType = (typeof MASTER_DATA_TYPES)[number];
 // attributes（TradeGoods 受控袋）经此处透传，词汇边界（键长/值标量）与条数上限
 // （superRefine）由端点预检 entitySchema('TradeGoods') 权威执行。
 export const CreateMasterDataInputSchema = z.object({
-  entityType: z.enum(MASTER_DATA_TYPES).describe('主数据类型（商品/交易对手/内部组织）'),
+  entityType: z.enum(MASTER_DATA_TYPES).describe('主数据类型（商品/交易对手/内部组织/贸易项目）'),
   validAt: z.string().min(1).optional().describe('业务生效时间 ISO 日期（如 2026-06-25）；缺省=登记时刻'),
   name: z.string().min(1).optional().describe('名称（商品名/企业名/内部组织名，三类实体均必填）'),
   commodityCode: z.string().min(1).optional().describe('商品码（仅商品必填）；v1 开放词汇自由填写，业务确认后收敛为闭枚举自动收紧'),
@@ -35,6 +35,11 @@ export const CreateMasterDataInputSchema = z.object({
   establishedDate: z.string().optional().describe('成立日期（仅交易对手，选填）'),
   businessScope: z.string().optional().describe('经营范围（仅交易对手，选填）'),
   code: z.string().optional().describe('组织编码（仅内部组织，选填）'),
+  projectNo: z.string().min(1).optional().describe('项目编号（仅贸易项目必填，如 PRJ-2025-039）'),
+  projectType: z.string().optional().describe('项目类型（仅贸易项目，选填：年度长协/批次自营/代采代销/套利）'),
+  commodity: z.string().optional().describe('主营商品品类（仅贸易项目，选填）'),
+  direction: z.string().optional().describe('方向（仅贸易项目，选填：采购/销售/双向）'),
+  plannedAmount: z.number().optional().describe('预算金额（仅贸易项目，选填）'),
 });
 
 // 变更换代输入（spec 主体身份 §4，2026-09-09）：主体变更=同主体新事实+旧事实失效。

@@ -34,7 +34,7 @@ export const ONTOLOGY_SCHEMA_VERSION = '2026-09-20-loop-v2';
 // ---------------------------------------------------------------------------
 
 export const OntologyEntityNameSchema = z.enum([
-  'TradeContract', 'TradeGoods', 'Counterparty', 'OrgUnit',
+  'TradeContract', 'TradeGoods', 'Counterparty', 'OrgUnit', 'TradeProject',
   'GoodsReceiptEvent', 'GoodsDeliveryEvent', 'SettlementEvent', 'InvoiceEvent',
   'PaymentEvent', 'CollectionEvent', 'ServiceCostEvent',
 ]);
@@ -73,6 +73,15 @@ export const ONTOLOGY_ENTITIES: Record<OntologyEntityName, z.ZodObject<z.ZodRawS
   OrgUnit: z.object({
     name: z.string().min(1).describe('内部组织名'),
     code: z.string().optional(),
+  }),
+  TradeProject: z.object({
+    projectNo: z.string().min(1).describe('项目编号(核算分组主键口径, 如 PRJ-2025-039)'),
+    name: z.string().min(1).describe('项目名称'),
+    projectType: z.string().optional().describe('项目类型(开放: 年度长协/批次自营/代采代销/套利)'),
+    commodity: z.string().optional().describe('主营商品品类(开放; 收敛后与 TradeGoods 词汇对齐)'),
+    direction: z.string().optional().describe('方向(开放: 采购/销售/双向)'),
+    plannedAmount: z.number().optional().describe('预算金额'),
+    currency: Currency.optional().describe('预算币种'),
   }),
   GoodsReceiptEvent: z.object({
     eventBizType: EventBizType.describe('收货(含采购退货); 逆向=负数金额'),
@@ -137,6 +146,7 @@ export const ENTITY_LABELS: Record<OntologyEntityName, string> = {
   TradeGoods: '商品',
   Counterparty: '交易对手',
   OrgUnit: '内部组织',
+  TradeProject: '贸易项目',
   GoodsReceiptEvent: '收货事件',
   GoodsDeliveryEvent: '发货事件',
   SettlementEvent: '结算事件',
@@ -153,6 +163,7 @@ export const ENTITY_DESCRIPTIONS: Record<OntologyEntityName, string> = {
   TradeGoods: '合同与事件中流转货物的品类口径（商品码/规格/单位）；作为收发货与结算数量的口径基准，保证履约数量对账一致。',
   Counterparty: '与本方发生业务往来的外部企业（供应商/客户/服务商）；是合同与资金、物流事件的对手方维度，对账时用于匹配双方口径。',
   OrgUnit: '本方内部参与交易的业务主体（分公司/事业部等）；明确事件的归属主体，区分内部多主体间的资金与货权口径。',
+  TradeProject: '核算分组/贸易批次（OrgUnit 项目化，原型 project 载体）；合同经 BELONGS_TO 归属，按项目聚合勾稽与报表的根节点。',
   GoodsReceiptEvent: '货物实际到货/入库的事实（含采购退货，逆向=负数金额），履约执行的起点凭证；作为结算依据（FEEDS_INTO）并与磅单/质检数量对齐。',
   GoodsDeliveryEvent: '货物实际发出/出库的事实（含销售退货，逆向=负数金额），履约交付的核心凭证；与收货对齐后喂入结算形成货值口径。',
   SettlementEvent: '按合同对一段履约结果计价的事实（补差/冲减走逆向负数）；向上承接收发货（FEEDS_INTO）、向下对齐发票（CORRESPONDS_TO），是资金对账的枢纽。',
@@ -194,6 +205,7 @@ export const ENTITY_BUSINESS_KEYS: Readonly<
   TradeGoods: ['name'],
   Counterparty: ['name'],
   OrgUnit: ['name'],
+  TradeProject: ['projectNo'],
   InvoiceEvent: ['invoiceNo', 'contractNo'],
   PaymentEvent: ['contractNo'],
   CollectionEvent: ['contractNo'],
@@ -390,6 +402,12 @@ export const ONTOLOGY_RELATIONS: ReadonlyArray<OntologyRelationDef> = [
       ratio: z.number().min(0).max(1).optional().describe('持股比例(0-1 小数, 与 ALLOCATE_TO.ratio 同构)'),
       note: z.string().optional().describe('备注(如 控股/全资)'),
     }).strict(),
+  },
+  {
+    name: 'BELONGS_TO',
+    description: '核算归属(business-loop Wave 1, 原型 belongs_to): 合同 BELONGS_TO 贸易项目; 资产树与按项目勾稽的骨架。',
+    pairs: [{ from: 'TradeContract', to: 'TradeProject' }],
+    params: NO_PARAMS,
   },
   {
     name: 'DELIVERED_AS',

@@ -390,6 +390,11 @@ describe('FACT_NODE_LABELS derivation (business-loop wave1)', () => {
     expect([...FACT_NODE_LABELS].sort()).toEqual([
       'CollectionEvent', 'Counterparty', 'GoodsDeliveryEvent', 'GoodsReceiptEvent',
       'InvoiceEvent', 'OrgUnit', 'PaymentEvent', 'ServiceCostEvent', 'SettlementEvent', 'TradeGoods',
+      'TradeProject',
     ]);
+  });
+
+  it('derived labels include TradeProject without editing graphSync (wave1 decision 4)', () => {
+    expect(FACT_NODE_LABELS).toContain('TradeProject');
   });
 });

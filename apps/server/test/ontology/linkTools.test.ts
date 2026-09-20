@@ -125,13 +125,14 @@ describe('link_ontology execute', () => {
     expect(out.status).toBe('ok');
   });
 
-  it('词表含 PARENT_OF/DELIVERED_AS（spec 主体身份 2026-09-09：11 关系中除核销/冲抵外全覆盖）', () => {
+  it('词表含 PARENT_OF/DELIVERED_AS（spec 主体身份 2026-09-09：12 关系中除核销/冲抵外全覆盖）', () => {
     const t = buildLinkOntologyTool({ ctx, userId: 'u1' });
     const shape = t.inputSchema.shape as { relation: { options: readonly string[] } };
     expect(shape.relation.options).toContain('PARENT_OF');
     expect(shape.relation.options).toContain('DELIVERED_AS');
     expect(shape.relation.options).toContain('TRADING_WITH');
-    expect(shape.relation.options).toHaveLength(9);
+    expect(shape.relation.options).toContain('BELONGS_TO');
+    expect(shape.relation.options).toHaveLength(10);
   });
 
   it('TRADING_WITH：收/发货事件 -> 交易对手（spec 决策 #11 事件对手显式化），role 落库', async () => {
@@ -242,5 +243,22 @@ describe('link_ontology execute', () => {
       toType: 'TradeGoods', toId: goods,
     });
     expect(edges[0]!.params).toMatchObject({ batch: 'SIF1234-20260901' });
+  });
+
+  it('BELONGS_TO: from = ledger contract row, to = TradeProject fact (wave1)', async () => {
+    insertContract('CL-1', 'HT-LOOP-1');
+    const projId = await insertTradeFact(ctx, {
+      entityType: 'TradeProject', payload: { projectNo: 'PRJ-1', name: '测试项目' },
+      validAt: '2026-09-20T00:00:00Z', createdBy: 't',
+    });
+    const t = buildLinkOntologyTool({ ctx, userId: 'u1' });
+    const res = await t.execute!({ relation: 'BELONGS_TO', fromId: 'CL-1', toId: projId }, CALL);
+    expect(res.status).toBe('ok');
+  });
+
+  it('BELONGS_TO rejects non-contract from id', async () => {
+    const t = buildLinkOntologyTool({ ctx, userId: 'u1' });
+    const res = await t.execute!({ relation: 'BELONGS_TO', fromId: 'TF-不存在', toId: 'TF-x' }, CALL);
+    expect(res.status).toBe('invalid');
   });
 });

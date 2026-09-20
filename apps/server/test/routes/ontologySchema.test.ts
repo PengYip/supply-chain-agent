@@ -26,7 +26,7 @@ describe('GET /api/ontology/schema', () => {
     const res = await appAs('u1').request('http://test/api/ontology/schema');
     expect(res.status).toBe(200);
     const json = (await res.json()) as { entities: Array<{ name: string; label: string; ownFields: string[] }> };
-    expect(json.entities).toHaveLength(11);
+    expect(json.entities).toHaveLength(12);
     const contract = json.entities.find((e) => e.name === 'TradeContract')!;
     expect(contract.label).toBe('贸易合同');
     expect(contract.ownFields).toContain('contractNo');

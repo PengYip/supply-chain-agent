@@ -18,8 +18,12 @@ import { syncOntologyGraphSafe } from './graphSync.js';
 
 export const LINKABLE_RELATIONS = [
   'ALLOCATE_TO', 'REVERSE_ORIGIN', 'FEEDS_INTO', 'CORRESPONDS_TO', 'TRIGGERS', 'PROVIDE',
-  'PARENT_OF', 'DELIVERED_AS', 'TRADING_WITH',
+  'PARENT_OF', 'DELIVERED_AS', 'TRADING_WITH', 'BELONGS_TO',
 ] as const;
+
+/** 起点为合同台账行的关系（business-loop Wave 1）：BELONGS_TO（Task 5 扩
+ *  TRADE_PAIR/MASTER_SUPPLEMENT）。合同实体活在 contract_ledger 投影，不在 trade_facts。 */
+const CONTRACT_FROM_RELATIONS: readonly string[] = ['BELONGS_TO'];
 
 export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string }) {
   return tool({
@@ -34,6 +38,7 @@ export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string })
       'toId=<商品事实id>, batch=<到货批次>；' +
       '"这批收货是某矿业发来的" -> relation=TRADING_WITH, fromId=<收/发货事实id>, ' +
       'toId=<对手方事实id>, role=上游（发货事件则 role=下游, spec 决策 #11 事件对手显式化）。' +
+      '合同归属项目："HT-1 归属 PRJ-2025-039 项目" -> relation=BELONGS_TO, fromId=<台账合同行id>, toId=<项目事实id>（from 用台账合同行 id，不是 TF-）。' +
       '边界：核销（票款匹配）用 create_writeoff、预付冲抵用 create_offset，本工具不受理；' +
       'fromId 必须是台账/穿透里的事实 id（TF- 开头）；toId 通常是事实 id，' +
       '仅 ALLOCATE_TO 的 toId 用台账合同行 id；' +
@@ -45,8 +50,8 @@ export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string })
       '数字或日期不精确时先向用户确认，不要猜测。' +
       '返回 { status: "ok", edgeId, relation } 或 { status: "invalid", detail }。',
     inputSchema: z.object({
-      relation: z.enum(LINKABLE_RELATIONS).describe('关系类型（9 类之一；核销/冲抵用 create_writeoff/create_offset）'),
-      fromId: z.string().min(1).describe('起点实体 id（事实 id TF- 开头；台账列表/详情可复制）'),
+      relation: z.enum(LINKABLE_RELATIONS).describe('关系类型（10 类之一；核销/冲抵用 create_writeoff/create_offset）'),
+      fromId: z.string().min(1).describe('起点实体 id（事实 id TF- 开头或合同台账行 id；台账列表/详情可复制）'),
       toId: z.string().min(1).describe('终点实体 id（事实 id；ALLOCATE_TO 用台账合同行 id）'),
       amount: z.number().optional().describe('关系金额（ALLOCATE_TO/REVERSE_ORIGIN 必填，如 15000）'),
       ratio: z.number().min(0).max(1).optional().describe('比例（ALLOCATE_TO 分摊比例 / PARENT_OF 持股比例，选填，如 0.5）'),
@@ -59,17 +64,29 @@ export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string })
     }),
     execute: async ({ relation, fromId, toId, amount, ratio, method, batch, partial, reason, note, role }) => {
       try {
-        // 1. 起点：必须是事实行（6 种关系的 from 全是事实实体）。
-        const from = await getTradeFactById(deps.ctx, fromId, deps.userId);
-        if (!from) {
-          return { status: 'invalid' as const, detail: `起点事实不存在或不可见: ${fromId}` };
+        // 1. 起点：事实行；合同起点关系用台账合同行（TradeContract 投影源，
+        //    ALLOCATE_TO 的 to 侧合同回退同款先例）。
+        let fromType: string;
+        let fromFact: Awaited<ReturnType<typeof getTradeFactById>> = null;
+        if (CONTRACT_FROM_RELATIONS.includes(relation)) {
+          const contract = await findContractRowById(deps.ctx, fromId, deps.userId ?? '');
+          if (!contract) {
+            return { status: 'invalid' as const, detail: `起点合同不存在或不可见: ${fromId}` };
+          }
+          fromType = 'TradeContract';
+        } else {
+          fromFact = await getTradeFactById(deps.ctx, fromId, deps.userId);
+          if (!fromFact) {
+            return { status: 'invalid' as const, detail: `起点事实不存在或不可见: ${fromId}` };
+          }
+          fromType = fromFact.entityType;
         }
         // 2. 终点：事实优先；ALLOCATE_TO 允许台账合同行（TradeContract 投影源）。
         let toType: string;
         const toFact = await getTradeFactById(deps.ctx, toId, deps.userId);
         if (toFact) {
           toType = toFact.entityType;
-        } else if (relation === 'ALLOCATE_TO') {
+        } else if (relation === 'ALLOCATE_TO' || CONTRACT_FROM_RELATIONS.includes(relation)) {
           const contract = await findContractRowById(deps.ctx, toId, deps.userId ?? '');
           if (!contract) {
             return { status: 'invalid' as const, detail: `终点合同不存在或不可见: ${toId}` };
@@ -79,18 +96,18 @@ export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string })
           return { status: 'invalid' as const, detail: `终点事实不存在或不可见: ${toId}` };
         }
         // 3. 连接对白名单（注册表 SSOT，逐字对应 docx §5）。
-        if (!isRelationPairAllowed(relation, from.entityType, toType)) {
+        if (!isRelationPairAllowed(relation, fromType, toType)) {
           const def = relationDef(relation);
           return {
             status: 'invalid' as const,
             detail:
-              `关系 ${relation} 不允许 ${from.entityType} -> ${toType}` +
+              `关系 ${relation} 不允许 ${fromType} -> ${toType}` +
               `（允许: ${def.pairs.map((p) => `${p.from}->${p.to}`).join(', ')}）`,
           };
         }
         // 4. REVERSE_ORIGIN 语义校验：红冲方逆向(负数)、原票正向(正数)。
         if (relation === 'REVERSE_ORIGIN') {
-          const fromBiz = from.payload['eventBizType'];
+          const fromBiz = fromFact?.payload['eventBizType'];
           const toBiz = toFact?.payload['eventBizType'];
           if (fromBiz !== '逆向' || toBiz !== '正向') {
             return {
@@ -114,7 +131,7 @@ export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string })
           deps.ctx,
           {
             relation,
-            fromType: from.entityType as never,
+            fromType: fromType as never,
             fromId,
             toType: toType as never,
             toId,
@@ -126,7 +143,7 @@ export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string })
         );
         // 落边成功后图投影 fire-and-forget(spec 2026-09-09): 永不阻塞登记主流程。
         void syncOntologyGraphSafe(deps.ctx, deps.userId);
-        return { status: 'ok' as const, edgeId, relation, fromType: from.entityType, toType };
+        return { status: 'ok' as const, edgeId, relation, fromType, toType };
       } catch (e) {
         return { status: 'invalid' as const, detail: e instanceof Error ? e.message : String(e) };
       }
