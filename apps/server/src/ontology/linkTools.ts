@@ -1,11 +1,13 @@
 // 本体关系登记 L2 工具（2026-09-09 P4，spec 本体图谱投影 §关系入口补全）：
-// link_ontology。覆盖核销工作台之外的 9 种关系（ALLOCATE_TO 分摊 / REVERSE_ORIGIN
+// link_ontology。覆盖核销工作台之外的 14 种关系（ALLOCATE_TO 分摊 / REVERSE_ORIGIN
 // 红冲溯源 / FEEDS_INTO / CORRESPONDS_TO / TRIGGERS / PROVIDE，及主体身份 spec
 // 2026-09-09 增补的 PARENT_OF 母子公司 / DELIVERED_AS 实际交付 / 决策 #11 TRADING_WITH
-// 交易对手）——这些关系此前只有 repo 写入边界、无对话入口。WRITE_OFF/OFFSET_SETTLE
-// 刻意不在本工具词表内（整单守恒语义归核销工作台 create_writeoff/create_offset，
-// 描述里显式引导）。
-// 校验链：事实行存在 -> 连接对白名单(relationDef/isRelationPairAllowed) ->
+// 交易对手 / business-loop Wave 1 增补的 BELONGS_TO 核算归属 / TRADE_PAIR 背靠背 /
+// MASTER_SUPPLEMENT 主补充协议 / STOCK_OFFSET 库存核减 / INVOICE_MATCH 票票配比）——
+// 这些关系此前只有 repo 写入边界、无对话入口。WRITE_OFF/OFFSET_SETTLE/
+// WRITE_OFF_SETTLEMENT 刻意不在本工具词表内（整单守恒语义归核销工作台
+// create_writeoff/create_offset，描述里显式引导）。
+// 校验链：起点/终点解析 -> 自环守卫 -> 连接对白名单(relationDef/isRelationPairAllowed) ->
 // params 走注册表关系 strict schema -> insertOntologyEdge 唯一写入边界。
 // 批准后 execute 自动落 side_effect_results 审计（harness L2 gated wrapper）。
 import { tool } from 'ai';
@@ -19,16 +21,17 @@ import { syncOntologyGraphSafe } from './graphSync.js';
 export const LINKABLE_RELATIONS = [
   'ALLOCATE_TO', 'REVERSE_ORIGIN', 'FEEDS_INTO', 'CORRESPONDS_TO', 'TRIGGERS', 'PROVIDE',
   'PARENT_OF', 'DELIVERED_AS', 'TRADING_WITH', 'BELONGS_TO',
+  'TRADE_PAIR', 'MASTER_SUPPLEMENT', 'STOCK_OFFSET', 'INVOICE_MATCH',
 ] as const;
 
-/** 起点为合同台账行的关系（business-loop Wave 1）：BELONGS_TO（Task 5 扩
- *  TRADE_PAIR/MASTER_SUPPLEMENT）。合同实体活在 contract_ledger 投影，不在 trade_facts。 */
-const CONTRACT_FROM_RELATIONS: readonly string[] = ['BELONGS_TO'];
+/** 起点为合同台账行的关系（business-loop Wave 1）：BELONGS_TO/TRADE_PAIR/
+ *  MASTER_SUPPLEMENT。合同实体活在 contract_ledger 投影，不在 trade_facts。 */
+const CONTRACT_FROM_RELATIONS: readonly string[] = ['BELONGS_TO', 'TRADE_PAIR', 'MASTER_SUPPLEMENT'];
 
 export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string }) {
   return tool({
     description:
-      '登记一条本体关系边（分摊/红冲溯源/结算依据/开票对应/触发付款/提供服务/母子公司/实际交付/交易对手）。' +
+      '登记一条本体关系边（分摊/红冲溯源/结算依据/开票对应/触发付款/提供服务/母子公司/实际交付/交易对手/核算归属/背靠背/补充协议/库存核减/票票配比）。' +
       '当用户口述一条明确的关系时调用，例如"把这笔服务费分摊 15000 元到合同 HT-CG-2601" ' +
       '-> relation=ALLOCATE_TO, fromId=<服务费事实id>, toId=<台账合同行id>, amount=15000, method=金额；' +
       '"这张红字发票冲的是 INV-001 那张蓝票" -> relation=REVERSE_ORIGIN, amount=<红冲金额>, reason=<原因>；' +
@@ -39,20 +42,24 @@ export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string })
       '"这批收货是某矿业发来的" -> relation=TRADING_WITH, fromId=<收/发货事实id>, ' +
       'toId=<对手方事实id>, role=上游（发货事件则 role=下游, spec 决策 #11 事件对手显式化）。' +
       '合同归属项目："HT-1 归属 PRJ-2025-039 项目" -> relation=BELONGS_TO, fromId=<台账合同行id>, toId=<项目事实id>（from 用台账合同行 id，不是 TF-）。' +
+      '背靠背："HT-1 与 HT-2 是背靠背对冲" -> relation=TRADE_PAIR, fromId/toId=两个台账合同行 id；库存核减："这批发货核减 6 月收货 400 吨" -> relation=STOCK_OFFSET, quantity=400；票票配比："这张进项票配比那张销项票 200 吨" -> relation=INVOICE_MATCH, quantity=200；补充协议挂主合同 -> relation=MASTER_SUPPLEMENT。' +
       '边界：核销（票款匹配）用 create_writeoff、预付冲抵用 create_offset，本工具不受理；' +
-      'fromId 必须是台账/穿透里的事实 id（TF- 开头）；toId 通常是事实 id，' +
-      '仅 ALLOCATE_TO 的 toId 用台账合同行 id；' +
+      'fromId 必须是台账/穿透里的事实 id（TF- 开头）或合同台账行 id；toId 通常是事实 id，' +
+      '仅 ALLOCATE_TO/合同起点关系用台账合同行 id；' +
       '连接对必须满足本体注册表（如 PARENT_OF 只允许 交易对手->交易对手、' +
       'DELIVERED_AS 只允许 收/发货->商品），不符整单拒绝并返回原因；' +
+      '起点与终点相同（自环）一律拒绝；' +
       'REVERSE_ORIGIN 要求红冲方为逆向（负数）发票、原票为正向；' +
-      '参数必须匹配关系定义（分摊必须 amount+method，红冲必须 amount，辅助关系无参），' +
+      '参数必须匹配关系定义（分摊必须 amount+method，红冲必须 amount，' +
+      'STOCK_OFFSET/INVOICE_MATCH 必须 quantity，辅助关系无参），' +
       '多余参数会被注册表 strict 校验拒绝。' +
       '数字或日期不精确时先向用户确认，不要猜测。' +
       '返回 { status: "ok", edgeId, relation } 或 { status: "invalid", detail }。',
     inputSchema: z.object({
-      relation: z.enum(LINKABLE_RELATIONS).describe('关系类型（10 类之一；核销/冲抵用 create_writeoff/create_offset）'),
+      relation: z.enum(LINKABLE_RELATIONS).describe('关系类型（14 类之一；核销/冲抵用 create_writeoff/create_offset）'),
       fromId: z.string().min(1).describe('起点实体 id（事实 id TF- 开头或合同台账行 id；台账列表/详情可复制）'),
-      toId: z.string().min(1).describe('终点实体 id（事实 id；ALLOCATE_TO 用台账合同行 id）'),
+      toId: z.string().min(1).describe('终点实体 id（事实 id；ALLOCATE_TO/合同起点关系用台账合同行 id）'),
+      quantity: z.number().optional().describe('数量（STOCK_OFFSET 库存核减 / INVOICE_MATCH 票票配比必填，如 400 吨）'),
       amount: z.number().optional().describe('关系金额（ALLOCATE_TO/REVERSE_ORIGIN 必填，如 15000）'),
       ratio: z.number().min(0).max(1).optional().describe('比例（ALLOCATE_TO 分摊比例 / PARENT_OF 持股比例，选填，如 0.5）'),
       method: AllocateMethod.optional().describe('分摊方式（仅 ALLOCATE_TO 必填：金额/数量/重量/定额）'),
@@ -62,7 +69,7 @@ export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string })
       note: z.string().optional().describe('备注（仅 PARENT_OF 选填，如 控股/全资）'),
       role: z.enum(['上游', '下游']).optional().describe('对手方位（仅 TRADING_WITH 必填：收货事件=上游，发货事件=下游）'),
     }),
-    execute: async ({ relation, fromId, toId, amount, ratio, method, batch, partial, reason, note, role }) => {
+    execute: async ({ relation, fromId, toId, quantity, amount, ratio, method, batch, partial, reason, note, role }) => {
       try {
         // 1. 起点：事实行；合同起点关系用台账合同行（TradeContract 投影源，
         //    ALLOCATE_TO 的 to 侧合同回退同款先例）。
@@ -95,7 +102,10 @@ export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string })
         } else {
           return { status: 'invalid' as const, detail: `终点事实不存在或不可见: ${toId}` };
         }
-        // 3. 连接对白名单（注册表 SSOT，逐字对应 docx §5）。
+        // 3. 连接对白名单（注册表 SSOT，逐字对应 docx §5）；自环边一律拒绝。
+        if (fromId === toId) {
+          return { status: 'invalid' as const, detail: '起点与终点相同，拒绝自环边' };
+        }
         if (!isRelationPairAllowed(relation, fromType, toType)) {
           const def = relationDef(relation);
           return {
@@ -119,6 +129,7 @@ export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string })
         }
         // 5. params 按注册表关系 strict schema 校验（多余/缺失参数在此快速失败）。
         const params: Record<string, unknown> = {};
+        if (quantity !== undefined) params['quantity'] = quantity;
         if (amount !== undefined) params['amount'] = amount;
         if (ratio !== undefined) params['ratio'] = ratio;
         if (method !== undefined) params['method'] = method;

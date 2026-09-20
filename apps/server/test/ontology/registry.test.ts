@@ -78,16 +78,18 @@ describe('ontology registry', () => {
     });
   });
 
-  it('12 relation types / 20 pairs (docx 8 + spec 2026-09-09 PARENT_OF/DELIVERED_AS + 决策 #11 TRADING_WITH + wave1 BELONGS_TO)', () => {
-    expect(ONTOLOGY_RELATIONS).toHaveLength(12);
+  it('17 relation types / 26 pairs (docx 8 + spec 2026-09-09 PARENT_OF/DELIVERED_AS + 决策 #11 TRADING_WITH + wave1 BELONGS_TO/TRADE_PAIR/MASTER_SUPPLEMENT/STOCK_OFFSET/INVOICE_MATCH/WRITE_OFF_SETTLEMENT)', () => {
+    expect(ONTOLOGY_RELATIONS).toHaveLength(17);
     const names = ONTOLOGY_RELATIONS.map((r) => r.name);
-    expect(new Set(names).size).toBe(12);
+    expect(new Set(names).size).toBe(17);
     expect(names).toEqual(expect.arrayContaining(
       ['ALLOCATE_TO', 'OFFSET_SETTLE', 'WRITE_OFF', 'REVERSE_ORIGIN',
        'FEEDS_INTO', 'CORRESPONDS_TO', 'TRIGGERS', 'PROVIDE',
-       'PARENT_OF', 'DELIVERED_AS', 'TRADING_WITH', 'BELONGS_TO']));
+       'PARENT_OF', 'DELIVERED_AS', 'TRADING_WITH', 'BELONGS_TO',
+       'TRADE_PAIR', 'MASTER_SUPPLEMENT', 'STOCK_OFFSET', 'INVOICE_MATCH',
+       'WRITE_OFF_SETTLEMENT']));
     const pairs = ONTOLOGY_RELATIONS.flatMap((r) => r.pairs);
-    expect(pairs).toHaveLength(20);
+    expect(pairs).toHaveLength(26);
     for (const p of pairs) {
       expect(ENTITY_NAMES).toContain(p.from);
       expect(ENTITY_NAMES).toContain(p.to);
@@ -103,6 +105,19 @@ describe('ontology registry', () => {
   it('BELONGS_TO allows contract -> project only', () => {
     expect(isRelationPairAllowed('BELONGS_TO', 'TradeContract', 'TradeProject')).toBe(true);
     expect(isRelationPairAllowed('BELONGS_TO', 'TradeProject', 'TradeContract')).toBe(false);
+  });
+
+  it('wave1 relations: pairs and params', () => {
+    expect(isRelationPairAllowed('TRADE_PAIR', 'TradeContract', 'TradeContract')).toBe(true);
+    expect(isRelationPairAllowed('MASTER_SUPPLEMENT', 'TradeContract', 'TradeContract')).toBe(true);
+    expect(isRelationPairAllowed('STOCK_OFFSET', 'GoodsReceiptEvent', 'GoodsDeliveryEvent')).toBe(true);
+    expect(isRelationPairAllowed('INVOICE_MATCH', 'InvoiceEvent', 'InvoiceEvent')).toBe(true);
+    expect(isRelationPairAllowed('WRITE_OFF_SETTLEMENT', 'PaymentEvent', 'SettlementEvent')).toBe(true);
+    expect(isRelationPairAllowed('WRITE_OFF_SETTLEMENT', 'CollectionEvent', 'SettlementEvent')).toBe(true);
+    expect(() => relationDef('STOCK_OFFSET').params.parse({ quantity: 400 })).not.toThrow();
+    expect(() => relationDef('STOCK_OFFSET').params.parse({ batch: 'B-1' } as never)).toThrow();
+    expect(() => relationDef('INVOICE_MATCH').params.parse({ quantity: 200, note: '税负转嫁' })).not.toThrow();
+    expect(() => relationDef('WRITE_OFF_SETTLEMENT').params.parse({ amount: 900000, partial: true })).not.toThrow();
   });
 
   it('TRADING_WITH: 收/发货事件 -> 交易对手(spec 决策 #11, 事件对手显式化)', () => {
@@ -168,7 +183,7 @@ describe('ontology registry', () => {
   it('ontologySchemaJson is the frontend-consumable projection', () => {
     const json = JSON.parse(JSON.stringify(ontologySchemaJson()));
     expect(json.entities).toHaveLength(12);
-    expect(json.relations).toHaveLength(12);
+    expect(json.relations).toHaveLength(17);
     const contract = json.entities.find((e: { name: string }) => e.name === 'TradeContract');
     expect(contract.fields).toContain('contractNo');
     expect(json.enums.PayType).toEqual(['预付', '尾款', '进度款', '质保金']);

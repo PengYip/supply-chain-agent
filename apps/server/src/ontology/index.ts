@@ -194,6 +194,9 @@ export const SHARED_TOOL_FIELD_NAMES = [
   'items', 'amount', 'partial', 'batch',
   // 事件登记工具（create_trade_event, 2026-09-08）：entityType=事件事实判别键。
   'entityType',
+  // 库存核减/票票配比关系参数（business-loop Wave 1）：STOCK_OFFSET/INVOICE_MATCH
+  // 的 params 词汇（toolOntologyMap CI 门禁共享词表）。
+  'quantity',
 ] as const;
 
 /** 台账业务键（原 projection.BUSINESS_KEY_FIELDS 硬编码注册表化，business-loop
@@ -429,6 +432,49 @@ export const ONTOLOGY_RELATIONS: ReadonlyArray<OntologyRelationDef> = [
     ],
     params: z.object({
       role: z.enum(['上游', '下游']).describe('对手方位: 收货(上游发货给我方)=上游, 发货(我方发往下游)=下游'),
+    }).strict(),
+  },
+  {
+    name: 'TRADE_PAIR',
+    description: '背靠背对冲(business-loop Wave 1, 原型 trade_pair): 采购合同与销售合同对冲/套利; 购销存勾稽(存货缺口)的范围约束。',
+    pairs: [{ from: 'TradeContract', to: 'TradeContract' }],
+    params: z.object({ note: z.string().optional().describe('备注(如 对冲/套利)') }).strict(),
+  },
+  {
+    name: 'MASTER_SUPPLEMENT',
+    description: '主合同-补充协议(business-loop Wave 1, 原型 master_supplement): 补充协议溯源主合同, 改价改量以协议事实承载。',
+    pairs: [{ from: 'TradeContract', to: 'TradeContract' }],
+    params: z.object({ note: z.string().optional().describe('备注') }).strict(),
+  },
+  {
+    name: 'STOCK_OFFSET',
+    description: '库存核减(business-loop Wave 1, 原型 stock_offset): 采购收货被销售发货核减, 按 商品+仓库 维度; params.quantity=本次核减数量。存货结存=Σ收货−Σ发货 的逐笔凭据。',
+    pairs: [{ from: 'GoodsReceiptEvent', to: 'GoodsDeliveryEvent' }],
+    params: z.object({
+      quantity: z.number().describe('本次核减数量(吨)'),
+      batch: z.string().optional().describe('批次'),
+    }).strict(),
+  },
+  {
+    name: 'INVOICE_MATCH',
+    description: '票票配比(business-loop Wave 1, 原型 invoice_match): 进项发票与销项发票按商品数量配比(税负转嫁勾稽); 红字票以负数参与。',
+    pairs: [{ from: 'InvoiceEvent', to: 'InvoiceEvent' }],
+    params: z.object({
+      quantity: z.number().describe('配比数量'),
+      note: z.string().optional().describe('备注'),
+    }).strict(),
+  },
+  {
+    name: 'WRITE_OFF_SETTLEMENT',
+    description: '结算目标核销(business-loop Wave 1, D1 裁决 2026-09-20 采原型口径): 付款/收款 → 结算 常规核销, 与 OFFSET_SETTLE(预付冲抵)端点相同语义不同; 既有 WRITE_OFF(→发票, 票款匹配)保留并存。核销工作台迁移归 Wave 4。',
+    pairs: [
+      { from: 'PaymentEvent', to: 'SettlementEvent' },
+      { from: 'CollectionEvent', to: 'SettlementEvent' },
+    ],
+    params: z.object({
+      amount: z.number().describe('核销金额'),
+      partial: z.boolean().optional().describe('部分核销标记'),
+      batch: z.string().optional().describe('批次'),
     }).strict(),
   },
 ];

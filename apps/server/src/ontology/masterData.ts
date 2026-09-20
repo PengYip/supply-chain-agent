@@ -18,7 +18,7 @@ export type MasterDataType = (typeof MASTER_DATA_TYPES)[number];
 export const CreateMasterDataInputSchema = z.object({
   entityType: z.enum(MASTER_DATA_TYPES).describe('主数据类型（商品/交易对手/内部组织/贸易项目）'),
   validAt: z.string().min(1).optional().describe('业务生效时间 ISO 日期（如 2026-06-25）；缺省=登记时刻'),
-  name: z.string().min(1).optional().describe('名称（商品名/企业名/内部组织名，三类实体均必填）'),
+  name: z.string().min(1).optional().describe('名称（商品名/企业名/内部组织名/项目名，四类实体均必填）'),
   commodityCode: z.string().min(1).optional().describe('商品码（仅商品必填）；v1 开放词汇自由填写，业务确认后收敛为闭枚举自动收紧'),
   spec: z.string().optional().describe('规格品位（仅商品，选填）'),
   unit: z.string().optional().describe('计量单位（仅商品，选填，如 吨）'),

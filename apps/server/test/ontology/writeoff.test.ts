@@ -43,7 +43,7 @@ async function seed(u = 'u1') {
 
 describe('writeoffModeRelations', () => {
   it('模式发现：带 amount 参数且资金侧发起的关系（映射驱动）', () => {
-    expect(writeoffModeRelations()).toEqual(['OFFSET_SETTLE', 'WRITE_OFF']);
+    expect(writeoffModeRelations()).toEqual(['OFFSET_SETTLE', 'WRITE_OFF', 'WRITE_OFF_SETTLEMENT']);
   });
 });
 
@@ -80,10 +80,10 @@ describe('listWriteoffBalances', () => {
 });
 
 describe('getWriteoffOverview', () => {
-  it('两模式各就各位：funds=资金行, targets=发票/结算行', async () => {
+  it('三模式各就各位：funds=资金行, targets=发票/结算行', async () => {
     await seed();
     const ov = await getWriteoffOverview(ctx, 'u1');
-    expect(ov.modes.map((m) => m.relation)).toEqual(['OFFSET_SETTLE', 'WRITE_OFF']);
+    expect(ov.modes.map((m) => m.relation)).toEqual(['OFFSET_SETTLE', 'WRITE_OFF', 'WRITE_OFF_SETTLEMENT']);
     const wo = ov.modes.find((m) => m.relation === 'WRITE_OFF')!;
     expect(wo.srcTypes).toEqual(['PaymentEvent', 'CollectionEvent']);
     expect(wo.dstTypes).toEqual(['InvoiceEvent']);

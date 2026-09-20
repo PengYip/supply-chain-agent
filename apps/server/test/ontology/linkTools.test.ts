@@ -125,14 +125,19 @@ describe('link_ontology execute', () => {
     expect(out.status).toBe('ok');
   });
 
-  it('词表含 PARENT_OF/DELIVERED_AS（spec 主体身份 2026-09-09：12 关系中除核销/冲抵外全覆盖）', () => {
+  it('词表含 PARENT_OF/DELIVERED_AS（spec 主体身份 2026-09-09：17 关系中除核销/冲抵/结算核销外全覆盖）', () => {
     const t = buildLinkOntologyTool({ ctx, userId: 'u1' });
     const shape = t.inputSchema.shape as { relation: { options: readonly string[] } };
     expect(shape.relation.options).toContain('PARENT_OF');
     expect(shape.relation.options).toContain('DELIVERED_AS');
     expect(shape.relation.options).toContain('TRADING_WITH');
     expect(shape.relation.options).toContain('BELONGS_TO');
-    expect(shape.relation.options).toHaveLength(10);
+    expect(shape.relation.options).toContain('TRADE_PAIR');
+    expect(shape.relation.options).toContain('MASTER_SUPPLEMENT');
+    expect(shape.relation.options).toContain('STOCK_OFFSET');
+    expect(shape.relation.options).toContain('INVOICE_MATCH');
+    expect(shape.relation.options).not.toContain('WRITE_OFF_SETTLEMENT');
+    expect(shape.relation.options).toHaveLength(14);
   });
 
   it('TRADING_WITH：收/发货事件 -> 交易对手（spec 决策 #11 事件对手显式化），role 落库', async () => {
@@ -259,6 +264,38 @@ describe('link_ontology execute', () => {
   it('BELONGS_TO rejects non-contract from id', async () => {
     const t = buildLinkOntologyTool({ ctx, userId: 'u1' });
     const res = await t.execute!({ relation: 'BELONGS_TO', fromId: 'TF-不存在', toId: 'TF-x' }, CALL);
+    expect(res.status).toBe('invalid');
+  });
+
+  it('TRADE_PAIR links two ledger contract rows (wave1)', async () => {
+    insertContract('CL-1', 'HT-LOOP-1');
+    insertContract('CL-2', 'HT-LOOP-2');
+    const t = buildLinkOntologyTool({ ctx, userId: 'u1' });
+    const res = await t.execute!({ relation: 'TRADE_PAIR', fromId: 'CL-1', toId: 'CL-2', note: '背靠背' }, CALL);
+    expect(res.status).toBe('ok');
+  });
+
+  it('STOCK_OFFSET requires quantity (strict params)', async () => {
+    const rcpt = await insertTradeFact(ctx, {
+      entityType: 'GoodsReceiptEvent', payload: { eventBizType: '正向', quantity: 620, unit: '吨' },
+      validAt: '2026-09-20T00:00:00Z', createdBy: 't',
+    });
+    const dlv = await insertTradeFact(ctx, {
+      entityType: 'GoodsDeliveryEvent', payload: { eventBizType: '正向', quantity: 200, unit: '吨' },
+      validAt: '2026-09-20T00:00:00Z', createdBy: 't',
+    });
+    const t = buildLinkOntologyTool({ ctx, userId: 'u1' });
+    const missing = await t.execute!({ relation: 'STOCK_OFFSET', fromId: rcpt, toId: dlv }, CALL);
+    expect(missing.status).toBe('invalid');
+    expect(JSON.stringify(missing)).toContain('quantity');
+    const ok = await t.execute!({ relation: 'STOCK_OFFSET', fromId: rcpt, toId: dlv, quantity: 200 }, CALL);
+    expect(ok.status).toBe('ok');
+  });
+
+  it('rejects self-loop edges (wave1)', async () => {
+    insertContract('CL-1', 'HT-LOOP-1');
+    const t = buildLinkOntologyTool({ ctx, userId: 'u1' });
+    const res = await t.execute!({ relation: 'TRADE_PAIR', fromId: 'CL-1', toId: 'CL-1' }, CALL);
     expect(res.status).toBe('invalid');
   });
 });

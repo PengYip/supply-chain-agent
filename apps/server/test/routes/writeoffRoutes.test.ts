@@ -76,7 +76,7 @@ describe('GET /api/writeoff/overview', () => {
     const res = await appAs('u1').request('http://test/api/writeoff/overview');
     expect(res.status).toBe(200);
     const body = (await res.json()) as { modes: unknown[] };
-    expect(body.modes.map((m) => (m as { relation: string }).relation)).toEqual(['OFFSET_SETTLE', 'WRITE_OFF']);
+    expect(body.modes.map((m) => (m as { relation: string }).relation)).toEqual(['OFFSET_SETTLE', 'WRITE_OFF', 'WRITE_OFF_SETTLEMENT']);
   });
 });
 

@@ -77,6 +77,11 @@ export const EDGE_LABELS: Record<string, string> = {
   DELIVERED_AS: '实际交付',
   TRADING_WITH: '交易对手',
   BELONGS_TO: '归属项目',
+  TRADE_PAIR: '背靠背',
+  MASTER_SUPPLEMENT: '补充协议',
+  STOCK_OFFSET: '库存核减',
+  INVOICE_MATCH: '票票配比',
+  WRITE_OFF_SETTLEMENT: '结算核销',
   CONTAINS: '文档血缘',
   EVIDENCE: '凭证溯源',
 };
@@ -99,6 +104,11 @@ export const EDGE_STYLE_OVERRIDES: Record<string, { color: string; dashed: boole
   DELIVERED_AS: { color: '#94A3B8', dashed: true },
   TRADING_WITH: { color: '#94A3B8', dashed: true },
   BELONGS_TO: { color: '#94A3B8', dashed: true },
+  TRADE_PAIR: { color: '#94A3B8', dashed: true },
+  MASTER_SUPPLEMENT: { color: '#94A3B8', dashed: true },
+  STOCK_OFFSET: { color: '#94A3B8', dashed: true },
+  INVOICE_MATCH: { color: '#94A3B8', dashed: true },
+  WRITE_OFF_SETTLEMENT: { color: '#94A3B8', dashed: true },
   CONTAINS: { color: '#64748B', dashed: true },
   // EVIDENCE 凭证据源(spec 2026-09-09 P3): 单据 -> 事件事实, 溯源族灰虚线。
   EVIDENCE: { color: '#64748B', dashed: true },
