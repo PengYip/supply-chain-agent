@@ -191,6 +191,28 @@ INVOICE_MATCH。
 
 ## 实施记录
 
+### Wave 2（2026-09-20 完成，分支 PengYip/tools-grouping，五任务全评审通过）
+
+- **T1 ALLOCATE_TO 数量归属**（f745f35）：params 放宽 {amount?, quantity?, method, batch?}
+  （W2-D，不用 superRefine 保 ZodObject 类型）；版本 '2026-09-20-loop-v3'；R8 口径下
+  link_ontology 的运行时守卫折入 T3。
+- **T2 幂等写回列**（ef820d5）：execution_flows/settlement_records 各加 ontology_fact_id
+  （三处镜像）。留意：src/pipeline/db/schema.ts SQLite drizzle twin 未被迁移消费未同步。
+- **T3 实体化映射器**（7dbd8b5）：`pipeline/ontologyMaterialize.ts`——execution_flows 按
+  flow_type×direction 映射六事件实体；extraction 补充字段（仓库/发票号/款项类型关键词）；
+  跳过计数不造假（W2-C）；ALLOCATE_TO 数量/金额边 + fact_id 回写幂等；safe 包装吞错 +
+  图投影 fire-and-forget；settlement_records 直连 SettlementEvent。结算→合同边被连接对
+  白名单拒绝 → R10 裁决走 payload.contractNo 属性路由。
+- **T4 六挂点 + R10**（47c785f）：SettlementEvent 补 contractNo?（对齐 Invoice 族先例，
+  指纹重生成，版本维持 v3）；materializer 结算 payload 激活；确认/绑定/结算三族钩子
+  全部 void ...Safe 挂接。留意：review.test 同文件双 confirm 404 系既有环境怪癖（受控
+  实验证明与钩子无关），deferred 独立排查。
+- **T5 回填脚本**（d108083）：`npm run backfill:ontology`（--dry-run 零写副作用 / --limit
+  200 默认），只调 materialize 函数不复制逻辑，实跑末尾 await 图收敛。
+- **验收**：每任务 TDD 红绿 + 全量绿（终态 server 1917 passed / web 123 / lint 0 错误）；
+  五任务评审全部 Spec PASS + Quality APPROVED；裁决台账 R7-R10 见 SDD ledger。
+- **收口待办**（T6）：合并 main + push；dev 库 backfill dry-run→实跑 + 图收敛。
+
 ### Wave 1（2026-09-20 完成，分支 PengYip/tools-grouping，六任务全评审通过）
 
 - **T1 版本化机制**（4d15f49）：`ONTOLOGY_SCHEMA_VERSION='2026-09-20-loop-v2'` +
