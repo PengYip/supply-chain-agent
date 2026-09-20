@@ -73,8 +73,9 @@
   关键词（预付/尾款/进度款/质保金）可解析则用，否则跳过并计数；InvoiceEvent 必填
   invoiceNo——extraction 发票号码缺失则跳过并计数（不造假数据）。资金币种缺省 CNY。
 - **W2-D 注册表修订**（版本升 '2026-09-20-loop-v3'）：ALLOCATE_TO params 放宽为
-  {amount?, quantity?, ratio?, method, batch?} + refinement「amount/quantity 至少其一」
-  ——数量-only 收发货事实可落 method=数量 的归属边。
+  {amount?, quantity?, ratio?, method, batch?}——注册表**不硬拦**双缺（params 类型
+  须保持 ZodObject 供 .shape 消费），"至少其一"由写入方运行时守卫保证
+  （materializer 必供其一；link_ontology 有守卫）。
 - 触发点：单据确认（review.ts 单条+批量）、绑定确认/流水刷新（bind_document、
   refreshExecutionFlowsForDocument）、结算确认（confirm_settlement）三族钩子，全部
   fire-and-forget（复刻 syncOntologyGraphSafe 模式）+ 图投影。
