@@ -153,6 +153,9 @@ async function main(): Promise<void> {
   }
 
   const t0 = performance.now();
+  // R15: 收集本次成功物化的 distinct 属主 uid——末尾图同步按属主投影
+  // (脚本缺 uid 只投影共享行, dev 实证 nodes=0)。
+  const ownerUids = new Set<string>();
   // 1. execution_flows 按 (document_id, user_id) 属主分组回填——R14: 逐组带属主 uid,
   //    materializer 按该 uid 的口径消费该组的 pending 流(owner + 共享行)。
   const groups = await listPendingDocGroups(ctx, limit);
@@ -161,6 +164,7 @@ async function main(): Promise<void> {
       const res = await materializeDocumentOntology(ctx, g.docId, g.userId);
       sum.documents += 1;
       addResult(sum, res);
+      if (res.attempted > 0) ownerUids.add(g.userId);
       if (res.failures.length > 0) {
         console.error(`[backfill] doc ${g.docId} (user=${g.userId}) partial failures:`, res.failures);
       }
@@ -175,17 +179,27 @@ async function main(): Promise<void> {
     try {
       const res = await materializeSettlementRecord(ctx, record, record.user_id ?? '');
       sum.settlements += 1;
-      // R11 终审: created 只计新产事实(幂等复用/resource 复用不进 created)。
-      if (res.created) sum.created += 1;
+      if (res.created) {
+        sum.created += 1; // R11 终审: created 只计新产事实(幂等复用/resource 复用不进 created)。
+        ownerUids.add(record.user_id ?? '');
+      }
     } catch (e) {
       console.error(`[backfill] FAILED settlement ${record.id}:`, e instanceof Error ? e.message : e);
     }
   }
 
-  // 3. 末尾一次图投影收敛(await, 脚本要收尾; 非 fire-and-forget)。
+  // 3. 末尾图投影收敛(await, 脚本要收尾; 非 fire-and-forget)。R15: 逐属主投影,
+  //    无属主时保持现状(uid 缺省)。
   try {
-    const graph = await syncOntologyGraph({ ctx });
-    console.log(`[backfill] graph sync status=${graph.status} nodes=${graph.nodeCount} edges=${graph.edgeCount}`);
+    if (ownerUids.size === 0) {
+      const graph = await syncOntologyGraph({ ctx });
+      console.log(`[backfill] graph sync (shared) status=${graph.status} nodes=${graph.nodeCount} edges=${graph.edgeCount}`);
+    } else {
+      for (const uid of ownerUids) {
+        const graph = await syncOntologyGraph({ ctx, userId: uid });
+        console.log(`[backfill] graph sync user=${uid} status=${graph.status} nodes=${graph.nodeCount} edges=${graph.edgeCount}`);
+      }
+    }
   } catch (e) {
     console.error('[backfill] graph sync failed (non-fatal):', e instanceof Error ? e.message : e);
   }

@@ -366,3 +366,22 @@ describe('R13 sequential-binding mode discrimination (wave2 final review round 3
     expect(facts.find((f) => f.id === tf2)?.payload).toMatchObject({ contractNo: 'HT-2' });
   });
 });
+
+describe('R15 CJK voucher date tolerance (wave2 closing round)', () => {
+  it('中文 voucher_date(YYYY年M月D日) -> 事实 validAt 归一为 ISO, 流不再永久 pending', async () => {
+    insertDoc('DOC-CJK');
+    insertContract('CL-1', 'HT-1');
+    insertFlow({ id: 'F-CJK', docId: 'DOC-CJK', contractNo: 'HT-1', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨', voucherDate: '2026年8月11日' });
+    const res = await materializeDocumentOntology(ctx, 'DOC-CJK', 'u1');
+    expect(res.created).toBe(1);
+    expect(res.failures).toEqual([]); // 不抛 asof: invalid datetime
+    const facts = await factsOf('GoodsReceiptEvent');
+    expect(facts).toHaveLength(1);
+    expect(facts[0]!.validAt).toBe('2026-08-11T00:00:00.000Z');
+    expect(flowFactId('F-CJK')).toBe(facts[0]!.id); // 已认领, 不再永久 pending
+    // 边同样用归一后的 validAt
+    const edges = await edgesOf('ALLOCATE_TO');
+    expect(edges).toHaveLength(1);
+    expect(edges[0]!.toId).toBe('CL-1');
+  });
+});

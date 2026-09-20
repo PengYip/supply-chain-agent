@@ -9,7 +9,7 @@ import {
 } from '../ontology/repo.js';
 import { syncOntologyGraphSafe } from '../ontology/graphSync.js';
 import { isRelationPairAllowed, type OntologyEntityName } from '../ontology/index.js';
-import { asOfBusinessTime, numberPlaceholders } from '../ontology/asof.js';
+import { asOfBusinessTime, numberPlaceholders, normalizeIsoUtc } from '../ontology/asof.js';
 import { effectiveUserId, loadLatestExtractionByDocId } from './db/repositories.js';
 
 export interface MaterializeResult {
@@ -63,6 +63,23 @@ function payTypeFromFields(fields: Record<string, unknown>): string | null {
     if (keywords.some((kw) => haystack.some((v) => v.includes(kw)))) return payType;
   }
   return null;
+}
+
+/**
+ * 本地日期归一(R15): voucher_date 等业务日期可来自中文抽取文本, 兼容
+ * ISO / 常见中文格式(YYYY年M月D日 / YYYY/M/D / YYYY.M.D / YYYY-M-D) -> UTC ISO。
+ * 不放 normalizeIsoUtc(共享工具, 放宽影响全局); 不合规输入照旧走原归一抛错。
+ */
+function normalizeLocalDate(input: string): string {
+  const trimmed = input.trim();
+  const m = trimmed.match(/^(\d{4})[年./-](\d{1,2})[月./-](\d{1,2})日?$/);
+  if (m) {
+    const y = m[1]!;
+    const mo = m[2]!.padStart(2, '0');
+    const d = m[3]!.padStart(2, '0');
+    return `${y}-${mo}-${d}T00:00:00.000Z`;
+  }
+  return normalizeIsoUtc(trimmed);
 }
 
 /** R13: 取该文档全量流(含已认领兄弟行)——维度模式判别与 pending 过滤都在内存做。 */
@@ -222,7 +239,7 @@ export async function materializeDocumentOntology(
           ...(flow.amount != null ? { amount: flow.amount, currency: 'CNY' } : {}),
         };
       }
-      const validAt = flow.voucher_date ?? new Date();
+      const validAt = flow.voucher_date ? normalizeLocalDate(flow.voucher_date) : new Date();
       // R13 增量模式(顺序绑定新增流): plain insert——不调配对、不查候选、不换代,
       // 兄弟事实与边不动(首流事实是另一绑定的合法事实, 不得复用吞/差异误失效)。
       let current: TradeFactRow | null = null;
