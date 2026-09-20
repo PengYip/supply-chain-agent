@@ -320,3 +320,49 @@ describe('R12 multi-binding fact matching (wave2 final review round 2)', () => {
     expect(edges[0]!.fromId).toBe(f1First);
   });
 });
+
+describe('R13 sequential-binding mode discrimination (wave2 final review round 3)', () => {
+  it('顺序绑定主路径: 首流已认领后新增同实体流 -> plain insert, 不复用吞事实, TF-1 无恙', async () => {
+    insertDoc('DOC-S1');
+    insertContract('CL-1', 'HT-1');
+    insertContract('CL-2', 'HT-2');
+    insertFlow({ id: 'F-1', docId: 'DOC-S1', contractNo: 'HT-1', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨', voucherDate: '2026-09-01T00:00:00Z' });
+    const r1 = await materializeDocumentOntology(ctx, 'DOC-S1', 'u1');
+    expect(r1.created).toBe(1);
+    const tf1 = flowFactId('F-1')!;
+    // 顺序绑定: 第二次确认新增第二笔流(contract B, 同实体同数量)——此时 F-1 已带 fact_id
+    insertFlow({ id: 'F-2', docId: 'DOC-S1', contractNo: 'HT-2', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨', voucherDate: '2026-09-01T00:00:00Z' });
+    const r2 = await materializeDocumentOntology(ctx, 'DOC-S1', 'u1');
+    expect(r2.created).toBe(1); // plain insert 独立新建
+    const tf2 = flowFactId('F-2')!;
+    expect(tf2).not.toBe(tf1); // 不复用吞事实
+    expect((await getTradeFactById(ctx, tf1, 'u1'))?.invalidAt).toBeNull(); // TF-1 无恙
+    // 两事实两 ALLOCATE_TO 边各指各合同
+    expect(await factsOf('GoodsReceiptEvent')).toHaveLength(2);
+    const edges = await edgesOf('ALLOCATE_TO');
+    expect(edges).toHaveLength(2);
+    expect(edges.find((e) => e.fromId === tf1)?.toId).toBe('CL-1');
+    expect(edges.find((e) => e.fromId === tf2)?.toId).toBe('CL-2');
+  });
+
+  it('顺序绑定资金流版: 新增流 contractNo 不同 -> plain insert, 不触发差异换代, TF-1 无恙', async () => {
+    insertDoc('DOC-S2');
+    insertContract('CL-1', 'HT-1');
+    insertContract('CL-2', 'HT-2');
+    insertExtraction('DOC-S2', { '款项类型': '预付款' });
+    insertFlow({ id: 'F-1', docId: 'DOC-S2', contractNo: 'HT-1', flowType: '资金流', direction: 'out', amount: 100_000, voucherDate: '2026-09-01T00:00:00Z' });
+    await materializeDocumentOntology(ctx, 'DOC-S2', 'u1');
+    const tf1 = flowFactId('F-1')!;
+    expect(tf1).not.toBeNull();
+    // 顺序绑定: 新增第二笔资金流(contract B)——增量模式 plain insert
+    insertFlow({ id: 'F-2', docId: 'DOC-S2', contractNo: 'HT-2', flowType: '资金流', direction: 'out', amount: 100_000, voucherDate: '2026-09-01T00:00:00Z' });
+    const r2 = await materializeDocumentOntology(ctx, 'DOC-S2', 'u1');
+    expect(r2.created).toBe(1);
+    const tf2 = flowFactId('F-2')!;
+    expect(tf2).not.toBe(tf1);
+    expect((await getTradeFactById(ctx, tf1, 'u1'))?.invalidAt).toBeNull(); // TF-1 无恙(不误失效)
+    const facts = await factsOf('PaymentEvent');
+    expect(facts).toHaveLength(2);
+    expect(facts.find((f) => f.id === tf2)?.payload).toMatchObject({ contractNo: 'HT-2' });
+  });
+});

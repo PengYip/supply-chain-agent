@@ -45,6 +45,8 @@ interface FlowRow {
   unit: string | null;
   voucher_date: string | null;
   user_id: string | null;
+  /** R13: 已认领兄弟流判别(非空=已被某趟实体化认领)。 */
+  ontology_fact_id: string | null;
 }
 
 function fieldStr(fields: Record<string, unknown>, keys: readonly string[]): string | null {
@@ -63,8 +65,9 @@ function payTypeFromFields(fields: Record<string, unknown>): string | null {
   return null;
 }
 
-async function listPendingFlows(ctx: DbContext, docId: string, uid: string): Promise<FlowRow[]> {
-  const sql = `SELECT * FROM execution_flows WHERE document_id = ? AND ontology_fact_id IS NULL AND ${USER_SCOPE}`;
+/** R13: 取该文档全量流(含已认领兄弟行)——维度模式判别与 pending 过滤都在内存做。 */
+async function listAllFlows(ctx: DbContext, docId: string, uid: string): Promise<FlowRow[]> {
+  const sql = `SELECT * FROM execution_flows WHERE document_id = ? AND ${USER_SCOPE}`;
   if (ctx.backend === 'postgres') {
     const res = await (ctx as PostgresDbContext).pool.query(numberPlaceholders(sql), [docId, uid]);
     return res.rows as FlowRow[];
@@ -157,12 +160,24 @@ export async function materializeDocumentOntology(
     failures: [],
   };
   const uid = effectiveUserId(userId);
-  const flows = await listPendingFlows(ctx, docId, uid);
+  // R13: 全量流(含已认领兄弟行)——配对/增量模式判别 + pending 过滤都在内存做。
+  const allFlows = await listAllFlows(ctx, docId, uid);
+  const flows = allFlows.filter((f) => f.ontology_fact_id == null);
   res.attempted = flows.length;
   // R12: 本趟已认领集合(复用与新建都入)——多绑定逐流独立配对, 不收敛不误失效。
   const claimedFactIds = new Set<string>();
-  // R12: 本趟处理过的 (docId:entity) 维度, 供孤儿清扫。
+  // R13: 维度模式——某维度存在已认领兄弟流(ontology_fact_id 非空) => 增量模式
+  // (顺序绑定新增流, plain insert 不配对不换代); 全 pending => 配对模式(全量重建签名)。
+  const incrementalDims = new Set<string>();
+  for (const f of allFlows) {
+    if (f.ontology_fact_id == null) continue;
+    const ent = FLOW_ENTITY[f.flow_type]?.[f.direction];
+    if (!ent) continue;
+    incrementalDims.add(`${docId}:${ent}`);
+  }
+  // R12: 本趟处理过的 (docId:entity) 维度, 供孤儿清扫; R13 收窄为配对模式且有完成。
   const processedDims = new Set<string>();
+  const completedDims = new Set<string>();
   // 补充字段读取: 同文档最新 extraction(中文键 fields); 无 extraction 时 fields 为空。
   const extraction = await loadLatestExtractionByDocId(ctx, docId, userId);
   const fields = (extraction?.fields ?? {}) as Record<string, unknown>;
@@ -170,7 +185,9 @@ export async function materializeDocumentOntology(
   for (const flow of flows) {
     const entity = FLOW_ENTITY[flow.flow_type]?.[flow.direction];
     if (!entity) { res.skippedNoMap += 1; continue; }
-    processedDims.add(`${docId}:${entity}`);
+    const dimKey = `${docId}:${entity}`;
+    const incremental = incrementalDims.has(dimKey);
+    processedDims.add(dimKey);
     try {
       let payload: Record<string, unknown>;
       if (entity === 'InvoiceEvent') {
@@ -206,15 +223,21 @@ export async function materializeDocumentOntology(
         };
       }
       const validAt = flow.voucher_date ?? new Date();
-      // R11/R12: 现行事实配对(排除本趟已认领; 边目标优先)。
-      const current = await findCurrentFactForFlow(
-        ctx, docId, entity, payload, userId, claimedFactIds, flow.contract_no, uid,
-      );
+      // R13 增量模式(顺序绑定新增流): plain insert——不调配对、不查候选、不换代,
+      // 兄弟事实与边不动(首流事实是另一绑定的合法事实, 不得复用吞/差异误失效)。
+      let current: TradeFactRow | null = null;
+      if (!incremental) {
+        // 配对模式(R12): 现行事实配对(排除本趟已认领; 边目标优先)。
+        current = await findCurrentFactForFlow(
+          ctx, docId, entity, payload, userId, claimedFactIds, flow.contract_no, uid,
+        );
+      }
       if (current) {
         if (payloadEquivalent(payload, current.payload)) {
           // 实质等价 -> 复用: 只回写 flow 认领, 不插新事实不插新边(计数不进 created)。
           await writebackFlowId(ctx, flow.id, current.id);
           claimedFactIds.add(current.id);
+          completedDims.add(dimKey);
           continue;
         }
         // 有差异 -> 换代替换: 旧事实+其发出的现行边整体失效, 审计链保留旧行。
@@ -251,17 +274,21 @@ export async function materializeDocumentOntology(
         res.created -= 1;
         res.edges = Math.max(0, res.edges - 1);
         claimedFactIds.delete(factId); // 已失效, 移出认领集(孤儿清扫不再命中)
+      } else {
+        completedDims.add(dimKey);
       }
     } catch (e) {
       res.failures.push(`${flow.id}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
-  // R12 孤儿清扫: 本趟处理过的 (docId, entityType) 维度下, 现行活事实既未被本趟
-  // 认领也非本趟新建(即本趟已失效者或绑定移除后的残留) -> 整体失效。
-  // 覆盖"绑定被移除后 refresh"场景: 只剩部分流, 其余维度的旧事实应随绑定消亡。
+  // R12/R13 孤儿清扫: 仅"配对模式且本趟 ≥1 条流成功完成(复用或新建)"的维度执行——
+  // 增量模式维度绝不清扫(顺序绑定的兄弟事实/边不动); 配对维度全流失败也不清扫
+  // (消除误差放大)。覆盖"绑定被移除后 refresh"场景: 只剩部分流, 残留事实随绑定消亡。
   const sweepAt = new Date();
   for (const key of processedDims) {
+    if (incrementalDims.has(key)) continue;
+    if (!completedDims.has(key)) continue;
     const sep = key.indexOf(':');
     const dimDoc = key.slice(0, sep);
     const dimEntity = key.slice(sep + 1) as OntologyEntityName;
