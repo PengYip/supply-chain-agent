@@ -59,15 +59,27 @@
 - link_ontology 词表扩到 14 关系（含合同端点解析重构）
 - 旧本体测试数据清理（D8 运维步骤）
 
-### Wave 2 实体化一跳（断点 1）
+### Wave 2 实体化一跳（断点 1；2026-09-20 修订：映射源升级）
 
-- 映射器：extraction fields → entitySchema payload（按 doc_type 分派，品类模板约束）
-- 确认钩子：documents `review_status` 置 confirmed 的既有路径上追加实体化
-  （`insertTradeFact(documentId=doc.id)` + 依 bindings 建 ALLOCATE_TO/BELONGS_TO 边
-  + `syncOntologyGraphSafe` fire-and-forget）
-- 幂等：同 document 重复确认不重复产事实（查 document_id 已存在则跳过）
-- 回填路由：历史 confirmed 单据批量实体化（dry-run 先行，沿 backfill:embeddings 先例）
-- 粒度 D7 默认：document 级 1:1，document_units 经 EVIDENCE 溯源
+- **映射源（修订裁决 W2-A，基于管线侦察）**：`execution_flows` 为主源（confirmed 绑定驱动、
+  flow_type×direction×amount/quantity/voucher_date 已类型化、UNIQUE(binding_id) 幓等）——
+  映射词表：货物流+in→GoodsReceiptEvent / 货物流+out→GoodsDeliveryEvent / 发票流+in→
+  InvoiceEvent(进项) / 发票流+out→InvoiceEvent(销项) / 资金流+out→PaymentEvent / 资金流+in→
+  CollectionEvent。`settlement_records`（confirm_settlement 确认产物）直连映射 SettlementEvent。
+  extraction 最新行仅作补充字段源（warehouse/发票号码/款项类型关键词）。
+- **W2-B 幂等**：execution_flows 与 settlement_records 各加 `ontology_fact_id` 可空列
+  （guarded ALTER 双后端 + drizzle twin），materializer 写回 fact id；非空即跳过。
+- **W2-C 保守跳过策略**：PaymentEvent 必填 payType 无法从流推断——extraction 款项类型
+  关键词（预付/尾款/进度款/质保金）可解析则用，否则跳过并计数；InvoiceEvent 必填
+  invoiceNo——extraction 发票号码缺失则跳过并计数（不造假数据）。资金币种缺省 CNY。
+- **W2-D 注册表修订**（版本升 '2026-09-20-loop-v3'）：ALLOCATE_TO params 放宽为
+  {amount?, quantity?, ratio?, method, batch?} + refinement「amount/quantity 至少其一」
+  ——数量-only 收发货事实可落 method=数量 的归属边。
+- 触发点：单据确认（review.ts 单条+批量）、绑定确认/流水刷新（bind_document、
+  refreshExecutionFlowsForDocument）、结算确认（confirm_settlement）三族钩子，全部
+  fire-and-forget（复刻 syncOntologyGraphSafe 模式）+ 图投影。
+- 回填：`backfill:ontology` tsx 脚本（--dry-run 先行，沿 backfillEmbeddings 先例）。
+- 逆向事件（退货/红冲）不经 materializer——沿用对话登记（create_trade_event）。
 
 ### Wave 3 AI 读闭环（断点 4）
 
@@ -148,8 +160,9 @@ INVOICE_MATCH。
    数量）；INVOICE_MATCH params {quantity, note?}；TRADE_PAIR / MASTER_SUPPLEMENT
    params {note?}。quantity 新入 SHARED_TOOL_FIELD_NAMES（toolOntologyMap 词表）。
 7. **link_ontology 端点解析泛化**: 现要求 from 必为事实行；BELONGS_TO/TRADE_PAIR/
-   MASTER_SUPPLEMENT 的合同端点走 findContractRowById（ALLOCATE_TO to 侧既有先例）。
-   词表 9 → 14 关系；WRITE_OFF/OFFSET_SETTLE 仍刻意排除（核销工作台领地）。
+    MASTER_SUPPLEMENT 的合同端点走 findContractRowById（ALLOCATE_TO to 侧既有先例）。
+    词表 9 → 14 关系；WRITE_OFF/OFFSET_SETTLE/WRITE_OFF_SETTLEMENT 仍刻意排除
+    （核销工作台领地，结算核销迁移归 Wave 4）。
 8. **不新增 agent 工具**: 全部经既有 link_ontology 扩词表；tool-inventory.json 只改
    link_ontology 条目的 whenToUse/boundary（inventory bijection 门禁不动）。
 9. **旧关系语义冻结**: WRITE_OFF 维持 → 发票（D1 默认）；任何已发布关系的语义变更
