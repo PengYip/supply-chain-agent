@@ -24,8 +24,6 @@ import {
 import { syncOntologyGraph } from '../src/ontology/graphSync.js';
 import type { DbContext, PostgresDbContext } from '../src/pipeline/db/client.js';
 
-const USER_SHARED_SCOPE = "(user_id = '' OR user_id IS NULL)";
-
 interface BackfillSummary {
   documents: number;
   settlements: number;
@@ -59,29 +57,37 @@ async function countByPg(ctx: PostgresDbContext, sql: string): Promise<number> {
   return Number(res.rows[0]?.n ?? 0);
 }
 
-/** 待回填 document 分组(dry-run 统计与实跑共用的查询口径, 双后端)。 */
-async function listPendingDocIds(ctx: DbContext, limit: number): Promise<string[]> {
-  const sql = `SELECT DISTINCT document_id FROM execution_flows
-                WHERE ontology_fact_id IS NULL AND ${USER_SHARED_SCOPE}
-                ORDER BY document_id LIMIT ?`;
+/** 待回填 (document_id, user_id) 分组(dry-run 统计与实跑共用口径, 无 user 过滤——
+ *  R14: 按属主 user_id 枚举, 不漏掉真实 user_id 的 pending 行)。 */
+interface PendingDocGroup {
+  docId: string;
+  /** 属主 user_id; 共享行(NULL/'')归一为空串。 */
+  userId: string;
+}
+
+async function listPendingDocGroups(ctx: DbContext, limit: number): Promise<PendingDocGroup[]> {
+  const sql = `SELECT DISTINCT document_id, user_id FROM execution_flows
+                WHERE ontology_fact_id IS NULL
+                ORDER BY document_id, user_id LIMIT ?`;
   if (ctx.backend === 'postgres') {
     const res = await (ctx as PostgresDbContext).pool.query(
       numberPlaceholders(sql), [limit],
     );
-    return (res.rows as Array<{ document_id: string }>).map((r) => r.document_id);
+    return (res.rows as Array<{ document_id: string; user_id: string | null }>)
+      .map((r) => ({ docId: r.document_id, userId: r.user_id ?? '' }));
   }
-  return (ctx.sqlite.prepare(sql).all(limit) as Array<{ document_id: string }>)
-    .map((r) => r.document_id);
+  return (ctx.sqlite.prepare(sql).all(limit) as Array<{ document_id: string; user_id: string | null }>)
+    .map((r) => ({ docId: r.document_id, userId: r.user_id ?? '' }));
 }
 
-/** 待回填 settlement 行(dry-run 统计与实跑共用的查询口径, 双后端)。 */
+/** 待回填 settlement 行(dry-run 统计与实跑共用的查询口径, 无 user 过滤)。 */
 async function listPendingSettlements(
   ctx: DbContext, limit: number,
 ): Promise<SettlementRecordInput[]> {
   const sql = `SELECT id, contract_no, contract_ledger_id, settled_quantity, quantity_unit,
                       currency, total_amount, user_id
                  FROM settlement_records
-                WHERE ontology_fact_id IS NULL AND ${USER_SHARED_SCOPE}
+                WHERE ontology_fact_id IS NULL
                 ORDER BY created_at, id LIMIT ?`;
   if (ctx.backend === 'postgres') {
     const res = await (ctx as PostgresDbContext).pool.query(
@@ -94,13 +100,13 @@ async function listPendingSettlements(
 
 function countPendingFlows(ctx: DbContext): Promise<number> {
   const sql = `SELECT COUNT(*) AS n FROM execution_flows
-                WHERE ontology_fact_id IS NULL AND ${USER_SHARED_SCOPE}`;
+                WHERE ontology_fact_id IS NULL`;
   return ctx.backend === 'postgres' ? countByPg(ctx as PostgresDbContext, sql) : countBySqlite(ctx, sql);
 }
 
 function countPendingSettlements(ctx: DbContext): Promise<number> {
   const sql = `SELECT COUNT(*) AS n FROM settlement_records
-                WHERE ontology_fact_id IS NULL AND ${USER_SHARED_SCOPE}`;
+                WHERE ontology_fact_id IS NULL`;
   return ctx.backend === 'postgres' ? countByPg(ctx as PostgresDbContext, sql) : countBySqlite(ctx, sql);
 }
 
@@ -139,7 +145,7 @@ async function main(): Promise<void> {
 
   if (dryRun) {
     // dry-run 分支零写副作用: 只数待处理行, 不调 materialize, 连图同步都不做。
-    sum.documents = (await listPendingDocIds(ctx, limit)).length;
+    sum.documents = (await listPendingDocGroups(ctx, limit)).length;
     sum.settlements = (await listPendingSettlements(ctx, limit)).length;
     console.log(JSON.stringify(sum, null, 2));
     console.log('[backfill] dry-run complete; nothing written.');
@@ -147,26 +153,27 @@ async function main(): Promise<void> {
   }
 
   const t0 = performance.now();
-  // 1. execution_flows 按 document 分组回填。
-  const docIds = await listPendingDocIds(ctx, limit);
-  for (const docId of docIds) {
+  // 1. execution_flows 按 (document_id, user_id) 属主分组回填——R14: 逐组带属主 uid,
+  //    materializer 按该 uid 的口径消费该组的 pending 流(owner + 共享行)。
+  const groups = await listPendingDocGroups(ctx, limit);
+  for (const g of groups) {
     try {
-      const res = await materializeDocumentOntology(ctx, docId);
+      const res = await materializeDocumentOntology(ctx, g.docId, g.userId);
       sum.documents += 1;
       addResult(sum, res);
       if (res.failures.length > 0) {
-        console.error(`[backfill] doc ${docId} partial failures:`, res.failures);
+        console.error(`[backfill] doc ${g.docId} (user=${g.userId}) partial failures:`, res.failures);
       }
     } catch (e) {
-      console.error(`[backfill] FAILED doc ${docId}:`, e instanceof Error ? e.message : e);
+      console.error(`[backfill] FAILED doc ${g.docId} (user=${g.userId}):`, e instanceof Error ? e.message : e);
     }
   }
 
-  // 2. settlement_records 逐行回填。
+  // 2. settlement_records 逐行回填(带属主 uid)。
   const settlements = await listPendingSettlements(ctx, limit);
   for (const record of settlements) {
     try {
-      const res = await materializeSettlementRecord(ctx, record);
+      const res = await materializeSettlementRecord(ctx, record, record.user_id ?? '');
       sum.settlements += 1;
       // R11 终审: created 只计新产事实(幂等复用/resource 复用不进 created)。
       if (res.created) sum.created += 1;
