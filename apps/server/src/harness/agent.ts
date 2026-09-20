@@ -25,6 +25,7 @@ import { defaultEmbedder } from '../pipeline/ingestModel.js';
 import { makeLlmTagger } from '../pipeline/chunkTagging.js';
 import { type DbContext } from '../pipeline/db/client.js';
 import { getDbContext } from '../pipeline/db/dbBackend.js';
+import { ENTITY_NAMES, ENTITY_LABELS, ONTOLOGY_RELATIONS } from '../ontology/index.js';
 
 // Shared agent configuration so /api/chat and /api/approval/callback run the
 // exact same model + tools + system prompt + telemetry on a resume.
@@ -45,7 +46,27 @@ export const SYSTEM_PROMPT = [
    // apps/server/skills/, 把技能清单拼进静态系统提示词尾部; 运行期不变
    // (KV cache 静态前缀)。扫描失败/无技能 -> 空串, 不阻塞启动。
    ...buildSkillIndexSection(discoverSkills()).split('\n'),
+   // 本体词汇节(Wave 3 Task 2): 12 实体/17 关系 + 登记查询口径, 模块加载期静态生成。
+   ...buildOntologyVocabSection().split('\n'),
 ].join('\n');
+
+/** 本体词汇节(business-loop Wave 3): 实体/关系/登记与查询口径, ≤25 行。
+ *  模块加载期静态生成(与 Skill 索引同款, 保持静态前缀 KV cache 稳定)。 */
+export function buildOntologyVocabSection(): string {
+  const entityLine = ENTITY_NAMES.map((n) => `${n}=${ENTITY_LABELS[n]}`).join(' ');
+  const relationLines = ONTOLOGY_RELATIONS.map((r) => {
+    // 取 description 首句(。;；截断)并限 30 字
+    const first = r.description.split(/[。;；]/)[0]!.trim();
+    const brief = first.length > 30 ? `${first.slice(0, 30)}…` : first;
+    return `${r.name}: ${brief}`;
+  });
+  return [
+    '## 本体词汇（登记与查询口径）',
+    `实体: ${entityLine}`,
+    ...relationLines,
+    '登记事件=create_trade_event、登记关系=link_ontology、核销/冲抵=create_writeoff/create_offset（L2 需确认）；查询=query_business 的 entity=ontology/neighbors/writeoff。',
+  ].join('\n');
+}
 
 /** Extract the trailing user message's text for scenario detection (阶段3). */
 function lastUserText(msgs: ModelMessage[]): string {
