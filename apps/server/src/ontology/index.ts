@@ -207,6 +207,8 @@ export const SHARED_TOOL_FIELD_NAMES = [
   // 库存核减/票票配比关系参数（business-loop Wave 1）：STOCK_OFFSET/INVOICE_MATCH
   // 的 params 词汇（toolOntologyMap CI 门禁共享词表）。
   'quantity',
+  // 本体读工具锚点（business-loop Wave 3）：query_business 的 neighbors/writeoff 锚点事实 id。
+  'factId',
 ] as const;
 
 /** 台账业务键（原 projection.BUSINESS_KEY_FIELDS 硬编码注册表化，business-loop

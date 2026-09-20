@@ -6,6 +6,11 @@ import { buildQueryContractTool, buildProjectRollupTool } from '../../tools/quer
 import { buildQueryExecutionFlowsTool } from '../executionFlow.js';
 import { buildQueryQuotaUsageTool } from './quotaTools.js';
 import { buildTemplateOverviewTool } from './templateOverviewTool.js';
+import { listProjectedEntities } from '../../ontology/projection.js';
+import { getNeighbors } from '../../ontology/neighbors.js';
+import { getWriteoffOverview } from '../../ontology/writeoff.js';
+import { getTradeFactById } from '../../ontology/repo.js';
+import type { OntologyEntityName } from '../../ontology/index.js';
 
 // query_business (tool-inventory methodology 阶段2, 2026-08-28): the single
 // structured-SSOT read entry. Absorbs query_contract / query_execution_flows /
@@ -39,15 +44,18 @@ export function buildQueryBusinessTool(deps: QueryBusinessDeps) {
       'project=按项目编号汇总合同金额/毛差/应收应付/流水/校验提示(必传 projectCode); ' +
       'template=单据模板类型层级与允许挂接的合同类型词表(可选 docType, 缺省返回全层级); ' +
       'unbound_docs=悬空凭证清单(已解析但未绑定合同的凭证类单据, 它们不参与 recall_documents 检索, 本清单是其唯一批量发现入口, 供人工确认合同号后用 bind_document 补绑)。' +
+      'ontology=本体台账某类实体清单(必传 entityType); neighbors=以事实为锚点穿透关联(必传 factId); writeoff=核销余额总览(可选 factId 点查)。' +
       '这些都是结构化台账/物化数据, 不要用 recall_documents 检索替代; 找单据原文片段才用 recall_documents。' +
       '查具体合同条款时两步走: 先用 entity="contract" 命中合同, 再用 recall_documents 传 contractNo 加条款关键词(如交货/违约/质量)检索原文片段作答, 以返回的 document_id 说明出处。' +
       '调用示例: 1) 盘点合同 {entity: "contract"}; ' +
       '2) 查合同执行流水 {entity: "flow", contractNo: "CJXC-2025-001"}; ' +
-      '3) 项目概况 {entity: "project", projectCode: "PRJ-2026-001"}。',
+      '3) 项目概况 {entity: "project", projectCode: "PRJ-2026-001"}; ' +
+      '4) 盘点收货事实 {entity: "ontology", entityType: "GoodsReceiptEvent"}; ' +
+      '5) 穿透某事实关联 {entity: "neighbors", factId: "TF-xxx"}(id 可从台账列表/详情复制)。',
     inputSchema: z.object({
       entity: z
-        .enum(['contract', 'flow', 'quota', 'project', 'template', 'unbound_docs'])
-        .describe('查什么: contract=合同台账; flow=执行流水; quota=额度占用; project=项目汇总; template=模板词表; unbound_docs=悬空凭证清单'),
+        .enum(['contract', 'flow', 'quota', 'project', 'template', 'unbound_docs', 'ontology', 'neighbors', 'writeoff'])
+        .describe('查什么: contract=合同台账; flow=执行流水; quota=额度占用; project=项目汇总; template=模板词表; unbound_docs=悬空凭证清单; ontology=本体台账实体清单; neighbors=事实锚点穿透; writeoff=核销余额总览'),
       contractNo: z
         .string()
         .optional()
@@ -68,6 +76,14 @@ export function buildQueryBusinessTool(deps: QueryBusinessDeps) {
         .string()
         .optional()
         .describe('entity=template 可选: 单据类型名(如 收货单/发票); 缺省返回全层级'),
+      entityType: z
+        .string()
+        .optional()
+        .describe('entity=ontology 必填: 12 实体名之一, 如 GoodsReceiptEvent/TradeProject'),
+      factId: z
+        .string()
+        .optional()
+        .describe('entity=neighbors/writeoff 的锚点事实 id(TF- 开头, 台账可复制)'),
     }),
     execute: async (input, opts) => {
       switch (input.entity) {
@@ -103,6 +119,86 @@ export function buildQueryBusinessTool(deps: QueryBusinessDeps) {
               'sourceSpan 可传 {blockId:"",start:0,end:0} 占位, 并向用户说明本次绑定依据用户口述/凭证信息)。' +
               'hasExtraction=false 的单据暂无结构化抽取, 如实告知用户该单据字段尚未抽取完成, 不得猜测字段值。',
           };
+        }
+        case 'ontology': {
+          if (!input.entityType || input.entityType.trim().length === 0) {
+            return { error: 'entity=ontology 需要 entityType(12 实体名之一, 如 GoodsReceiptEvent)' };
+          }
+          try {
+            const res = await listProjectedEntities(
+              deps.ctx, input.entityType as OntologyEntityName,
+              { page: 1, pageSize: 20 }, deps.userId,
+            );
+            return {
+              status: 'ok' as const,
+              entity: 'ontology' as const,
+              total: res.total,
+              items: res.items.map((e) => ({
+                id: e.id,
+                label: e.label,
+                entityType: e.entityType,
+                validAt: e.validAt,
+                // 核心字段前 5(精简展示; Counterparty 归一的 formerNames 等派生字段不进)
+                fields: Object.fromEntries(
+                  Object.entries(e.fields).filter(([k]) => k !== 'formerNames' && k !== 'uscc').slice(0, 5),
+                ),
+              })),
+              usage: '详情用 factId 查 neighbors(穿透关联), 或按 id 打开台账详情。',
+            };
+          } catch (e) {
+            return { error: e instanceof Error ? e.message : String(e) };
+          }
+        }
+        case 'neighbors': {
+          if (!input.factId || input.factId.trim().length === 0) {
+            return { error: 'entity=neighbors 需要 factId(TF- 开头的事实 id)' };
+          }
+          try {
+            const fact = await getTradeFactById(deps.ctx, input.factId, deps.userId);
+            if (!fact) return { error: `锚点事实不存在或不可见: ${input.factId}` };
+            const res = await getNeighbors(
+              deps.ctx,
+              { type: fact.entityType as OntologyEntityName, id: fact.id, depth: 2 },
+              deps.userId,
+            );
+            return {
+              status: 'ok' as const,
+              entity: 'neighbors' as const,
+              anchor: { id: fact.id, entityType: fact.entityType },
+              nodeCount: res.nodes.length,
+              edgeCount: res.edges.length,
+              truncated: res.truncated,
+              nodes: res.nodes.slice(0, 20).map((n) => ({ id: n.id, entityType: n.entityType, label: n.label })),
+              edges: res.edges.slice(0, 20).map((e) => ({
+                relation: e.relation, fromType: e.fromType, fromId: e.fromId, toType: e.toType, toId: e.toId,
+              })),
+            };
+          } catch (e) {
+            return { error: e instanceof Error ? e.message : String(e) };
+          }
+        }
+        case 'writeoff': {
+          try {
+            const ov = await getWriteoffOverview(deps.ctx, deps.userId);
+            const filter = (rows: typeof ov.modes[number]['funds']) =>
+              (input.factId ? rows.filter((r) => r.id === input.factId) : rows)
+                .map((r) => ({ id: r.id, entityType: r.entityType, label: r.label, amount: r.amount, remaining: r.remaining, status: r.status }));
+            return {
+              status: 'ok' as const,
+              entity: 'writeoff' as const,
+              asOf: ov.asOf,
+              modes: ov.modes.map((m) => ({
+                relation: m.relation,
+                description: m.description,
+                srcTypes: m.srcTypes,
+                dstTypes: m.dstTypes,
+                funds: filter(m.funds),
+                targets: filter(m.targets),
+              })),
+            };
+          } catch (e) {
+            return { error: e instanceof Error ? e.message : String(e) };
+          }
         }
       }
     },
