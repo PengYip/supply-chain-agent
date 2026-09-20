@@ -178,4 +178,29 @@ INVOICE_MATCH。
 
 ## 实施记录
 
-（Wave 1 执行时追加；Wave 2-4 各自 spec/plan 落地时回填。）
+### Wave 1（2026-09-20 完成，分支 PengYip/tools-grouping，六任务全评审通过）
+
+- **T1 版本化机制**（4d15f49）：`ONTOLOGY_SCHEMA_VERSION='2026-09-20-loop-v2'` +
+  `registryContentFingerprint()`（纯 TS fnv-1a 稳定序列化，剔除 version）+ 指纹文件
+  `test/ontology/registry-fingerprint.json` CI 门禁。win32 下重生成命令用 `.ts` 后缀。
+- **T2 schema_version 落列**（55abdfd）：trade_facts/ontology_edges 双后端 + drizzle
+  twin 三处加列；repo 四处 INSERT 与行映射全链透传；缺省盖章=当前版本、显式覆盖=回填。
+  附带 tables.test.ts 列镜像断言补列（最低必要）。
+- **T3 注册表派生**（3ee74b6）：`FACT_NODE_LABELS = ENTITY_NAMES 去掉 TradeContract`；
+  `ENTITY_BUSINESS_KEYS` 按实体声明业务键，`businessKeyOf` 导出。指纹中性如裁决。
+- **T4 TradeProject + BELONGS_TO**（4013833）：第 12 实体（静态，projectNo/name 必填）、
+  masterData 四类表单、link_ontology 合同起点解析（CONTRACT_FROM_RELATIONS）。
+  附带 routes 计数/web businessTypes 标签（门禁逼出，评审裁决接受）。
+- **T5 五新关系**（fe6916e）：TRADE_PAIR/MASTER_SUPPLEMENT/STOCK_OFFSET/INVOICE_MATCH/
+  WRITE_OFF_SETTLEMENT（D1 裁决新名承载）——17 类型/26 连接对；link_ontology 词表 14
+  （WRITE_OFF_SETTLEMENT 归核销工作台领地）；SHARED_TOOL_FIELD_NAMES +quantity；
+  自环守卫。核销读侧注册表驱动自动纳入新关系（R6 裁决=设计使然），写侧不扩面归 Wave 4。
+- **T6 字段扩展集**（e27ccaf）：TradeContract +direction(必填)/signDate/expireDate/
+  buyerName/sellerName/contractAmount；收发货 +warehouse；结算 +settlementType。
+- **验收**：每任务 TDD 红绿 + 全量 build/lint/test 绿（终态 server 1904 passed / 42
+  skipped[PG 集成车道] / web 123 passed / lint 0 错误）；六任务评审全部 Spec PASS +
+  Quality APPROVED，全部 Minor 已随后续任务携带修复，无遗留 deferred。
+- **裁决台账**（R1-R6 详见 SDD ledger）：R4 PG 集成断言待 sca_test 库实跑；R5 版本
+  波次级升版（Wave 1 合并即 '2026-09-20-loop-v2'）；R6 核销读侧纳入=设计使然。
+- **收口待办**：合并 main + push（触发 CI/CD）；D8 dev 库两表 TRUNCATE；PG 集成在
+  sca_test 实跑（R4）。
