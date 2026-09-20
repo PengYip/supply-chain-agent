@@ -2039,20 +2039,20 @@ export async function findContractLedgerByNoPg(
   ctx: PostgresDbContext,
   contractNo: string,
   userId?: string,
-): Promise<ContractLedgerEntry | null> {
+): Promise<(ContractLedgerEntry & { id: string }) | null> {
   const normalized = normalizeContractNo(contractNo);
   if (!normalized) return null; // no usable key -> no match
   const uid = effectiveUserId(userId);
   const res = uid
     ? await ctx.pool.query(
-        `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+        `SELECT id, contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
                 overall_confidence, needs_review, user_id, contract_type
          FROM contract_ledger
          WHERE contract_no = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)`,
         [normalized, uid],
       )
     : await ctx.pool.query(
-        `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+        `SELECT id, contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
                 overall_confidence, needs_review, user_id, contract_type
          FROM contract_ledger
          WHERE contract_no = $1`,
@@ -2060,6 +2060,7 @@ export async function findContractLedgerByNoPg(
       );
   if (!res.rows[0]) return null;
   const r = res.rows[0] as {
+    id: string;
     contract_no: string;
     display_contract_no: string;
     doc_type: string;
@@ -2073,6 +2074,7 @@ export async function findContractLedgerByNoPg(
     contract_type: string | null;
   };
   return {
+    id: r.id,
     contractNo: r.contract_no,
     displayContractNo: r.display_contract_no,
     docType: r.doc_type,

@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.js';
 import { asOfBusinessTime } from '../../src/ontology/asof.js';
-import { listTradeFactsAsOf, listOntologyEdgesAsOf } from '../../src/ontology/repo.js';
+import { listTradeFactsAsOf, listOntologyEdgesAsOf, getTradeFactById } from '../../src/ontology/repo.js';
 import {
   materializeDocumentOntology, materializeDocumentOntologySafe,
   materializeSettlementRecord, materializeSettlementRecordSafe,
@@ -175,5 +175,73 @@ describe('safe wrappers (business-loop wave2)', () => {
       settled_quantity: null, quantity_unit: null, currency: null, total_amount: 1, user_id: '',
     };
     await expect(materializeSettlementRecordSafe(ctx, record, 'u1')).resolves.toBeUndefined();
+  });
+});
+
+describe('R11 refresh-proof idempotency (wave2 final review)', () => {
+  it('等价重建: refresh 删全重建同值流水 -> 复用原事实, 不增事实不增边', async () => {
+    insertDoc('DOC-R1');
+    insertContract('CL-1', 'HT-1');
+    insertFlow({ id: 'F-1', docId: 'DOC-R1', contractNo: 'HT-1', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨', voucherDate: '2026-09-01T00:00:00Z' });
+    const r1 = await materializeDocumentOntology(ctx, 'DOC-R1', 'u1');
+    expect(r1.created).toBe(1);
+    const originalFactId = flowFactId('F-1')!;
+    expect(originalFactId).not.toBeNull();
+    expect(await edgesOf('ALLOCATE_TO')).toHaveLength(1);
+    // 模拟 refresh: DELETE 全部流水 + 重建同值流水(新 id, ontology_fact_id 为空)
+    ctx.sqlite.prepare('DELETE FROM execution_flows WHERE document_id = ?').run('DOC-R1');
+    insertFlow({ id: 'F-1b', docId: 'DOC-R1', contractNo: 'HT-1', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨', voucherDate: '2026-09-01T00:00:00Z' });
+    const r2 = await materializeDocumentOntology(ctx, 'DOC-R1', 'u1');
+    expect(r2.created).toBe(0); // 复用不计 created
+    expect(r2.edges).toBe(0);
+    expect(await factsOf('GoodsReceiptEvent')).toHaveLength(1); // 事实数不变
+    expect(flowFactId('F-1b')).toBe(originalFactId); // 新流水指向原事实
+    expect(await edgesOf('ALLOCATE_TO')).toHaveLength(1); // 边数不变(原边仍现行)
+  });
+
+  it('差异重建: 重建流水 amount 变化 -> 旧事实/旧边失效, 新事实/新边现行', async () => {
+    insertDoc('DOC-R2');
+    insertContract('CL-1', 'HT-1');
+    insertFlow({ id: 'F-2', docId: 'DOC-R2', contractNo: 'HT-1', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨', voucherDate: '2026-09-01T00:00:00Z' });
+    const r1 = await materializeDocumentOntology(ctx, 'DOC-R2', 'u1');
+    expect(r1.created).toBe(1);
+    const oldFactId = flowFactId('F-2')!;
+    const oldEdge = ctx.sqlite.prepare('SELECT id FROM ontology_edges WHERE from_id = ?').get(oldFactId) as { id: string };
+    // 模拟 refresh: amount 变化
+    ctx.sqlite.prepare('DELETE FROM execution_flows WHERE document_id = ?').run('DOC-R2');
+    insertFlow({ id: 'F-2b', docId: 'DOC-R2', contractNo: 'HT-1', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨', amount: 700, voucherDate: '2026-09-01T00:00:00Z' });
+    const r2 = await materializeDocumentOntology(ctx, 'DOC-R2', 'u1');
+    expect(r2.created).toBe(1);
+    // 旧事实失效(审计链保留行)
+    const old = await getTradeFactById(ctx, oldFactId, 'u1');
+    expect(old?.invalidAt).not.toBeNull();
+    // 旧边失效
+    const oldEdgeRow = ctx.sqlite.prepare('SELECT invalid_at FROM ontology_edges WHERE id = ?').get(oldEdge.id) as { invalid_at: string | null };
+    expect(oldEdgeRow.invalid_at).not.toBeNull();
+    // 新事实现行 + 新边现行
+    const currentFacts = await factsOf('GoodsReceiptEvent');
+    expect(currentFacts).toHaveLength(1);
+    expect(currentFacts[0]!.id).not.toBe(oldFactId);
+    expect(currentFacts[0]!.payload).toMatchObject({ amount: 700, currency: 'CNY', quantity: 620 });
+    const currentEdges = await edgesOf('ALLOCATE_TO');
+    expect(currentEdges).toHaveLength(1);
+    expect(currentEdges[0]!.fromId).toBe(currentFacts[0]!.id);
+  });
+
+  it('并发认领: 预置 fact_id 非空不在待处理集; 条件认领不覆盖已有值', async () => {
+    insertDoc('DOC-R3');
+    insertContract('CL-1', 'HT-1');
+    insertFlow({ id: 'F-3', docId: 'DOC-R3', contractNo: 'HT-1', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨' });
+    // 预置认领(TF-PRESET 表示并发 materializer 已认领)
+    ctx.sqlite.prepare('UPDATE execution_flows SET ontology_fact_id = ? WHERE id = ?').run('TF-PRESET', 'F-3');
+    const r = await materializeDocumentOntology(ctx, 'DOC-R3', 'u1');
+    expect(r.attempted).toBe(0);
+    expect(r.created).toBe(0);
+    expect(flowFactId('F-3')).toBe('TF-PRESET'); // 未被覆盖
+    // 条件认领守卫: 已认领的 flow 再次认领不覆盖(WHERE ontology_fact_id IS NULL)
+    const changes = ctx.sqlite.prepare(
+      'UPDATE execution_flows SET ontology_fact_id = ? WHERE id = ? AND ontology_fact_id IS NULL',
+    ).run('TF-OTHER', 'F-3').changes;
+    expect(changes).toBe(0);
   });
 });

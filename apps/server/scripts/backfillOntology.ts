@@ -168,7 +168,8 @@ async function main(): Promise<void> {
     try {
       const res = await materializeSettlementRecord(ctx, record);
       sum.settlements += 1;
-      if (res.factId) sum.created += 1;
+      // R11 终审: created 只计新产事实(幂等复用/resource 复用不进 created)。
+      if (res.created) sum.created += 1;
     } catch (e) {
       console.error(`[backfill] FAILED settlement ${record.id}:`, e instanceof Error ? e.message : e);
     }

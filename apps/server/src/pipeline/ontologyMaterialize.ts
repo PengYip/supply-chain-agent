@@ -2,10 +2,14 @@
 // 铁律: 本体写入只经 repo 写入边界; safe 包装永不抛(钩子 fire-and-forget);
 // 跳过计数不造假数据(W2-C: payType/invoiceNo 解析不到就跳)。
 import type { DbContext, PostgresDbContext } from './db/client.js';
-import { insertTradeFact, insertOntologyEdge } from '../ontology/repo.js';
+import {
+  insertTradeFact, insertOntologyEdge, listTradeFactsAsOf,
+  invalidateTradeFact, invalidateOntologyEdgesFromFact,
+  type TradeFactRow,
+} from '../ontology/repo.js';
 import { syncOntologyGraphSafe } from '../ontology/graphSync.js';
 import { isRelationPairAllowed, type OntologyEntityName } from '../ontology/index.js';
-import { numberPlaceholders } from '../ontology/asof.js';
+import { asOfBusinessTime, numberPlaceholders } from '../ontology/asof.js';
 import { effectiveUserId, loadLatestExtractionByDocId } from './db/repositories.js';
 
 export interface MaterializeResult {
@@ -87,6 +91,39 @@ async function writebackFlowId(ctx: DbContext, flowId: string, factId: string): 
   ctx.sqlite.prepare(sql).run(factId, flowId);
 }
 
+/**
+ * 条件认领(R11): 只在 ontology_fact_id IS NULL 时回写——并发 materializer 已认领
+ * 的 flow 不被覆盖, 返回 false 由调用方补偿刚插入的事实(失效防双)。
+ */
+async function claimFlowWriteback(ctx: DbContext, flowId: string, factId: string): Promise<boolean> {
+  const sql = 'UPDATE execution_flows SET ontology_fact_id = ? WHERE id = ? AND ontology_fact_id IS NULL';
+  if (ctx.backend === 'postgres') {
+    const res = await (ctx as PostgresDbContext).pool.query(numberPlaceholders(sql), [factId, flowId]);
+    return (res.rowCount ?? 0) > 0;
+  }
+  return ctx.sqlite.prepare(sql).run(factId, flowId).changes > 0;
+}
+
+/** R11: 同 documentId+entityType 的现行事实(业务时间 now 口径, 内存过滤 documentId)。 */
+async function findCurrentFactForFlow(
+  ctx: DbContext, docId: string, entity: OntologyEntityName, userId?: string,
+): Promise<TradeFactRow | null> {
+  const rows = await listTradeFactsAsOf(
+    ctx, asOfBusinessTime(new Date().toISOString()), { entityType: entity }, userId,
+  );
+  return rows.find((f) => f.documentId === docId) ?? null;
+}
+
+/** R11 实质等价: 金额/数量/币种/合同号全同即视为等价(其余字段差异容忍)。 */
+function payloadEquivalent(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const same = (x: unknown, y: unknown): boolean =>
+    (x == null ? null : x) === (y == null ? null : y);
+  return same(a['amount'], b['amount'])
+    && same(a['quantity'], b['quantity'])
+    && same(a['currency'], b['currency'])
+    && same(a['contractNo'], b['contractNo']);
+}
+
 /** 待实体化流 -> 本体事实(payload 按注册表实体 schema strict 语义构建; 跳过规则先行)。 */
 export async function materializeDocumentOntology(
   ctx: DbContext, docId: string, userId?: string,
@@ -141,6 +178,18 @@ export async function materializeDocumentOntology(
         };
       }
       const validAt = flow.voucher_date ?? new Date();
+      // R11 refresh-proof: 同 documentId+entityType 现行事实存在时先判等价。
+      const current = await findCurrentFactForFlow(ctx, docId, entity, userId);
+      if (current) {
+        if (payloadEquivalent(payload, current.payload)) {
+          // 实质等价 -> 复用: 只回写 flow 认领, 不插新事实不插新边(计数不进 created)。
+          await writebackFlowId(ctx, flow.id, current.id);
+          continue;
+        }
+        // 有差异 -> 换代替换: 旧事实+其发出的现行边整体失效, 审计链保留旧行。
+        await invalidateTradeFact(ctx, current.id, validAt, userId);
+        await invalidateOntologyEdgesFromFact(ctx, entity, current.id, validAt, userId);
+      }
       const factId = await insertTradeFact(ctx, {
         entityType: entity, payload, validAt, createdBy: 'materializer', documentId: docId,
       }, userId);
@@ -162,7 +211,14 @@ export async function materializeDocumentOntology(
         }, userId);
         res.edges += 1;
       }
-      await writebackFlowId(ctx, flow.id, factId);
+      // 条件认领: 并发已被认领(changes=0)则失效刚插的事实+边, 防双份。
+      const claimed = await claimFlowWriteback(ctx, flow.id, factId);
+      if (!claimed) {
+        await invalidateTradeFact(ctx, factId, validAt, userId);
+        await invalidateOntologyEdgesFromFact(ctx, entity, factId, validAt, userId);
+        res.created -= 1;
+        res.edges = Math.max(0, res.edges - 1);
+      }
     } catch (e) {
       res.failures.push(`${flow.id}: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -201,13 +257,24 @@ async function writebackSettlementId(ctx: DbContext, id: string, factId: string)
   ctx.sqlite.prepare(sql).run(factId, id);
 }
 
+/** 校验 contract_ledger_id 解析到真实台账行(返回行主键; 解析失败返回 null)。 */
+async function resolveLedgerRowId(ctx: DbContext, ledgerId: string, uid: string): Promise<string | null> {
+  const sql = `SELECT id FROM contract_ledger WHERE id = ? AND ${USER_SCOPE} LIMIT 1`;
+  if (ctx.backend === 'postgres') {
+    const res = await (ctx as PostgresDbContext).pool.query(numberPlaceholders(sql), [ledgerId, uid]);
+    return (res.rows[0]?.id as string | undefined) ?? null;
+  }
+  const row = ctx.sqlite.prepare(sql).get(ledgerId, uid) as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
 /** settlement_records -> SettlementEvent 事实 + ALLOCATE_TO(金额归属)边 + 回写; 幂等。 */
 export async function materializeSettlementRecord(
   ctx: DbContext, record: SettlementRecordInput, userId?: string,
-): Promise<{ factId: string | null }> {
+): Promise<{ factId: string | null; created: boolean }> {
   const uid = effectiveUserId(userId);
   const existing = await settlementWriteback(ctx, record.id, uid);
-  if (existing) return { factId: existing };
+  if (existing) return { factId: existing, created: false };
   const payload: Record<string, unknown> = {
     eventBizType: '正向',
     amount: record.total_amount,
@@ -221,19 +288,22 @@ export async function materializeSettlementRecord(
   }, userId);
   // 结算归属走 payload.contractNo（wave4 两路口径）；注册表连接对白名单是 SSOT，
   // SettlementEvent->TradeContract 当前不在 ALLOCATE_TO 合法对内，不建边（守卫防 throw）。
-  if (record.contract_ledger_id
-    && isRelationPairAllowed('ALLOCATE_TO', 'SettlementEvent', 'TradeContract')) {
+  // Wave 4 放开连接对前置条件: id 必须为台账行主键——先解析 contract_ledger_id 到行。
+  const ledgerId = record.contract_ledger_id
+    ? await resolveLedgerRowId(ctx, record.contract_ledger_id, uid)
+    : null;
+  if (ledgerId && isRelationPairAllowed('ALLOCATE_TO', 'SettlementEvent', 'TradeContract')) {
     await insertOntologyEdge(ctx, {
       relation: 'ALLOCATE_TO', fromType: 'SettlementEvent', fromId: factId,
-      toType: 'TradeContract', toId: record.contract_ledger_id,
+      toType: 'TradeContract', toId: ledgerId,
       params: { amount: record.total_amount, method: '金额' }, validAt, createdBy: 'materializer',
     }, userId);
   }
   await writebackSettlementId(ctx, record.id, factId);
-  return { factId };
+  return { factId, created: true };
 }
 
-// safe 包装: 永不抛出(挂点消费方 fire-and-forget); document 版成功路径末尾触发图投影。
+// safe 包装: 永不抛出(挂点消费方 fire-and-forget); 成功路径末尾触发图投影。
 export async function materializeDocumentOntologySafe(
   ctx: DbContext, docId: string, userId?: string,
 ): Promise<void> {
@@ -251,6 +321,7 @@ export async function materializeSettlementRecordSafe(
 ): Promise<void> {
   try {
     await materializeSettlementRecord(ctx, record, userId);
+    void syncOntologyGraphSafe(ctx, userId);
   } catch (e) {
     console.warn('[materialize] settlement materialization failed (swallowed):',
       e instanceof Error ? e.message : e);

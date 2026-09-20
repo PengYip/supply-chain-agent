@@ -444,3 +444,48 @@ export async function listOntologyEdgesAsOf(
   ).all(...params) as Array<Record<string, unknown>>;
   return rows.map((r) => mapRow(r, (v) => (v == null ? null : v as string)));
 }
+
+// ---------------------------------------------------------------------------
+// 失效换代替换 helper（business-loop Wave 2 终审 R11）：
+// materializer 差异重建时"旧事实+其发出的现行边"整体失效(审计链保留行)。
+// 只做 UPDATE invalid_at, 与 supersede 同款换代语义, 不经由本 helper 直写其他列。
+// ---------------------------------------------------------------------------
+
+/** 失效单条事实(换代语义): UPDATE trade_facts SET invalid_at=? WHERE id=? AND invalid_at IS NULL + 用户口径。 */
+export async function invalidateTradeFact(
+  ctx: DbContext,
+  id: string,
+  at: string | Date,
+  userId?: string,
+): Promise<void> {
+  const uid = effectiveUserId(userId);
+  const sql =
+    `UPDATE trade_facts SET invalid_at = ? WHERE id = ? AND invalid_at IS NULL ` +
+    `AND (user_id = ? OR user_id = '')`;
+  if (ctx.backend === 'postgres') {
+    await (ctx as PostgresDbContext).pool.query(numberPlaceholders(sql), [normalizeIsoUtc(at), id, uid]);
+    return;
+  }
+  ctx.sqlite.prepare(sql).run(normalizeIsoUtc(at), id, uid);
+}
+
+/** 失效某事实发出的全部现行边(换代替换的边侧): UPDATE ontology_edges SET invalid_at=? WHERE from_type=? AND from_id=? AND invalid_at IS NULL + 用户口径。 */
+export async function invalidateOntologyEdgesFromFact(
+  ctx: DbContext,
+  fromType: string,
+  fromId: string,
+  at: string | Date,
+  userId?: string,
+): Promise<void> {
+  const uid = effectiveUserId(userId);
+  const sql =
+    `UPDATE ontology_edges SET invalid_at = ? WHERE from_type = ? AND from_id = ? ` +
+    `AND invalid_at IS NULL AND (user_id = ? OR user_id = '')`;
+  if (ctx.backend === 'postgres') {
+    await (ctx as PostgresDbContext).pool.query(
+      numberPlaceholders(sql), [normalizeIsoUtc(at), fromType, fromId, uid],
+    );
+    return;
+  }
+  ctx.sqlite.prepare(sql).run(normalizeIsoUtc(at), fromType, fromId, uid);
+}

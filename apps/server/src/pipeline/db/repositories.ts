@@ -2993,7 +2993,7 @@ export async function findContractLedgerByNo(
   ctx: DbContext,
   contractNo: string,
   userId?: string,
-): Promise<ContractLedgerEntry | null> {
+): Promise<(ContractLedgerEntry & { id: string }) | null> {
   if (ctx.backend === 'postgres') return findContractLedgerByNoPg(ctx, contractNo, userId);
   const normalized = normalizeContractNo(contractNo);
   if (!normalized) return null; // no usable key -> no match
@@ -3001,7 +3001,7 @@ export async function findContractLedgerByNo(
   const row = (uid
     ? ctx.sqlite
         .prepare(
-          `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+          `SELECT id, contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
                   overall_confidence, needs_review, user_id, contract_type
            FROM contract_ledger
            WHERE contract_no = ? AND (user_id = ? OR user_id = '' OR user_id IS NULL)`,
@@ -3009,13 +3009,14 @@ export async function findContractLedgerByNo(
         .get(normalized, uid)
     : ctx.sqlite
         .prepare(
-          `SELECT contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
+          `SELECT id, contract_no, display_contract_no, doc_type, document_id, title, fields, field_meta,
                   overall_confidence, needs_review, user_id, contract_type
            FROM contract_ledger
            WHERE contract_no = ?`,
         )
         .get(normalized)) as
     | {
+        id: string;
         contract_no: string;
         display_contract_no: string;
         doc_type: string;
@@ -3031,6 +3032,7 @@ export async function findContractLedgerByNo(
     | undefined;
   if (!row) return null;
   return {
+    id: row.id,
     contractNo: row.contract_no,
     displayContractNo: row.display_contract_no,
     docType: row.doc_type,

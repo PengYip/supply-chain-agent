@@ -203,7 +203,7 @@ export function buildConfirmSettlementTool(deps: SettlementToolDeps) {
         ctx,
         {
           contractNo: input.contractNo,
-          contractLedgerId: ledger.documentId,
+          contractLedgerId: ledger.id,
           settledQuantity: input.settledQuantity,
           quantityUnit: input.quantityUnit,
           basePrice: input.basePrice,
@@ -218,12 +218,14 @@ export function buildConfirmSettlementTool(deps: SettlementToolDeps) {
         userId,
       );
       // 实体化钩子: 结算确认落账后 fire-and-forget 产 SettlementEvent 事实(永不阻塞)。
+      // contract_ledger_id 传台账行主键(ledger.id)——旧口径 ledger.documentId 是合同单据
+      // id, 命名错位会击穿 Contract 桥; 存量行不回迁, 新写入自此用行主键。
       void materializeSettlementRecordSafe(
         ctx,
         {
           id: settlementId,
           contract_no: input.contractNo,
-          contract_ledger_id: ledger.documentId,
+          contract_ledger_id: ledger.id,
           settled_quantity: input.settledQuantity,
           quantity_unit: input.quantityUnit,
           currency: input.currency,

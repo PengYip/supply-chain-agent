@@ -2731,6 +2731,9 @@ export function buildUpdateDocumentFieldsTool(deps: ToolDeps) {
         } catch (e) {
           console.warn('[executionFlow] 修正后重建执行流水失败:', docId, (e as Error).message);
         }
+        // 实体化钩子: 重建流水后 fire-and-forget 消费待实体化流水(永不阻塞;
+        // 与 review.ts 修正分支同款, refresh 删全重建场景由 R11 幂等兜底)。
+        void materializeDocumentOntologySafe(deps.ctx, docId, deps.userId);
         out = {
           ...out,
           reviewStatus: 'corrected' as const,
