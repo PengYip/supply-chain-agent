@@ -22,6 +22,14 @@ export const COMMODITY_CODES: readonly string[] = [];
 export const MEANING_URIS: Readonly<Record<string, string>> = {};
 
 // ---------------------------------------------------------------------------
+// 模型版本（business-loop Wave 1，spec §5 决策 #1）：行级血缘标记。
+// 语义性变更（新实体/新关系/枚举变动）必须升本常量；任何内容变更必须同步
+// test/ontology/registry-fingerprint.json（重生成命令见 wave1 plan Task 1）。
+// ---------------------------------------------------------------------------
+
+export const ONTOLOGY_SCHEMA_VERSION = '2026-09-20-loop-v2';
+
+// ---------------------------------------------------------------------------
 // 实体（docx §3：4 静态 + 7 事件；v1 字段=单据/流水既有词汇最小集）
 // ---------------------------------------------------------------------------
 
@@ -410,7 +418,7 @@ export function isRelationPairAllowed(name: string, from: string, to: string): b
 
 export function ontologySchemaJson() {
   return {
-    version: '2026-09-10-flowpanel',
+    version: ONTOLOGY_SCHEMA_VERSION,
     enums: {
       PayType: PayType.options,
       EventBizType: EventBizType.options,
@@ -434,4 +442,34 @@ export function ontologySchemaJson() {
       meaning: r.meaning ?? MEANING_URIS[r.name] ?? null,
     })),
   };
+}
+
+// ---------------------------------------------------------------------------
+// 内容指纹门禁（spec §5 决策 #2）：纯 TS fnv-1a + 稳定序列化，本文件保持
+// 零 node 内建依赖。CI 断言指纹文件与注册表内容一致——改注册表不更新文件即红。
+// ---------------------------------------------------------------------------
+
+function stableStringify(v: unknown): string {
+  if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']';
+  if (v !== null && typeof v === 'object') {
+    const rec = v as Record<string, unknown>;
+    return '{' + Object.keys(rec).sort()
+      .map((k) => JSON.stringify(k) + ':' + stableStringify(rec[k])).join(',') + '}';
+  }
+  return JSON.stringify(v) ?? 'null';
+}
+
+function fnv1a(str: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+/** 注册表内容指纹：ontologySchemaJson() 剔除 version 后的稳定序列化哈希。 */
+export function registryContentFingerprint(): string {
+  const { version: _version, ...rest } = ontologySchemaJson() as Record<string, unknown>;
+  return fnv1a(stableStringify(rest));
 }

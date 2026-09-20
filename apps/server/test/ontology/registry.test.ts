@@ -7,7 +7,10 @@ import {
   ONTOLOGY_RELATIONS, relationDef, isRelationPairAllowed,
   PayType, EventBizType, AllocateMethod, COMMODITY_CODES, MEANING_URIS,
   DUAL_TIMELINE_FIELDS, PROVENANCE_FIELDS, ontologySchemaJson,
+  ONTOLOGY_SCHEMA_VERSION, registryContentFingerprint,
 } from '../../src/ontology/index.js';
+
+const FINGERPRINT_PATH = fileURLToPath(new URL('./registry-fingerprint.json', import.meta.url));
 
 describe('ontology registry', () => {
   it('11 entities: 4 static + 7 events, exact names', () => {
@@ -161,7 +164,7 @@ describe('ontology registry', () => {
   });
 
   it('schema version 随注册表结构变更推进(spec 附A: 实施同步清单)', () => {
-    expect(ontologySchemaJson().version).toBe('2026-09-10-flowpanel');
+    expect(ontologySchemaJson().version).toBe(ONTOLOGY_SCHEMA_VERSION);
   });
 
   it('款/票事件 payload 可选 contractNo(spec §15 前置①: 按合同聚合款/票)', () => {
@@ -309,5 +312,19 @@ describe('ontology registry', () => {
     for (const e of json.entities as Array<{ name: string; description: string }>) {
       expect(e.description).toBe(ENTITY_DESCRIPTIONS[e.name as OntologyEntityName]);
     }
+  });
+});
+
+describe('registry versioning (business-loop wave1)', () => {
+  it('fingerprint file stays in sync with registry content and version', () => {
+    const recorded = JSON.parse(readFileSync(FINGERPRINT_PATH, 'utf-8')) as {
+      version: string; fingerprint: string;
+    };
+    expect(ONTOLOGY_SCHEMA_VERSION).toBe(recorded.version);
+    expect(registryContentFingerprint()).toBe(recorded.fingerprint);
+  });
+
+  it('fingerprint is deterministic within a process', () => {
+    expect(registryContentFingerprint()).toBe(registryContentFingerprint());
   });
 });
