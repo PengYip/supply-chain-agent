@@ -10,7 +10,7 @@ import { listProjectedEntities } from '../../ontology/projection.js';
 import { getNeighbors } from '../../ontology/neighbors.js';
 import { getWriteoffOverview } from '../../ontology/writeoff.js';
 import { getTradeFactById } from '../../ontology/repo.js';
-import type { OntologyEntityName } from '../../ontology/index.js';
+import { ENTITY_NAMES, type OntologyEntityName } from '../../ontology/index.js';
 
 // query_business (tool-inventory methodology 阶段2, 2026-08-28): the single
 // structured-SSOT read entry. Absorbs query_contract / query_execution_flows /
@@ -84,6 +84,12 @@ export function buildQueryBusinessTool(deps: QueryBusinessDeps) {
         .string()
         .optional()
         .describe('entity=neighbors/writeoff 的锚点事实 id(TF- 开头, 台账可复制)'),
+      page: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('entity=ontology 可选: 分页页码(默认 1, 每页 20)'),
     }),
     execute: async (input, opts) => {
       switch (input.entity) {
@@ -124,23 +130,30 @@ export function buildQueryBusinessTool(deps: QueryBusinessDeps) {
           if (!input.entityType || input.entityType.trim().length === 0) {
             return { error: 'entity=ontology 需要 entityType(12 实体名之一, 如 GoodsReceiptEvent)' };
           }
+          // W3 Minor: entityType 经注册表白名单校验(原 as 直转型废)。
+          if (!ENTITY_NAMES.includes(input.entityType as OntologyEntityName)) {
+            return { error: `entityType 须为 12 实体名之一: ${ENTITY_NAMES.join('/')}` };
+          }
           try {
+            const page = input.page ?? 1;
             const res = await listProjectedEntities(
               deps.ctx, input.entityType as OntologyEntityName,
-              { page: 1, pageSize: 20 }, deps.userId,
+              { page, pageSize: 20 }, deps.userId,
             );
             return {
               status: 'ok' as const,
               entity: 'ontology' as const,
               total: res.total,
+              page,
               items: res.items.map((e) => ({
                 id: e.id,
                 label: e.label,
                 entityType: e.entityType,
                 validAt: e.validAt,
-                // 核心字段前 5(精简展示; Counterparty 归一的 formerNames 等派生字段不进)
+                // 核心字段前 5(精简展示; 保留 uscc——主体归一主键, 对账引用需要;
+                // formerNames 为 Counterparty 归一派生字段不进)
                 fields: Object.fromEntries(
-                  Object.entries(e.fields).filter(([k]) => k !== 'formerNames' && k !== 'uscc').slice(0, 5),
+                  Object.entries(e.fields).filter(([k]) => k !== 'formerNames').slice(0, 5),
                 ),
               })),
               usage: '详情用 factId 查 neighbors(穿透关联), 或按 id 打开台账详情。',

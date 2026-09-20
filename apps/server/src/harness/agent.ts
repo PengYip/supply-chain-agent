@@ -55,8 +55,9 @@ export const SYSTEM_PROMPT = [
 export function buildOntologyVocabSection(): string {
   const entityLine = ENTITY_NAMES.map((n) => `${n}=${ENTITY_LABELS[n]}`).join(' ');
   const relationLines = ONTOLOGY_RELATIONS.map((r) => {
-    // 取 description 首句(。;；截断)并限 30 字
-    const first = r.description.split(/[。;；]/)[0]!.trim();
+    // W3 Minor: 先 strip 圆括号出处注记, 再取首句(。；;截断)限 30 字
+    const stripped = r.description.replace(/\(.*?\)/g, '').trim();
+    const first = stripped.split(/[。;；]/)[0]!.trim();
     const brief = first.length > 30 ? `${first.slice(0, 30)}…` : first;
     return `${r.name}: ${brief}`;
   });
@@ -64,7 +65,7 @@ export function buildOntologyVocabSection(): string {
     '## 本体词汇（登记与查询口径）',
     `实体: ${entityLine}`,
     ...relationLines,
-    '登记事件=create_trade_event、登记关系=link_ontology、核销/冲抵=create_writeoff/create_offset（L2 需确认）；查询=query_business 的 entity=ontology/neighbors/writeoff。',
+    '登记与核销工具（create_trade_event/link_ontology/create_writeoff/create_offset，均 L2 需用户确认）；查询=query_business 的 entity=ontology/neighbors/writeoff。',
   ].join('\n');
 }
 

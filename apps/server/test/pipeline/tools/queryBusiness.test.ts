@@ -36,9 +36,18 @@ describe('query_business ontology/neighbors/writeoff (wave3)', () => {
     expect(out.status).toBe('ok');
     expect(out.total).toBeGreaterThanOrEqual(1);
     expect(out.items?.some((i) => i.id === id)).toBe(true);
+    // W3 Minor: page 透传(listProjectedEntities 分页)
+    const page2 = await t.execute!({ entity: 'ontology', entityType: 'GoodsReceiptEvent', page: 1 }, CALL) as {
+      status: string; page?: number;
+    };
+    expect(page2.status).toBe('ok');
+    expect(page2.page).toBe(1);
     // entityType 缺失 -> {error} 不抛
     const missing = await t.execute!({ entity: 'ontology' }, CALL) as { error?: string };
     expect(missing.error).toBeTruthy();
+    // W3 Minor: 白名单非法 entityType -> {error}
+    const invalid = await t.execute!({ entity: 'ontology', entityType: 'NoSuchEntity' }, CALL) as { error?: string };
+    expect(invalid.error).toContain('entityType 须为 12 实体名之一');
   });
 
   it('2) neighbors: factId 锚点穿透, 返回节点/边计数', async () => {
