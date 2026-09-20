@@ -212,7 +212,19 @@ INVOICE_MATCH。
   200 默认），只调 materialize 函数不复制逻辑，实跑末尾 await 图收敛。
 - **验收**：每任务 TDD 红绿 + 全量绿（终态 server 1917 passed / web 123 / lint 0 错误）；
   五任务评审全部 Spec PASS + Quality APPROVED；裁决台账 R7-R10 见 SDD ledger。
-- **收口待办**（T6）：合并 main + push；dev 库 backfill dry-run→实跑 + 图收敛。
+- **最终评审修复轮（R11-R13，2026-09-20 三轮收敛，oracle 终审放行）**：
+  - R11（7dd550a）：refresh=删全重建摧毁幂等链——去重复用/差异换代（旧事实 invalid_at
+    +旧边失效）/条件认领封 TOCTOU；correct_document 补钩；settlement 台账行 id 语义摆正；
+    四 Minor（settlement 图投影/计数口径/换行/spec 措辞）。
+  - R12（39e10d6）：一单多绑定匹配键过粗——本趟认领集 + ALLOCATE_TO 边目标优先配对 +
+    孤儿清扫。
+  - R13（351b412）：顺序绑定主路径残余——维度级模式判别（claimedSiblings==0 重建签名
+    才配对/换代/清扫；增量模式 plain insert 不动兄弟事实），清扫收窄到有成功流的配对维度。
+  - 遗留裁决：同合同重复绑定不去重=审计链语义（Wave 4 勾稽层策略）；解绑不触发刷新的
+    孤儿事实存活到下次全量刷新（可恢复）；差异换代连带失效用户手工边=换代语义（Wave 4+
+    评估补登记 UX）。
+- **收口**：全量绿（server 1925 / web 123 / lint 0 错误）；合并 main + push（CI/CD 部署）；
+  dev 库 backfill dry-run→实跑 + 图收敛。
 
 ### Wave 1（2026-09-20 完成，分支 PengYip/tools-grouping，六任务全评审通过）
 
