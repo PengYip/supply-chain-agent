@@ -9,6 +9,7 @@
 import type { DbContext, PostgresDbContext } from '../pipeline/db/client.js';
 import { effectiveUserId } from '../pipeline/db/repositories.js';
 import { asOfBusinessTime, numberPlaceholders, asOfSystemTime, normalizeIsoUtc, type AsOfPredicate } from './asof.js';
+import { ENTITY_BUSINESS_KEYS } from './index.js';
 import type { OntologyEntityName } from './index.js';
 import {
   listTradeFactsAsOf, getTradeFactById, listTradeFactHistory, listOntologyEdgesAsOf,
@@ -182,10 +183,12 @@ async function listReceiptDeliveryDocs(
 // 事件 <- trade_facts(列表口径 = 最新口径：asOfBusinessTime(now))
 // ---------------------------------------------------------------------------
 
-const BUSINESS_KEY_FIELDS = ['invoiceNo', 'contractNo', 'name', 'costType'] as const;
-
-function businessKeyOf(p: Record<string, unknown>): string | null {
-  for (const k of BUSINESS_KEY_FIELDS) {
+/** 事实行业务键解析（注册表驱动，wave1 决策 #5）：ENTITY_BUSINESS_KEYS 按序取
+ *  第一个非空字符串；无声明键的实体返回 null（台账回退显示行 id）。 */
+export function businessKeyOf(entityType: string, p: Record<string, unknown>): string | null {
+  const keys = ENTITY_BUSINESS_KEYS[entityType as OntologyEntityName];
+  if (!keys) return null;
+  for (const k of keys) {
     const v = p[k];
     if (typeof v === 'string' && v !== '') return v;
   }
@@ -197,7 +200,7 @@ export function factToEntity(row: TradeFactRow): ProjectedEntity {
   return {
     id: row.id,
     entityType: row.entityType as OntologyEntityName,
-    label: businessKeyOf(row.payload) ?? row.id,
+    label: businessKeyOf(row.entityType, row.payload) ?? row.id,
     fields: row.payload,
     source: 'trade_facts',
     // P3 凭证据源: 来源单据 id 走 meta(非注册表实体字段, 详情抽屉单列展示)。

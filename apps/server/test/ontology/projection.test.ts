@@ -1,7 +1,7 @@
 // apps/server/test/ontology/projection.test.ts
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.js';
-import { listProjectedEntities, getProjectedEntityDetail } from '../../src/ontology/projection.js';
+import { listProjectedEntities, getProjectedEntityDetail, businessKeyOf } from '../../src/ontology/projection.js';
 import { insertTradeFact, insertOntologyEdge, supersedeTradeFact, listTradeFactHistory } from '../../src/ontology/repo.js';
 
 let ctx: DbContext;
@@ -419,5 +419,18 @@ describe('projection: Counterparty 台账归一 + 名称史 (spec 主体身份 �
     expect(res.total).toBe(2);
     const jia = res.items.find((r) => r.label === '甲公司二期')!;
     expect(jia.fields['formerNames']).toEqual(['甲公司一期']);
+  });
+});
+
+describe('businessKeyOf (registry-driven, wave1 decision 5)', () => {
+  it('resolves first non-empty key per entity priority list', () => {
+    expect(businessKeyOf('InvoiceEvent', { invoiceNo: 'INV-1', contractNo: 'C-1' })).toBe('INV-1');
+    expect(businessKeyOf('InvoiceEvent', { contractNo: 'C-1' })).toBe('C-1');
+    expect(businessKeyOf('ServiceCostEvent', { costType: '物流' })).toBe('物流');
+    expect(businessKeyOf('TradeGoods', { name: '螺纹钢' })).toBe('螺纹钢');
+  });
+  it('returns null for entities without declared keys or empty payloads', () => {
+    expect(businessKeyOf('PaymentEvent', { amount: 5 })).toBeNull();
+    expect(businessKeyOf('SettlementEvent', { amount: 1, currency: 'CNY' })).toBeNull();
   });
 });

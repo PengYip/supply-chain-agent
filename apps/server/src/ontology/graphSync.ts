@@ -29,15 +29,13 @@ import {
   type TradeFactRow,
 } from './repo.js';
 import { findContractRowById, findDocRowById } from './projection.js';
+import { ENTITY_NAMES, type OntologyEntityName } from './index.js';
 
-/** 建事实节点的实体 label(7 事件 + 3 主数据)。TradeContract 走 Contract 桥不建
- *  节点; 收/发货的 documents 源伪事件保持 Document 表示(spec §2.1)。 */
-export const FACT_NODE_LABELS = [
-  'GoodsReceiptEvent', 'GoodsDeliveryEvent', 'SettlementEvent', 'InvoiceEvent',
-  'PaymentEvent', 'CollectionEvent', 'ServiceCostEvent',
-  'TradeGoods', 'Counterparty', 'OrgUnit',
-] as const;
-type FactNodeLabel = (typeof FACT_NODE_LABELS)[number];
+/** 建事实节点的实体 label（派生，spec business-loop 决策 #4）：全部实体除
+ *  TradeContract（永远走 Contract 桥，不建节点）；收/发货的 documents 源伪事件
+ *  保持 Document 表示。新增实体自动进本集合，不再改本文件。 */
+export const FACT_NODE_LABELS: readonly OntologyEntityName[] =
+  ENTITY_NAMES.filter((n) => n !== 'TradeContract');
 
 /** 单表扫描上限(与 projection.SOURCE_ROW_CAP 同口径的本地常量, 避免 ontology ->
  *  projection 私有常量依赖)。超限置 truncated 并跳过 prune 防误删。 */
@@ -141,7 +139,7 @@ export async function syncOntologyGraph(deps: SyncOntologyGraphDeps): Promise<Gr
     try {
       const node = await io.createEntity({ kind: fact.entityType, name: fact.id, props });
       nodeIdByKey.set(`${fact.entityType}:${fact.id}`, node.elementId);
-      if (FACT_NODE_LABELS.includes(fact.entityType as FactNodeLabel)) {
+      if (FACT_NODE_LABELS.includes(fact.entityType as OntologyEntityName)) {
         const keep = keepByLabel.get(fact.entityType) ?? new Set<string>();
         keep.add(fact.id);
         keepByLabel.set(fact.entityType, keep);

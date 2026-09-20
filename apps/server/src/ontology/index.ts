@@ -185,6 +185,21 @@ export const SHARED_TOOL_FIELD_NAMES = [
   'entityType',
 ] as const;
 
+/** 台账业务键（原 projection.BUSINESS_KEY_FIELDS 硬编码注册表化，business-loop
+ *  Wave 1 spec 决策 #5）：按实体声明键优先级数组，依序取第一个非空字符串值。
+ *  新增实体的业务键登记于此，不再改 projection 硬编码。 */
+export const ENTITY_BUSINESS_KEYS: Readonly<
+  Partial<Record<OntologyEntityName, readonly string[]>>
+> = {
+  TradeGoods: ['name'],
+  Counterparty: ['name'],
+  OrgUnit: ['name'],
+  InvoiceEvent: ['invoiceNo', 'contractNo'],
+  PaymentEvent: ['contractNo'],
+  CollectionEvent: ['contractNo'],
+  ServiceCostEvent: ['costType'],
+};
+
 // ---------------------------------------------------------------------------
 // 语义规则层（docx §6.2）：事件实体 逆向=负数 / 正向=正数。
 // 与词汇层分离——ONTOLOGY_ENTITIES 保持纯 z.object（.shape 可直取），规则在写入边界叠加。

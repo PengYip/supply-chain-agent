@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createDb, migrate, type DbContext } from '../../src/pipeline/db/client.js';
 import { insertTradeFact, insertOntologyEdge } from '../../src/ontology/repo.js';
 import {
-  syncOntologyGraph, syncOntologyGraphSafe, type GraphSyncIo,
+  syncOntologyGraph, syncOntologyGraphSafe, FACT_NODE_LABELS, type GraphSyncIo,
 } from '../../src/ontology/graphSync.js';
 import { normalizeName } from '../../src/graph/normalize.js';
 import type { GraphEntity } from '../../src/graph/repo.js';
@@ -382,5 +382,14 @@ describe('syncOntologyGraphSafe', () => {
       findEntities: async () => [],
     };
     await expect(syncOntologyGraphSafe(ctx, 'u1', boomIo)).resolves.toBeUndefined();
+  });
+});
+
+describe('FACT_NODE_LABELS derivation (business-loop wave1)', () => {
+  it('FACT_NODE_LABELS derives from registry: all entities except TradeContract (wave1 decision 4)', () => {
+    expect([...FACT_NODE_LABELS].sort()).toEqual([
+      'CollectionEvent', 'Counterparty', 'GoodsDeliveryEvent', 'GoodsReceiptEvent',
+      'InvoiceEvent', 'OrgUnit', 'PaymentEvent', 'ServiceCostEvent', 'SettlementEvent', 'TradeGoods',
+    ]);
   });
 });
