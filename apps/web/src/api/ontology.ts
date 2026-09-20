@@ -272,6 +272,49 @@ export interface ChangeMasterDataResult {
   invalidAt: string;
 }
 
+// ---------------------------------------------------------------------------
+// 勾稽缺口报表（business-loop Wave 4，2026-09-20）：GET /api/ontology/gaps 只读聚合
+// （trade_facts + ontology_edges 现行口径），可选 projectNo 过滤。qty/amt 为 null
+// 表示该口径数据未登记（missingInputs 说明原因），前端显示「待登记」弱化态，不造数。
+// ---------------------------------------------------------------------------
+
+/** 勾稽明细项（①-⑪）：qty 或 amt 其一有值，取决于该勾稽的口径（数量/金额）。 */
+export interface GapItemDTO {
+  code: string;
+  label: string;
+  qty?: number | null;
+  amt?: number | null;
+  basis: string;
+  missingInputs?: string[];
+}
+
+export interface GapGroupDTO {
+  key: 'stock' | 'recv' | 'pay' | 'mis';
+  label: string;
+  desc: string;
+  items: GapItemDTO[];
+}
+
+export interface GapTileDTO {
+  key: string;
+  label: string;
+  qty?: number | null;
+  amt?: number | null;
+  hint?: string;
+}
+
+export interface GapsReportDTO {
+  scope: string;
+  tiles: GapTileDTO[];
+  groups: GapGroupDTO[];
+  checks: string[];
+}
+
+export function fetchGaps(projectNo?: string): Promise<GapsReportDTO> {
+  const qs = projectNo ? new URLSearchParams({ projectNo }).toString() : '';
+  return request<GapsReportDTO>(`/api/ontology/gaps${qs ? `?${qs}` : ''}`);
+}
+
 export async function changeMasterData(input: {
   prevFactId: string;
   payload: Record<string, string | number | Record<string, string>>;
