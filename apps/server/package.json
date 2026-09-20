@@ -15,7 +15,8 @@
     "backfill:flows": "tsx scripts/backfillFlows.ts",
     "backfill:tags": "tsx scripts/backfillChunkTags.ts",
     "seed:goods": "tsx scripts/seed-goods.ts",
-    "eval:tools": "tsx eval/runToolEval.ts"
+    "eval:tools": "tsx eval/runToolEval.ts",
+    "backfill:ontology": "tsx scripts/backfillOntology.ts"
   },
   "dependencies": {
     "@ai-sdk/deepseek": "^2.0.52",
