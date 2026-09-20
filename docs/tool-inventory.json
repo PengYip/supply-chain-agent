@@ -322,7 +322,7 @@
       "status": "active",
       "mount": "always",
       "whenToUse": "对话登记单条本体关系边（14 类：ALLOCATE_TO 分摊 / REVERSE_ORIGIN 红冲溯源 / FEEDS_INTO 结算依据 / CORRESPONDS_TO 开票对应 / TRIGGERS 触发付款 / PROVIDE 提供服务 / PARENT_OF 母子公司 / DELIVERED_AS 实际交付 / TRADING_WITH 交易对手 / BELONGS_TO 核算归属 / TRADE_PAIR 背靠背 / MASTER_SUPPLEMENT 补充协议 / STOCK_OFFSET 库存核减 / INVOICE_MATCH 票票配比）：用户口述一条明确关系（如\"把这笔服务费分摊 15000 到合同 X\"）时调用，落库后穿透图与台账详情即时可见。",
-      "boundary": "L2 需审批中心批准；一次一条边；核销(WRITE_OFF)、冲抵(OFFSET_SETTLE)与结算目标核销(WRITE_OFF_SETTLEMENT)不受理（用 create_writeoff/create_offset 工作台工具，结算核销迁移归 Wave 4）；起点与终点相同（自环）一律拒绝；fromId 必须是事实 id（TF- 开头）或合同台账行 id（BELONGS_TO/TRADE_PAIR/MASTER_SUPPLEMENT 的起点为台账合同行），仅 ALLOCATE_TO/合同起点关系的 toId 允许台账合同行 id；连接对必须满足本体注册表白名单，REVERSE_ORIGIN 额外要求红冲方逆向(负数)/原票正向；params 走注册表关系 strict schema（分摊必须 amount+method，红冲必须 amount，STOCK_OFFSET/INVOICE_MATCH 必须 quantity，辅助关系无参），多余参数整单拒绝；不接受自由文本数字。",
+      "boundary": "L2 需审批中心批准；一次一条边；核销(WRITE_OFF)、冲抵(OFFSET_SETTLE)与结算目标核销(WRITE_OFF_SETTLEMENT)不受理（用 create_writeoff/create_offset 工作台工具，结算核销迁移归 Wave 4）；起点与终点相同（自环）一律拒绝；fromId 必须是事实 id（TF- 开头）或合同台账行 id（BELONGS_TO/TRADE_PAIR/MASTER_SUPPLEMENT 的起点为台账合同行），仅 ALLOCATE_TO/合同起点关系的 toId 允许台账合同行 id；连接对必须满足本体注册表白名单，REVERSE_ORIGIN 额外要求红冲方逆向(负数)/原票正向；params 走注册表关系 strict schema（分摊须 amount 或 quantity 其一 + method，红冲必须 amount，STOCK_OFFSET/INVOICE_MATCH 必须 quantity，辅助关系无参），多余参数整单拒绝；不接受自由文本数字。",
       "rationale": "注册表 17 种本体关系中，核销/冲抵/结算核销 3 种归工作台（create_writeoff/create_offset），本工具覆盖其余 14 种对话登记入口——此前多数关系只有 repo 写入边界、无产品入口，关系模型与产品能力断层的补全；校验链全部复用本体注册表（relationDef/isRelationPairAllowed/params strict），与 create_trade_event 同构的对话登记模式。"
     }
   ],

@@ -51,7 +51,7 @@ export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string })
       'DELIVERED_AS 只允许 收/发货->商品），不符整单拒绝并返回原因；' +
       '起点与终点相同（自环）一律拒绝；' +
       'REVERSE_ORIGIN 要求红冲方为逆向（负数）发票、原票为正向；' +
-      '参数必须匹配关系定义（分摊必须 amount+method，红冲必须 amount，' +
+      '参数必须匹配关系定义（分摊须 amount 或 quantity 其一 + method，红冲必须 amount，' +
       'STOCK_OFFSET/INVOICE_MATCH 必须 quantity，辅助关系无参），' +
       '多余参数会被注册表 strict 校验拒绝。' +
       '数字或日期不精确时先向用户确认，不要猜测。' +

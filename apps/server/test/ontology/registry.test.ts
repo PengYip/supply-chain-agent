@@ -140,6 +140,17 @@ describe('ontology registry', () => {
     } as never)).toThrow();
   });
 
+  it('W2-D: ALLOCATE_TO supports quantity-based attribution', () => {
+    expect(() => relationDef('ALLOCATE_TO').params.parse({ amount: 15000, method: '金额' })).not.toThrow();
+    expect(() => relationDef('ALLOCATE_TO').params.parse({ quantity: 620, method: '数量' })).not.toThrow();
+    expect(() => relationDef('ALLOCATE_TO').params.parse({ method: '定额' } as never)).not.toThrow(); // 注册表不硬拦, 写入方保证(R8)
+    expect(() => relationDef('ALLOCATE_TO').params.parse({ quantity: 620 })).toThrow(); // method 仍必填
+  });
+
+  it('W2-D: schema version bumped to loop-v3', () => {
+    expect(ONTOLOGY_SCHEMA_VERSION).toBe('2026-09-20-loop-v3');
+  });
+
   it('TRADING_WITH: 收/发货事件 -> 交易对手(spec 决策 #11, 事件对手显式化)', () => {
     expect(isRelationPairAllowed('TRADING_WITH', 'GoodsReceiptEvent', 'Counterparty')).toBe(true);
     expect(isRelationPairAllowed('TRADING_WITH', 'GoodsDeliveryEvent', 'Counterparty')).toBe(true);

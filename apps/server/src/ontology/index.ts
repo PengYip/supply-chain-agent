@@ -27,7 +27,7 @@ export const MEANING_URIS: Readonly<Record<string, string>> = {};
 // test/ontology/registry-fingerprint.json（重生成命令见 wave1 plan Task 1）。
 // ---------------------------------------------------------------------------
 
-export const ONTOLOGY_SCHEMA_VERSION = '2026-09-20-loop-v2';
+export const ONTOLOGY_SCHEMA_VERSION = '2026-09-20-loop-v3';
 
 // ---------------------------------------------------------------------------
 // 实体（docx §3：4 静态 + 7 事件；v1 字段=单据/流水既有词汇最小集）
@@ -336,7 +336,8 @@ export const ONTOLOGY_RELATIONS: ReadonlyArray<OntologyRelationDef> = [
       { from: 'GoodsDeliveryEvent', to: 'TradeContract' },
     ],
     params: z.object({
-      amount: z.number().describe('分摊金额'),
+      amount: z.number().optional().describe('分摊金额(金额归属时与 method=金额 搭配)'),
+      quantity: z.number().optional().describe('归属数量(business-loop W2-D: 数量归属, 如 收货 620 吨; 与 method=数量 搭配)'),
       ratio: z.number().min(0).max(1).optional().describe('分摊比例'),
       method: AllocateMethod.describe('分摊方式: 金额/数量/重量/定额'),
       batch: z.string().optional().describe('批次'),
