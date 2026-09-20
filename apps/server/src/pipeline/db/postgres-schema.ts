@@ -287,6 +287,8 @@ export const executionFlows = pgTable(
     createdBy: text('created_by').notNull(),
     userId: text('user_id'),
     createdAt: nowTs(),
+    // business-loop Wave 2(W2-B): 实体化幂等写回列——materializer 产事实后回写 fact id; NULL=未实体化。
+    ontologyFactId: text('ontology_fact_id'),
   },
   (t) => ({
     bindingIdx: uniqueIndex('idx_execution_flows_binding').on(t.bindingId, t.userId),
@@ -318,6 +320,8 @@ export const settlementRecords = pgTable(
     createdBy: text('created_by').notNull(),
     userId: text('user_id'),
     createdAt: nowTs(),
+    // business-loop Wave 2(W2-B): 实体化幂等写回列——materializer 产事实后回写 fact id; NULL=未实体化。
+    ontologyFactId: text('ontology_fact_id'),
   },
   (t) => ({
     contractIdx: index('idx_settlement_records_contract').on(t.contractNo, t.userId),

@@ -57,4 +57,11 @@ describe('ontology tables (SQLite lane)', () => {
     ).get('2026-06-30T00:00:00.000Z', '2026-06-30T00:00:00.000Z') as { n: number };
     expect(hit.n).toBe(0);
   });
+
+  it('flows/settlements carry ontology_fact_id writeback column (wave2 W2-B)', () => {
+    for (const tbl of ['execution_flows', 'settlement_records']) {
+      const cols = ctx.sqlite.prepare(`PRAGMA table_info(${tbl})`).all() as Array<{ name: string }>;
+      expect(cols.map((c) => c.name)).toContain('ontology_fact_id');
+    }
+  });
 });

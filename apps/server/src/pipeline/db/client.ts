@@ -512,6 +512,14 @@ export function migrate(sqlite: Database.Database): void {
     }
   }
 
+  // business-loop Wave 2(W2-B): 实体化幂等写回列——materializer 产事实后回写 fact id。
+  for (const tbl of ['execution_flows', 'settlement_records']) {
+    const cols = sqlite.prepare(`PRAGMA table_info(${tbl})`).all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'ontology_fact_id')) {
+      try { sqlite.exec(`ALTER TABLE ${tbl} ADD COLUMN ontology_fact_id TEXT`); } catch { /* concurrent */ }
+    }
+  }
+
   // P4: 种子冲突策略列(managed-wins)。NULL=纯种子行(boot 可覆写);非空=DB 优先。
   // 存量 dev 库补列, 同 guarded ALTER 模式(CREATE TABLE IF NOT EXISTS 不加列;
   // try/catch 兜并发初始化 "duplicate column name" -- 见 sessionStore.ts 51ef03c)。
@@ -1189,6 +1197,9 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     // (spec 决策 #3)。CREATE TABLE 不带此列, 新旧库统一走幂等补列。
     `ALTER TABLE ontology_edges ADD COLUMN IF NOT EXISTS schema_version TEXT`,
     `ALTER TABLE trade_facts ADD COLUMN IF NOT EXISTS schema_version TEXT`,
+    // business-loop Wave 2(W2-B): 实体化幂等写回列——materializer 产事实后回写 fact id。
+    `ALTER TABLE execution_flows ADD COLUMN IF NOT EXISTS ontology_fact_id TEXT`,
+    `ALTER TABLE settlement_records ADD COLUMN IF NOT EXISTS ontology_fact_id TEXT`,
   ];
   try {
     for (const sql of statements) {
