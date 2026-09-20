@@ -120,6 +120,26 @@ describe('ontology registry', () => {
     expect(() => relationDef('WRITE_OFF_SETTLEMENT').params.parse({ amount: 900000, partial: true })).not.toThrow();
   });
 
+  it('wave1 field extension set parses (spec D4 default)', () => {
+    expect(() => entitySchema('TradeContract').parse({
+      contractNo: 'HT-1', contractType: '采购', direction: '采购',
+      signDate: '2025-07-15', buyerName: '甲公司', sellerName: '乙公司', contractAmount: 3860000,
+    })).not.toThrow();
+    expect(() => entitySchema('TradeContract').parse({ contractNo: 'HT-1', contractType: '采购' } as never)).toThrow();
+    expect(() => entitySchema('GoodsReceiptEvent').parse({
+      eventBizType: '正向', quantity: 620, unit: '吨', warehouse: '北仓',
+    })).not.toThrow();
+    expect(() => entitySchema('SettlementEvent').parse({
+      eventBizType: '正向', amount: 100, currency: 'CNY', settlementType: '批次',
+    })).not.toThrow();
+  });
+
+  it('strict still rejects unknown keys after extension', () => {
+    expect(() => entitySchema('SettlementEvent').parse({
+      eventBizType: '正向', amount: 1, currency: 'CNY', unknownField: 1,
+    } as never)).toThrow();
+  });
+
   it('TRADING_WITH: 收/发货事件 -> 交易对手(spec 决策 #11, 事件对手显式化)', () => {
     expect(isRelationPairAllowed('TRADING_WITH', 'GoodsReceiptEvent', 'Counterparty')).toBe(true);
     expect(isRelationPairAllowed('TRADING_WITH', 'GoodsDeliveryEvent', 'Counterparty')).toBe(true);

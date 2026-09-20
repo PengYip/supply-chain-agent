@@ -43,7 +43,8 @@ export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string })
       'toId=<对手方事实id>, role=上游（发货事件则 role=下游, spec 决策 #11 事件对手显式化）。' +
       '合同归属项目："HT-1 归属 PRJ-2025-039 项目" -> relation=BELONGS_TO, fromId=<台账合同行id>, toId=<项目事实id>（from 用台账合同行 id，不是 TF-）。' +
       '背靠背："HT-1 与 HT-2 是背靠背对冲" -> relation=TRADE_PAIR, fromId/toId=两个台账合同行 id；库存核减："这批发货核减 6 月收货 400 吨" -> relation=STOCK_OFFSET, quantity=400；票票配比："这张进项票配比那张销项票 200 吨" -> relation=INVOICE_MATCH, quantity=200；补充协议挂主合同 -> relation=MASTER_SUPPLEMENT。' +
-      '边界：核销（票款匹配）用 create_writeoff、预付冲抵用 create_offset，本工具不受理；' +
+      '边界：核销（票款匹配）用 create_writeoff、预付冲抵用 create_offset，' +
+      '结算目标核销（WRITE_OFF_SETTLEMENT）亦不在本工具受理（核销工作台迁移归 Wave 4）；' +
       'fromId 必须是台账/穿透里的事实 id（TF- 开头）或合同台账行 id；toId 通常是事实 id，' +
       '仅 ALLOCATE_TO/合同起点关系用台账合同行 id；' +
       '连接对必须满足本体注册表（如 PARENT_OF 只允许 交易对手->交易对手、' +
@@ -63,10 +64,10 @@ export function buildLinkOntologyTool(deps: { ctx: DbContext; userId?: string })
       amount: z.number().optional().describe('关系金额（ALLOCATE_TO/REVERSE_ORIGIN 必填，如 15000）'),
       ratio: z.number().min(0).max(1).optional().describe('比例（ALLOCATE_TO 分摊比例 / PARENT_OF 持股比例，选填，如 0.5）'),
       method: AllocateMethod.optional().describe('分摊方式（仅 ALLOCATE_TO 必填：金额/数量/重量/定额）'),
-      batch: z.string().optional().describe('批次标识（ALLOCATE_TO 族选填；DELIVERED_AS=到货批次，如 SIF 厂号批次）'),
+      batch: z.string().optional().describe('批次标识（ALLOCATE_TO 族选填；DELIVERED_AS=到货批次，如 SIF 厂号批次；STOCK_OFFSET 核减批次可选）'),
       partial: z.boolean().optional().describe('部分核销标记（本工具词表内暂无核销关系，保留字段）'),
       reason: z.string().optional().describe('红冲原因（仅 REVERSE_ORIGIN 选填）'),
-      note: z.string().optional().describe('备注（仅 PARENT_OF 选填，如 控股/全资）'),
+      note: z.string().optional().describe('备注（PARENT_OF 如 控股/全资；TRADE_PAIR 如 对冲/套利；MASTER_SUPPLEMENT 补充说明，均选填）'),
       role: z.enum(['上游', '下游']).optional().describe('对手方位（仅 TRADING_WITH 必填：收货事件=上游，发货事件=下游）'),
     }),
     execute: async ({ relation, fromId, toId, quantity, amount, ratio, method, batch, partial, reason, note, role }) => {
