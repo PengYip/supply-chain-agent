@@ -3,7 +3,7 @@
 // 跳过计数不造假数据(W2-C: payType/invoiceNo 解析不到就跳)。
 import type { DbContext, PostgresDbContext } from './db/client.js';
 import {
-  insertTradeFact, insertOntologyEdge, listTradeFactsAsOf,
+  insertTradeFact, insertOntologyEdge, listTradeFactsAsOf, listOntologyEdgesAsOf,
   invalidateTradeFact, invalidateOntologyEdgesFromFact,
   type TradeFactRow,
 } from '../ontology/repo.js';
@@ -104,14 +104,37 @@ async function claimFlowWriteback(ctx: DbContext, flowId: string, factId: string
   return ctx.sqlite.prepare(sql).run(factId, flowId).changes > 0;
 }
 
-/** R11: 同 documentId+entityType 的现行事实(业务时间 now 口径, 内存过滤 documentId)。 */
+/**
+ * R11/R12: 同 documentId+entityType 的现行事实配对。
+ * - 排除本趟已认领(claimed)的 fact id——多绑定下逐流独立配对, 不收敛不误失效;
+ * - 边目标优先: 候选事实的现行 ALLOCATE_TO 边目标合同 == 该 flow 合同者, 视为本流
+ *   上一代事实(确定性配对, 避免流-事实错挂; 差异时调用方走换代替换);
+ * - 无边目标匹配: 退等价候选(复用路径), 无等价则任意候选(单流差异兜底)。
+ */
 async function findCurrentFactForFlow(
-  ctx: DbContext, docId: string, entity: OntologyEntityName, userId?: string,
+  ctx: DbContext, docId: string, entity: OntologyEntityName,
+  payload: Record<string, unknown>, userId: string | undefined,
+  claimed: ReadonlySet<string>, contractNo: string, uid: string,
 ): Promise<TradeFactRow | null> {
+  const now = new Date().toISOString();
   const rows = await listTradeFactsAsOf(
-    ctx, asOfBusinessTime(new Date().toISOString()), { entityType: entity }, userId,
+    ctx, asOfBusinessTime(now), { entityType: entity }, userId,
   );
-  return rows.find((f) => f.documentId === docId) ?? null;
+  const candidates = rows.filter((f) => f.documentId === docId && !claimed.has(f.id));
+  if (candidates.length === 0) return null;
+  if (contractNo) {
+    const contractId = await findContractIdByNo(ctx, contractNo, uid);
+    if (contractId) {
+      const edges = await listOntologyEdgesAsOf(
+        ctx, asOfBusinessTime(now), { relation: 'ALLOCATE_TO' }, userId,
+      );
+      const matched = candidates.find((f) =>
+        edges.some((e) => e.fromId === f.id && e.toId === contractId));
+      if (matched) return matched;
+    }
+  }
+  const equivalent = candidates.filter((f) => payloadEquivalent(payload, f.payload));
+  return equivalent[0] ?? candidates[0] ?? null;
 }
 
 /** R11 实质等价: 金额/数量/币种/合同号全同即视为等价(其余字段差异容忍)。 */
@@ -136,6 +159,10 @@ export async function materializeDocumentOntology(
   const uid = effectiveUserId(userId);
   const flows = await listPendingFlows(ctx, docId, uid);
   res.attempted = flows.length;
+  // R12: 本趟已认领集合(复用与新建都入)——多绑定逐流独立配对, 不收敛不误失效。
+  const claimedFactIds = new Set<string>();
+  // R12: 本趟处理过的 (docId:entity) 维度, 供孤儿清扫。
+  const processedDims = new Set<string>();
   // 补充字段读取: 同文档最新 extraction(中文键 fields); 无 extraction 时 fields 为空。
   const extraction = await loadLatestExtractionByDocId(ctx, docId, userId);
   const fields = (extraction?.fields ?? {}) as Record<string, unknown>;
@@ -143,6 +170,7 @@ export async function materializeDocumentOntology(
   for (const flow of flows) {
     const entity = FLOW_ENTITY[flow.flow_type]?.[flow.direction];
     if (!entity) { res.skippedNoMap += 1; continue; }
+    processedDims.add(`${docId}:${entity}`);
     try {
       let payload: Record<string, unknown>;
       if (entity === 'InvoiceEvent') {
@@ -178,12 +206,15 @@ export async function materializeDocumentOntology(
         };
       }
       const validAt = flow.voucher_date ?? new Date();
-      // R11 refresh-proof: 同 documentId+entityType 现行事实存在时先判等价。
-      const current = await findCurrentFactForFlow(ctx, docId, entity, userId);
+      // R11/R12: 现行事实配对(排除本趟已认领; 边目标优先)。
+      const current = await findCurrentFactForFlow(
+        ctx, docId, entity, payload, userId, claimedFactIds, flow.contract_no, uid,
+      );
       if (current) {
         if (payloadEquivalent(payload, current.payload)) {
           // 实质等价 -> 复用: 只回写 flow 认领, 不插新事实不插新边(计数不进 created)。
           await writebackFlowId(ctx, flow.id, current.id);
+          claimedFactIds.add(current.id);
           continue;
         }
         // 有差异 -> 换代替换: 旧事实+其发出的现行边整体失效, 审计链保留旧行。
@@ -194,6 +225,7 @@ export async function materializeDocumentOntology(
         entityType: entity, payload, validAt, createdBy: 'materializer', documentId: docId,
       }, userId);
       res.created += 1;
+      claimedFactIds.add(factId);
       const contractId = await findContractIdByNo(ctx, flow.contract_no, uid);
       // 合同归属两路（wave4 plan 口径）：款/票/结算走 payload.contractNo（上已落），
       // 收/发货/服务费走 ALLOCATE_TO 边——注册表连接对白名单是 SSOT，不合法对不建边。
@@ -218,9 +250,29 @@ export async function materializeDocumentOntology(
         await invalidateOntologyEdgesFromFact(ctx, entity, factId, validAt, userId);
         res.created -= 1;
         res.edges = Math.max(0, res.edges - 1);
+        claimedFactIds.delete(factId); // 已失效, 移出认领集(孤儿清扫不再命中)
       }
     } catch (e) {
       res.failures.push(`${flow.id}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // R12 孤儿清扫: 本趟处理过的 (docId, entityType) 维度下, 现行活事实既未被本趟
+  // 认领也非本趟新建(即本趟已失效者或绑定移除后的残留) -> 整体失效。
+  // 覆盖"绑定被移除后 refresh"场景: 只剩部分流, 其余维度的旧事实应随绑定消亡。
+  const sweepAt = new Date();
+  for (const key of processedDims) {
+    const sep = key.indexOf(':');
+    const dimDoc = key.slice(0, sep);
+    const dimEntity = key.slice(sep + 1) as OntologyEntityName;
+    const rows = await listTradeFactsAsOf(
+      ctx, asOfBusinessTime(sweepAt.toISOString()), { entityType: dimEntity }, userId,
+    );
+    for (const f of rows) {
+      if (f.documentId === dimDoc && !claimedFactIds.has(f.id)) {
+        await invalidateTradeFact(ctx, f.id, sweepAt, userId);
+        await invalidateOntologyEdgesFromFact(ctx, dimEntity, f.id, sweepAt, userId);
+      }
     }
   }
   return res;

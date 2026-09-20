@@ -245,3 +245,78 @@ describe('R11 refresh-proof idempotency (wave2 final review)', () => {
     expect(changes).toBe(0);
   });
 });
+
+describe('R12 multi-binding fact matching (wave2 final review round 2)', () => {
+  it('多绑定首次: 同 doc 两笔货物流各绑定不同合同 -> 两事实两 ALLOCATE_TO 边, 无收敛', async () => {
+    insertDoc('DOC-M1');
+    insertContract('CL-1', 'HT-1');
+    insertContract('CL-2', 'HT-2');
+    insertFlow({ id: 'F-1', docId: 'DOC-M1', contractNo: 'HT-1', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨', voucherDate: '2026-09-01T00:00:00Z' });
+    insertFlow({ id: 'F-2', docId: 'DOC-M1', contractNo: 'HT-2', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨', voucherDate: '2026-09-01T00:00:00Z' });
+    const res = await materializeDocumentOntology(ctx, 'DOC-M1', 'u1');
+    expect(res.created).toBe(2); // 无收敛
+    const facts = await factsOf('GoodsReceiptEvent');
+    expect(facts).toHaveLength(2);
+    const edges = await edgesOf('ALLOCATE_TO');
+    expect(edges).toHaveLength(2);
+    // 两条流各自认领不同 fact id
+    const f1Fact = flowFactId('F-1')!;
+    const f2Fact = flowFactId('F-2')!;
+    expect(f1Fact).not.toBe(f2Fact);
+    // 边各指各合同(流-事实-边一一对应)
+    expect(edges.find((e) => e.fromId === f1Fact)?.toId).toBe('CL-1');
+    expect(edges.find((e) => e.fromId === f2Fact)?.toId).toBe('CL-2');
+  });
+
+  it('多绑定刷新: 重建两流(同值) -> 事实数不变, 两流各自认领原 fact id, 无新边', async () => {
+    insertDoc('DOC-M2');
+    insertContract('CL-1', 'HT-1');
+    insertContract('CL-2', 'HT-2');
+    insertFlow({ id: 'F-1', docId: 'DOC-M2', contractNo: 'HT-1', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨', voucherDate: '2026-09-01T00:00:00Z' });
+    insertFlow({ id: 'F-2', docId: 'DOC-M2', contractNo: 'HT-2', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨', voucherDate: '2026-09-01T00:00:00Z' });
+    await materializeDocumentOntology(ctx, 'DOC-M2', 'u1');
+    const f1First = flowFactId('F-1')!;
+    const f2First = flowFactId('F-2')!;
+    expect(f1First).not.toBe(f2First);
+    // 模拟 refresh: DELETE + 重建两流(同值, 新 id)
+    ctx.sqlite.prepare('DELETE FROM execution_flows WHERE document_id = ?').run('DOC-M2');
+    insertFlow({ id: 'F-1b', docId: 'DOC-M2', contractNo: 'HT-1', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨', voucherDate: '2026-09-01T00:00:00Z' });
+    insertFlow({ id: 'F-2b', docId: 'DOC-M2', contractNo: 'HT-2', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨', voucherDate: '2026-09-01T00:00:00Z' });
+    const res = await materializeDocumentOntology(ctx, 'DOC-M2', 'u1');
+    expect(res.created).toBe(0); // 全部复用
+    expect(res.edges).toBe(0);   // 无新边
+    expect(await factsOf('GoodsReceiptEvent')).toHaveLength(2); // 事实数不变
+    // 边目标优先配对: HT-1 流回 f1First, HT-2 流回 f2First(确定性)
+    expect(flowFactId('F-1b')).toBe(f1First);
+    expect(flowFactId('F-2b')).toBe(f2First);
+    expect(await edgesOf('ALLOCATE_TO')).toHaveLength(2);
+  });
+
+  it('绑定移除: 只重建一流 -> 未被认领的旧事实失效、其边失效, 存活流事实现行', async () => {
+    insertDoc('DOC-M3');
+    insertContract('CL-1', 'HT-1');
+    insertContract('CL-2', 'HT-2');
+    insertFlow({ id: 'F-1', docId: 'DOC-M3', contractNo: 'HT-1', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨', voucherDate: '2026-09-01T00:00:00Z' });
+    insertFlow({ id: 'F-2', docId: 'DOC-M3', contractNo: 'HT-2', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨', voucherDate: '2026-09-01T00:00:00Z' });
+    await materializeDocumentOntology(ctx, 'DOC-M3', 'u1');
+    const f1First = flowFactId('F-1')!;
+    const f2First = flowFactId('F-2')!;
+    // 模拟 refresh: 只重建 HT-1 那笔(HT-2 绑定被移除)
+    ctx.sqlite.prepare('DELETE FROM execution_flows WHERE document_id = ?').run('DOC-M3');
+    insertFlow({ id: 'F-1c', docId: 'DOC-M3', contractNo: 'HT-1', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨', voucherDate: '2026-09-01T00:00:00Z' });
+    const res = await materializeDocumentOntology(ctx, 'DOC-M3', 'u1');
+    expect(res.created).toBe(0);
+    expect(flowFactId('F-1c')).toBe(f1First); // 存活流认领原事实
+    // 被移除绑定的旧事实失效(孤儿清扫)
+    const removed = await getTradeFactById(ctx, f2First, 'u1');
+    expect(removed?.invalidAt).not.toBeNull();
+    // 其边失效
+    const removedEdge = ctx.sqlite.prepare('SELECT invalid_at FROM ontology_edges WHERE from_id = ?').get(f2First) as { invalid_at: string | null };
+    expect(removedEdge.invalid_at).not.toBeNull();
+    // 存活事实现行
+    expect((await getTradeFactById(ctx, f1First, 'u1'))?.invalidAt).toBeNull();
+    const edges = await edgesOf('ALLOCATE_TO');
+    expect(edges).toHaveLength(1);
+    expect(edges[0]!.fromId).toBe(f1First);
+  });
+});
