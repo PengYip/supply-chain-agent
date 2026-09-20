@@ -14,6 +14,7 @@ import { listProjectedEntities, getProjectedEntityDetail } from '../ontology/pro
 import { getNeighbors } from '../ontology/neighbors.js';
 import { insertTradeFact, supersedeTradeFact } from '../ontology/repo.js';
 import { syncOntologyGraph, syncOntologyGraphSafe } from '../ontology/graphSync.js';
+import { computeGaps } from '../ontology/gaps.js';
 import {
   CreateMasterDataInputSchema, ChangeMasterDataInputSchema,
   commodityCodeGateError, masterDataFormSchemaJson,
@@ -171,6 +172,20 @@ ontologyRoute.post('/graph/sync', async (c) => {
   } catch (e) {
     console.error('[ontology] graph sync failed:', errDetail(e));
     return c.json({ error: 'graph sync failed', detail: errDetail(e) }, 500);
+  }
+});
+
+/** GET /gaps — 四组勾稽缺口报表(business-loop Wave 4, 聚合=ontology/gaps.ts computeGaps)。
+ *  纯只读; 可选 projectNo 过滤(经 BELONGS_TO 反查合同集合); 异常 500 兜底。 */
+ontologyRoute.get('/gaps', async (c) => {
+  const user = c.get('user')!;
+  try {
+    const projectNo = c.req.query('projectNo');
+    const report = await computeGaps(getDbContext(), projectNo ? { projectNo } : {}, user.id);
+    return c.json(report);
+  } catch (e) {
+    console.error('[ontology] gaps compute failed:', errDetail(e));
+    return c.json({ error: 'gaps compute failed', detail: errDetail(e) }, 500);
   }
 });
 
