@@ -192,7 +192,27 @@ INVOICE_MATCH。
 
 ## 实施记录
 
-### Wave 5（2026-09-20/21 验收修复波，四枚提交已部署 a329fe4）
+### Wave 6（2026-09-21 火运贯通+闭环补全，5 枚提交已部署 7e66bf4）
+
+- **T1 火运词汇适配**（d08b073）：根因＝运输凭证/重量凭证（模板树中间节点）不在
+  FLOW_ADAPTERS；补两行货物流适配（qtyFields 对齐汽运磅单族 7 键，R21 无
+  codedDirection）。轨道衡称重单/铁路大票本有适配；货转单因图片凭证锚点路由保护
+  有意不改。
+- **T2 上传健壮性**（558310a）：根因＝MinIO fGetObject part 临时名 263B > NAME_MAX
+  255（ENAMETOOLONG，dev pm2 日志实证）；flattenLocalName 190B 预算仅净化落盘名，
+  MinIO key 与可见名不动（红线遵守）。
+- **T3+T3b 结算核销写入口**（0994c15+2bc7462）：create_writeoff 增 target 判别
+  （缺省 invoice 向后兼容，R22）；settlement 分支 dst 白名单拦截 InvoiceEvent、守恒
+  复用 validateAllocationPlan；WriteoffView 全空模式折叠+WS- 批次前缀；工作台提交
+  路由三值枚举+指令带 target: settlement。六环验收"关系可登记"最后缺口补上。
+- **收口复测**：PATCH 刷新大票（运输凭证×货权转移×XYRL-2022-225）→ skipped 原因
+  `direction-undeterminable`——适配器已生效（到达方向判定层），卡在合同侧别：
+  deriveContractType 无法消歧抽取值"购销合同" → contract_type 空 → sideUnknown。
+  系统诚实跳过并给出理由，行为正确。
+- **Wave 7 发现**：购销合同类歧义需要业务消歧 UX（台账合同类型人工修正入口）；
+  deriveContractType 与抽取"合同类型"字段的映射链待核；dev Neo4j 脚本端图同步
+  挂起诊断（R16 遗留）。
+
 
 钢材项目实测发现 + 火运数据集复测驱动的修复：
 - **56c400f 三连修复**：发货单 formTypes 增 交货确认单/交货单/发运单（分类纠偏）；
