@@ -232,6 +232,11 @@ INVOICE_MATCH。
   → tile① 2000.05→594.26 实时变化；⑤应收未收 0→null 为 R19 诚实降级（称重单有量
   无金额，结算/发票单据补齐后回值）。运输凭证 重量(kg)/计费重量(kg)（'(kg)' 后缀不
   在单位推断链）与重量凭证 裸'重量'（单位不明）暂不接，记 Wave 8 候选。
+- **乐化数据集收尾（2026-09-21 dev 实证）**：mu… 批 6 张有量称重单批量绑定
+  （凭证 relation）后，XYRL-2022-225 名下 8 条流水 total_qty=10,654.9t（合同量 1.0
+  万吨，合理超运区间）、8 事实存活、7 条 ALLOCATE_TO 全挂（大票无数量无边=守卫自洽）；
+  tile①=−8,654.85 为诚实算术（dev 仅销侧发货在册，无采购侧收货——购侧单据录入后
+  自衡）。mt… 旧批称重单（另属主、含 57720 异常值疑 kg 误读）整批不绑，留用户裁决。
 - **验收**：每任务 TDD + councillor 评审（T3 一轮修复后全 ADDRESSED）+ oracle 全分支
   终审 GO（零 Critical/Important，红线三条独立验证）；全量 build/lint/test 绿
   （server 1976·42skip / web 143）；合并 main + push（CI/CD 部署 10.10.0.2，sha 4142d01；
@@ -240,10 +245,10 @@ INVOICE_MATCH。
   （review.ts=流水条数 vs contracts.ts=文档张数，优先统一）；修正动作审计痕迹
   （decided_by/telemetry，与 review.ts PATCH /type 一起做）；legacy user_id='' 行 404
   错误码细化；500 errDetail 透出收敛；买受方/出卖方 侧别锚点键集词汇候选；前端
-  encodeURIComponent 机会补测；角标 aria；未挂边悬空事实进勾稽口径重估；gaps 组名
-  在台账行 fields 缺 contractNo 时回退行 id（台账写入口补 fields.contractNo 或 gaps
-  用 contract_no 列兜底）；运输凭证 重量(kg)/计费重量(kg) 的 '(kg)' 后缀单位推断；
-  重量凭证 裸'重量' 键单位语义。
+  encodeURIComponent 机会补测；角标 aria；未挂边悬空事实进勾稽口径重估；gaps API
+  无按合同下钻（响应仅全局四组+检查项，合同身份只经 sideUnknown 备注浮现且
+  fields.contractNo 缺失时回退台账行 id——下钻视图与命名兜底一并评估）；运输凭证
+  重量(kg)/计费重量(kg) 的 '(kg)' 后缀单位推断；重量凭证 裸'重量' 键单位语义。
 
 ### Wave 6（2026-09-21 火运贯通+闭环补全，5 枚提交已部署 7e66bf4）
 
