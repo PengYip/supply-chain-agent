@@ -19,6 +19,7 @@ vi.mock('../../api/contracts', async (importOriginal) => {
 
 function okResult(overrides: Partial<ContractTypeChangeResult> = {}): ContractTypeChangeResult {
   return {
+    ok: true,
     contractNo: 'XYRL-2022-225',
     contractType: '采购',
     refreshedFlows: 2,
@@ -106,5 +107,18 @@ describe('ContractTypeCorrection (business-loop wave7)', () => {
     expect(screen.getByTestId('contract-type-editor')).toBeTruthy();
     // 从受控值打开: 提供「取消」回退
     expect(screen.getByText('取消')).toBeTruthy();
+  });
+
+  it('受控值态完整流程: 打开修正 -> 选新值 -> 保存 -> patch 调用 + onChanged + 成功反馈', async () => {
+    const onChanged = vi.fn();
+    render(<ContractTypeCorrection contractNo="C-2" currentType="销售" onChanged={onChanged} />);
+    fireEvent.click(screen.getByTestId('contract-type-edit-trigger'));
+    fireEvent.change(screen.getByTestId('contract-type-select'), { target: { value: '物流' } });
+    fireEvent.click(screen.getByTestId('contract-type-submit'));
+    await waitFor(() => expect(patchMock).toHaveBeenCalledWith('C-2', '物流'));
+    expect(await screen.findByTestId('contract-type-result')).toBeTruthy();
+    expect(screen.getByText(/已改为「物流」/)).toBeTruthy();
+    expect(screen.getByText(/已重建 2 张单据的执行流水/)).toBeTruthy();
+    expect(onChanged).toHaveBeenCalled();
   });
 });

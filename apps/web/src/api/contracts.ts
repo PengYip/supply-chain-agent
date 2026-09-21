@@ -13,6 +13,7 @@ export function isControlledContractType(v: string | null | undefined): v is Con
 /** PATCH /api/contracts/:no/type 200 响应(与 server routes/contracts.ts 一致)。
  *  refreshedFlows 语义 = 重建流水的文档数(张/单据), 不是流水条数。 */
 export interface ContractTypeChangeResult {
+  ok: boolean;
   contractNo: string;
   contractType: string;
   refreshedFlows: number;
@@ -53,16 +54,24 @@ export async function patchContractType(
     }
     throw new Error(message);
   }
+  let data: Partial<ContractTypeChangeResult> & { error?: unknown };
   try {
-    const data = (await res.json()) as Partial<ContractTypeChangeResult>;
-    return {
-      contractNo: typeof data.contractNo === 'string' ? data.contractNo : contractNo,
-      contractType: typeof data.contractType === 'string' ? data.contractType : contractType,
-      refreshedFlows: typeof data.refreshedFlows === 'number' ? data.refreshedFlows : 0,
-      failed: typeof data.failed === 'number' ? data.failed : 0,
-      skipped: Array.isArray(data.skipped) ? data.skipped : [],
-    };
+    data = (await res.json()) as Partial<ContractTypeChangeResult> & { error?: unknown };
   } catch {
     throw new Error('响应格式异常');
   }
+  // 契约上失败走 4xx + error 码; 防御 200 带 ok:false 的异常形状——按错误码映射
+  // 给接地文案, 无码按响应异常, 绝不误判成功。
+  if (data.ok === false) {
+    const code = typeof data.error === 'string' ? data.error : '';
+    throw new Error(CONTRACT_ERROR_TEXT[code] ?? '响应异常，请稍后重试');
+  }
+  return {
+    ok: data.ok === true,
+    contractNo: typeof data.contractNo === 'string' ? data.contractNo : contractNo,
+    contractType: typeof data.contractType === 'string' ? data.contractType : contractType,
+    refreshedFlows: typeof data.refreshedFlows === 'number' ? data.refreshedFlows : 0,
+    failed: typeof data.failed === 'number' ? data.failed : 0,
+    skipped: Array.isArray(data.skipped) ? data.skipped : [],
+  };
 }
