@@ -192,7 +192,28 @@ INVOICE_MATCH。
 
 ## 实施记录
 
-### Wave 4（2026-09-20 完成，终审 MERGE_READY——业务闭环收官）
+### Wave 5（2026-09-20/21 验收修复波，四枚提交已部署 a329fe4）
+
+钢材项目实测发现 + 火运数据集复测驱动的修复：
+- **56c400f 三连修复**：发货单 formTypes 增 交货确认单/交货单/发运单（分类纠偏）；
+  PATCH /type 白名单对齐模板树（allowedDocTypes = 模板活跃 ∪ legacy 八类，DB 失败兜底）；
+  bindings 路由补本体 materializer 钩子。
+- **b32e548 fieldHints 多键**：收/发货单 fieldHints 覆盖 FLOW_ADAPTERS qtyFields 全键
+  （发运数量/数量_吨/数量）。
+- **c07c65f 流水重建读最新抽取**：根因＝SQLite 秒精度 created_at 同秒平局使
+  loadLatest ORDER BY 取旧行（20/20 实证）；流水重建经 resolveLatestExtraction
+  （loadLatest 主取 + listLatestExtractionsByDocIds 确定性口径交叉核对）；附带
+  gaps sideOf 购销合同双词歧义 → sideUnknown。
+- **复测结论（dev 实证）**：PATCH 发货单 3/3 通过且流水重建为 out/发货单 + 事实自动
+  入谱免回填；重抽后 数量_吨=2000.049 精确抽取并贯通 流水→事实→首条 ALLOCATE_TO
+  边→勾稽 tile①=2000.05 吨实数；批次拆分器在火运多票 PDF 上自动工作（单据组容器+
+  轨道衡称重单子单据）。
+- **新发现（Wave 6 候选）**：火运词汇（运输凭证/铁路大票/轨道衡称重单）不在
+  FLOW_ADAPTERS → 绑定后无流水；JPG 签收件解析失败（图像管线限制）；合同文件名
+  特殊字符上传 500（干净名可绕）；loadLatest 同秒平局的其他消费方待统一确定性口径；
+  未挂边的发货事实不进 tile①（悬空口径设计再评估）。
+
+
 
 - **T1 聚合+金标准+W3 打磨**（306728e）+ 修复轮（4b49dc3）：`ontology/gaps.ts`
   computeGaps 四组 11 项；金标准数字逐字断言（终审独立复算全对）；R20 双口径（⑦⑨
