@@ -223,14 +223,27 @@ INVOICE_MATCH。
   **遗留观察**：大票（运输凭证）抽取无吨位字段→事实 qty/amt 空→ALLOCATE_TO 守卫
   （至少其一）跳过→悬空不进勾稽聚合——W2-C 诚实降级与"未挂边悬空口径"已知项；
   轨道衡称重单子单据（携带重量）绑定后即挂边入账。
+- **Wave 7 followup（2026-09-21 纵深验收衍生，43e5004 已部署）**：轨道衡称重单
+  qtyFields 追加 ['总净重_吨','吨'],['净重_吨','吨']（追加位零扰动既有优先级；总净重优先
+  =unit 页区聚合，兄弟 unit 值互异实证非父总计复制；cou-1 评审 APPROVED）+ templateSeed
+  hints 两键。dev 全链实证：绑定称重单 DOC-muanykrl-v9kz（凭证 relation，手动绑定路由
+  直接 confirmed）→ 同值重 PATCH 触发全绑定重建 → 流水 quantity_ton=1405.79 → 事实
+  差分换代（旧 qty 空事实 invalid_at、新事实带量存活）→ 首条 ALLOCATE_TO 边挂台账行
+  → tile① 2000.05→594.26 实时变化；⑤应收未收 0→null 为 R19 诚实降级（称重单有量
+  无金额，结算/发票单据补齐后回值）。运输凭证 重量(kg)/计费重量(kg)（'(kg)' 后缀不
+  在单位推断链）与重量凭证 裸'重量'（单位不明）暂不接，记 Wave 8 候选。
 - **验收**：每任务 TDD + councillor 评审（T3 一轮修复后全 ADDRESSED）+ oracle 全分支
   终审 GO（零 Critical/Important，红线三条独立验证）；全量 build/lint/test 绿
-  （server 1976·42skip / web 143）；合并 main + push（CI/CD 部署 10.10.0.2，sha 4142d01）。
+  （server 1976·42skip / web 143）；合并 main + push（CI/CD 部署 10.10.0.2，sha 4142d01；
+  followup 43e5004 同链部署）。
 - **Wave 8 候选（oracle triage + 波内发现）**：refreshedFlows 同名异单位契约陷阱
   （review.ts=流水条数 vs contracts.ts=文档张数，优先统一）；修正动作审计痕迹
   （decided_by/telemetry，与 review.ts PATCH /type 一起做）；legacy user_id='' 行 404
   错误码细化；500 errDetail 透出收敛；买受方/出卖方 侧别锚点键集词汇候选；前端
-  encodeURIComponent 机会补测；角标 aria；未挂边悬空事实进勾稽口径重估。
+  encodeURIComponent 机会补测；角标 aria；未挂边悬空事实进勾稽口径重估；gaps 组名
+  在台账行 fields 缺 contractNo 时回退行 id（台账写入口补 fields.contractNo 或 gaps
+  用 contract_no 列兜底）；运输凭证 重量(kg)/计费重量(kg) 的 '(kg)' 后缀单位推断；
+  重量凭证 裸'重量' 键单位语义。
 
 ### Wave 6（2026-09-21 火运贯通+闭环补全，5 枚提交已部署 7e66bf4）
 
