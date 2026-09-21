@@ -192,6 +192,46 @@ INVOICE_MATCH。
 
 ## 实施记录
 
+### Wave 7（2026-09-21 合同类型消歧+遗留清偿，7 提交已部署 4142d01）
+
+- **T1 映射链诊断**（无代码）：乐化 XYRL-2022-225 dev 实证——抽取值"购销合同"有意不映射
+  （别名表设计，tradeSemantics:35）、标题"煤炭购销合同"关键词不中、甲方/乙方锚点在但乙方
+  （湖北国贸供应链管理有限公司）不在 self_parties → 三层诚实降级全落空；抽取行早台账行
+  3-5ms **无 confirm 早于抽取竞态**；upsertContractLedgerEntry 唯一调用点=录入时。结论
+  (A) 链路完好纯歧义。
+- **T2 修正端点**（78bea28）：`PATCH /api/contracts/:contractNo/type`——白名单=
+  TRADE_VOCAB.contractTypes（"购销合同"400 拒绝）；更新域 (contract_no, user_id) 请求者
+  本人行（UNIQUE 索引对齐，双后端）；修正后按请求者 confirmed 绑定逐文档重建流水
+  （parties.ts backfillFlows 模式：refreshedFlows/failed/skipped 透传）+ materializer
+  钩子；PATCH /:docId/type 重派生守卫（非空不动）保护人工值不被 docType 级联清洗。
+- **T3 前端入口**（09f96ca+ef1c1c2，designer 通道）：ContractTypeCorrection 两态组件
+  （待消歧 warning 弱化引导 / 受控态安静入口）挂 EntityDetailDrawer 合同详情；受控六值
+  选择禁自由文本；refreshedFlows 按张口径文案；ok:false-on-200 防御消费（评审修复轮）。
+- **T4 R16 Neo4j 结案**（7a5bca5）：dev 实证 Neo4j/驱动/网络健康（bolt 双栈探针 80ms、
+  钩子路径持续投影、驱动超时自诞生即有）——挂起不可按需复现；根因判定=无查询级超时的
+  无界 await + 零进度信号 + 脚本无资源收尾。修复：scripts/lib/watchdog.ts（可测原语）+
+  图同步段逐属主 120s 看门狗 + 阶段进度日志 + closeNeo4j/双后端 ctx finally 收尾
+  （dry-run 也收尾）。残余：driver.close 对 hung 查询不强制 abort（既定取舍，ops 兜底）。
+- **T5 四小项**（cc68ff0）：loadLatest 平局键下沉源函数（SQLite rowid DESC / PG id DESC，
+  8 消费方自动继承，wave5 交叉核对转防御性冗余）；gaps resolveByNo byNo 缓存（镜像
+  resolveByEdge）；GapsPanel ④负→「预收」/⑥负→「超收」语义角标（R2 亚分归 0 故纯
+  amt<0）；tool-inventory query_business 补 page 分页文案。
+- **收口验收（dev 实证）**：acceptance 会话 PATCH XYRL-2022-225→销售：200
+  refreshedFlows=2、结算单据诚实 skipped(not-whitelisted)；台账 contract_type='销售'；
+  大票流水 EF-mub161ok-n6u1（货物流/**out**——Wave 6 卡点 direction-undeterminable
+  消除）+ 事实 TF-mub161os-z3jl GoodsDeliveryEvent 自动入谱（ontology_fact_id 回写）。
+  **遗留观察**：大票（运输凭证）抽取无吨位字段→事实 qty/amt 空→ALLOCATE_TO 守卫
+  （至少其一）跳过→悬空不进勾稽聚合——W2-C 诚实降级与"未挂边悬空口径"已知项；
+  轨道衡称重单子单据（携带重量）绑定后即挂边入账。
+- **验收**：每任务 TDD + councillor 评审（T3 一轮修复后全 ADDRESSED）+ oracle 全分支
+  终审 GO（零 Critical/Important，红线三条独立验证）；全量 build/lint/test 绿
+  （server 1976·42skip / web 143）；合并 main + push（CI/CD 部署 10.10.0.2，sha 4142d01）。
+- **Wave 8 候选（oracle triage + 波内发现）**：refreshedFlows 同名异单位契约陷阱
+  （review.ts=流水条数 vs contracts.ts=文档张数，优先统一）；修正动作审计痕迹
+  （decided_by/telemetry，与 review.ts PATCH /type 一起做）；legacy user_id='' 行 404
+  错误码细化；500 errDetail 透出收敛；买受方/出卖方 侧别锚点键集词汇候选；前端
+  encodeURIComponent 机会补测；角标 aria；未挂边悬空事实进勾稽口径重估。
+
 ### Wave 6（2026-09-21 火运贯通+闭环补全，5 枚提交已部署 7e66bf4）
 
 - **T1 火运词汇适配**（d08b073）：根因＝运输凭证/重量凭证（模板树中间节点）不在

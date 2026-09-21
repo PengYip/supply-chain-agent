@@ -92,6 +92,8 @@ which reloads it).
 
 Access cheat-sheet (verify before trusting local files):
 
+- **验收账号**（dev 复测用，火运乐化/钢材数据属主）：`acceptance@test.local` / `Abc12345`（better-auth `POST /api/auth/sign-in/email`，会话走 Set-Cookie）。
+
 - **Dev database topology (verified 2026-09-07): the runtime DB is Postgres.**
   The dev deployment runs `DB_BACKEND=postgres` +
   `DATABASE_URL=postgresql://sca:<pwd>@localhost:5433/sca`, so ALL dev data —
