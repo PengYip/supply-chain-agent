@@ -181,6 +181,39 @@ export function exceedsUploadLimit(size: number, limit: number): boolean {
   return size > limit;
 }
 
+/**
+ * Flatten a MinIO object key to a single INGEST_ROOT filename, bounded to a
+ * byte budget (wave6: ENAMETOOLONG on upload). minio's fGetObject writes a
+ * temp part file `<name>.<etag-b64>.part.minio` during download; long CJK
+ * filenames (3 bytes/char UTF-8) + the uuid/folder prefixes routinely push
+ * that part file past Linux NAME_MAX (255 bytes) -> upload 500 (dev repro:
+ * ≥（）空格 long names). The MinIO key itself is left untouched (S3 allows
+ * 1024-byte keys; the file drawer derives the visible name from the key via
+ * parseFileKey) — only the LOCAL ingest copy is bounded. The trailing
+ * extension is preserved so parse routing (digitalAdapter matches sourceUri by
+ * extension) keeps working; the leading prefix (user/uuid) is preserved for
+ * traceability. Short names return unchanged (behavior identical to the
+ * historical `key.replace(/\//g, '_')` flattening).
+ */
+export function flattenLocalName(key: string, budget = 190): string {
+  const flat = key.replace(/\//g, '_');
+  if (Buffer.byteLength(flat, 'utf8') <= budget) return flat;
+  // Keep the extension (last dot segment) and the leading prefix; drop the middle.
+  const dot = flat.lastIndexOf('.');
+  const ext = dot > 0 ? flat.slice(dot) : '';
+  const stem = dot > 0 ? flat.slice(0, dot) : flat;
+  const stemBudget = Math.max(0, budget - Buffer.byteLength(ext, 'utf8'));
+  let out = '';
+  let outBytes = 0;
+  for (const ch of stem) {
+    const chBytes = Buffer.byteLength(ch, 'utf8');
+    if (outBytes + chBytes > stemBudget) break;
+    out += ch;
+    outBytes += chBytes;
+  }
+  return out + ext;
+}
+
 /** Upload a file -> MinIO -> INGEST_ROOT + create a storage-only documents stub. */
 // Phase 4 RBAC: only admin/trader may upload files (viewer cannot).
 filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
@@ -221,8 +254,10 @@ filesRoute.post('/', requireRole('admin', 'trader'), async (c) => {
   const buffer = Buffer.from(await file.arrayBuffer());
   // Flatten the slash-bearing key to a single filename (assertWithinRoot
   // requires the path to live directly under INGEST_ROOT). Declared outside the
-  // try so the catch can clean it up on failure.
-  const localPath = path.join(env.INGEST_ROOT, key.replace(/\//g, '_'));
+  // try so the catch can clean it up on failure. wave6: flattenLocalName 对
+  // 长 CJK 名做字节预算截断(minio fGetObject 会追加 .<etag>.part.minio 后缀,
+  // 超 Linux NAME_MAX 255 字节 -> ENAMETOOLONG); MinIO key 原样保留(可见名来源)。
+  const localPath = path.join(env.INGEST_ROOT, flattenLocalName(key));
   let minioStored = false;
 
   try {

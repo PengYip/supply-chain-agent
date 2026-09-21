@@ -10,6 +10,7 @@ import {
   validateFolderPathChange,
   rewriteKeyPrefix,
   isPathUnderFolder,
+  flattenLocalName,
   filesRoute,
 } from '../../src/routes/files.js';
 
@@ -144,6 +145,38 @@ describe('rewriteKeyPrefix (MinIO key relocation math)', () => {
   });
 });
 
+describe('flattenLocalName (wave6: INGEST_ROOT 落盘名, 字节预算内防 ENAMETOOLONG)', () => {
+  it('短名原样返回(斜杠换下划线, 行为不变)', () => {
+    expect(flattenLocalName('users/u1/abc-报告.pdf')).toBe('users_u1_abc-报告.pdf');
+    expect(flattenLocalName('users/u1/合同/x.docx')).toBe('users_u1_合同_x.docx');
+  });
+
+  it('长 CJK 名截断到 200 字节内, 保留 uuid 前缀 + 扩展名', () => {
+    // 目录段 + uuid + 长中文名(3 字节/字), 模拟重测超长名。
+    const key =
+      'users/WaREA6JAfJdr6xRZFf99AvS6tjpNxuqU/火运_乐化_1.合同/' +
+      '93728c38-eaa2-4948-bbcf-7578384c15db-' +
+      'XYXD-TW-2209- 094   湖北国贸供应链管理有限公司(Qnet,ar≥5000)9月（硫1.0）（新昌）.docx';
+    const flat = flattenLocalName(key);
+    // minio fGetObject 会追加 `.<etag-b64>.part.minio`(≈56 字节), 落盘名本身须留出预算。
+    expect(Buffer.byteLength(flat, 'utf8')).toBeLessThanOrEqual(200);
+    // 扩展名保留(解析按 sourceUri 扩展名路由); uuid 前缀保留(可溯源)。
+    expect(flat.endsWith('.docx')).toBe(true);
+    expect(flat.startsWith('users_WaREA6JAfJdr6xRZFf99AvS6tjpNxuqU_')).toBe(true);
+  });
+
+  it('长名 + fGetObject part 后缀仍在 Linux NAME_MAX(255) 内', () => {
+    const key =
+      'users/WaREA6JAfJdr6xRZFf99AvS6tjpNxuqU/火运_乐化_1.合同/' +
+      '93728c38-eaa2-4948-bbcf-7578384c15db-' +
+      'XYXD-TW-2209- 094   湖北国贸供应链管理有限公司(Qnet,ar≥5000)9月（硫1.0）（新昌）.docx';
+    const flat = flattenLocalName(key);
+    const etagB64 = Buffer.from('0123456789abcdef0123456789abcdef').toString('base64');
+    const partFile = `${flat}.${etagB64}.part.minio`;
+    expect(Buffer.byteLength(partFile, 'utf8')).toBeLessThanOrEqual(255);
+  });
+});
+
 // ---- 小修 6a: 上传回执携带存储 docType(叙述修正 G 的服务端一半) ----
 describe('POST /api/files (upload receipt echoes the STORED docType)', () => {
   function appAs(userId: string) {
@@ -193,5 +226,19 @@ describe('POST /api/files (upload receipt echoes the STORED docType)', () => {
     expect(body.docType).toBe('其他');
     const meta = await getDocumentMeta(ctxHolder.current!, String(body.docId), 'u1');
     expect(meta?.docType).toBe(body.docType);
+  });
+
+  it('wave6: 特殊字符文件名(≥（）空格) 上传 201 + 存根建行 + 台账 filename 保留原名', async () => {
+    const filename = 'XYXD-TW-2209- 094   湖北国贸供应链管理有限公司(Qnet,ar≥5000)9月（硫1.0）（新昌）.docx';
+    const fd = new FormData();
+    fd.append('file', new File(['DOCX内容'], filename, { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }));
+    const res = await appAs('u1').request('/api/files', { method: 'POST', body: fd });
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(res.status).toBe(201);
+    // 台账 filename 保留原名(不含净化痕迹)。
+    expect(body.filename).toBe(filename);
+    // documents stub 建行 + 回执 docId 可用。
+    const meta = await getDocumentMeta(ctxHolder.current!, String(body.docId), 'u1');
+    expect(meta).not.toBeNull();
   });
 });
