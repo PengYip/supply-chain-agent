@@ -472,7 +472,7 @@ export async function allowedDocTypes(db: DbContext): Promise<readonly string[]>
  * 契约的一部分, 重建失败返回 500 而非静默告警。
  *
  * Request body (JSON):
- *   { docType: string }  — 必须在 DOC_TYPES 八类词汇内
+ *   { docType: string }  — 必须为模板树活跃业务类型或 legacy DOC_TYPES 八类（allowedDocTypes 并集）
  *
  * Responses:
  *   200 { ok: true, docType, refreshedFlows, skipped?, vectorization }
