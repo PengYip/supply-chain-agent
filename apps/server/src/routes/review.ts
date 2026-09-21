@@ -44,6 +44,7 @@ import { commitDocumentGraph, syncDocumentTypeToGraph } from '../pipeline/graphC
 import { buildIngestDeps, defaultEmbedder } from '../pipeline/ingestModel.js';
 import { reconcileVectorizationAfterDocTypeChange } from '../pipeline/vectorReconcile.js';
 import { materializeDocumentOntologySafe } from '../pipeline/ontologyMaterialize.js';
+import { DOC_TYPES } from '../pipeline/classifier.js';
 import { getModalityHint } from '../pipeline/modalityHints.js';
 import { renderPdfPages } from '../pipeline/pdfRender.js';
 import {
@@ -444,6 +445,24 @@ reviewRoute.post('/:docId/process', async (c) => {
 
 const docTypeChangeSchema = z.object({ docType: z.string().min(1) });
 
+/** PATCH /type 可接受类型白名单(wave5 验收): 模板树活跃 doc_type 名集(剔除 aliasOf
+ *  别名——boot 迁移会翻回主类型) ∪ legacy 八类兜底; DB 读失败退 DOC_TYPES, 永不 500。 */
+export async function allowedDocTypes(db: DbContext): Promise<readonly string[]> {
+  try {
+    const templateTypes = await listTemplateTypes(db);
+    const aliased = new Set(
+      templateTypes.filter((t) => t.kind === 'doc_type' && t.props.aliasOf).map((t) => t.name),
+    );
+    const tree = templateTypes
+      .filter((t) => t.kind === 'doc_type' && t.isActive && !t.props.aliasOf)
+      .map((t) => t.name);
+    const legacy = DOC_TYPES.filter((t) => !aliased.has(t));
+    return [...new Set([...legacy, ...tree])];
+  } catch {
+    return [...DOC_TYPES];
+  }
+}
+
 /**
  * PATCH /api/documents/:docId/type
  *
@@ -477,13 +496,8 @@ reviewRoute.patch('/:docId/type', async (c) => {
     return c.json({ ok: false, error: 'invalid_body' }, 400);
   }
   const docType = parsed.data.docType;
-  const templateTypes = await listTemplateTypes(ctx());
-  // 小修 4: 同步排除 aliasOf 别名类型(提单/装箱单=货转单别名) —— boot 迁移
-  // migrateDocTypeAliases 会把设成别名的 doc_type 翻回主类型, 人工修正接口
-  // 必须拒绝这类值, 否则用户改完刷新即被翻回。
-  const valid = templateTypes.some(
-    (t) => t.kind === 'doc_type' && t.isActive && !t.props.aliasOf && t.name === docType,
-  );
+  // 白名单 = 模板树活跃业务类型 ∪ legacy 八类(wave5 验收 Fix 2); DB 读失败退八类。
+  const valid = (await allowedDocTypes(ctx())).includes(docType);
   if (!valid) {
     return c.json({ ok: false, error: 'invalid_doc_type' }, 400);
   }

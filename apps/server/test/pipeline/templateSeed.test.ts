@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createDb, migrate } from '../../src/pipeline/db/client.js';
 import { ensureTemplateSeed } from '../../src/pipeline/templateSeed.js';
 import { listActiveEdgeRules, listTemplateTypes } from '../../src/pipeline/db/repositories.js';
-import { CONTRACT_TEMPLATE_FIELDS } from '../../src/pipeline/schemas/contract.js';
+import { CONTRACT_TEMPLATE_FIELDS, CONTRACT_FIELD_HINTS } from '../../src/pipeline/schemas/contract.js';
 
 const ctx = createDb();
 beforeEach(() => migrate(ctx.sqlite));
@@ -88,5 +88,24 @@ describe('template seed', () => {
     // 登记不启用的边规则不进活跃列表
     const active = await listActiveEdgeRules(ctx);
     expect(active.find((r) => r.edgeType === 'settles' && r.sourceTypeId === 'dt-水尺计重单')).toBeUndefined();
+  });
+
+  it('v2.3(wave5 验收): 发货单/收货单 formTypes 词表 + 数量提示; 合同字段集含合同类型', async () => {
+    await ensureTemplateSeed(ctx);
+    const rows = await listTemplateTypes(ctx);
+    const byName = new Map(rows.filter((r) => r.kind === 'doc_type').map((r) => [r.name, r]));
+    // 发货单(销售侧发货凭证): 交货确认单 等表单词 + 数量提示(键对齐数量派生字段 数量_吨)
+    expect(byName.get('发货单')?.props.formTypes)
+      .toEqual(expect.arrayContaining(['交货确认单', '交货单', '发运单']));
+    expect(byName.get('发货单')?.props.fieldHints)
+      .toMatchObject({ 数量_吨: expect.stringContaining('净重') });
+    // 收货单: 收货确认单 表单词 + 同款数量提示
+    expect(byName.get('收货单')?.props.formTypes).toContain('收货确认单');
+    expect(byName.get('收货单')?.props.fieldHints)
+      .toMatchObject({ 数量_吨: expect.stringContaining('净重') });
+    // 合同: 保底字段集含 合同类型, fieldHints 引导受控别名
+    expect(CONTRACT_TEMPLATE_FIELDS).toContain('合同类型');
+    expect(CONTRACT_FIELD_HINTS['合同类型']).toContain('采购合同');
+    expect(CONTRACT_FIELD_HINTS['合同类型']).toContain('销售合同');
   });
 });

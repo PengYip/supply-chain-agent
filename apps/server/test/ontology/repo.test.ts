@@ -341,7 +341,7 @@ describe('schema_version stamping (business-loop wave1)', () => {
       validAt: '2026-09-20T00:00:00Z', createdBy: 't',
     });
     const edges = await listOntologyEdgesAsOf(
-      ctx, asOfSystemTime('2026-09-21T00:00:00Z'), { relation: 'ALLOCATE_TO' });
+      ctx, asOfSystemTime('2099-01-01T00:00:00Z'), { relation: 'ALLOCATE_TO' });
     expect(edges.find((e) => e.id === edgeId)?.schemaVersion).toBe(ONTOLOGY_SCHEMA_VERSION);
   });
 });

@@ -17,6 +17,7 @@ import { syncBindingEdge, removeBindingEdge, type GraphSyncOutcome } from '../pi
 import { syncSettlesEdge, removeSettlesEdge } from '../pipeline/settlesGraphSync.js';
 import { settlesRelationFor } from '../domain/tradeSemantics.js';
 import { materializeExecutionFlow, retractExecutionFlow, getEffectiveSelfPartyNames } from '../pipeline/executionFlow.js';
+import { materializeDocumentOntologySafe } from '../pipeline/ontologyMaterialize.js';
 import { validateEdge, ancestorChain, matchEdgeRule } from '../pipeline/templateGuard.js';
 import { parseFileKey } from './files.js';
 
@@ -303,6 +304,8 @@ async function confirmOne(db: DbContext, userId: string, bindingId: string) {
   } catch (e) {
     console.warn('[executionFlow] 确认绑定物化执行流水失败:', (e as Error).message);
   }
+  // 本体实体化钩子(wave5 验收 Fix 3): 流水物化后 fire-and-forget 消费待实体化流水。
+  void materializeDocumentOntologySafe(db, row.documentId, userId);
   // 方向编码类型(白名单外, 无流水物化): 类型自带 settles 方向, 直接落 settles 边。
   await syncSettlesByType(db, userId,
     { documentId: row.documentId, contractNo: row.contractNo, confidence: row.confidence });
@@ -419,6 +422,8 @@ bindingsRoute.post('/', async (c) => {
   } catch (e) {
     console.warn('[executionFlow] 手动创建绑定物化执行流水失败:', (e as Error).message);
   }
+  // 本体实体化钩子(wave5 验收 Fix 3): 流水物化后 fire-and-forget 消费待实体化流水。
+  void materializeDocumentOntologySafe(db, documentId, user.id);
   // 方向编码类型(白名单外, 无流水物化): 类型自带 settles 方向, 直接落 settles 边。
   await syncSettlesByType(db, user.id, { documentId, contractNo, confidence: 1 });
   const sync = await syncBindingEdgeWithMeta(db, user.id, { docId: documentId, contractNo, relation, bindingId, confidence: 1, templateVersion: gate.templateVersion ?? undefined, dstKind: targetKind });

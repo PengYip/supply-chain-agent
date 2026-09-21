@@ -48,7 +48,7 @@ export const CONTRACT_TEMPLATE_FIELDS: readonly string[] = [
 
 export const CONTRACT_FIELD_HINTS: Readonly<Record<string, string>> = {
   合同号: '合同编号/合同号',
-  合同类型: '受控值: 采购/销售/物流/租赁/服务/其他',
+  合同类型: '采购合同|销售合同|购销合同|买卖合同|框架协议',
   甲方: '买方/需方',
   乙方: '卖方/供方',
   标的物: '商品/品名',
