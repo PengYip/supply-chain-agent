@@ -30,9 +30,10 @@ export const DOC_TYPE_SEED: Array<{ name: string; parent?: string; props?: Recor
   { name: '结算单', parent: '履约凭证', props: { formTypes: ['结算单'] } },
   { name: '运输凭证', parent: '履约凭证' },
   // wave5 验收(2026-09-21): 交货确认单等表单词入发货/收货单 formTypes(VLM 分类数据源);
-  // fieldHints 键对齐数量派生字段 数量_吨(executionFlow FLOW_ADAPTERS.qtyFields 先例)。
-  { name: '收货单', parent: '运输凭证', props: { formTypes: ['货物交接清单', '收货确认单'], fieldHints: { 数量_吨: '净重|数量|重量|吨' } } },
-  { name: '发货单', parent: '运输凭证', props: { formTypes: ['交货确认单', '交货单', '发运单'], fieldHints: { 数量_吨: '净重|数量|重量|吨' } } },
+  // fieldHints 覆盖 FLOW_ADAPTERS(tradeSemantics.ts)收货单/发货单 qtyFields 全部数量键
+  // (发运数量/数量_吨/数量, 按优先序) —— 首选 发运数量 有提示可落, 次选 数量_吨 带单位语义。
+  { name: '收货单', parent: '运输凭证', props: { formTypes: ['货物交接清单', '收货确认单'], fieldHints: { 发运数量: '发运数量|发运重量|数量|吨', 数量_吨: '净重|数量|重量|吨', 数量: '数量|吨|净重|重量' } } },
+  { name: '发货单', parent: '运输凭证', props: { formTypes: ['交货确认单', '交货单', '发运单'], fieldHints: { 发运数量: '发运数量|发运重量|数量|吨', 数量_吨: '净重|数量|重量|吨', 数量: '数量|吨|净重|重量' } } },
   { name: '汽运磅单', parent: '重量凭证', props: { formTypes: ['汽车过磅单票据'] } },
   { name: '火运大票', parent: '运输凭证', props: { formTypes: ['火运大票'] } },
   { name: '轨道衡称重单', parent: '重量凭证', props: { formTypes: ['轨道衡称重记录'] } },

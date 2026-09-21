@@ -3,6 +3,7 @@ import { createDb, migrate } from '../../src/pipeline/db/client.js';
 import { ensureTemplateSeed } from '../../src/pipeline/templateSeed.js';
 import { listActiveEdgeRules, listTemplateTypes } from '../../src/pipeline/db/repositories.js';
 import { CONTRACT_TEMPLATE_FIELDS, CONTRACT_FIELD_HINTS } from '../../src/pipeline/schemas/contract.js';
+import { FLOW_ADAPTERS } from '../../src/domain/tradeSemantics.js';
 
 const ctx = createDb();
 beforeEach(() => migrate(ctx.sqlite));
@@ -94,7 +95,7 @@ describe('template seed', () => {
     await ensureTemplateSeed(ctx);
     const rows = await listTemplateTypes(ctx);
     const byName = new Map(rows.filter((r) => r.kind === 'doc_type').map((r) => [r.name, r]));
-    // 发货单(销售侧发货凭证): 交货确认单 等表单词 + 数量提示(键对齐数量派生字段 数量_吨)
+    // 发货单(销售侧发货凭证): 交货确认单 等表单词 + 数量提示(多键覆盖适配表数量键)
     expect(byName.get('发货单')?.props.formTypes)
       .toEqual(expect.arrayContaining(['交货确认单', '交货单', '发运单']));
     expect(byName.get('发货单')?.props.fieldHints)
@@ -103,6 +104,18 @@ describe('template seed', () => {
     expect(byName.get('收货单')?.props.formTypes).toContain('收货确认单');
     expect(byName.get('收货单')?.props.fieldHints)
       .toMatchObject({ 数量_吨: expect.stringContaining('净重') });
+    // fieldHints 覆盖 FLOW_ADAPTERS(tradeSemantics.ts) qtyFields 全部数量键
+    // (以适配表为准逐键补非空提示): 收货单/发货单适配键同为 发运数量/数量_吨/数量,
+    // 无签收类键可分配。
+    for (const docType of ['收货单', '发货单'] as const) {
+      const hints = byName.get(docType)?.props.fieldHints as Record<string, string>;
+      for (const [qtyKey] of FLOW_ADAPTERS[docType].qtyFields) {
+        expect(hints?.[qtyKey], `${docType} fieldHints 缺适配数量键 ${qtyKey}`).toBeTruthy();
+      }
+      // 首选键(发运数量)提示引导发运类写法; 次选键(数量_吨)保留带单位语义提示
+      expect(hints['发运数量']).toContain('发运');
+      expect(hints['数量_吨']).toContain('净重');
+    }
     // 合同: 保底字段集含 合同类型, fieldHints 引导受控别名
     expect(CONTRACT_TEMPLATE_FIELDS).toContain('合同类型');
     expect(CONTRACT_FIELD_HINTS['合同类型']).toContain('采购合同');
