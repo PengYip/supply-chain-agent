@@ -4,7 +4,7 @@
 // 空数据时会产生空模式行); 有数据时照常渲染。API 层 vi.mock, 纯前端行为。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, waitFor } from '@testing-library/react';
-import { WriteoffView } from './WriteoffView';
+import { WriteoffView, items0Batch } from './WriteoffView';
 import type { WriteoffOverview, WriteoffMode, WriteoffBalanceRow } from '../../api/writeoff';
 
 const fetchWriteoffOverviewMock = vi.fn<() => Promise<WriteoffOverview>>();
@@ -65,5 +65,13 @@ describe('WriteoffView 空模式行隐藏 (wave6)', () => {
     render(<WriteoffView />);
     await waitFor(() => expect(screen.getByText('WRITE_OFF_SETTLEMENT')).toBeTruthy());
     expect(screen.getByText('票款核销')).toBeTruthy();
+  });
+});
+
+describe('items0Batch 批次前缀 (wave6 收尾)', () => {
+  it('WRITE_OFF_SETTLEMENT 用 WS-，与 OFFSET_SETTLE 的 OS- 区分', () => {
+    expect(items0Batch('WRITE_OFF_SETTLEMENT')).toMatch(/^WS-\d{4}-\d{2}-\d{2}$/);
+    expect(items0Batch('OFFSET_SETTLE')).toMatch(/^OS-\d{4}-\d{2}-\d{2}$/);
+    expect(items0Batch('WRITE_OFF')).toMatch(/^WO-\d{4}-\d{2}-\d{2}$/);
   });
 });

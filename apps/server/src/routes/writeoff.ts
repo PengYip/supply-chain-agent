@@ -35,7 +35,7 @@ writeoffRoute.get('/overview', async (c) => {
 // ---- POST /submit：工作台提交 -> chat 后台管道 -> L2 审批（不直接落边） ----
 
 const SubmitSchema = z.object({
-  relation: z.enum(['WRITE_OFF', 'OFFSET_SETTLE']),
+  relation: z.enum(['WRITE_OFF', 'OFFSET_SETTLE', 'WRITE_OFF_SETTLEMENT']),
   items: z.array(z.object({
     srcId: z.string().min(1),
     dstId: z.string().min(1),
@@ -46,16 +46,24 @@ const SubmitSchema = z.object({
 });
 
 /** 固定指令模板：逐字 JSON + 场景关键词（核销/冲抵/票款/结算 -> settlement，审批恢复轮次
- *  的工具可见性依赖此命中，见 scenarios.ts SETTLEMENT_RE）+ 禁改数字纪律。 */
+ *  的工具可见性依赖此命中，见 scenarios.ts SETTLEMENT_RE）+ 禁改数字纪律。
+ *  WRITE_OFF_SETTLEMENT（结算目标核销）追加 target 固定为 "settlement" 子句，
+ *  指引模型走 create_writeoff 的结算分派（与 OFFSET_SETTLE 的 create_offset 路径区分）。 */
 export function buildWriteoffInstruction(
-  relation: 'WRITE_OFF' | 'OFFSET_SETTLE',
+  relation: 'WRITE_OFF' | 'OFFSET_SETTLE' | 'WRITE_OFF_SETTLEMENT',
   items: AllocationItem[],
 ): string {
-  const toolName = relation === 'WRITE_OFF' ? 'create_writeoff' : 'create_offset';
-  const actionLabel = relation === 'WRITE_OFF' ? '票款核销' : '预付冲抵（冲抵结算）';
+  const toolName = relation === 'OFFSET_SETTLE' ? 'create_offset' : 'create_writeoff';
+  const actionLabel =
+    relation === 'WRITE_OFF' ? '票款核销'
+    : relation === 'OFFSET_SETTLE' ? '预付冲抵（冲抵结算）'
+    : '结算核销';
+  const targetClause = relation === 'WRITE_OFF_SETTLEMENT'
+    ? 'target 参数固定为 "settlement"，'
+    : '';
   return [
     `[核销工作台提交·${actionLabel}] 用户已在工作台完成勾选与金额分配（结算域操作）。`,
-    `请立即调用 ${toolName} 工具，items 参数使用以下 JSON 数组（逐字传递，禁止修改、四舍五入、拆分或合并任何条目与数字）：`,
+    `请立即调用 ${toolName} 工具，${targetClause}items 参数使用以下 JSON 数组（逐字传递，禁止修改、四舍五入、拆分或合并任何条目与数字）：`,
     JSON.stringify(items),
     `调用成功后，用一两句话向用户复述${actionLabel}结果（合计金额与影响的单据），并提醒等待审批中心批准。`,
     '若工具返回校验错误（status=invalid），原样转述 violations 给用户并停止；禁止自行调整数字后重试。',

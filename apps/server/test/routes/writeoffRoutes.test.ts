@@ -89,6 +89,16 @@ describe('buildWriteoffInstruction', () => {
     expect(text).toContain('核销');
     expect(text).toContain('禁止修改');
   });
+
+  it('WRITE_OFF_SETTLEMENT：create_writeoff + target settlement 子句 + 场景关键词', () => {
+    const items = [{ srcId: 'TF-p1', dstId: 'TF-s1', amount: 60, partial: true }];
+    const text = buildWriteoffInstruction('WRITE_OFF_SETTLEMENT', items);
+    expect(text).toContain('create_writeoff');
+    expect(text).toContain('"settlement"');
+    expect(text).toContain('结算');
+    expect(text).toContain(JSON.stringify(items));
+    expect(text).toContain('禁止修改');
+  });
 });
 
 describe('POST /api/writeoff/submit', () => {
@@ -169,5 +179,33 @@ describe('POST /api/writeoff/submit', () => {
     expect(session?.title).toContain('核销');
     const persisted = JSON.stringify(session?.messages ?? []);
     expect(persisted).toContain('create_writeoff');
+  });
+
+  it('200：WRITE_OFF_SETTLEMENT 提交透传 target=settlement 指令（Payment -> Settlement）', async () => {
+    const p = await insertTradeFact(ctx, {
+      entityType: 'PaymentEvent',
+      payload: { eventBizType: '正向', amount: 100, currency: 'CNY', payType: '尾款' },
+      validAt: '2026-06-01', createdBy: 'demo',
+    }, 'u1');
+    const stl = await insertTradeFact(ctx, {
+      entityType: 'SettlementEvent',
+      payload: { eventBizType: '正向', amount: 80, currency: 'CNY' },
+      validAt: '2026-06-02', createdBy: 'demo',
+    }, 'u1');
+    (runSession as ReturnType<typeof vi.fn>).mockClear();
+    const res = await post(appAs('u1'), {
+      relation: 'WRITE_OFF_SETTLEMENT',
+      items: [{ srcId: p, dstId: stl, amount: 60 }],
+    });
+    expect(res.status).toBe(200);
+    // run 首条消息即指令：断言工具名 + target=settlement + 逐字数字
+    const opts = (runSession as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const first = opts.messages[0]!;
+    expect(first.role).toBe('user');
+    expect(first.content).toContain('create_writeoff');
+    expect(first.content).toContain('"settlement"');
+    expect(first.content).toContain('"amount":60');
   });
 });

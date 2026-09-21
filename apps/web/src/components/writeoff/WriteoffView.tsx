@@ -323,7 +323,13 @@ export function WriteoffView() {
   );
 }
 
-/** v1 批次号：关系缩写 + 日期（用户可后续在工作台扩展编辑，OUT of v1）。 */
-function items0Batch(relation: string): string {
-  return `${relation === 'WRITE_OFF' ? 'WO' : 'OS'}-${new Date().toISOString().slice(0, 10)}`;
+/** v1 批次号：关系缩写 + 日期（用户可后续在工作台扩展编辑，OUT of v1）。
+ *  前缀：WO=票款核销、OS=预付冲抵、WS=结算目标核销——WRITE_OFF_SETTLEMENT
+ *  独立 'WS-'（与 OFFSET_SETTLE 的 'OS-' 区分，避免同批号跨语义混淆）。 */
+export function items0Batch(relation: string): string {
+  const prefix =
+    relation === 'WRITE_OFF' ? 'WO'
+    : relation === 'OFFSET_SETTLE' ? 'OS'
+    : 'WS';
+  return `${prefix}-${new Date().toISOString().slice(0, 10)}`;
 }
