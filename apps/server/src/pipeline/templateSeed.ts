@@ -17,7 +17,9 @@ export const DOC_TYPE_SEED: Array<{ name: string; parent?: string; props?: Recor
   { name: '补充合同', parent: '合同' },
   { name: '立项书', props: { bindsTargetKind: 'Project' } },
   { name: '履约凭证' },
-  { name: '重量凭证', parent: '履约凭证' },
+  // wave6(2026-09-21): 火运词汇贯通——中间节点补 qtyFields 对应 fieldHints
+  // (键对齐 FLOW_ADAPTERS 运输凭证/重量凭证适配行, 数量键同汽运磅单族)。
+  { name: '重量凭证', parent: '履约凭证', props: { fieldHints: { 合计净重: '合计净重|总净重|净重合计|净重', 净重: '净重|重量|吨', 合计毛重: '合计毛重|总毛重|毛重合计|毛重', 毛重: '毛重|重量|吨', 重量_吨: '重量|吨|净重|毛重', 数量_吨: '数量|吨|净重|重量', 数量: '数量|吨|净重|重量' } } },
   { name: '货转单', parent: '履约凭证', props: { formTypes: ['货权转移证明'] } },
   { name: '提单', parent: '货转单', props: { aliasOf: '货转单' } },
   { name: '装箱单', parent: '货转单', props: { aliasOf: '货转单' } },
@@ -28,7 +30,7 @@ export const DOC_TYPE_SEED: Array<{ name: string; parent?: string; props?: Recor
   // 按 formType 字符串各自映射, 不冲突。
   { name: '质检汇总表', parent: '质检报告', props: { formTypes: ['收货质检汇总表', '下游收货数据'] } },
   { name: '结算单', parent: '履约凭证', props: { formTypes: ['结算单'] } },
-  { name: '运输凭证', parent: '履约凭证' },
+  { name: '运输凭证', parent: '履约凭证', props: { fieldHints: { 合计净重: '合计净重|总净重|净重合计|净重', 净重: '净重|重量|吨', 合计毛重: '合计毛重|总毛重|毛重合计|毛重', 毛重: '毛重|重量|吨', 重量_吨: '重量|吨|净重|毛重', 数量_吨: '数量|吨|净重|重量', 数量: '数量|吨|净重|重量' } } },
   // wave5 验收(2026-09-21): 交货确认单等表单词入发货/收货单 formTypes(VLM 分类数据源);
   // fieldHints 覆盖 FLOW_ADAPTERS(tradeSemantics.ts)收货单/发货单 qtyFields 全部数量键
   // (发运数量/数量_吨/数量, 按优先序) —— 首选 发运数量 有提示可落, 次选 数量_吨 带单位语义。

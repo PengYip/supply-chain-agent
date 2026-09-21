@@ -91,6 +91,20 @@ describe('template seed', () => {
     expect(active.find((r) => r.edgeType === 'settles' && r.sourceTypeId === 'dt-水尺计重单')).toBeUndefined();
   });
 
+  it('wave6: 运输凭证/重量凭证 fieldHints 覆盖 FLOW_ADAPTERS 适配数量键', async () => {
+    await ensureTemplateSeed(ctx);
+    const rows = await listTemplateTypes(ctx);
+    const byName = new Map(rows.filter((r) => r.kind === 'doc_type').map((r) => [r.name, r]));
+    for (const docType of ['运输凭证', '重量凭证'] as const) {
+      const hints = byName.get(docType)?.props.fieldHints as Record<string, string>;
+      for (const [qtyKey] of FLOW_ADAPTERS[docType].qtyFields) {
+        expect(hints?.[qtyKey], `${docType} fieldHints 缺适配数量键 ${qtyKey}`).toBeTruthy();
+      }
+      expect(hints['合计净重']).toContain('净重');
+      expect(hints['净重']).toContain('吨');
+    }
+  });
+
   it('v2.3(wave5 验收): 发货单/收货单 formTypes 词表 + 数量提示; 合同字段集含合同类型', async () => {
     await ensureTemplateSeed(ctx);
     const rows = await listTemplateTypes(ctx);
