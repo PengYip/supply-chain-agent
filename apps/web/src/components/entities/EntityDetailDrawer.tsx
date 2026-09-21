@@ -5,6 +5,7 @@ import { edgeLabel } from '../graph/businessTypes';
 import { formatEdgeParams } from '../graph/OntologyExplorer';
 import { maskBankAccount } from '../../lib/mask';
 import { ContractFlowPanel } from '../ledger/ContractFlowPanel';
+import { ContractTypeCorrection } from '../ledger/ContractTypeCorrection';
 
 interface Props {
   type: string;
@@ -26,6 +27,9 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
   const [detail, setDetail] = useState<EntityDetailResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 对账面板重挂纪元(business-loop Wave 7): 合同类型修正成功后 +1, 让面板按
+  // 重建后的执行流水重新拉取(面板自持数据, 用 key 重挂是最小侵入的刷新方式)。
+  const [flowEpoch, setFlowEpoch] = useState(0);
   // 过期响应守卫: 快速切换实体/口径时, 慢的旧响应不得覆盖新数据。
   const seqRef = useRef(0);
 
@@ -120,11 +124,31 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
         </div>
 
         {/* 合同台账详情首屏: 四流对账面板(spec §15)——货/权/款/票泳道+告警+钻取。
-            仅 TradeContract 且台账行带 contractNo 时渲染; 面板自带加载/错误态。 */}
+            仅 TradeContract 且台账行带 contractNo 时渲染; 面板自带加载/错误态。
+            面板上方挂合同类型修正入口(business-loop Wave 7): 类型空/值不当(如
+            「购销合同」无方向语义)时引导人工消歧, 修正后重建执行流水并刷新两侧。 */}
         {type === 'TradeContract' && typeof detail?.entity.fields['contractNo'] === 'string'
           && (detail.entity.fields['contractNo'] as string) !== '' && (
-          <div className="border-b border-line px-3 py-3">
-            <ContractFlowPanel contractNo={detail!.entity.fields['contractNo'] as string} />
+          <div className="space-y-2.5 border-b border-line px-3 py-3">
+            <ContractTypeCorrection
+              contractNo={detail!.entity.fields['contractNo'] as string}
+              currentType={
+                typeof detail!.entity.fields['contractType'] === 'string'
+                  ? (detail!.entity.fields['contractType'] as string)
+                  : null
+              }
+              onChanged={() => {
+                // 刷新台账行字段(contract_type 直读 contract_ledger, 立即可见新值)
+                // + 重挂对账面板吃重建后的流水。本体事实物化是后端异步的, 面板
+                // 数字以 PATCH 响应的重建计数为准, 面板稍后自然对齐。
+                void load();
+                setFlowEpoch((e) => e + 1);
+              }}
+            />
+            <ContractFlowPanel
+              key={flowEpoch}
+              contractNo={detail!.entity.fields['contractNo'] as string}
+            />
           </div>
         )}
 
