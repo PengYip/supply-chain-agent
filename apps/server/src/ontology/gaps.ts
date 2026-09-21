@@ -48,11 +48,15 @@ const nearZero = (x: number): boolean => Math.abs(x) < EPSILON;
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
-/** 合同侧判定: contract_type 含"销"=销侧; 含"采/购"=购侧; 无法判定 null(计入 missingInputs)。 */
+/** 合同侧判定: contract_type 含"销"=销侧; 含"采/购"=购侧; 双侧同含(购销合同)
+ *  或无法判定 -> null(计入 missingInputs 口径提示, 不得任一先命中就定侧)。 */
 function sideOf(contractType: string | null | undefined): 'buy' | 'sell' | null {
   if (!contractType) return null;
-  if (contractType.includes('销')) return 'sell';
-  if (contractType.includes('采') || contractType.includes('购')) return 'buy';
+  const sell = contractType.includes('销');
+  const buy = contractType.includes('采') || contractType.includes('购');
+  if (sell && buy) return null; // 购销合同 等混合口径: 侧别不明, 不猜侧
+  if (sell) return 'sell';
+  if (buy) return 'buy';
   return null;
 }
 

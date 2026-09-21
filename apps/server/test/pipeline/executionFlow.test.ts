@@ -9,6 +9,11 @@ const mocks = vi.hoisted(() => ({
   retractExecutionFlowsForDocument: vi.fn<(args: any[]) => Promise<any>>(async () => 0),
   listConfirmedBindingsForDocument: vi.fn<(args: any[]) => Promise<any>>(async () => []),
   loadLatestExtractionByDocId: vi.fn<(args: any[]) => Promise<any>>(async () => null),
+  // wave5 收尾修复: 物化经 resolveLatestExtraction -> 确定性最新复核(listLatest
+  // 批量版) + 溯源兜底(loadExtraction)。单文档场景默认返回空 Map / null, 物化
+  // 结果与 loadLatest 一致(平局守卫只在真实同秒平局时触发)。
+  listLatestExtractionsByDocIds: vi.fn<(args: any[]) => Promise<any>>(async () => new Map()),
+  loadExtraction: vi.fn<(args: any[]) => Promise<any>>(async () => null),
   summarizeExecutionFlows: vi.fn<(args: any[]) => Promise<any>>(async () => []),
   listExecutionFlows: vi.fn<(args: any[]) => Promise<any>>(async () => []),
   // 自主体名单(Task A): materializeExecutionFlow 缺省名单走 getEffectiveSelfPartyNames
@@ -24,6 +29,8 @@ vi.mock('../../src/pipeline/db/repositories.js', () => ({
   retractExecutionFlowsForDocument: mocks.retractExecutionFlowsForDocument,
   listConfirmedBindingsForDocument: mocks.listConfirmedBindingsForDocument,
   loadLatestExtractionByDocId: mocks.loadLatestExtractionByDocId,
+  listLatestExtractionsByDocIds: mocks.listLatestExtractionsByDocIds,
+  loadExtraction: mocks.loadExtraction,
   summarizeExecutionFlows: mocks.summarizeExecutionFlows,
   listExecutionFlows: mocks.listExecutionFlows,
   listSelfParties: mocks.listSelfParties,
@@ -48,6 +55,8 @@ beforeEach(() => {
   mocks.retractExecutionFlowForBinding.mockResolvedValue(true);
   mocks.retractExecutionFlowsForDocument.mockResolvedValue(0);
   mocks.listConfirmedBindingsForDocument.mockResolvedValue([]);
+  mocks.listLatestExtractionsByDocIds.mockResolvedValue(new Map());
+  mocks.loadExtraction.mockResolvedValue(null);
   mocks.summarizeExecutionFlows.mockResolvedValue([]);
   mocks.listExecutionFlows.mockResolvedValue([]);
   mocks.findContractLedgerByNo.mockResolvedValue(null);

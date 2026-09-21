@@ -200,6 +200,41 @@ describe('computeGaps golden numbers (wave4, prototype reportGaps 复现)', () =
     expect(item('①').qty).toBe(1310);
   });
 
+  it('contract_type 同时含购/销词(购销合同): 判 sideUnknown 不猜侧(W5 收尾)', async () => {
+    await seedGolden();
+    // 购销合同: 既有购词又有销词, 不得任一先命中就定侧(旧 sideOf 先判 销 -> sell)。
+    insertContract('CL-MIX', 'CON-MIX', '购销合同');
+    const rcpt = await insertTradeFact(ctx, {
+      entityType: 'GoodsReceiptEvent',
+      payload: { eventBizType: '正向', quantity: 100, amount: 999, currency: 'CNY', unit: '吨' },
+      validAt: '2026-09-08T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    await insertOntologyEdge(ctx, {
+      relation: 'ALLOCATE_TO', fromType: 'GoodsReceiptEvent', fromId: rcpt,
+      toType: 'TradeContract', toId: 'CL-MIX',
+      params: { quantity: 100, method: '数量' }, validAt: '2026-09-08T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    const dly = await insertTradeFact(ctx, {
+      entityType: 'GoodsDeliveryEvent',
+      payload: { eventBizType: '正向', quantity: 50, amount: 500, currency: 'CNY', unit: '吨' },
+      validAt: '2026-09-08T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    await insertOntologyEdge(ctx, {
+      relation: 'ALLOCATE_TO', fromType: 'GoodsDeliveryEvent', fromId: dly,
+      toType: 'TradeContract', toId: 'CL-MIX',
+      params: { quantity: 50, amount: 500, method: '金额' }, validAt: '2026-09-08T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    const rep = await computeGaps(ctx, {}, 'u1');
+    const item = (code: string) => rep.groups.flatMap((g) => g.items).find((i) => i.code === code)!;
+    // ③ 已发货未结算(销侧): CON-MIX 侧别不明 -> 其发货 500 不计入销侧合计
+    // (若旧逻辑误定 sell, ③=176,500; 修复后 ③ 保持金标准 176,000)。
+    expect(item('③').amt).toBe(176_000);
+    expect(item('③').missingInputs?.some((m) => m.includes('CON-MIX'))).toBe(true);
+    // ② 已收货未结算(购侧): 同款口径提示, 且未知侧收货不计入购侧合计。
+    expect(item('②').amt).toBe(756_000);
+    expect(item('②').missingInputs?.some((m) => m.includes('CON-MIX'))).toBe(true);
+  });
+
   it('EPSILON 近零: ⑩ 差 0.001 -> 展示 0(W4-R1)', async () => {
     insertContract('CL-NZ', 'CON-NZ', '采购');
     const rcpt = await insertTradeFact(ctx, {

@@ -19,6 +19,8 @@ import { z } from 'zod';
 import type { DbContext } from './db/client.js';
 import {
   loadLatestExtractionByDocId,
+  listLatestExtractionsByDocIds,
+  loadExtraction,
   upsertExecutionFlow,
   retractExecutionFlowForBinding,
   retractExecutionFlowsForDocument,
@@ -54,6 +56,46 @@ export interface MaterializeInput {
   bindingId: string;
   confidence: number;
   createdBy: string;
+  /** 溯源兜底: 无抽取行时退回该既有传入值(仅 loadLatest 找不到时使用)。 */
+  extractionId?: string | null;
+}
+
+/**
+ * 流水(重)建时取最新抽取行(wave5 收尾修复)。一律经 loadLatestExtractionByDocId
+ * 取最新; 但 SQLite extractions.created_at 默认 datetime('now') 为秒精度, 同秒
+ * 两次抽取(强制重抽)created_at 相同, loadLatest 的 ORDER BY created_at DESC 对
+ * 平局行会回到旧行(rowid 序) -> 重建流水读到旧抽取, quantity_ton 派生落空。
+ * 故用确定性最新次序(listLatestExtractionsByDocIds: SQLite MAX(rowid) /
+ * PG created_at DESC, id DESC)复核, 平局时取真新行 —— 保证重建流水 extraction_id
+ * 指向最新抽取、数量/金额派生读新行。找不到抽取行时退回调用方既有传入值
+ * (fallbackExtractionId, 溯源兜底; 无行则无法物化 -> null)。
+ */
+async function resolveLatestExtraction(
+  ctx: DbContext,
+  docId: string,
+  userId?: string,
+  fallbackExtractionId?: string | null,
+): Promise<ExtractionRow | null> {
+  const latest = await loadLatestExtractionByDocId(ctx, docId, userId);
+  if (latest) {
+    // 同秒 created_at 平局守卫: 复核失败(桩缺省/库异常)时照用 loadLatest 结果。
+    try {
+      const deterministic = (await listLatestExtractionsByDocIds(ctx, [docId], userId)).get(docId) ?? null;
+      if (deterministic && deterministic.id !== latest.id) return deterministic;
+    } catch {
+      /* 复核不可用 -> 照用 loadLatest(生产同库不应发生)。 */
+    }
+    return latest;
+  }
+  if (fallbackExtractionId) {
+    try {
+      const row = await loadExtraction(ctx, fallbackExtractionId, userId);
+      if (row && row.documentId === docId) return row;
+    } catch {
+      /* 行不存在 -> 落 null, 不物化。 */
+    }
+  }
+  return null;
 }
 
 /**
@@ -155,7 +197,7 @@ export async function materializeExecutionFlow(
   userId?: string,
   selfPartyNames?: string[],
 ): Promise<MaterializedFlow | null> {
-  const extraction = await loadLatestExtractionByDocId(ctx, input.documentId, userId);
+  const extraction = await resolveLatestExtraction(ctx, input.documentId, userId, input.extractionId);
   if (!extraction) return null;
 
   const flowType = flowTypeFor(extraction.docType);
@@ -261,7 +303,8 @@ export async function refreshExecutionFlowsForDocument(
   let extraction: ExtractionRow | null = null;
   let introspectionOk = true;
   try {
-    extraction = await loadLatestExtractionByDocId(ctx, documentId, userId);
+    // 与物化同源: 取最新抽取行(含同秒平局守卫, 防重建读到旧抽取)。
+    extraction = await resolveLatestExtraction(ctx, documentId, userId);
   } catch {
     introspectionOk = false;
   }
