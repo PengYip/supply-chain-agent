@@ -266,8 +266,8 @@
       "group": "结算核销",
       "status": "active",
       "mount": "always",
-      "whenToUse": "票款核销工作台提交后执行：收付资金与发票之间建立 WRITE_OFF 带参边（多对多/部分金额/分批），一次调用携带整单分配计划。",
-      "boundary": "L2 需审批中心批准后才落边；items 必须逐字来自工作台提交，禁止模型自行改数；服务端整单守恒校验失败即拒绝落库；不做自动核销建议、不跨币种。",
+      "whenToUse": "票款/结算核销工作台提交后执行：收付资金与发票之间建立 WRITE_OFF 带参边（target=invoice，缺省）；或收付资金与结算之间建立 WRITE_OFF_SETTLEMENT 带参边（target=settlement）——多对多/部分金额/分批，一次调用携带整单分配计划。",
+      "boundary": "L2 需审批中心批准后才落边；target 缺省 invoice 保持向后兼容，target=settlement 时目标行必须是 SettlementEvent 事实（资金侧起点 Payment/Collection 不变）；items 必须逐字来自工作台提交，禁止模型自行改数；服务端整单守恒校验失败即拒绝落库；不做自动核销建议、不跨币种。",
       "rationale": "自由数字输入不适合对话承载（roadmap Item 5），工作台结构化输入 + L2 工具审计写入是核销唯一入口；整单提交保证守恒校验原子性。"
     },
     {

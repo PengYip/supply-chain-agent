@@ -23,14 +23,18 @@ const itemSchema = z.object({
 export function buildCreateWriteoffTool(deps: { ctx: DbContext; userId?: string }) {
   return tool({
     description:
-      '票款核销：在收付资金与发票之间建立 WRITE_OFF 带参边（多对多/部分金额/分批）。' +
+      '票款/结算核销：在收付资金与发票（target=invoice，缺省）之间建立 WRITE_OFF 带参边，' +
+      '或在收付资金与结算（target=settlement）之间建立 WRITE_OFF_SETTLEMENT 带参边（多对多/部分金额/分批）。' +
       '仅在工作台提交指令中调用，items 数组必须逐字传递指令中的 JSON，禁止修改/四舍五入/拆并任何数字。' +
-      '服务端按 DB 余额做整单守恒校验，任一条超额则整单拒绝、零边产生。',
+      '服务端按 DB 余额做整单守恒校验（target=settlement 时目标行必须是 SettlementEvent 事实），任一条超额则整单拒绝、零边产生。',
     inputSchema: z.object({
+      target: z.enum(['invoice', 'settlement']).optional()
+        .describe('核销目标类型：invoice（缺省）= 发票核销（WRITE_OFF 边）；settlement = 结算目标核销（WRITE_OFF_SETTLEMENT 边，目标行必须是 SettlementEvent 事实）'),
       items: z.array(itemSchema).min(1).max(50).describe('整单分配计划（srcId/dstId/amount 逐字来自工作台提交）'),
     }),
-    execute: async ({ items }) => {
-      return executeWriteoffEdges(deps, 'WRITE_OFF', 'create_writeoff', items);
+    execute: async ({ target = 'invoice', items }) => {
+      const relation = target === 'settlement' ? 'WRITE_OFF_SETTLEMENT' : 'WRITE_OFF';
+      return executeWriteoffEdges(deps, relation, 'create_writeoff', items);
     },
   });
 }
@@ -51,7 +55,7 @@ export function buildCreateOffsetTool(deps: { ctx: DbContext; userId?: string })
 
 async function executeWriteoffEdges(
   deps: { ctx: DbContext; userId?: string },
-  relation: 'WRITE_OFF' | 'OFFSET_SETTLE',
+  relation: 'WRITE_OFF' | 'OFFSET_SETTLE' | 'WRITE_OFF_SETTLEMENT',
   toolName: 'create_writeoff' | 'create_offset',
   items: AllocationItem[],
 ): Promise<

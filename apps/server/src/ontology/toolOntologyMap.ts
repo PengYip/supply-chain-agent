@@ -25,7 +25,7 @@ export const toolOntologyMap: Readonly<Record<string, ToolOntologyMapping>> = {
   },
   create_writeoff: {
     entities: ['PaymentEvent', 'CollectionEvent', 'InvoiceEvent', 'SettlementEvent'],
-    note: '核销工作台(2026-09-07 Item 5): items 容器+关系 params 词汇(amount/partial/batch)属共享词汇; srcId/dstId 属共享引用词汇',
+    note: '核销工作台(2026-09-07 Item 5): items 容器+关系 params 词汇(amount/partial/batch)属共享词汇; srcId/dstId 属共享引用词汇; target(invoice|settlement) 属共享判别词汇(wave6 结算目标核销)',
   },
   create_offset: {
     entities: ['PaymentEvent', 'CollectionEvent', 'SettlementEvent'],

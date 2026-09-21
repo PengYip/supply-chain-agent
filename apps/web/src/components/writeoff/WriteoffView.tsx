@@ -43,9 +43,12 @@ export function WriteoffView() {
     setError(null);
     try {
       const ov = await fetchWriteoffOverview();
-      setModes(ov.modes);
-      setRelation((prev) => prev && ov.modes.some((m) => m.relation === prev)
-        ? prev : (ov.modes[0]?.relation ?? null));
+      // 空模式折叠(wave6 Task 3): 无该类事实(资金与目标两侧均空)的核销模式不渲染——
+      // 读侧 writeoffModeRelations 已自动纳入 WRITE_OFF_SETTLEMENT, 空数据时避免空模式行。
+      const visible = ov.modes.filter((m) => m.funds.length > 0 || m.targets.length > 0);
+      setModes(visible);
+      setRelation((prev) => prev && visible.some((m) => m.relation === prev)
+        ? prev : (visible[0]?.relation ?? null));
       setSelectedFunds(new Set());
       setSelectedTargets(new Set());
       setCells({});
@@ -153,7 +156,7 @@ export function WriteoffView() {
     );
   }
   if (modes.length === 0) {
-    return <div className="p-6 text-sm text-gray-500">本体注册表中暂无核销类关系（params 含 amount 且资金侧发起）。</div>;
+    return <div className="p-6 text-sm text-gray-500">暂无核销/冲抵数据（待相关事实入库后自动出现）。</div>;
   }
 
   return (

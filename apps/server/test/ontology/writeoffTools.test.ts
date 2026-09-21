@@ -95,3 +95,92 @@ describe('create_offset execute', () => {
     expect(bad.violations.map((v: { code: string }) => v.code)).toContain('pair_not_allowed');
   });
 });
+
+describe('create_writeoff settlement target (wave6)', () => {
+  it('target=settlement: Payment -> Settlement 落 WRITE_OFF_SETTLEMENT 边(amount params)', async () => {
+    const { p } = await seed();
+    const stl = await insertTradeFact(ctx, {
+      entityType: 'SettlementEvent',
+      payload: { eventBizType: '正向', amount: 80, currency: 'CNY' },
+      validAt: '2026-06-04', createdBy: 'demo',
+    }, 'u1');
+    const t = buildCreateWriteoffTool({ ctx, userId: 'u1' });
+    const out = await t.execute!({
+      target: 'settlement',
+      items: [{ srcId: p, dstId: stl, amount: 80 }],
+    }, { toolCallId: 'call_w6_1', messages: [] } as never);
+    expect(out.status).toBe('ok');
+    if (out.status !== 'ok') return;
+    expect(out.relation).toBe('WRITE_OFF_SETTLEMENT');
+    expect(out.edges).toHaveLength(1);
+    const edges = await listOntologyEdgesAsOf(
+      ctx, asOfBusinessTime(new Date().toISOString()), { relation: 'WRITE_OFF_SETTLEMENT' }, 'u1',
+    );
+    expect(edges).toHaveLength(1);
+    expect(edges[0]!.fromId).toBe(p);
+    expect(edges[0]!.toId).toBe(stl);
+    expect(edges[0]!.params).toEqual({ amount: 80 });
+    expect(edges[0]!.createdBy).toBe('create_writeoff');
+  });
+
+  it('target=settlement + InvoiceEvent 目标 -> pair_not_allowed 拒绝(核销对象必须 SettlementEvent)', async () => {
+    const { p, invA } = await seed();
+    const t = buildCreateWriteoffTool({ ctx, userId: 'u1' });
+    const out = await t.execute!({
+      target: 'settlement',
+      items: [{ srcId: p, dstId: invA, amount: 10 }],
+    }, { toolCallId: 'call_w6_2', messages: [] } as never);
+    expect(out.status).toBe('invalid');
+    if (out.status !== 'invalid') return;
+    expect(out.violations.map((v: { code: string }) => v.code)).toContain('pair_not_allowed');
+    const edges = await listOntologyEdgesAsOf(
+      ctx, asOfBusinessTime(new Date().toISOString()), { relation: 'WRITE_OFF_SETTLEMENT' }, 'u1',
+    );
+    expect(edges).toEqual([]);
+  });
+
+  it('target=settlement 超额拒绝: 金额超结算余额 -> 整单拒绝零边', async () => {
+    const { p } = await seed();
+    const stl = await insertTradeFact(ctx, {
+      entityType: 'SettlementEvent',
+      payload: { eventBizType: '正向', amount: 50, currency: 'CNY' },
+      validAt: '2026-06-04', createdBy: 'demo',
+    }, 'u1');
+    const t = buildCreateWriteoffTool({ ctx, userId: 'u1' });
+    const out = await t.execute!({
+      target: 'settlement',
+      items: [{ srcId: p, dstId: stl, amount: 999 }],
+    }, { toolCallId: 'call_w6_3', messages: [] } as never);
+    expect(out.status).toBe('invalid');
+    if (out.status !== 'invalid') return;
+    expect(out.violations.map((v: { code: string }) => v.code)).toContain('dst_over_remaining');
+    const edges = await listOntologyEdgesAsOf(
+      ctx, asOfBusinessTime(new Date().toISOString()), { relation: 'WRITE_OFF_SETTLEMENT' }, 'u1',
+    );
+    expect(edges).toEqual([]);
+  });
+
+  it('target 缺省 = invoice: 默认路径零回归(仍落 WRITE_OFF 边)', async () => {
+    const { p, invA } = await seed();
+    const t = buildCreateWriteoffTool({ ctx, userId: 'u1' });
+    const out = await t.execute!({ items: [{ srcId: p, dstId: invA, amount: 60 }] },
+      { toolCallId: 'call_w6_4', messages: [] } as never);
+    expect(out.status).toBe('ok');
+    if (out.status !== 'ok') return;
+    expect(out.relation).toBe('WRITE_OFF');
+    const wo = await listOntologyEdgesAsOf(
+      ctx, asOfBusinessTime(new Date().toISOString()), { relation: 'WRITE_OFF' }, 'u1',
+    );
+    expect(wo).toHaveLength(1);
+    const ws = await listOntologyEdgesAsOf(
+      ctx, asOfBusinessTime(new Date().toISOString()), { relation: 'WRITE_OFF_SETTLEMENT' }, 'u1',
+    );
+    expect(ws).toEqual([]);
+  });
+
+  it('zod 层: target 非法值拒绝', async () => {
+    const t = buildCreateWriteoffTool({ ctx, userId: 'u1' });
+    const parsed = t.inputSchema.safeParse({ target: 'bogus', items: [{ srcId: 'a', dstId: 'b', amount: 5 }] });
+    expect(parsed.success).toBe(false);
+  });
+});
