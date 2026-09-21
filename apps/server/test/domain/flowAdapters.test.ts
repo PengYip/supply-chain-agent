@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { FLOW_ADAPTERS, CONTRACT_TYPE_FLOW_DIRECTION } from '../../src/domain/tradeSemantics.js';
+import { deriveAnchorsFromFields } from '../../src/pipeline/bindingProposal.js';
+
+const wrap = (m: Record<string, string | number>) =>
+  Object.fromEntries(Object.entries(m).map(([k, v]) => [k, { value: v }]));
 
 describe('FLOW_ADAPTERS', () => {
   it('覆盖 spec §6 全部字段路径类型', () => {
@@ -39,6 +43,38 @@ describe('FLOW_ADAPTERS', () => {
   it('发货单日期别名含 dev 实测 发货日期; 磅单数量别名含 合计净重', () => {
     expect(FLOW_ADAPTERS['发货单']!.dateFields).toContain('发货日期');
     expect(FLOW_ADAPTERS['汽运磅单']!.qtyFields.map((f) => f[0])).toContain('合计净重');
+  });
+});
+
+describe('轨道衡称重单 qtyFields 吨制键族(wave7 followup)', () => {
+  it('适配表含 总净重_吨/净重_吨 两键, 且 总净重_吨 在 净重_吨 之前(聚合优先)', () => {
+    const qty = FLOW_ADAPTERS['轨道衡称重单']!.qtyFields;
+    expect(qty).toContainEqual(['总净重_吨', '吨']);
+    expect(qty).toContainEqual(['净重_吨', '吨']);
+    const iTotal = qty.findIndex(([k]) => k === '总净重_吨');
+    const iNet = qty.findIndex(([k]) => k === '净重_吨');
+    expect(iTotal).toBeGreaterThanOrEqual(0);
+    expect(iNet).toBeGreaterThan(iTotal);
+  });
+
+  it('派生: 总净重_吨 + 净重_吨 同现 -> 取总净重(页区间聚合优先)', () => {
+    const a = deriveAnchorsFromFields('轨道衡称重单', wrap({ 总净重_吨: 1405.79, 净重_吨: 70.64 }));
+    expect(a.quantity).toEqual({ value: 1405.79, unit: '吨', dimension: 'mass', canonical: 1405790 });
+    expect(a.quantityTon).toBe(1405.79);
+  });
+
+  it('派生: 仅净重_吨(无总净重) -> 兜底取净重', () => {
+    const a = deriveAnchorsFromFields('轨道衡称重单', wrap({ 净重_吨: 70.64 }));
+    expect(a.quantity).toEqual({ value: 70.64, unit: '吨', dimension: 'mass', canonical: 70640 });
+    expect(a.quantityTon).toBe(70.64);
+  });
+
+  it('回归: 既有 7 键仍首中(合计净重 优先于新增 总净重_吨)', () => {
+    const a = deriveAnchorsFromFields('轨道衡称重单', wrap({ 合计净重: 100, 总净重_吨: 200 }));
+    expect(a.quantityTon).toBe(100);
+    // 仅合计净重: 无单位提示/后缀 -> dimension NULL 原值照存(既有语义)。
+    const b = deriveAnchorsFromFields('轨道衡称重单', wrap({ 合计净重: 100 }));
+    expect(b.quantity).toEqual({ value: 100, dimension: null, canonical: null });
   });
 });
 

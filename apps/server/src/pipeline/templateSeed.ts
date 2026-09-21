@@ -38,7 +38,9 @@ export const DOC_TYPE_SEED: Array<{ name: string; parent?: string; props?: Recor
   { name: '发货单', parent: '运输凭证', props: { formTypes: ['交货确认单', '交货单', '发运单'], fieldHints: { 发运数量: '发运数量|发运重量|数量|吨', 数量_吨: '净重|数量|重量|吨', 数量: '数量|吨|净重|重量' } } },
   { name: '汽运磅单', parent: '重量凭证', props: { formTypes: ['汽车过磅单票据'] } },
   { name: '火运大票', parent: '运输凭证', props: { formTypes: ['火运大票'] } },
-  { name: '轨道衡称重单', parent: '重量凭证', props: { formTypes: ['轨道衡称重记录'] } },
+  // wave7 followup: 轨道衡 _吨 键族(总净重_吨/净重_吨)补 fieldHints —— 引导抽取向
+  // FLOW_ADAPTERS 适配表消费的规范键靠拢(键写法沿 wave6 火运 hints 块)。
+  { name: '轨道衡称重单', parent: '重量凭证', props: { formTypes: ['轨道衡称重记录'], fieldHints: { 总净重_吨: '总净重|合计净重|净重合计|净重', 净重_吨: '净重|重量|吨' } } },
   { name: '水尺计重单', parent: '重量凭证', props: { formTypes: ['水尺计重单'] } },
   { name: '派船通知单', parent: '运输凭证', props: { formTypes: ['派船通知单'] } },
   { name: '资金凭证', parent: '履约凭证' },
