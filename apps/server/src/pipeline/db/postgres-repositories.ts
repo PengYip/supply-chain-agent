@@ -199,12 +199,14 @@ export async function saveBindingPg(
 export async function listBindingsForContractPg(
   ctx: PostgresDbContext,
   contractNo: string,
+  userId?: string,
 ): Promise<BindingRow[]> {
+  const uid = effectiveUserId(userId);
   const res = await ctx.pool.query(
     `SELECT id, document_id, contract_no, relation, source_refs, confidence, created_by,
             status, confirmation_source, proposed_by, evidence, graph_status, target_kind
-     FROM bindings WHERE contract_no = $1`,
-    [contractNo],
+     FROM bindings WHERE contract_no = $1${uid ? " AND (user_id = $2 OR user_id = '' OR user_id IS NULL)" : ''}`,
+    uid ? [contractNo, uid] : [contractNo],
   );
   return res.rows.map(bindingRowFromPg);
 }
@@ -2088,6 +2090,26 @@ export async function findContractLedgerByNoPg(
     needsReview: !!r.needs_review,
     userId: r.user_id,
   };
+}
+
+/**
+ * 人工修正合同台账 contract_type(pg twin)。更新域 = (contract_no, user_id) ——
+ * 请求者本人的行(UNIQUE 键), 绝不触碰他人私有行。返回是否有行被更新
+ * (false -> 路由 404 contract_not_found)。
+ */
+export async function updateContractLedgerTypePg(
+  ctx: PostgresDbContext,
+  contractNo: string,
+  contractType: ContractType,
+  userId?: string,
+): Promise<boolean> {
+  const uid = effectiveUserId(userId);
+  const res = await ctx.pool.query(
+    `UPDATE contract_ledger SET contract_type = $1, updated_at = NOW()
+     WHERE contract_no = $2 AND user_id = $3`,
+    [contractType, contractNo, uid],
+  );
+  return (res.rowCount ?? 0) > 0;
 }
 
 // ---- Execution flows (六向执行流水, pg twins) --------------------------------

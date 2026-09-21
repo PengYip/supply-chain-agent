@@ -163,6 +163,7 @@ import {
   // 对话分享快照(feature 2026-08-31): pg twins for upsert + token 读面。
   upsertConversationSharePg,
   getConversationShareByTokenPg,
+  updateContractLedgerTypePg,
   type ConversationShareUpsert as ConversationShareUpsertPg,
   type ConversationShareRow as ConversationShareRowPg,
 } from './postgres-repositories.js';
@@ -832,9 +833,14 @@ export async function saveBinding(ctx: DbContext, input: BindingInput, userId?: 
 export async function listBindingsForContract(
   ctx: DbContext,
   contractNo: string,
+  userId?: string,
 ): Promise<BindingRow[]> {
-  if (ctx.backend === 'postgres') return listBindingsForContractPg(ctx, contractNo);
-  return ctx.db.select().from(bindings).where(eq(bindings.contractNo, contractNo)).all().map(rowToBinding);
+  if (ctx.backend === 'postgres') return listBindingsForContractPg(ctx, contractNo, userId);
+  const uid = effectiveUserId(userId);
+  const filter = uid
+    ? and(eq(bindings.contractNo, contractNo), or(eq(bindings.userId, uid), eq(bindings.userId, ''), isNull(bindings.userId)))
+    : eq(bindings.contractNo, contractNo);
+  return ctx.db.select().from(bindings).where(filter).all().map(rowToBinding);
 }
 
 /**
@@ -3045,6 +3051,29 @@ export async function findContractLedgerByNo(
     needsReview: !!row.needs_review,
     userId: row.user_id,
   };
+}
+
+/**
+ * 人工修正合同台账 contract_type(PATCH /api/contracts/:contractNo/type)。
+ * 更新域 = (contract_no, user_id) —— 请求者本人的行(UNIQUE 键, 见
+ * idx_contract_ledger_no_user), 绝不触碰他人私有行。返回是否有行被更新
+ * (false -> 路由 404 contract_not_found)。
+ */
+export async function updateContractLedgerType(
+  ctx: DbContext,
+  contractNo: string,
+  contractType: ContractType,
+  userId?: string,
+): Promise<boolean> {
+  if (ctx.backend === 'postgres') return updateContractLedgerTypePg(ctx, contractNo, contractType, userId);
+  const uid = effectiveUserId(userId);
+  const res = ctx.sqlite
+    .prepare(
+      `UPDATE contract_ledger SET contract_type = ?, updated_at = datetime('now')
+       WHERE contract_no = ? AND user_id = ?`,
+    )
+    .run(contractType, contractNo, uid);
+  return res.changes > 0;
 }
 
 /**
