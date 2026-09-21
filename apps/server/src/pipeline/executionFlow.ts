@@ -63,13 +63,12 @@ export interface MaterializeInput {
 
 /**
  * 流水(重)建时取最新抽取行(wave5 收尾修复)。一律经 loadLatestExtractionByDocId
- * 取最新; 但 SQLite extractions.created_at 默认 datetime('now') 为秒精度, 同秒
- * 两次抽取(强制重抽)created_at 相同, loadLatest 的 ORDER BY created_at DESC 对
- * 平局行会回到旧行(rowid 序) -> 重建流水读到旧抽取, quantity_ton 派生落空。
- * 故用确定性最新次序(listLatestExtractionsByDocIds: SQLite MAX(rowid) /
- * PG created_at DESC, id DESC)复核, 平局时取真新行 —— 保证重建流水 extraction_id
- * 指向最新抽取、数量/金额派生读新行。找不到抽取行时退回调用方既有传入值
- * (fallbackExtractionId, 溯源兜底; 无行则无法物化 -> null)。
+ * 取最新 —— 该函数已确定性(wave7 sweep: SQLite ORDER BY created_at DESC, rowid
+ * DESC / PG ORDER BY created_at DESC, id DESC 平局键), SQLite created_at 秒精度
+ * 同秒两次抽取(强制重抽)也取后插新行, 重建流水 extraction_id 必然指向最新抽取、
+ * 数量/金额派生读新行。下方 listLatestExtractionsByDocIds 交叉复核为防御性冗余
+ * (双保险): 复核失败(桩缺省/库异常)时照用 loadLatest 结果。找不到抽取行时退回
+ * 调用方既有传入值(fallbackExtractionId, 溯源兜底; 无行则无法物化 -> null)。
  */
 async function resolveLatestExtraction(
   ctx: DbContext,
@@ -79,7 +78,7 @@ async function resolveLatestExtraction(
 ): Promise<ExtractionRow | null> {
   const latest = await loadLatestExtractionByDocId(ctx, docId, userId);
   if (latest) {
-    // 同秒 created_at 平局守卫: 复核失败(桩缺省/库异常)时照用 loadLatest 结果。
+    // 防御性冗余交叉复核(loadLatest 已确定性, 双保险): 复核失败(桩缺省/库异常)时照用 loadLatest 结果。
     try {
       const deterministic = (await listLatestExtractionsByDocIds(ctx, [docId], userId)).get(docId) ?? null;
       if (deterministic && deterministic.id !== latest.id) return deterministic;

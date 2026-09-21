@@ -125,3 +125,46 @@ describe('GapsPanel (business-loop wave4)', () => {
     await waitFor(() => expect(screen.getByText(/请求失败（500）/)).toBeTruthy());
   });
 });
+
+describe('GapsPanel ④⑥ 负值语义角标 (wave7 sweep)', () => {
+  it('④ 负值出「预收」、⑥ 负值出「超收」', async () => {
+    fetchGapsMock.mockResolvedValue(fixture({
+      groups: [
+        {
+          key: 'recv', label: '应收缺口', desc: '销售侧结算/发货/开票与收款的勾稽',
+          items: [
+            { code: '④', label: '结算未收', amt: -15000.5, basis: 'Σ销结算 − Σ收款' },
+            { code: '⑥', label: '开票未收', amt: -300, basis: '净销项 − Σ收款' },
+          ],
+        },
+      ],
+    }));
+    render(<GapsPanel />);
+    await waitFor(() => expect(screen.getByText('结算未收')).toBeTruthy());
+    expect(screen.getByText('预收')).toBeTruthy();
+    expect(screen.getByText('超收')).toBeTruthy();
+    // 角标带语义 hint tooltip(收款超结算 / 收款超开票)。
+    expect(screen.getByText('预收').getAttribute('title')).toBe('收款超结算');
+    expect(screen.getByText('超收').getAttribute('title')).toBe('收款超开票');
+  });
+
+  it('正值 / 空值不出角标', async () => {
+    fetchGapsMock.mockResolvedValue(fixture({
+      groups: [
+        {
+          key: 'recv', label: '应收缺口', desc: '销售侧结算/发货/开票与收款的勾稽',
+          items: [
+            { code: '④', label: '结算未收', amt: 5000, basis: 'Σ销结算 − Σ收款' },
+            { code: '⑥', label: '开票未收', amt: null, basis: '净销项 − Σ收款', missingInputs: ['销项金额'] },
+          ],
+        },
+      ],
+    }));
+    render(<GapsPanel />);
+    await waitFor(() => expect(screen.getByText('结算未收')).toBeTruthy());
+    expect(screen.queryByText('预收')).toBeNull();
+    expect(screen.queryByText('超收')).toBeNull();
+    // 空值行显示待登记弱化态, 同样无角标。
+    expect(screen.getAllByText('待登记').length).toBeGreaterThan(0);
+  });
+});

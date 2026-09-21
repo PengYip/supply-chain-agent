@@ -22,6 +22,14 @@ const GROUP_THEME: Record<GroupKey, { dot: string; code: string; accent: string 
   mis: { dot: 'bg-danger', code: 'border-danger/25 bg-danger/10 text-danger', accent: 'border-l-danger/60' },
 };
 
+/** ④⑥ 负值语义角标(weak 弱化态, 不新建视觉体系): 收款超结算/超开票时用文字点明
+ *  方向 —— ④=Σ销结算−Σ收款<0 → 预收, ⑥=净销项−Σ收款<0 → 超收。其余 code 的
+ *  负值(如 ② 结算超收货)无既定语义, 不渲染。 */
+const NEGATIVE_BADGE_BY_CODE: Partial<Record<string, { text: string; hint: string }>> = {
+  '④': { text: '预收', hint: '收款超结算' },
+  '⑥': { text: '超收', hint: '收款超开票' },
+};
+
 const fmtNum = (n: number): string => n.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
 
 export function GapsPanel() {
@@ -265,11 +273,13 @@ export function GapsPanel() {
   );
 }
 
-/** 明细行：code 圆标 + label + basis 小字 + 数值（或待登记）+ 口径提示角标。 */
+/** 明细行：code 圆标 + label + basis 小字 + 数值（或待登记）+ 口径提示/负值语义角标。 */
 function GapRow({ item, theme }: { item: GapItemDTO; theme: { code: string } }) {
   const reasons = item.missingInputs ?? [];
   const hasQty = item.qty != null;
   const hasAmt = item.amt != null;
+  // ④⑥ 负值语义角标: 仅当 code ∈ {④,⑥} 且 amt 为负时渲染(正值/空值/其他 code 不出)。
+  const negBadge = item.amt != null && item.amt < 0 ? NEGATIVE_BADGE_BY_CODE[item.code] : null;
   return (
     <div className="flex items-center gap-3 px-4 py-2.5">
       <span
@@ -283,6 +293,14 @@ function GapRow({ item, theme }: { item: GapItemDTO; theme: { code: string } }) 
         <div className="mt-0.5 font-mono text-[11px] leading-4 text-ink-soft">{item.basis}</div>
       </div>
       {reasons.length > 0 && <CaliberBadge reasons={reasons} />}
+      {negBadge && (
+        <span
+          title={negBadge.hint}
+          className="shrink-0 rounded border border-line bg-surface/60 px-1.5 py-0.5 text-[10px] text-ink-soft"
+        >
+          {negBadge.text}
+        </span>
+      )}
       <div className="w-40 shrink-0 text-right">
         {hasQty || hasAmt ? (
           <span className="text-sm tabular-nums text-ink">

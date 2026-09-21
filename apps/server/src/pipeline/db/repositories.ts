@@ -1,4 +1,4 @@
-import { eq, and, or, isNull, desc } from 'drizzle-orm';
+import { eq, and, or, isNull, desc, sql } from 'drizzle-orm';
 import { documents, extractions, bindings, classifications } from './schema.js';
 import type { DbContext, SqliteDbContext } from './client.js';
 import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
@@ -566,7 +566,8 @@ export async function loadExtraction(
  * user corrections onto the current full-fields + fieldMeta state. Same
  * userId-legacy filter as loadExtraction (rows with user_id = '' / NULL stay
  * readable by any caller). Mirrors loadExtraction but keyed on document_id
- * with ORDER BY created_at DESC LIMIT 1.
+ * with ORDER BY created_at DESC, rowid DESC LIMIT 1 (wave7 sweep: rowid DESC
+ * 平局键 —— SQLite created_at 秒精度, 同秒两次抽取时后插行 rowid 更大, 取真新行)。
  */
 export async function loadLatestExtractionByDocId(
   ctx: DbContext,
@@ -585,7 +586,7 @@ export async function loadLatestExtractionByDocId(
     .select()
     .from(extractions)
     .where(filter)
-    .orderBy(desc(extractions.createdAt))
+    .orderBy(desc(extractions.createdAt), sql`rowid DESC`)
     .limit(1)
     .all()[0];
   if (!row) return null;

@@ -146,10 +146,16 @@ export async function computeGaps(
     contractCache.set(toId, resolved);
     return resolved;
   };
+  // resolveByNo 缓存(镜像 resolveByEdge 惯例): contractNo -> resolved。款/票/结算
+  // 事实同一合同号反复命中, 避免每行重复查台账。
+  const contractNoCache = new Map<string, { id: string; contractNo: string; side: 'buy' | 'sell' | null }>();
   const resolveByNo = async (contractNo: string): Promise<{ id: string; contractNo: string; side: 'buy' | 'sell' | null } | null> => {
+    const hit = contractNoCache.get(contractNo);
+    if (hit) return hit;
     const entry = await findContractLedgerByNo(ctx, contractNo, userId);
     if (!entry) return null;
     const resolved = { id: entry.id, contractNo: entry.contractNo, side: sideOf(entry.contractType as string | null) };
+    contractNoCache.set(contractNo, resolved);
     contractCache.set(entry.id, resolved);
     return resolved;
   };

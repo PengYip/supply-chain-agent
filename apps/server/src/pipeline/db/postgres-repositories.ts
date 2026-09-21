@@ -868,7 +868,9 @@ export async function loadExtractionPg(
 
 // Latest extraction row for a document (Task 7 update_document_fields merge
 // base). Mirrors loadExtractionPg but keyed on document_id with ORDER BY
-// created_at DESC LIMIT 1. fields/field_meta are jsonb -> node-postgres already
+// created_at DESC, id DESC LIMIT 1 (wave7 sweep: id DESC 平局键, 与
+// listLatestExtractionsByDocIdsPg 的 DISTINCT ON 次序同口径)。
+// fields/field_meta are jsonb -> node-postgres already
 // returns them parsed, so NO JSON.parse here (SQLite branch does JSON.parse).
 export async function loadLatestExtractionByDocIdPg(
   ctx: PostgresDbContext,
@@ -881,13 +883,13 @@ export async function loadLatestExtractionByDocIdPg(
         `SELECT id, document_id, doc_type, fields, field_meta, overall_confidence, needs_review
          FROM extractions
          WHERE document_id = $1 AND (user_id = $2 OR user_id = '' OR user_id IS NULL)
-         ORDER BY created_at DESC LIMIT 1`,
+         ORDER BY created_at DESC, id DESC LIMIT 1`,
         [docId, uid],
       )
     : await ctx.pool.query(
         `SELECT id, document_id, doc_type, fields, field_meta, overall_confidence, needs_review
          FROM extractions
-         WHERE document_id = $1 ORDER BY created_at DESC LIMIT 1`,
+         WHERE document_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`,
         [docId],
       );
   if (!res.rows[0]) return null;
