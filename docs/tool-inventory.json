@@ -67,7 +67,7 @@
       "group": "台账查询",
       "status": "active",
       "mount": "always",
-      "whenToUse": "结构化业务数据统一查询入口: contract=合同台账(枚举/点查, 点查含 boundDocuments 在案单据摘要), flow=六向执行流水, quota=额度占用, unbound_docs=悬空凭证清单, project=项目汇总, template=模板词表, ontology=本体台账实体清单(必传 entityType, 12 实体之一; 支持 page 分页, 默认 1, 每页 20), neighbors=以事实为锚点穿透关联(必传 factId), writeoff=核销余额总览(可选 factId 点查)。盘点/枚举/穿透类问题必须用它。",
+      "whenToUse": "结构化业务数据统一查询入口: contract=合同台账(枚举/点查, 点查含 boundDocuments 在案单据摘要), flow=六向执行流水, quota=额度占用, unbound_docs=悬空凭证清单, project=项目汇总, template=模板词表, gaps=四组勾稽缺口快照(存货结存/应收未收/应付未付/票款错配, 可选 projectCode), ontology=本体台账实体清单(必传 entityType, 12 实体之一; 支持 page 分页, 默认 1, 每页 20), neighbors=以事实为锚点穿透关联(必传 factId), writeoff=核销余额总览(可选 factId 点查)。盘点/枚举/穿透类问题必须用它。",
       "boundary": "只给台账/物化结构化数据, 不含单据原文; 找原文片段用 recall_documents; entity=flow 必传 contractNo, entity=project 必传 projectCode, entity=ontology 必传 entityType, entity=neighbors 必传 factId, 缺失时返回 error 不猜测; 纯只读(L1)不触发任何写路径。",
       "rationale": "阶段2 合并(2026-08-28): 功能相似+场景重叠+参数简单的 SSOT 读工具合一, 底层委托原实现行为不变; Wave 3 起 entity 判别词扩至 9 值(含 ontology/neighbors/writeoff 本体三值), 台账/穿透/核销读面统一入口。"
     },

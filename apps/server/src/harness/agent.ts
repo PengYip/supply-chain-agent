@@ -65,7 +65,7 @@ export function buildOntologyVocabSection(): string {
     '## 本体词汇（登记与查询口径）',
     `实体: ${entityLine}`,
     ...relationLines,
-    '登记与核销工具（create_trade_event/link_ontology/create_writeoff/create_offset，均 L2 需用户确认）；查询=query_business 的 entity=ontology/neighbors/writeoff。',
+    '登记与核销工具（create_trade_event/link_ontology/create_writeoff/create_offset，均 L2 需用户确认）；查询=query_business 的 entity=ontology/neighbors/writeoff/gaps。',
   ].join('\n');
 }
 

@@ -9,6 +9,7 @@ import { buildTemplateOverviewTool } from './templateOverviewTool.js';
 import { listProjectedEntities } from '../../ontology/projection.js';
 import { getNeighbors } from '../../ontology/neighbors.js';
 import { getWriteoffOverview } from '../../ontology/writeoff.js';
+import { computeGaps } from '../../ontology/gaps.js';
 import { getTradeFactById } from '../../ontology/repo.js';
 import { ENTITY_NAMES, type OntologyEntityName } from '../../ontology/index.js';
 
@@ -43,6 +44,7 @@ export function buildQueryBusinessTool(deps: QueryBusinessDeps) {
       'quota=两层额度占用(只读对账桥物化结果, 可选 scope/ownerName/projectCode 过滤); ' +
       'project=按项目编号汇总合同金额/毛差/应收应付/流水/校验提示(必传 projectCode); ' +
       'template=单据模板类型层级与允许挂接的合同类型词表(可选 docType, 缺省返回全层级); ' +
+      'gaps=四组勾稽缺口快照(存货结存/应收未收/应付未付/票款错配, 可选 projectCode 按项目过滤, 含 checks 等式推导); ' +
       'unbound_docs=悬空凭证清单(已解析但未绑定合同的凭证类单据, 它们不参与 recall_documents 检索, 本清单是其唯一批量发现入口, 供人工确认合同号后用 bind_document 补绑)。' +
       'ontology=本体台账某类实体清单(必传 entityType); neighbors=以事实为锚点穿透关联(必传 factId); writeoff=核销余额总览(可选 factId 点查)。' +
       '这些都是结构化台账/物化数据, 不要用 recall_documents 检索替代; 找单据原文片段才用 recall_documents。' +
@@ -54,8 +56,8 @@ export function buildQueryBusinessTool(deps: QueryBusinessDeps) {
       '5) 穿透某事实关联 {entity: "neighbors", factId: "TF-xxx"}(id 可从台账列表/详情复制)。',
     inputSchema: z.object({
       entity: z
-        .enum(['contract', 'flow', 'quota', 'project', 'template', 'unbound_docs', 'ontology', 'neighbors', 'writeoff'])
-        .describe('查什么: contract=合同台账; flow=执行流水; quota=额度占用; project=项目汇总; template=模板词表; unbound_docs=悬空凭证清单; ontology=本体台账实体清单; neighbors=事实锚点穿透; writeoff=核销余额总览'),
+        .enum(['contract', 'flow', 'quota', 'project', 'template', 'gaps', 'unbound_docs', 'ontology', 'neighbors', 'writeoff'])
+        .describe('查什么: contract=合同台账; flow=执行流水; quota=额度占用; project=项目汇总; template=模板词表; gaps=四组勾稽缺口快照; unbound_docs=悬空凭证清单; ontology=本体台账实体清单; neighbors=事实锚点穿透; writeoff=核销余额总览'),
       contractNo: z
         .string()
         .optional()
@@ -63,7 +65,7 @@ export function buildQueryBusinessTool(deps: QueryBusinessDeps) {
       projectCode: z
         .string()
         .optional()
-        .describe('entity=project 时必填(如 PRJ-2026-001); entity=quota 时可选过滤'),
+        .describe('entity=project 时必填(如 PRJ-2026-001); entity=quota 时可选过滤; entity=gaps 时可选按项目过滤(BELONGS_TO 反查)'),
       scope: z
         .enum(['counterparty', 'project'])
         .optional()
@@ -112,6 +114,27 @@ export function buildQueryBusinessTool(deps: QueryBusinessDeps) {
           return projectTool.execute!({ projectCode: input.projectCode }, opts);
         case 'template':
           return templateTool.execute!({ docType: input.docType }, opts);
+        case 'gaps': {
+          try {
+            const rep = await computeGaps(
+              deps.ctx,
+              input.projectCode ? { projectNo: input.projectCode } : {},
+              deps.userId,
+            );
+            return {
+              status: 'ok' as const,
+              entity: 'gaps' as const,
+              scope: rep.scope,
+              tiles: rep.tiles,
+              checks: rep.checks,
+              usage:
+                '勾稽缺口四组快照(存货结存/应收未收/应付未付/票款错配)与等式推导(checks)。' +
+                '按合同/单据逐项明细请用勾稽缺口面板查看 groups(此处只给数字快照, 明细不进对话返回)。',
+            };
+          } catch (e) {
+            return { error: e instanceof Error ? e.message : String(e) };
+          }
+        }
         case 'unbound_docs': {
           const docs = await listUnboundVoucherDocs(deps.ctx, deps.userId);
           return {

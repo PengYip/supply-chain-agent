@@ -88,3 +88,143 @@ describe('query_business ontology/neighbors/writeoff (wave3)', () => {
     expect(out.modes!.some((m) => m.relation === 'WRITE_OFF')).toBe(true);
   });
 });
+
+describe('query_business entity=gaps (wave8 T1, AI 可答勾稽)', () => {
+  // 金标准 seed(沿 gaps.test.ts): 采购 CON-0817 + 销售 CON-0512 -> 四 tiles 数字逐字可断言
+  const insertContract = (id: string, contractNo: string, contractType: string) => {
+    ctx.sqlite.prepare(
+      `INSERT INTO contract_ledger (id, contract_no, display_contract_no, doc_type, document_id,
+          title, fields, field_meta, overall_confidence, needs_review, user_id, contract_type)
+       VALUES (?, ?, ?, '合同', 'doc-1', '', '{}', '{}', 1, 0, '', ?)`,
+    ).run(id, contractNo, contractNo, contractType);
+  };
+
+  async function seedGolden(): Promise<void> {
+    insertContract('CL-1', 'CON-0817', '采购');
+    insertContract('CL-2', 'CON-0512', '销售');
+    const receipt = await insertTradeFact(ctx, {
+      entityType: 'GoodsReceiptEvent',
+      payload: { eventBizType: '正向', quantity: 1600, amount: 3_200_000, currency: 'CNY', unit: '吨' },
+      validAt: '2026-09-01T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    await insertOntologyEdge(ctx, {
+      relation: 'ALLOCATE_TO', fromType: 'GoodsReceiptEvent', fromId: receipt,
+      toType: 'TradeContract', toId: 'CL-1',
+      params: { quantity: 1600, method: '数量' }, validAt: '2026-09-01T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    await insertTradeFact(ctx, {
+      entityType: 'SettlementEvent',
+      payload: { eventBizType: '正向', amount: 2_444_000, currency: 'CNY', contractNo: 'CON-0817' },
+      validAt: '2026-09-02T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    await insertTradeFact(ctx, {
+      entityType: 'InvoiceEvent',
+      payload: { eventBizType: '正向', amount: 2_444_000, currency: 'CNY', invoiceNo: 'INV-IN-1', invoiceType: '进项', contractNo: 'CON-0817' },
+      validAt: '2026-09-03T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    await insertTradeFact(ctx, {
+      entityType: 'PaymentEvent',
+      payload: { eventBizType: '正向', amount: 1_158_000, currency: 'CNY', payType: '预付', contractNo: 'CON-0817' },
+      validAt: '2026-09-01T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    await insertTradeFact(ctx, {
+      entityType: 'PaymentEvent',
+      payload: { eventBizType: '正向', amount: 1_544_000, currency: 'CNY', payType: '尾款', contractNo: 'CON-0817' },
+      validAt: '2026-09-04T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    await insertTradeFact(ctx, {
+      entityType: 'PaymentEvent',
+      payload: { eventBizType: '逆向', amount: -86_000, currency: 'CNY', payType: '预付', contractNo: 'CON-0817' },
+      validAt: '2026-09-05T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    const delivery = await insertTradeFact(ctx, {
+      entityType: 'GoodsDeliveryEvent',
+      payload: { eventBizType: '正向', quantity: 390, amount: 764_000, currency: 'CNY', unit: '吨' },
+      validAt: '2026-09-01T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    await insertOntologyEdge(ctx, {
+      relation: 'ALLOCATE_TO', fromType: 'GoodsDeliveryEvent', fromId: delivery,
+      toType: 'TradeContract', toId: 'CL-2',
+      params: { quantity: 390, amount: 764_000, method: '金额' }, validAt: '2026-09-01T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    await insertTradeFact(ctx, {
+      entityType: 'SettlementEvent',
+      payload: { eventBizType: '正向', amount: 588_000, currency: 'CNY', contractNo: 'CON-0512' },
+      validAt: '2026-09-02T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    await insertTradeFact(ctx, {
+      entityType: 'InvoiceEvent',
+      payload: { eventBizType: '正向', amount: 588_000, currency: 'CNY', invoiceNo: 'INV-OUT-1', invoiceType: '销项', contractNo: 'CON-0512' },
+      validAt: '2026-09-03T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    await insertTradeFact(ctx, {
+      entityType: 'InvoiceEvent',
+      payload: { eventBizType: '逆向', amount: -58_800, currency: 'CNY', invoiceNo: 'INV-OUT-1', invoiceType: '销项', contractNo: 'CON-0512' },
+      validAt: '2026-09-04T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    await insertTradeFact(ctx, {
+      entityType: 'CollectionEvent',
+      payload: { eventBizType: '正向', amount: 300_000, currency: 'CNY', collectionType: '回款', contractNo: 'CON-0512' },
+      validAt: '2026-09-05T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    await insertTradeFact(ctx, {
+      entityType: 'CollectionEvent',
+      payload: { eventBizType: '正向', amount: 288_000, currency: 'CNY', collectionType: '回款', contractNo: 'CON-0512' },
+      validAt: '2026-09-06T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+  }
+
+  it('1) entity=gaps 返回四 tiles 数字+hint + scope + usage(全局口径缺省)', async () => {
+    await seedGolden();
+    const t = buildQueryBusinessTool({ ctx, userId: 'u1' });
+    const out = await t.execute!({ entity: 'gaps' }, CALL) as {
+      status: string; entity?: string; scope?: string;
+      tiles?: Array<{ key: string; label: string; qty?: number | null; amt?: number | null; hint?: string }>;
+      checks?: string[]; usage?: string; error?: string;
+    };
+    expect(out.status).toBe('ok');
+    expect(out.entity).toBe('gaps');
+    expect(out.scope).toBe('all');
+    const tile = (key: string) => out.tiles!.find((x) => x.key === key)!;
+    expect(tile('stock').qty).toBe(1210);
+    expect(tile('recv').amt).toBe(176_000);
+    expect(tile('pay').amt).toBe(900_000);
+    expect(tile('mis').amt).toBe(230_800);
+    // hint 透传 + usage 引导明细走面板
+    expect(tile('stock').hint).toBeTruthy();
+    expect(out.checks!.length).toBeGreaterThanOrEqual(8);
+    expect(out.usage).toContain('勾稽缺口面板');
+  });
+
+  it('2) projectCode 透传 -> BELONGS_TO 范围命中(scope=PRJ-1, 采购侧在范围)', async () => {
+    await seedGolden();
+    const proj = await insertTradeFact(ctx, {
+      entityType: 'TradeProject',
+      payload: { projectNo: 'PRJ-1', name: '年度采购' },
+      validAt: '2026-09-01T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    await insertOntologyEdge(ctx, {
+      relation: 'BELONGS_TO', fromType: 'TradeContract', fromId: 'CL-1',
+      toType: 'TradeProject', toId: proj,
+      params: {}, validAt: '2026-09-01T00:00:00Z', createdBy: 'golden',
+    }, 'u1');
+    const t = buildQueryBusinessTool({ ctx, userId: 'u1' });
+    const out = await t.execute!({ entity: 'gaps', projectCode: 'PRJ-1' }, CALL) as {
+      status: string; scope?: string; tiles?: Array<{ key: string; qty?: number | null; amt?: number | null }>; error?: string;
+    };
+    expect(out.status).toBe('ok');
+    expect(out.scope).toBe('PRJ-1'); // computeGaps 收到 projectNo
+    // 销侧不在范围: recv(⑤ 发货未收)归 0
+    expect(out.tiles!.find((x) => x.key === 'recv')!.amt).toBe(0);
+  });
+
+  it('3) computeGaps 抛错 -> 返回 {error} 对象不抛(沿 ontology/neighbors 分支风格)', async () => {
+    const broken = {
+      backend: 'sqlite',
+      sqlite: { prepare: () => ({ all: () => { throw new Error('gaps boom'); }, get: () => { throw new Error('gaps boom'); } }) },
+    } as never;
+    const t = buildQueryBusinessTool({ ctx: broken, userId: 'u1' });
+    const out = await t.execute!({ entity: 'gaps' }, CALL) as { error?: string };
+    expect(out.error).toContain('gaps boom');
+  });
+});
