@@ -263,3 +263,78 @@ describe('computeGaps golden numbers (wave4, prototype reportGaps 复现)', () =
     expect(item('⑩').amt).toBe(0);
   });
 });
+
+describe('gaps contracts 下钻(W8 T2): 逐合同行 + 合同号命名兜底锁定', () => {
+  it('金标准多合同: contracts[] 每行数字/side 正确, 合同号显示 contract_no 而非行 id, 稳定排序', async () => {
+    await seedGolden();
+    const rep = await computeGaps(ctx, {}, 'u1');
+    expect(Array.isArray(rep.contracts)).toBe(true);
+    expect(rep.contracts).toHaveLength(2);
+    // 排序: |settlements+invoicesIn+invoicesOut| 降序 (CON-0817 购侧 4,888,000 > CON-0512 销侧 1,117,200)
+    expect(rep.contracts[0]!.contractNo).toBe('CON-0817');
+    expect(rep.contracts[1]!.contractNo).toBe('CON-0512');
+    // 合同号必须是 contract_no, 绝非 CL- 行 id(锁定 projection 映射)
+    expect(rep.contracts.every((r) => !r.contractNo.startsWith('CL-'))).toBe(true);
+    // 购侧 CON-0817
+    const buy = rep.contracts.find((r) => r.contractNo === 'CON-0817')!;
+    expect(buy.side).toBe('buy');
+    expect(buy.receiptsQty).toBe(1600);
+    expect(buy.deliveriesQty).toBe(0);
+    expect(buy.settlements).toBe(2_444_000);
+    expect(buy.invoicesIn).toBe(2_444_000);
+    expect(buy.invoicesOut).toBe(0);
+    expect(buy.payments).toBe(2_616_000); // 预付 1,158,000 + 尾款 1,544,000 − 退款 86,000
+    expect(buy.collections).toBe(0);
+    expect(buy.receiptsQtyMissing).toBe(false);
+    expect(buy.paymentsMissing).toBe(false);
+    // 销侧 CON-0512
+    const sell = rep.contracts.find((r) => r.contractNo === 'CON-0512')!;
+    expect(sell.side).toBe('sell');
+    expect(sell.deliveriesQty).toBe(390);
+    expect(sell.receiptsQty).toBe(0);
+    expect(sell.settlements).toBe(588_000);
+    expect(sell.invoicesOut).toBe(529_200); // 销项 588,000 − 红冲 58,800
+    expect(sell.invoicesIn).toBe(0);
+    expect(sell.collections).toBe(588_000);
+    expect(sell.payments).toBe(0);
+    expect(sell.deliveriesQtyMissing).toBe(false);
+  });
+
+  it('missing 标志: 收货缺数量 -> receiptsQtyMissing=true(注册表禁造无金额付款, paymentsMissing 为防御位)', async () => {
+    insertContract('CL-M', 'CON-M', '采购');
+    // 收货: 有金额无数量 -> receiptsQtyMissing
+    const rcpt = await insertTradeFact(ctx, {
+      entityType: 'GoodsReceiptEvent',
+      payload: { eventBizType: '正向', amount: 1000, currency: 'CNY', unit: '吨' },
+      validAt: '2026-09-01T00:00:00Z', createdBy: 't',
+    }, 'u1');
+    await insertOntologyEdge(ctx, {
+      relation: 'ALLOCATE_TO', fromType: 'GoodsReceiptEvent', fromId: rcpt,
+      toType: 'TradeContract', toId: 'CL-M',
+      params: { amount: 1000, method: '金额' }, validAt: '2026-09-01T00:00:00Z', createdBy: 't',
+    }, 'u1');
+    const rep = await computeGaps(ctx, {}, 'u1');
+    const row = rep.contracts.find((r) => r.contractNo === 'CON-M')!;
+    expect(row.side).toBe('buy');
+    expect(row.receiptsQtyMissing).toBe(true);
+    expect(row.deliveriesQtyMissing).toBe(false);
+    expect(row.paymentsMissing).toBe(false);
+  });
+
+  it('projectNo 范围: contracts[] 只含范围内合同(BELONGS_TO)', async () => {
+    await seedGolden();
+    const proj = await insertTradeFact(ctx, {
+      entityType: 'TradeProject',
+      payload: { projectNo: 'PRJ-1', name: '年度采购' },
+      validAt: '2026-09-01T00:00:00Z', createdBy: 't',
+    }, 'u1');
+    await insertOntologyEdge(ctx, {
+      relation: 'BELONGS_TO', fromType: 'TradeContract', fromId: 'CL-1',
+      toType: 'TradeProject', toId: proj,
+      params: {}, validAt: '2026-09-01T00:00:00Z', createdBy: 't',
+    }, 'u1');
+    const rep = await computeGaps(ctx, { projectNo: 'PRJ-1' }, 'u1');
+    expect(rep.contracts).toHaveLength(1);
+    expect(rep.contracts[0]!.contractNo).toBe('CON-0817');
+  });
+});

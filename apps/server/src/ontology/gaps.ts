@@ -34,11 +34,29 @@ export interface GapTile {
   hint?: string;
 }
 
+/** 按合同下钻行(W8 T2): 从 aggs 直接投影, 不新增聚合逻辑。合同号 = 台账 contract_no
+ *  (经 resolveByEdge/resolveByNo 归一; 绝非台账行 id)。missing 标志 = 该口径缺输入。 */
+export interface GapContractRow {
+  contractNo: string;
+  side: 'buy' | 'sell' | null;
+  receiptsQty: number;
+  deliveriesQty: number;
+  settlements: number;
+  invoicesIn: number;
+  invoicesOut: number;
+  payments: number;
+  collections: number;
+  receiptsQtyMissing: boolean;
+  deliveriesQtyMissing: boolean;
+  paymentsMissing: boolean;
+}
+
 export interface GapsReport {
   scope: string;
   tiles: GapTile[];
   groups: GapGroup[];
   checks: string[];
+  contracts: GapContractRow[];
 }
 
 const EPSILON = 0.005;
@@ -352,6 +370,29 @@ export async function computeGaps(
   const payTile = tileOf('⑦');
   const misAmt = (tileOf('⑩')?.amt ?? 0) + (tileOf('⑪')?.amt ?? 0);
 
+  // 按合同下钻(W8 T2): aggs 直接投影, 不新增聚合逻辑。排序 = |settlements+invoicesIn+
+  // invoicesOut| 降序(金额主导的合同排前), 同值按 contractNo 升序(确定性, 便于前端/测试)。
+  const contracts: GapContractRow[] = [...aggs.values()].map((a) => ({
+    contractNo: a.contractNo,
+    side: a.side,
+    receiptsQty: R2(a.receiptsQty),
+    deliveriesQty: R2(a.deliveriesQty),
+    settlements: R2(a.settlements),
+    invoicesIn: R2(a.invoicesIn),
+    invoicesOut: R2(a.invoicesOut),
+    payments: R2(a.payments),
+    collections: R2(a.collections),
+    receiptsQtyMissing: a.receiptsQtyMissing,
+    deliveriesQtyMissing: a.deliveriesQtyMissing,
+    paymentsMissing: a.paymentsMissing,
+  }));
+  contracts.sort((x, y) => {
+    const kx = Math.abs(x.settlements + x.invoicesIn + x.invoicesOut);
+    const ky = Math.abs(y.settlements + y.invoicesIn + y.invoicesOut);
+    if (ky !== kx) return ky - kx;
+    return x.contractNo < y.contractNo ? -1 : x.contractNo > y.contractNo ? 1 : 0;
+  });
+
   return {
     scope: opts.projectNo ?? 'all',
     tiles: [
@@ -367,5 +408,6 @@ export async function computeGaps(
       { key: 'mis', label: '票款错配', desc: '付款/收款与进销项票的绝对差异', items: misItems },
     ],
     checks,
+    contracts,
   };
 }
