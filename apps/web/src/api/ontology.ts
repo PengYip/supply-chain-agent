@@ -303,11 +303,31 @@ export interface GapTileDTO {
   hint?: string;
 }
 
+/** 按合同下钻行（business-loop Wave 8，T2 契约 commit 9cda503）：从聚合直接投影，
+ *  按 |结算+进项+销项| 降序。数量=吨、金额=元；missing=true 表示该口径缺输入、
+ *  值不可信（面板弱化标注，数值照显不隐藏——与「口径提示」行同哲学）。 */
+export interface GapContractRowDTO {
+  contractNo: string;
+  side: 'buy' | 'sell' | null;
+  receiptsQty: number;
+  deliveriesQty: number;
+  settlements: number;
+  invoicesIn: number;
+  invoicesOut: number;
+  payments: number;
+  collections: number;
+  receiptsQtyMissing: boolean;
+  deliveriesQtyMissing: boolean;
+  paymentsMissing: boolean;
+}
+
 export interface GapsReportDTO {
   scope: string;
   tiles: GapTileDTO[];
   groups: GapGroupDTO[];
   checks: string[];
+  /** Wave 8 新增；可选 = 旧响应 / 旧 mock 无此字段时按空态处理（区块不渲染）。 */
+  contracts?: GapContractRowDTO[];
 }
 
 export function fetchGaps(projectNo?: string): Promise<GapsReportDTO> {

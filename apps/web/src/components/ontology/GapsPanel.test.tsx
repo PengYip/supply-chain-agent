@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import { GapsPanel } from './GapsPanel';
-import type { GapsReportDTO } from '../../api/ontology';
+import type { GapContractRowDTO, GapsReportDTO } from '../../api/ontology';
 
 const fetchGapsMock = vi.fn<(projectNo?: string) => Promise<GapsReportDTO>>();
 
@@ -166,5 +166,116 @@ describe('GapsPanel ④⑥ 负值语义角标 (wave7 sweep)', () => {
     expect(screen.queryByText('超收')).toBeNull();
     // 空值行显示待登记弱化态, 同样无角标。
     expect(screen.getAllByText('待登记').length).toBeGreaterThan(0);
+  });
+});
+
+// Wave 8 T3: 按合同下钻区块(consumes T2 report.contracts)。
+function contractRow(overrides: Partial<GapContractRowDTO> = {}): GapContractRowDTO {
+  return {
+    contractNo: 'XYRL-2022-225',
+    side: 'buy',
+    receiptsQty: 3357.46,
+    deliveriesQty: 0,
+    settlements: 3460988,
+    invoicesIn: 300000,
+    invoicesOut: 0,
+    payments: 250000,
+    collections: 0,
+    receiptsQtyMissing: false,
+    deliveriesQtyMissing: false,
+    paymentsMissing: false,
+    ...overrides,
+  };
+}
+
+describe('GapsPanel 按合同下钻 (wave8)', () => {
+  it('默认收起, 展开后渲染合同行与七列量额(千分位)', async () => {
+    fetchGapsMock.mockResolvedValue(fixture({
+      contracts: [
+        contractRow(),
+        contractRow({
+          contractNo: 'GMNH-JBKZ-2025', side: 'sell', receiptsQty: 0, deliveriesQty: 2156.2,
+          settlements: 1988765.4, invoicesIn: 0, invoicesOut: 1800000, payments: 0, collections: 950000,
+        }),
+      ],
+    }));
+    render(<GapsPanel />);
+    await waitFor(() => expect(screen.getByText('按合同')).toBeTruthy());
+    // 头部计数(2 份), 默认收起: 表格不渲染。
+    expect(screen.getByText('2 份')).toBeTruthy();
+    expect(screen.queryByTestId('gaps-contracts')!.querySelector('table')).toBeNull();
+    fireEvent.click(screen.getByText('按合同'));
+    // 行内容: 合同号 + 数值千分位(吨/额列各抽一个)。
+    expect(await screen.findByText('XYRL-2022-225')).toBeTruthy();
+    expect(screen.getByText('GMNH-JBKZ-2025')).toBeTruthy();
+    expect(screen.getAllByText('3,357.46').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('1,988,765.4').length).toBeGreaterThan(0);
+    // 列头齐全(收货量/发货量/结算/进项/销项/付款/收款)。
+    for (const h of ['收货量', '发货量', '结算', '进项', '销项', '付款', '收款']) {
+      expect(screen.getByText(h, { selector: 'th' })).toBeTruthy();
+    }
+  });
+
+  it('侧别徽标: buy=购 / sell=销 / null=未定侧(带无法判定 tooltip)', async () => {
+    fetchGapsMock.mockResolvedValue(fixture({
+      contracts: [
+        contractRow(),
+        contractRow({ contractNo: 'C-SELL', side: 'sell' }),
+        contractRow({ contractNo: 'C-99', side: null, receiptsQty: 120.5, receiptsQtyMissing: true }),
+      ],
+    }));
+    render(<GapsPanel />);
+    await waitFor(() => expect(screen.getByText('按合同')).toBeTruthy());
+    fireEvent.click(screen.getByText('按合同'));
+    expect(await screen.findByText('C-99')).toBeTruthy();
+    // 徽标文本精确匹配(购/销 为单字, 不与组描述里的采购/销售串匹配)。
+    expect(screen.getByText('购', { selector: 'span' })).toBeTruthy();
+    expect(screen.getByText('销', { selector: 'span' })).toBeTruthy();
+    const unknown = screen.getByText('未定侧');
+    expect(unknown.getAttribute('title')).toContain('合同侧别无法判定');
+  });
+
+  it('missing 口径: 数值照显但弱化, 挂「缺」角标 + tooltip; 无 missing 列不出角标', async () => {
+    fetchGapsMock.mockResolvedValue(fixture({
+      contracts: [
+        contractRow({ paymentsMissing: true, receiptsQtyMissing: true }),
+      ],
+    }));
+    render(<GapsPanel />);
+    await waitFor(() => expect(screen.getByText('按合同')).toBeTruthy());
+    fireEvent.click(screen.getByText('按合同'));
+    expect(await screen.findByText('XYRL-2022-225')).toBeTruthy();
+    // 两处 missing(收货量+付款) -> 两个「缺」角标, tooltip 点明口径与不可信。
+    const chips = screen.getAllByText('缺');
+    expect(chips.length).toBe(2);
+    const titles = chips.map((el) => el.getAttribute('title') ?? '');
+    expect(titles.some((t) => t.includes('收货量口径缺输入'))).toBe(true);
+    expect(titles.some((t) => t.includes('付款口径缺输入'))).toBe(true);
+    expect(titles.every((t) => t.includes('不可作对账依据'))).toBe(true);
+    // 数值照显(不归零不隐藏)。
+    expect(screen.getAllByText('3,357.46').length).toBeGreaterThan(0);
+  });
+
+  it('空态安静不占位: contracts 缺省或空数组 -> 区块整块不渲染', async () => {
+    // 缺省(beforeEach 默认 fixture 无 contracts 字段, 兼容旧响应形状)
+    render(<GapsPanel />);
+    await waitFor(() => expect(screen.getByText('存货结存')).toBeTruthy());
+    expect(screen.queryByText('按合同')).toBeNull();
+    cleanup();
+    // 显式空数组
+    fetchGapsMock.mockResolvedValueOnce(fixture({ contracts: [] }));
+    render(<GapsPanel />);
+    await waitFor(() => expect(screen.getByText('存货结存')).toBeTruthy());
+    expect(screen.queryByText('按合同')).toBeNull();
+  });
+
+  it('projectNo 过滤联动: 区块头部注明范围', async () => {
+    fetchGapsMock.mockResolvedValue(fixture({
+      scope: 'PRJ-2026-01',
+      contracts: [contractRow()],
+    }));
+    render(<GapsPanel />);
+    await waitFor(() => expect(screen.getByText('按合同')).toBeTruthy());
+    expect(screen.getByText(/1 份 · 项目 PRJ-2026-01/)).toBeTruthy();
   });
 });

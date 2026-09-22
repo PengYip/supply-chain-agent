@@ -3,13 +3,14 @@ import clsx from 'clsx';
 import { AlertCircle, ChevronDown, RefreshCw } from 'lucide-react';
 import {
   fetchGaps,
-  type GapGroupDTO, type GapItemDTO, type GapsReportDTO,
+  type GapContractRowDTO, type GapGroupDTO, type GapItemDTO, type GapsReportDTO,
 } from '../../api/ontology';
 
 /** 勾稽缺口面板（business-loop Wave 4，2026-09-20）：GET /api/ontology/gaps 的只读投影，
  *  挂在本体视图「勾稽缺口」tab。三段式：四块 tiles 摘要 -> 四组可折叠明细（行=勾稽项）
- *  -> 勾稽校验说明（默认收起）。qty/amt 为 null 表示该口径数据未登记（missingInputs
- *  说明原因），显示「待登记」弱化态，不造数（后端 R19 口径的前端承诺）。 */
+ *  -> 按合同下钻（Wave 8：合同号/侧别/收发量/结算票款累计，默认收起）-> 勾稽校验说明
+ *  （默认收起）。qty/amt 为 null 表示该口径数据未登记（missingInputs 说明原因），
+ *  显示「待登记」弱化态，不造数（后端 R19 口径的前端承诺）。 */
 
 type GroupKey = GapGroupDTO['key'];
 
@@ -32,6 +33,15 @@ const NEGATIVE_BADGE_BY_CODE: Partial<Record<string, { text: string; hint: strin
 
 const fmtNum = (n: number): string => n.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
 
+/** 按合同下钻的侧别徽标（Wave 8）：购/销沿用项目台账 ROLE_BADGE 的语义色
+ *  （采购=warning / 销售=success 弱底色），null=未定侧弱化态——合同类型分不出
+ *  方向时的诚实呈现，不猜侧。 */
+const SIDE_BADGE: Record<'buy' | 'sell' | 'null', { text: string; cls: string; title: string }> = {
+  buy: { text: '购', cls: 'bg-warning/10 text-warning border-warning/30', title: '采购侧' },
+  sell: { text: '销', cls: 'bg-success/10 text-success border-success/30', title: '销售侧' },
+  null: { text: '未定侧', cls: 'bg-surface/50 text-ink-soft/70 border-line/50', title: '合同侧别无法判定，相关勾稽口径受影响' },
+};
+
 export function GapsPanel() {
   const [report, setReport] = useState<GapsReportDTO | null>(null);
   const [loading, setLoading] = useState(true);
@@ -43,8 +53,10 @@ export function GapsPanel() {
   // 过期响应守卫（照抄 EntitiesView seqRef 模式）：刷新/改过滤时先发后至的旧响应不得覆盖新结果。
   const seqRef = useRef(0);
   // 折叠态：四组默认展开（明细是本面板的主体），checks 默认收起（等式推导是佐证材料）。
+  // 按合同下钻默认收起（Wave 8）：七列宽表 + 行数不定，属二级下钻，头部计数引导展开。
   const [collapsed, setCollapsed] = useState<Partial<Record<GroupKey, boolean>>>({});
   const [checksOpen, setChecksOpen] = useState(false);
+  const [contractsOpen, setContractsOpen] = useState(false);
 
   const load = useCallback(async (projectNo?: string) => {
     const seq = ++seqRef.current;
@@ -230,6 +242,61 @@ export function GapsPanel() {
           })}
         </div>
 
+        {/* 按合同下钻（Wave 8）：T2 report.contracts 直接投影，后端已按 |结算+进项+销项|
+            降序，前端不重排。空态（字段缺失 / 空数组）整块不渲染——安静不占位。 */}
+        {(report.contracts ?? []).length > 0 && (
+          <section className="overflow-hidden rounded-lg border border-line bg-white" data-testid="gaps-contracts">
+            <button
+              type="button"
+              onClick={() => setContractsOpen((v) => !v)}
+              aria-expanded={contractsOpen}
+              className="flex w-full items-center gap-2.5 px-4 py-3 text-left transition-colors hover:bg-surface/40"
+            >
+              <span className="h-2 w-2 shrink-0 rounded-[3px] bg-primary-400" aria-hidden />
+              <span className="shrink-0 text-sm font-medium text-ink">按合同</span>
+              <span className="hidden min-w-0 truncate text-xs text-ink-soft md:inline">
+                每份合同的收发 / 结算 / 票款累计
+              </span>
+              <span className="ml-auto shrink-0 text-xs tabular-nums text-ink-soft">
+                {(report.contracts ?? []).length} 份{report.scope !== 'all' ? ` · ${scopeLabel}` : ''}
+              </span>
+              <ChevronDown
+                className={clsx('h-4 w-4 shrink-0 text-ink-soft transition-transform', contractsOpen && 'rotate-180')}
+                aria-hidden
+              />
+            </button>
+            {contractsOpen && (
+              <div className="animate-fade-in border-t border-line/60">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[760px] border-collapse">
+                    <thead>
+                      <tr className="border-b border-line bg-surface text-[10px] font-medium text-ink-soft">
+                        <th className="px-3 py-1.5 text-left font-medium">合同号</th>
+                        <th className="px-2 py-1.5 text-left font-medium">侧别</th>
+                        <th className="whitespace-nowrap px-2 py-1.5 text-right font-medium">收货量</th>
+                        <th className="whitespace-nowrap px-2 py-1.5 text-right font-medium">发货量</th>
+                        <th className="whitespace-nowrap px-2 py-1.5 text-right font-medium">结算</th>
+                        <th className="whitespace-nowrap px-2 py-1.5 text-right font-medium">进项</th>
+                        <th className="whitespace-nowrap px-2 py-1.5 text-right font-medium">销项</th>
+                        <th className="whitespace-nowrap px-2 py-1.5 text-right font-medium">付款</th>
+                        <th className="whitespace-nowrap px-2 py-1.5 text-right font-medium">收款</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(report.contracts ?? []).map((c) => (
+                        <ContractDrilldownRow key={c.contractNo} row={c} />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="border-t border-line/60 px-4 py-2 text-[10px] leading-4 text-ink-soft">
+                  数量单位为吨，金额单位为元；标「缺」的口径缺输入，数值按已登记部分计，不可作对账依据。
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
         {/* 勾稽校验说明：等宽小字，默认收起 */}
         <div className="rounded-lg border border-line bg-white">
           <button
@@ -312,6 +379,53 @@ function GapRow({ item, theme }: { item: GapItemDTO; theme: { code: string } }) 
         )}
       </div>
     </div>
+  );
+}
+
+/** 按合同下钻行（Wave 8）：合同号 + 侧别徽标 + 七列量额。missing 口径数值照显但
+ *  弱化着色，并挂「缺」角标（沿 ④预收/⑥超收 的 quiet chip 视觉）+ tooltip 说明。 */
+function ContractDrilldownRow({ row }: { row: GapContractRowDTO }) {
+  const side = SIDE_BADGE[row.side ?? 'null'];
+  return (
+    <tr className="border-b border-line/60 last:border-b-0">
+      <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-ink" title={row.contractNo}>
+        {row.contractNo}
+      </td>
+      <td className="px-2 py-1.5">
+        <span
+          title={side.title}
+          className={clsx('inline-flex items-center rounded border px-1.5 py-px text-[10px]', side.cls)}
+        >
+          {side.text}
+        </span>
+      </td>
+      <MetricCell label="收货量" value={row.receiptsQty} missing={row.receiptsQtyMissing} />
+      <MetricCell label="发货量" value={row.deliveriesQty} missing={row.deliveriesQtyMissing} />
+      <MetricCell label="结算" value={row.settlements} />
+      <MetricCell label="进项" value={row.invoicesIn} />
+      <MetricCell label="销项" value={row.invoicesOut} />
+      <MetricCell label="付款" value={row.payments} missing={row.paymentsMissing} />
+      <MetricCell label="收款" value={row.collections} />
+    </tr>
+  );
+}
+
+/** 数值单元格：missing=true 时弱化着色 + 「缺」角标（数值照显，不隐藏不归零）。 */
+function MetricCell({ label, value, missing = false }: { label: string; value: number; missing?: boolean }) {
+  return (
+    <td className="whitespace-nowrap px-2 py-1.5 text-right">
+      <span className={clsx('text-xs tabular-nums', missing ? 'text-ink-soft/70' : 'text-ink')}>
+        {fmtNum(value)}
+      </span>
+      {missing && (
+        <span
+          title={`${label}口径缺输入，数值按已登记部分计，不可作对账依据`}
+          className="ml-1 rounded border border-line bg-surface/60 px-1 py-px text-[9px] text-ink-soft"
+        >
+          缺
+        </span>
+      )}
+    </td>
   );
 }
 
