@@ -99,6 +99,20 @@ describe('运输凭证 (kg) 键族(W8 T6, 战地: mt 旧批 重量(kg)=57720 曾
     expect(a.quantity).toEqual({ value: 100, unit: '吨', dimension: 'mass', canonical: 100000 });
     expect(a.quantityTon).toBe(100);
   });
+
+  it('裸 (kg) 键无 hint -> 正则后缀兜底推断 kg(锁 bindingProposal (kg) 分支, 非 hint 分支)', () => {
+    // 临时给运输凭证适配器追加一个无 hint 的 (kg) 键(测试后还原): 单位须由正则兜底给出。
+    const adapter = FLOW_ADAPTERS['运输凭证']! as unknown as { qtyFields: Array<readonly [string, string | undefined]> };
+    const saved = adapter.qtyFields;
+    adapter.qtyFields = [...saved, ['裸重量(kg)', undefined]];
+    try {
+      const a = deriveAnchorsFromFields('运输凭证', wrap({ '裸重量(kg)': 3000 }));
+      expect(a.quantity).toEqual({ value: 3000, unit: 'kg', dimension: 'mass', canonical: 3000 });
+      expect(a.quantityTon).toBe(3); // 3000kg -> 3吨(projectLegacyQuantity /1000)
+    } finally {
+      adapter.qtyFields = saved;
+    }
+  });
 });
 
 describe('CONTRACT_TYPE_FLOW_DIRECTION', () => {

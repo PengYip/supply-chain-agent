@@ -57,6 +57,10 @@ import {
 } from '../pipeline/unitImages.js';
 import type { DocType, Modality } from '../pipeline/types.js';
 
+function errDetail(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 export const reviewRoute = new Hono<AuthEnv>();
 // Review mutation is a business write, not a read-only hydration endpoint.
 reviewRoute.post('/:docId/review', requireRole('admin', 'trader'));
@@ -527,7 +531,7 @@ reviewRoute.patch('/:docId/type', async (c) => {
         userId: user.id,
       });
     } catch (e) {
-      console.warn('[review] docType audit failed:', e instanceof Error ? e.message : String(e));
+      console.warn('[review] docType 审计失败:', errDetail(e));
     }
     // 轻量图同步(F3): 把新 docType 幂等 MERGE 到 Neo4j Document 节点, 让图视图
     // 不再显示陈旧类型。best-effort —— 图不可达/未配置时静默跳过, 绝不阻断修正。

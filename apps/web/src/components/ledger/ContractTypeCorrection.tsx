@@ -19,7 +19,8 @@ import {
  *
  * 两态: 类型空/值不当 -> 默认展开的弱化引导(warning 色系, 与台账页「待确认」
  * 提示同级, 不抢主视觉); 类型已是受控值 -> 一行小字 + 安静的「修正」入口。
- * 成功反馈按 refreshedFlows 语义 = 重建流水的文档数(张), 不写「条」。
+ * 成功反馈按 refreshedDocuments 主口径 = 重建流水的文档数(张), 不写「条」;
+ * refreshedFlows 为遗留别名(同值, 消费走 refreshedDocuments ?? refreshedFlows 兜底)。
  */
 
 export function ContractTypeCorrection({

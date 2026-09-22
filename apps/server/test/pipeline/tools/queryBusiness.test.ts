@@ -91,7 +91,8 @@ describe('query_business ontology/neighbors/writeoff (wave3)', () => {
 
 describe('query_business entity=gaps (wave8 T1, AI 可答勾稽)', () => {
   // 金标准 seed(沿 gaps.test.ts): 采购 CON-0817 + 销售 CON-0512 -> 四 tiles 数字逐字可断言
-  const insertContract = (id: string, contractNo: string, contractType: string) => {
+  // (W8 sweep: 改名避免遮蔽外层两参 insertContract——本块需要带 contract_type 三参版本)。
+  const insertContractWithProject = (id: string, contractNo: string, contractType: string) => {
     ctx.sqlite.prepare(
       `INSERT INTO contract_ledger (id, contract_no, display_contract_no, doc_type, document_id,
           title, fields, field_meta, overall_confidence, needs_review, user_id, contract_type)
@@ -100,8 +101,8 @@ describe('query_business entity=gaps (wave8 T1, AI 可答勾稽)', () => {
   };
 
   async function seedGolden(): Promise<void> {
-    insertContract('CL-1', 'CON-0817', '采购');
-    insertContract('CL-2', 'CON-0512', '销售');
+    insertContractWithProject('CL-1', 'CON-0817', '采购');
+    insertContractWithProject('CL-2', 'CON-0512', '销售');
     const receipt = await insertTradeFact(ctx, {
       entityType: 'GoodsReceiptEvent',
       payload: { eventBizType: '正向', quantity: 1600, amount: 3_200_000, currency: 'CNY', unit: '吨' },

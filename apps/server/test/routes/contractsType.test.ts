@@ -23,6 +23,17 @@ vi.mock('../../src/pipeline/db/dbBackend.js', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../../src/pipeline/db/dbBackend.js')>();
   return { ...mod, getDbContext: () => ctxHolder.current };
 });
+// W8 sweep: insertCorrectionAudit 经 mock 可注入(默认委托真实现, 审计断言不受影响;
+// 失败用例 mockRejectedValueOnce 锁"审计失败不阻断")。
+const audit = vi.hoisted(() => ({
+  auditMock: vi.fn<(...args: any[]) => Promise<string>>(),
+  realAudit: { current: null as ((...a: any[]) => Promise<string>) | null },
+}));
+vi.mock('../../src/pipeline/db/repositories.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../src/pipeline/db/repositories.js')>();
+  audit.realAudit.current = mod.insertCorrectionAudit;
+  return { ...mod, insertCorrectionAudit: (...args: any[]) => audit.auditMock(...args) };
+});
 const { contractsRoute } = await import('../../src/routes/contracts.js');
 
 function appAs(userId: string) {
@@ -37,6 +48,11 @@ function appAs(userId: string) {
 
 let ctx: DbContext;
 beforeEach(() => { ctx = createDb(':memory:'); migrate(ctx.sqlite); ctxHolder.current = ctx; });
+// 审计 mock 默认委托真实现(既有审计行断言不受影响); 失败用例 per-call 覆盖。
+beforeEach(() => {
+  audit.auditMock.mockReset();
+  audit.auditMock.mockImplementation((...args) => audit.realAudit.current!(...args));
+});
 
 /** 台账行 + 绑定一张火运大票(适配表无 codedDirection): 无名单/无合同类型时
  *  方向三级链全判不出 -> direction-undeterminable 跳过。 */
@@ -190,5 +206,18 @@ describe('PATCH /api/contracts/:contractNo/type', () => {
     const updated = await updateDocumentType(ctx, docId, '合同' as DocType, 'u1');
     expect(updated).toBe(true);
     expect((await findContractLedgerByNo(ctx, 'CJXC-1', 'u1'))?.contractType).toBe('采购');
+  });
+
+  it('审计失败不阻断: insertCorrectionAudit 抛错 -> PATCH 仍 200 且 contract_type 落库', async () => {
+    await seedBigTicketContract('CJXC-1');
+    audit.auditMock.mockRejectedValueOnce(new Error('audit boom'));
+    const res = await appAs('u1').request('/api/contracts/CJXC-1/type', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contractType: '采购' }),
+    });
+    expect(res.status).toBe(200);
+    expect((await findContractLedgerByNo(ctx, 'CJXC-1', 'u1'))?.contractType).toBe('采购');
+    // 审计抛错后不落行(仅 warn), 主流程修正不受影响。
+    expect(ctx.sqlite.prepare('SELECT COUNT(*) AS n FROM correction_audit').get() as { n: number }).toEqual({ n: 0 });
   });
 });

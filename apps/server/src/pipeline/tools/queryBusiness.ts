@@ -116,9 +116,11 @@ export function buildQueryBusinessTool(deps: QueryBusinessDeps) {
           return templateTool.execute!({ docType: input.docType }, opts);
         case 'gaps': {
           try {
+            // 对齐 project 分支风格: 空/纯空白 projectCode 按缺省处理(全局口径)。
+            const projectNo = input.projectCode ? input.projectCode.trim() : '';
             const rep = await computeGaps(
               deps.ctx,
-              input.projectCode ? { projectNo: input.projectCode } : {},
+              projectNo ? { projectNo } : {},
               deps.userId,
             );
             return {

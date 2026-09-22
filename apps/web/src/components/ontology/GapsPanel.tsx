@@ -420,6 +420,7 @@ function MetricCell({ label, value, missing = false }: { label: string; value: n
       {missing && (
         <span
           title={`${label}口径缺输入，数值按已登记部分计，不可作对账依据`}
+          aria-label={`${label}口径缺输入，数值按已登记部分计，不可作对账依据`}
           className="ml-1 rounded border border-line bg-surface/60 px-1 py-px text-[9px] text-ink-soft"
         >
           缺

@@ -35,7 +35,9 @@ export interface GapTile {
 }
 
 /** 按合同下钻行(W8 T2): 从 aggs 直接投影, 不新增聚合逻辑。合同号 = 台账 contract_no
- *  (经 resolveByEdge/resolveByNo 归一; 绝非台账行 id)。missing 标志 = 该口径缺输入。 */
+ *  (经 resolveByEdge/resolveByNo 归一; 绝非台账行 id)。missing 标志 = 该口径缺输入。
+ *  paymentsMissing 为防御位: PaymentEvent 注册表 zod 要求 amount 必填 -> 事实路径
+ *  不可达(仅当未来放开可选金额时才会置位), 前端按它显示「缺」角标。 */
 export interface GapContractRow {
   contractNo: string;
   side: 'buy' | 'sell' | null;
@@ -160,6 +162,8 @@ export async function computeGaps(
     if (hit) return hit;
     const row = await findContractRowById(ctx, toId, uid);
     if (!row) return null;
+    // mapContractRow(projection.ts) 恒置 fields.contractNo(取自 contract_no 列)——
+    // `?? toId` 兜底实不可达, 保留为防御(防未来投影字段调整误回归到行 id)。
     const resolved = { contractNo: String(row.fields['contractNo'] ?? toId), side: sideOf(String(row.fields['contractType'] ?? '')) };
     contractCache.set(toId, resolved);
     return resolved;
