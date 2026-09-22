@@ -13,6 +13,8 @@ export const UNIT_REGISTRY: Readonly<Record<string, UnitDef>> = {
   吨: { dimension: 'mass', factorToKg: 1000 },
   千克: { dimension: 'mass', factorToKg: 1 },
   公斤: { dimension: 'mass', factorToKg: 1 },
+  // W8 T6: 拉丁 'kg'(大票抽取字段名 `重量(kg)` 后缀推断产出)——与 千克/公斤 同 factor。
+  kg: { dimension: 'mass', factorToKg: 1 },
   克: { dimension: 'mass', factorToKg: 0.001 },
   箱: { dimension: 'count', factorToKg: 1 },
   件: { dimension: 'count', factorToKg: 1 },

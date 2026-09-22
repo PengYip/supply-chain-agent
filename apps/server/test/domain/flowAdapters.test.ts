@@ -78,6 +78,29 @@ describe('轨道衡称重单 qtyFields 吨制键族(wave7 followup)', () => {
   });
 });
 
+describe('运输凭证 (kg) 键族(W8 T6, 战地: mt 旧批 重量(kg)=57720 曾疑吨级异常)', () => {
+  it('适配表含 重量(kg)/计费重量(kg) 两键, 且位于吨制键(数量)之后', () => {
+    const qty = FLOW_ADAPTERS['运输凭证']!.qtyFields;
+    expect(qty).toContainEqual(['重量(kg)', 'kg']);
+    expect(qty).toContainEqual(['计费重量(kg)', 'kg']);
+    const iTon = qty.findIndex(([k]) => k === '数量');
+    const iKg = qty.findIndex(([k]) => k === '重量(kg)');
+    expect(iKg).toBeGreaterThan(iTon); // kg 键追加在吨制键之后, 不前置
+  });
+
+  it('派生: 仅 重量(kg)=57720 -> quantityTon=57.72(kg mass canonical/1000 出吨)', () => {
+    const a = deriveAnchorsFromFields('运输凭证', wrap({ '重量(kg)': 57720 }));
+    expect(a.quantity).toEqual({ value: 57720, unit: 'kg', dimension: 'mass', canonical: 57720 });
+    expect(a.quantityTon).toBe(57.72);
+  });
+
+  it('派生: 重量_吨 与 重量(kg) 并存 -> 吨制键优先(100 而非 95)', () => {
+    const a = deriveAnchorsFromFields('运输凭证', wrap({ 重量_吨: 100, '重量(kg)': 95000 }));
+    expect(a.quantity).toEqual({ value: 100, unit: '吨', dimension: 'mass', canonical: 100000 });
+    expect(a.quantityTon).toBe(100);
+  });
+});
+
 describe('CONTRACT_TYPE_FLOW_DIRECTION', () => {
   it('采购: 货物收/资金付/发票收; 销售: 反向', () => {
     expect(CONTRACT_TYPE_FLOW_DIRECTION['采购']).toEqual({ 资金流: 'out', 货物流: 'in', 发票流: 'in' });

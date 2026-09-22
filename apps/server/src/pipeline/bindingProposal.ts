@@ -414,7 +414,7 @@ function projectLegacyQuantity(
   return { quantityTon: q.value, ...(q.unit ? { quantityUnit: q.unit } : {}) };
 }
 
-/** 适配表数量派生: qtyFields 优先序首个数值命中; 单位 = 提示 > '_吨'后缀 > unitFields。 */
+/** 适配表数量派生: qtyFields 优先序首个数值命中; 单位 = 提示 > '_吨'后缀 > '(kg)'后缀 > unitFields。 */
 function deriveAnchorQuantity(
   adapter: FlowAdapter,
   fields: Record<string, { value: string | number }>,
@@ -425,6 +425,10 @@ function deriveAnchorQuantity(
     const unit =
       unitHint ??
       (name.endsWith('_吨') ? '吨' : undefined) ??
+      // W8 T6: (kg) 后缀识别(dev 大票实测键为半角 `重量(kg)`; 全角括号（kg）无实测,
+      // 正则做半角即可 —— 有全角实测再扩) —— kg 经 UNIT_REGISTRY mass canonical 后
+      // projectLegacyQuantity /1000 出吨(如 57720kg -> 57.72吨)。
+      (/\(kg\)$/i.test(name) ? 'kg' : undefined) ??
       firstStr(fields, [...adapter.unitFields]);
     const canon = unit ? canonicalizeQuantity(value, unit) : null;
     return {
