@@ -49,16 +49,30 @@ interface FlowRow {
   ontology_fact_id: string | null;
 }
 
+/**
+ * 抽取字段值解包(W8-T6b, 导入战役战地实证): 实际 fields 每键为 {value, sourceSpans}
+ * 包装对象; 旧测试 fixture/部分路径为裸标量。双形态兼容: 对象形态取 .value,
+ * 裸标量原样返回。
+ */
+function unwrapFieldValue(v: unknown): unknown {
+  if (v !== null && typeof v === 'object' && 'value' in (v as Record<string, unknown>)) {
+    return (v as { value: unknown }).value;
+  }
+  return v;
+}
+
 function fieldStr(fields: Record<string, unknown>, keys: readonly string[]): string | null {
   for (const k of keys) {
-    const v = fields[k];
-    if (typeof v === 'string' && v.trim() !== '') return v.trim();
+    const raw = unwrapFieldValue(fields[k]);
+    if (typeof raw === 'string' && raw.trim() !== '') return raw.trim();
   }
   return null;
 }
 
 function payTypeFromFields(fields: Record<string, unknown>): string | null {
-  const haystack = Object.values(fields).filter((v): v is string => typeof v === 'string');
+  const haystack = Object.values(fields)
+    .map(unwrapFieldValue)
+    .filter((v): v is string => typeof v === 'string');
   for (const [payType, keywords] of PAY_TYPE_KEYWORDS) {
     if (keywords.some((kw) => haystack.some((v) => v.includes(kw)))) return payType;
   }

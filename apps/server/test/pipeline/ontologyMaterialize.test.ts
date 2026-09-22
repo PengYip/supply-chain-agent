@@ -138,6 +138,60 @@ describe('materializeDocumentOntology (business-loop wave2)', () => {
   });
 });
 
+describe('W8-T6b wrapped extraction fields (导入战役战地实证: fields 存 {value,sourceSpans} 包装)', () => {
+  it('发票流 + 发票号码包装形态 -> InvoiceEvent 物化(invoiceNo 命中, 双形态之一)', async () => {
+    insertDoc('DOC-W1');
+    insertContract('CL-1', 'HT-1');
+    // dev 实证形状(#14 销项票): 每键 {value, sourceSpans} 包装
+    insertExtraction('DOC-W1', { '发票号码': { value: '26422000003159763606', sourceSpans: [] } });
+    insertFlow({ id: 'F-W1', docId: 'DOC-W1', contractNo: 'HT-1', flowType: '发票流', direction: 'out', amount: 5_117_908.02 });
+    const res = await materializeDocumentOntology(ctx, 'DOC-W1', 'u1');
+    expect(res).toMatchObject({ created: 1, edges: 0, skippedInvoice: 0, failures: [] });
+    const facts = await factsOf('InvoiceEvent');
+    expect(facts).toHaveLength(1);
+    expect(facts[0]!.payload).toMatchObject({ invoiceNo: '26422000003159763606', invoiceType: '销项', amount: 5_117_908.02, contractNo: 'HT-1' });
+    expect(flowFactId('F-W1')).toBe(facts[0]!.id);
+  });
+
+  it('资金流 out + 款项类型包装形态 -> PaymentEvent 物化(payType 关键词命中)', async () => {
+    insertDoc('DOC-W2');
+    insertContract('CL-1', 'HT-1');
+    insertExtraction('DOC-W2', { '款项类型': { value: '预付款 30%', sourceSpans: [] } });
+    insertFlow({ id: 'F-W2', docId: 'DOC-W2', contractNo: 'HT-1', flowType: '资金流', direction: 'out', amount: 100_000 });
+    const res = await materializeDocumentOntology(ctx, 'DOC-W2', 'u1');
+    expect(res).toMatchObject({ created: 1, edges: 0, skippedPayment: 0, failures: [] });
+    const facts = await factsOf('PaymentEvent');
+    expect(facts).toHaveLength(1);
+    expect(facts[0]!.payload).toMatchObject({ payType: '预付', amount: 100_000, contractNo: 'HT-1' });
+    expect(flowFactId('F-W2')).toBe(facts[0]!.id);
+  });
+
+  it('货物流 in + 仓库包装形态 -> GoodsReceiptEvent 带 warehouse', async () => {
+    insertDoc('DOC-W3');
+    insertContract('CL-1', 'HT-1');
+    insertExtraction('DOC-W3', { '仓库': { value: '武汉阳逻仓', sourceSpans: [] } });
+    insertFlow({ id: 'F-W3', docId: 'DOC-W3', contractNo: 'HT-1', flowType: '货物流', direction: 'in', quantity: 620, unit: '吨' });
+    const res = await materializeDocumentOntology(ctx, 'DOC-W3', 'u1');
+    expect(res).toMatchObject({ created: 1, edges: 1, failures: [] });
+    const facts = await factsOf('GoodsReceiptEvent');
+    expect(facts[0]!.payload).toMatchObject({ warehouse: '武汉阳逻仓', quantity: 620 });
+  });
+
+  it('裸字符串形态不回归(既有 fixture 形状: fieldStr/payType 继续命中)', async () => {
+    insertDoc('DOC-W4');
+    insertContract('CL-1', 'HT-1');
+    insertExtraction('DOC-W4', { '发票号码': 'INV-BARE', '款项类型': '尾款结算' });
+    insertFlow({ id: 'F-W4a', docId: 'DOC-W4', contractNo: 'HT-1', flowType: '发票流', direction: 'in', amount: 50_000 });
+    insertFlow({ id: 'F-W4b', docId: 'DOC-W4', contractNo: 'HT-1', flowType: '资金流', direction: 'out', amount: 60_000 });
+    const res = await materializeDocumentOntology(ctx, 'DOC-W4', 'u1');
+    expect(res).toMatchObject({ created: 2, skippedInvoice: 0, skippedPayment: 0, failures: [] });
+    const inv = await factsOf('InvoiceEvent');
+    expect(inv[0]!.payload).toMatchObject({ invoiceNo: 'INV-BARE', invoiceType: '进项' });
+    const pay = await factsOf('PaymentEvent');
+    expect(pay[0]!.payload).toMatchObject({ payType: '尾款' });
+  });
+});
+
 describe('materializeSettlementRecord (business-loop wave2)', () => {
   it('7) settlement_records -> SettlementEvent + 回写; 重跑幂等', async () => {
     insertContract('CL-1', 'HT-1');
