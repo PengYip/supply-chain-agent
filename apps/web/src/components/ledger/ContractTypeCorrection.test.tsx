@@ -22,6 +22,7 @@ function okResult(overrides: Partial<ContractTypeChangeResult> = {}): ContractTy
     ok: true,
     contractNo: 'XYRL-2022-225',
     contractType: '采购',
+    refreshedDocuments: 2,
     refreshedFlows: 2,
     failed: 0,
     skipped: [],
@@ -74,12 +75,24 @@ describe('ContractTypeCorrection (business-loop wave7)', () => {
   });
 
   it('成功反馈的 0 重建分支: 无已确认绑定时如实说"没有流水需要重建"', async () => {
-    patchMock.mockImplementation(async (_no, t) => okResult({ contractType: t, refreshedFlows: 0 }));
+    patchMock.mockImplementation(async (_no, t) => okResult({ contractType: t, refreshedDocuments: 0, refreshedFlows: 0 }));
     render(<ContractTypeCorrection contractNo="C-1" currentType={null} />);
     fireEvent.change(screen.getByTestId('contract-type-select'), { target: { value: '销售' } });
     fireEvent.click(screen.getByTestId('contract-type-submit'));
     await waitFor(() => expect(screen.getByTestId('contract-type-result')).toBeTruthy());
     expect(screen.getByText(/没有流水需要重建/)).toBeTruthy();
+  });
+
+  it('W8 T4 同部署兜底: 旧服务端仅返 refreshedFlows -> 消费切 refreshedDocuments ?? refreshedFlows, 反馈仍按张渲染', async () => {
+    patchMock.mockImplementation(async (_no, t) => {
+      const base = okResult({ contractType: t });
+      return { ...base, refreshedDocuments: undefined as never } as ContractTypeChangeResult;
+    });
+    render(<ContractTypeCorrection contractNo="C-FB" currentType={null} />);
+    fireEvent.change(screen.getByTestId('contract-type-select'), { target: { value: '采购' } });
+    fireEvent.click(screen.getByTestId('contract-type-submit'));
+    await waitFor(() => expect(screen.getByTestId('contract-type-result')).toBeTruthy());
+    expect(screen.getByText(/已重建 2 张单据的执行流水/)).toBeTruthy();
   });
 
   it('失败反馈: 404(非本人台账行)显示接地气错误, 不触发 onChanged, 可重试', async () => {

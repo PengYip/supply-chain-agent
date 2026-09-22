@@ -86,7 +86,9 @@ const contractTypeChangeSchema = z.object({ contractType: z.string().min(1) });
  * ('采购'|'销售'|'物流'|'租赁'|'服务'|'其他'); '购销合同' 等歧义值拒绝。
  *
  * Responses:
- *   200 { ok, contractNo, contractType, refreshedFlows, failed, skipped }
+ *   200 { ok, contractNo, contractType, refreshedDocuments, refreshedFlows, failed, skipped }
+ *        —— refreshedDocuments = 重建流水的文档张数(语义准确名); refreshedFlows 为
+ *           同名遗留别名(deprecated, 同值, 单位同样=文档张数, 供旧消费方兼容)。
  *   400 { ok: false, error: 'invalid_body' | 'invalid_contract_type' }
  *   401 { error: 'unauthorized' }            (requireAuth, applied in index.ts)
  *   404 { ok: false, error: 'contract_not_found' }
@@ -122,9 +124,19 @@ contractsRoute.patch('/:contractNo/type', async (c) => {
     );
     if (!updated) return c.json({ ok: false, error: 'contract_not_found' }, 404);
     // 流水重建: 只作用于请求者 confirmed 绑定的去重文档(ownership 过滤在
-    // listBindingsForContract 内 3-way OR)。
-    const { refreshedFlows, failed, skipped } = await rebuildFlowsForContract(ctx, row.contractNo, user.id);
-    return c.json({ ok: true, contractNo: row.contractNo, contractType, refreshedFlows, failed, skipped });
+    // listBindingsForContract 内 3-way OR)。refreshedFlows 实为"文档张数"(每文档 +1),
+    // W8 T4 契约卫生: refreshedDocuments 为语义准确名, refreshedFlows 保留同值别名。
+    const { refreshedDocuments, failed, skipped } = await rebuildFlowsForContract(ctx, row.contractNo, user.id);
+    return c.json({
+      ok: true,
+      contractNo: row.contractNo,
+      contractType,
+      refreshedDocuments,
+      // @deprecated 同名遗留别名: 单位=文档张数(与 refreshedDocuments 同值), 新消费方用 refreshedDocuments。
+      refreshedFlows: refreshedDocuments,
+      failed,
+      skipped,
+    });
   } catch (e) {
     console.error('[contracts] contract-type change failed:', errDetail(e));
     return c.json({ ok: false, error: errDetail(e) }, 500);
@@ -134,7 +146,7 @@ contractsRoute.patch('/:contractNo/type', async (c) => {
 /**
  * 修正后重建: 对合同名下请求者 confirmed 绑定的去重 documentId 逐文档
  * refreshExecutionFlowsForDocument(镜像 parties.backfillFlows 的循环捕获模式:
- * refreshedFlows 按文档计数、failed 按文档捕获不中断其余、skipped 透传)。
+ * refreshedDocuments 按文档计数、failed 按文档捕获不中断其余、skipped 透传)。
  * 每成功文档 fire-and-forget 实体化本体(materializeDocumentOntologySafe 永不
  * 抛出, 不阻塞修正响应)。
  */
@@ -142,16 +154,16 @@ async function rebuildFlowsForContract(
   ctx: DbContext,
   contractNo: string,
   userId: string,
-): Promise<{ refreshedFlows: number; failed: number; skipped: RefreshSkipEntry[] }> {
+): Promise<{ refreshedDocuments: number; failed: number; skipped: RefreshSkipEntry[] }> {
   const bindings = await listBindingsForContract(ctx, contractNo, userId);
   const docIds = [...new Set(bindings.filter((b) => b.status === 'confirmed').map((b) => b.documentId))];
-  let refreshedFlows = 0;
+  let refreshedDocuments = 0;
   let failed = 0;
   const skipped: RefreshSkipEntry[] = [];
   for (const docId of docIds) {
     try {
       const res = await refreshExecutionFlowsForDocument(ctx, docId, userId);
-      refreshedFlows += 1;
+      refreshedDocuments += 1;
       skipped.push(...res.skipped);
       void materializeDocumentOntologySafe(ctx, docId, userId);
     } catch (e) {
@@ -159,5 +171,5 @@ async function rebuildFlowsForContract(
       failed += 1;
     }
   }
-  return { refreshedFlows, failed, skipped };
+  return { refreshedDocuments, failed, skipped };
 }

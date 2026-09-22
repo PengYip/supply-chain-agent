@@ -36,17 +36,28 @@ describe('patchContractType 服务端响应映射', () => {
     expect((err2 as Error).message).toBe('响应异常，请稍后重试');
   });
 
-  it('200 ok:true 正常解析: PATCH 方法 + 字段归一化(refreshedFlows=张口径)', async () => {
+  it('200 ok:true 正常解析: PATCH 方法 + 字段归一化(refreshedDocuments=张口径, refreshedFlows 别名同值)', async () => {
     const fetchMock = stubFetchOnce(200, {
       ok: true, contractNo: 'XYRL-2022-225', contractType: '采购',
-      refreshedFlows: 3, failed: 0, skipped: [],
+      refreshedDocuments: 3, refreshedFlows: 3, failed: 0, skipped: [],
     });
     const res = await patchContractType('XYRL-2022-225', '采购');
     expect(res.ok).toBe(true);
+    expect(res.refreshedDocuments).toBe(3);
     expect(res.refreshedFlows).toBe(3);
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/contracts/XYRL-2022-225/type',
       expect.objectContaining({ method: 'PATCH' }),
     );
+  });
+
+  it('W8 T4 同部署兜底: 服务端仅返 refreshedFlows(旧形状) -> refreshedDocuments 回退同值', async () => {
+    stubFetchOnce(200, {
+      ok: true, contractNo: 'XYRL-2022-225', contractType: '采购',
+      refreshedFlows: 2, failed: 0, skipped: [],
+    });
+    const res = await patchContractType('XYRL-2022-225', '采购');
+    expect(res.refreshedDocuments).toBe(2);
+    expect(res.refreshedFlows).toBe(2);
   });
 });

@@ -126,7 +126,7 @@ describe('PATCH /api/contracts/:contractNo/type', () => {
     expect((await findContractLedgerByNo(ctx, 'CJXC-OTHER', 'u-other'))?.contractType).toBeNull();
   });
 
-  it('happy path: 大票方向判不出 -> 修正采购后 200, contract_type 落库, refreshedFlows=1 且无 direction-undeterminable', async () => {
+  it('happy path: 大票方向判不出 -> 修正采购后 200, contract_type 落库, refreshedDocuments=1 且无 direction-undeterminable', async () => {
     const docId = await seedBigTicketContract('CJXC-1');
     // 前置: 无名单/无合同类型时该文档方向判不出(场景前提, 锁语义)。
     const before = await refreshExecutionFlowsForDocument(ctx, docId, 'u1');
@@ -139,12 +139,15 @@ describe('PATCH /api/contracts/:contractNo/type', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       ok: boolean; contractNo: string; contractType: string;
-      refreshedFlows: number; failed: number; skipped: Array<{ reason: string }>;
+      refreshedFlows: number; refreshedDocuments: number; failed: number; skipped: Array<{ reason: string }>;
     };
     expect(body.ok).toBe(true);
     expect(body.contractNo).toBe('CJXC-1');
     expect(body.contractType).toBe('采购');
+    // W8 T4: refreshedDocuments(语义准确的"张"数)与 refreshedFlows(遗留别名)并存且同值。
+    expect(body.refreshedDocuments).toBe(1);
     expect(body.refreshedFlows).toBe(1);
+    expect(body.refreshedDocuments).toBe(body.refreshedFlows);
     expect(body.failed).toBe(0);
     expect(body.skipped.map((s) => s.reason)).not.toContain('direction-undeterminable');
     expect((await findContractLedgerByNo(ctx, 'CJXC-1', 'u1'))?.contractType).toBe('采购');

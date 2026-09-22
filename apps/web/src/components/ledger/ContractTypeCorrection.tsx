@@ -65,14 +65,17 @@ export function ContractTypeCorrection({
   return (
     <div data-testid="contract-type-correction" className="space-y-2">
       {/* 成功反馈: 独立于 currentType 存活(父级刷新后引导态消失, 反馈不丢)。 */}
-      {result && !editing && (
+      {result && !editing && (() => {
+        // W8 T4: 主口径 refreshedDocuments; 旧服务端仅返 refreshedFlows 时回退(同部署幂等)。
+        const docs = result.refreshedDocuments ?? result.refreshedFlows;
+        return (
         <div className="animate-fade-in flex items-start gap-1.5 rounded border border-success/30 bg-success/5 px-2 py-1.5" data-testid="contract-type-result">
           <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" aria-hidden />
           <div className="min-w-0 text-xs leading-5">
             <span className="text-ink">
               已改为「{result.contractType}」。
-              {result.refreshedFlows > 0
-                ? `已重建 ${result.refreshedFlows} 张单据的执行流水。`
+              {docs > 0
+                ? `已重建 ${docs} 张单据的执行流水。`
                 : '该合同名下暂无已确认绑定的单据，本次没有流水需要重建。'}
             </span>
             {result.failed > 0 && (
@@ -83,7 +86,8 @@ export function ContractTypeCorrection({
             )}
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* 类型已是受控值: 一行小字 + 安静的修正入口(不展开不占空间)。 */}
       {!needsFix && !editing && (

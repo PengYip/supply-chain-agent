@@ -11,11 +11,15 @@ export function isControlledContractType(v: string | null | undefined): v is Con
 }
 
 /** PATCH /api/contracts/:no/type 200 响应(与 server routes/contracts.ts 一致)。
- *  refreshedFlows 语义 = 重建流水的文档数(张/单据), 不是流水条数。 */
+ *  refreshedDocuments 语义 = 重建流水的文档数(张/单据), 不是流水条数。
+ *  refreshedFlows 为同名遗留别名(deprecated, 同值, 供旧服务端/旧消费兼容)。
+ *  @deprecated refreshedFlows —— 单位同样=文档张数, 新消费方用 refreshedDocuments。 */
 export interface ContractTypeChangeResult {
   ok: boolean;
   contractNo: string;
   contractType: string;
+  refreshedDocuments: number;
+  /** @deprecated 同 refreshedDocuments 值(单位=文档张数), 遗留别名。 */
   refreshedFlows: number;
   failed: number;
   skipped: Array<{ bindingId: string | null; contractNo: string | null; reason: string }>;
@@ -70,7 +74,13 @@ export async function patchContractType(
     ok: data.ok === true,
     contractNo: typeof data.contractNo === 'string' ? data.contractNo : contractNo,
     contractType: typeof data.contractType === 'string' ? data.contractType : contractType,
-    refreshedFlows: typeof data.refreshedFlows === 'number' ? data.refreshedFlows : 0,
+    // W8 T4: refreshedDocuments 为主口径; 旧服务端仅返 refreshedFlows -> 互相回退(同部署幂等)。
+    refreshedDocuments: typeof data.refreshedDocuments === 'number'
+      ? data.refreshedDocuments
+      : (typeof data.refreshedFlows === 'number' ? data.refreshedFlows : 0),
+    refreshedFlows: typeof data.refreshedFlows === 'number'
+      ? data.refreshedFlows
+      : (typeof data.refreshedDocuments === 'number' ? data.refreshedDocuments : 0),
     failed: typeof data.failed === 'number' ? data.failed : 0,
     skipped: Array.isArray(data.skipped) ? data.skipped : [],
   };
