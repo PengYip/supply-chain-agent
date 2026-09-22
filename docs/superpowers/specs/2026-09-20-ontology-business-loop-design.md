@@ -192,6 +192,34 @@ INVOICE_MATCH。
 
 ## 实施记录
 
+### Wave 9（2026-09-22 回归测试样例集，abc051f）
+
+- **目标**：字段级抽取回归守门——代表性真实单据随仓走，ERP 真值冻结为 golden expectations，
+  抽取/配置漂移即红（exit 1）。防御面=W8 全部修复语义（fieldStr 解包/kg 推断/轨道衡数量/
+  守卫跳过）。用户三段式指令第三阶段收官。
+- **设计裁决**：走直连管线模式（`eval/run.ts` 先例）非 agent yaml（LLM-judge 噪声不适合
+  数字回归）；fixture=dev 冻结 **block_model**（13 份共约 290KB，runner 直接
+  `saveDocument(blockModel)`——跳过 MinerU/OCR 层，守我方代码不守厂商）；守门=退出码 1，
+  不进 CI（需真实 key，dev 手动跑）；**生产形状调用**（模板行 requiredFields+fieldHints
+  逐行镜像 `buildAutoExtractionDeps`——T4 关键发现：裸调用欠约束是伪回归源）；**数字锚定
+  比较**（期望"首位数字+单数字 token"→ token 集成员匹配，容修饰语/空格 garble，拒子串
+  误报）；**五试重试+边际键降级**（真回归系统性皆红仍拦；出现率五五开的键降 soft 记
+  provenance；OK@n/MISS@n+noise-watch 行暴露噪声水位）；manifest↔truth 双向对齐守卫。
+- **交付**（T1 fixer/T2 亲做/T3 fixer/T4 亲做/T5 cou-3 评审 PASS-with-minors）：
+  `apps/server/eval/regression/`——13 样本 PDF（12 份已验证链+kg 案例乐化铁路大票）+
+  13 blocks fixtures + manifest + ground-truth.json（三方对账 dev 抽取×导入报告×ERP
+  manifests，分歧 ERP 优先）+ `eval/regression.ts` + `npm run eval:regression`。
+- **T4 证据**（dev 主机 qwen-flash 实弹）：裸调用 9/13 → 生产形状 12/13（游走偶发）→
+  五试+边际降级 **连续两轮 13/13 EXIT=0**；破坏性实弹（真值 400000→400001）**MISS@5
+  EXIT=1**（五试救不回错值）后还原；评审后终版 13/13 + noise-watch（s08@4）实证。
+- **真值发现入册**：轨道衡分单量 3619.32+3558.45+3527.73=10705.50 与 dev dlvQty 精确
+  吻合；货转单抽取层有数量（"无数量锚点"=流适配器层缺口）；销项票 金额/发票号码为
+  修正补键（raw 不产出，仅 erpTruth 记录）；s08 结算单本体合同号=HNJM-2025-NM-010
+  （019 绑定系人工）；dev 模型=qwen-flash（未来模型切换会红=配置漂移守卫特性）。
+- **遗留**：发票号断言覆盖=erpTruth 记录（V1 边界）；s06 单硬键哨兵（soft 面观察）；
+  props 解析块三处拷贝去重（需动 src/，记 backlog）；回单入账日期 raw=紧凑串
+  20260527（ISO 为人工修正形态）。
+
 ### Wave 8（2026-09-22 AI 可答勾稽 + 按合同下钻 + 契约卫生，8 提交已部署 490efdd）
 
 - **前置数据面**：ERP 全量原始单据采集（华能湖北供煤项目 10 类 778 文件/1.53GB，零失败，

@@ -48,6 +48,7 @@ Run from repo root unless noted.
 | Single test file | `npm test --workspace apps/server -- test/harness/foo.test.ts` |
 | Tests watch mode | `npm run test:watch --workspace apps/server` |
 | Eval harness | `npm run eval --workspace apps/server` (tsx eval/run.ts) |
+| Regression samples (ERP ground truth) | `npm run eval:regression --workspace apps/server` (frozen block-model fixtures + real-LLM extraction vs ground-truth.json; exit 1 on any hard miss; needs real model creds — run where root .env has them, e.g. dev host) |
 | Backfill embeddings | `npm run backfill:embeddings --workspace apps/server -- --dry-run` first, then without `--dry-run`; on ubuntu-server prepend the nvm PATH export (`export PATH=$HOME/.nvm/versions/node/v24.19.0/bin:$PATH`) |
 
 Required order before claiming done: **build → lint → test** (matches CI).
