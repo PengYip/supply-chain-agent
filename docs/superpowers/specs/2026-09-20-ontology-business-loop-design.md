@@ -192,6 +192,42 @@ INVOICE_MATCH。
 
 ## 实施记录
 
+### Wave 8（2026-09-22 AI 可答勾稽 + 按合同下钻 + 契约卫生，8 提交已部署 490efdd）
+
+- **前置数据面**：ERP 全量原始单据采集（华能湖北供煤项目 10 类 778 文件/1.53GB，零失败，
+  `样本收集/华能湖北供煤项目/_采集报告.md`）+ 背靠背精选链导入 dev（12 份/10 绑定/8 流水，
+  Wave7 修正端点实弹 2 发；销锚点 .doc 不受支持换 HNJM-2026-NM-019 PDF；`_导入报告.md`）。
+- **T6b 发票/付款事件复活**（1d566b4，执行序首发）：战地发现——materializer fieldStr 期望
+  裸字符串而抽取实存 `{value,sourceSpans}` 包装 → invoiceNo/payType 守卫落空（全仓唯一裸串读
+  离群者）。unwrapFieldValue 双形态解包，三消费点全覆盖；部署后 backfill 实证 **2 事实复活**
+  （skippedInvoice 0）、mis tile 0→**4,717,908.02**、下钻行 invOut 入账。
+- **T1 AI 可答勾稽**（768fdd2）：query_business 增 entity=gaps（tiles+checks 进对话返回，
+  groups 明细按裁决不进省 token）；projectCode 复用映射 projectNo。六环验收第 4 环补全。
+  对话实弹：异步 run（POST 返 runId）+ SSE 会话事件流中 **gaps 工具调用痕迹与 tile 数字**
+  双证（模型答出 mis=4,717,908.02）。
+- **T2 按合同下钻数据**（9cda503）：GapsReport 增 contracts[]（GapContractRow 12 字段，从
+  aggs 零新聚合纯投影，量额降序稳定排序）；"组名回退行 id"疑点核实为死代码（mapContractRow
+  恒置 fields.contractNo）。
+- **T3 GapsPanel 下钻展示**（aab9f02，designer）：四 tiles 下"按合同"折叠宽表（侧别徽标沿
+  ROLE_BADGE 语义色、missing 沿 ④预收/⑥超收 quiet chip、空态整块不渲染、过滤联动）。
+- **T4 refreshedDocuments 单位统一**（a149ee6）：contracts.ts PATCH 响应主口径 refreshedDocuments
+  + refreshedFlows @deprecated 同值别名（wave7 oracle 契约陷阱收口；web 双向回退；同值不变式
+  双锁）；review.ts 语义本就准确不动。
+- **T5 修正动作审计**（9845e2b）：correction_audit 表（三处镜像幂等）+ 两写入点（合同类型/
+  docType 修正，old 取更新前值）+ 审计失败仅 warn 不阻断（有失败分支守卫用例）。
+- **T6 (kg) 单位推断**（8a91aba）：`(kg)` 后缀识别 + 运输凭证 qtyFields kg 键族 + UNIT_REGISTRY
+  补 kg（披露裁决：侦察过时最小扩面）；大票 re-PATCH 重建实证 **重量(kg)=3,351,000 → 3351 吨**。
+- **验收**：七任务 councillor 评审全 PASS/APPROVED（两处披露裁决均经独立核实成立：projection
+  映射已在 / UNIT_REGISTRY 无 kg）；oracle 全分支终审 **GO 零 Critical**（红线三条独立 PASS，
+  deferred 10 项全带病合并）；全量 build/lint/test 绿（**server 1996·42skip / web 150**）；
+  合并 main + push（CI/CD 部署 490efdd）。dev 验收五件套：backfill 复活（Wave7 看门狗生产首跑
+  1.25s 干净）/下钻 4 行（HNJM sell 10705.5t+票 5.12M+收 40万、XYRL sell 10654.9t、两钢材合同
+  含结算额）/kg 3351t/refreshedDocuments=9/AI 问答双证。
+- **遗留（记 backlog）**：GMNH 不进下钻行（货转单 qty/amount 双空守卫——货转单无数量锚点，
+  导入战役已知）；结算单无流适配器（结算事实走独立登记面）；oracle 终审 7 项 Minor（日志语言
+  半修/解包判别宽/审计-重建顺序窗/审计无索引/KG 大写边界等）；**回归测试样例集**（用户指令
+  第三阶段：语料选样 + ERP 结构化真值冻结 Ground Truth + eval 接线）待立项。
+
 ### Wave 7（2026-09-21 合同类型消歧+遗留清偿，7 提交已部署 4142d01）
 
 - **T1 映射链诊断**（无代码）：乐化 XYRL-2022-225 dev 实证——抽取值"购销合同"有意不映射
