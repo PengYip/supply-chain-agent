@@ -1,0 +1,110 @@
+{
+  "createdAt": "2026-09-22",
+  "corpusRoot": "样本收集/华能湖北供煤项目",
+  "samples": [
+    {
+      "id": "s01",
+      "file": "合同【上】9.16鸿立隆20260917HNJM荆门1万吨5000卡合同 双章.pdf",
+      "sourceDir": "采购合同",
+      "docType": "合同",
+      "whySelected": "采购合同锚点(鸿立隆->荆门1万吨), 购销合同歧义经合同类型修正为采购",
+      "sizeBytes": 2172358
+    },
+    {
+      "id": "s02",
+      "file": "湖北国贸-华能荆门1万吨4500卡合同（019）双章.pdf",
+      "sourceDir": "发票附件管理",
+      "docType": "合同",
+      "whySelected": "销售合同锚点(华能荆门1万吨@643.50), 侧别派生销售",
+      "sizeBytes": 5892056
+    },
+    {
+      "id": "s03",
+      "file": "2025.5.16 荆门55车轨道衡（康庄）.pdf",
+      "sourceDir": "发货批次",
+      "docType": "轨道衡称重单",
+      "whySelected": "轨道衡称重单(55车), 销侧货物流/out 物化",
+      "sizeBytes": 1640280
+    },
+    {
+      "id": "s04",
+      "file": "2025.5.18 55车荆门轨道衡榜单（康庄）.pdf",
+      "sourceDir": "发货批次",
+      "docType": "轨道衡称重单",
+      "whySelected": "轨道衡称重单, 销侧货物流/out 物化",
+      "sizeBytes": 2169879
+    },
+    {
+      "id": "s05",
+      "file": "2025.5.19 55车荆门轨道衡（康庄）.pdf",
+      "sourceDir": "发货批次",
+      "docType": "轨道衡称重单",
+      "whySelected": "轨道衡称重单, 销侧货物流/out 物化",
+      "sizeBytes": 1654779
+    },
+    {
+      "id": "s06",
+      "file": "货转【上】鸿立隆6908.24吨 双章.pdf",
+      "sourceDir": "收货批次",
+      "docType": "货转单",
+      "whySelected": "货转单(鸿立隆6908.24吨), 购侧货物流/in 物化",
+      "sizeBytes": 255807
+    },
+    {
+      "id": "s07",
+      "file": "货转【上】鸿立隆10438.14吨 双章.pdf",
+      "sourceDir": "收货批次",
+      "docType": "货转单",
+      "whySelected": "货转单(鸿立隆10438.14吨), 购侧货物流/in 物化",
+      "sizeBytes": 249338
+    },
+    {
+      "id": "s08",
+      "file": "下游荆门结算单10803.84吨.pdf",
+      "sourceDir": "销售结算",
+      "docType": "结算单",
+      "whySelected": "下游(销售)结算单 10803.84吨",
+      "sizeBytes": 50685
+    },
+    {
+      "id": "s09",
+      "file": "国裕-湖北国贸结算单9013.21吨双章8.20.pdf",
+      "sourceDir": "采购结算",
+      "docType": "结算单",
+      "whySelected": "上游(采购)结算单 9013.21吨",
+      "sizeBytes": 242102
+    },
+    {
+      "id": "s10",
+      "file": "电厂收货数据 章.pdf",
+      "sourceDir": "付款",
+      "docType": "付款凭证",
+      "whySelected": "付款凭证(无付款类型关键词, PaymentEvent 守卫跳过场景)",
+      "sizeBytes": 173230
+    },
+    {
+      "id": "s11",
+      "file": "260527151512EBH0002T304303832421864028018800034180.pdf",
+      "sourceDir": "收款",
+      "docType": "付款凭证",
+      "whySelected": "华能荆门电子回单, 400000 入账, CollectionEvent 物化",
+      "sizeBytes": 100970
+    },
+    {
+      "id": "s12",
+      "file": "（销项票9013.21吨 5,783,236.06元）华能荆门热电有限责任公司_20260903163213.pdf",
+      "sourceDir": "发票附件管理",
+      "docType": "销项票",
+      "whySelected": "销项票(华能荆门 5,117,908.02), InvoiceEvent 物化回归",
+      "sizeBytes": 148927
+    },
+    {
+      "id": "s13",
+      "file": "9月乐化3铁路大票.pdf",
+      "sourceDir": "火运/乐化/2.发运单据",
+      "docType": "运输凭证",
+      "whySelected": "kg 推断守卫: 重量(kg)=3351000 -> quantityTon=3351 吨(W8 T6 实弹)",
+      "sizeBytes": 586930
+    }
+  ]
+}
