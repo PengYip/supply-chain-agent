@@ -29,6 +29,8 @@ import {
   listLatestExtractionsByDocIds,
   getDocumentUnitByChild,
   getDocumentSourceUri,
+  getDocumentMeta,
+  insertCorrectionAudit,
 } from '../pipeline/db/repositories.js';
 import {
   checkWeighRow,
@@ -504,9 +506,28 @@ reviewRoute.patch('/:docId/type', async (c) => {
 
   const docId = c.req.param('docId');
   try {
+    // W8 T5: 修正前 docType 从文档元数据读(审计 old 值; 读不到不阻断审计, old=null)。
+    let oldDocType: string | null = null;
+    try {
+      oldDocType = (await getDocumentMeta(ctx(), docId, user.id))?.docType ?? null;
+    } catch {
+      oldDocType = null;
+    }
     const updated = await updateDocumentType(ctx(), docId, docType as DocType, user.id);
     if (!updated) {
       return c.json({ ok: false, error: 'document_not_found' }, 404);
+    }
+    // 修正动作审计(W8 T5): kind=doc_type, target=docId; 失败仅 warn 不阻断主流程。
+    try {
+      await insertCorrectionAudit(ctx(), {
+        kind: 'doc_type',
+        target: docId,
+        oldValue: oldDocType,
+        newValue: docType,
+        userId: user.id,
+      });
+    } catch (e) {
+      console.warn('[review] docType audit failed:', e instanceof Error ? e.message : String(e));
     }
     // 轻量图同步(F3): 把新 docType 幂等 MERGE 到 Neo4j Document 节点, 让图视图
     // 不再显示陈旧类型。best-effort —— 图不可达/未配置时静默跳过, 绝不阻断修正。

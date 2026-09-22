@@ -10,6 +10,7 @@ import {
   searchContractLedger,
   updateContractLedgerType,
   listBindingsForContract,
+  insertCorrectionAudit,
 } from '../pipeline/db/repositories.js';
 import { buildFlowPanel } from '../pipeline/flowPanel.js';
 import {
@@ -123,6 +124,18 @@ contractsRoute.patch('/:contractNo/type', async (c) => {
       ctx, row.contractNo, contractType as ContractType, user.id,
     );
     if (!updated) return c.json({ ok: false, error: 'contract_not_found' }, 404);
+    // 修正动作审计(W8 T5): 不可变留痕 old=更新前台账行 contractType; 失败仅 warn 不阻断。
+    try {
+      await insertCorrectionAudit(ctx, {
+        kind: 'contract_type',
+        target: row.contractNo,
+        oldValue: row.contractType,
+        newValue: contractType,
+        userId: user.id,
+      });
+    } catch (e) {
+      console.warn('[contracts] contract-type audit failed:', errDetail(e));
+    }
     // 流水重建: 只作用于请求者 confirmed 绑定的去重文档(ownership 过滤在
     // listBindingsForContract 内 3-way OR)。refreshedFlows 实为"文档张数"(每文档 +1),
     // W8 T4 契约卫生: refreshedDocuments 为语义准确名, refreshedFlows 保留同值别名。

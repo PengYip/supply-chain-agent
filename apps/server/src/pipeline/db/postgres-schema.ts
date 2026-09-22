@@ -329,6 +329,23 @@ export const settlementRecords = pgTable(
 );
 
 /**
+ * 修正动作审计(W8 T5): 合同类型/文档类型人工修正的不可变留痕(kind=contract_type|doc_type)。
+ * Mirror of the SQLite correction_audit 列对列; created_at 走 nowTs(timestamptz UTC)。
+ */
+export const correctionAudit = pgTable(
+  'correction_audit',
+  {
+    id: text('id').primaryKey(),
+    kind: text('kind').notNull(),
+    target: text('target').notNull(),
+    oldValue: text('old_value'),
+    newValue: text('new_value').notNull(),
+    userId: text('user_id').notNull().default(''),
+    createdAt: nowTs(),
+  },
+);
+
+/**
  * graph_links(spec 2026-08-25 方案A §3.3/§6): correlates(背靠背购销对应)与
  * relates(项目级关联)的提案-确认 SSOT。Mirrors SQLite graph_links 列对列;
  * props/graph_status 为 TEXT(JSON 字符串), 与本文件 JSON-in-TEXT 惯例一致。

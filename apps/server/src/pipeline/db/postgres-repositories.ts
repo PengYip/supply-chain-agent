@@ -25,7 +25,7 @@ import { normalizeCompanyName } from '../../domain/flowDirection.js';
 import { deriveContractType } from '../../domain/contractType.js';
 import type { ContractType } from '../../domain/tradeSemantics.js';
 import { isVectorizableDocType } from '../vectorPolicy.js';
-import { parseGraphStatus, effectiveSelfPartyNamesForDerivation, normalizeProjectCode, ledgerRowFieldsToProjection, listTemplateTypes, safeParseJson, displayNameFromDocRow, batchUnitSummaryFromRow } from './repositories.js';
+import { parseGraphStatus, effectiveSelfPartyNamesForDerivation, normalizeProjectCode, ledgerRowFieldsToProjection, listTemplateTypes, safeParseJson, displayNameFromDocRow, batchUnitSummaryFromRow, type CorrectionAuditInput } from './repositories.js';
 import type {
   ExtractionInput,
   BindingInput,
@@ -2112,6 +2112,20 @@ export async function updateContractLedgerTypePg(
     [contractType, contractNo, uid],
   );
   return (res.rowCount ?? 0) > 0;
+}
+
+/** 修正动作审计 pg twin(W8 T5): 落一行不可变留痕, created_at 走 NOW()(timestamptz)。 */
+export async function insertCorrectionAuditPg(
+  ctx: PostgresDbContext,
+  input: CorrectionAuditInput,
+): Promise<string> {
+  const id = rid('CA');
+  await ctx.pool.query(
+    `INSERT INTO correction_audit (id, kind, target, old_value, new_value, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [id, input.kind, input.target, input.oldValue, input.newValue, effectiveUserId(input.userId)],
+  );
+  return id;
 }
 
 // ---- Execution flows (六向执行流水, pg twins) --------------------------------

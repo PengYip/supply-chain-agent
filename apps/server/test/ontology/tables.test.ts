@@ -11,6 +11,8 @@ const EDGE_COLS = ['id', 'relation', 'from_type', 'from_id', 'to_type', 'to_id',
   'params', 'valid_at', 'invalid_at', 'ingested_at', 'created_by', 'user_id', 'schema_version'];
 const FACT_COLS = ['id', 'entity_type', 'payload', 'valid_at', 'invalid_at',
   'ingested_at', 'created_by', 'user_id', 'document_id', 'schema_version'];
+// W8 T5: 修正动作审计表(contract_type/doc_type 人工修正留痕)。
+const AUDIT_COLS = ['id', 'kind', 'target', 'old_value', 'new_value', 'user_id', 'created_at'];
 
 function tableCols(table: string): string[] {
   return (ctx.sqlite.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
@@ -63,5 +65,9 @@ describe('ontology tables (SQLite lane)', () => {
       const cols = ctx.sqlite.prepare(`PRAGMA table_info(${tbl})`).all() as Array<{ name: string }>;
       expect(cols.map((c) => c.name)).toContain('ontology_fact_id');
     }
+  });
+
+  it('correction_audit columns mirror the spec exactly (W8 T5)', () => {
+    expect(tableCols('correction_audit')).toEqual(AUDIT_COLS);
   });
 });

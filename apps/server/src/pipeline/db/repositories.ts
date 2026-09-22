@@ -164,6 +164,7 @@ import {
   upsertConversationSharePg,
   getConversationShareByTokenPg,
   updateContractLedgerTypePg,
+  insertCorrectionAuditPg,
   type ConversationShareUpsert as ConversationShareUpsertPg,
   type ConversationShareRow as ConversationShareRowPg,
 } from './postgres-repositories.js';
@@ -3075,6 +3076,34 @@ export async function updateContractLedgerType(
     )
     .run(contractType, contractNo, uid);
   return res.changes > 0;
+}
+
+/** 修正动作审计入参(W8 T5): 合同类型/文档类型人工修正的不可变留痕。 */
+export interface CorrectionAuditInput {
+  kind: 'contract_type' | 'doc_type';
+  target: string;
+  oldValue: string | null;
+  newValue: string;
+  userId?: string;
+}
+
+/**
+ * 落一行修正审计(W8 T5)。调用方(路由)为 best-effort: 本函数可抛, 路由侧 try/catch
+ * 仅 console.warn 不阻断主流程(沿图同步兜底模式)。created_at 走表默认值(UTC ISO)。
+ */
+export async function insertCorrectionAudit(
+  ctx: DbContext,
+  input: CorrectionAuditInput,
+): Promise<string> {
+  if (ctx.backend === 'postgres') return insertCorrectionAuditPg(ctx, input);
+  const id = rid('CA');
+  ctx.sqlite
+    .prepare(
+      `INSERT INTO correction_audit (id, kind, target, old_value, new_value, user_id)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(id, input.kind, input.target, input.oldValue, input.newValue, effectiveUserId(input.userId));
+  return id;
 }
 
 /**

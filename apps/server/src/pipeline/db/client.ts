@@ -238,6 +238,18 @@ export function migrate(sqlite: Database.Database): void {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_ledger_no_user ON contract_ledger(contract_no, user_id);
 
+    -- 修正动作审计(W8 T5): 合同类型/文档类型人工修正的不可变留痕(kind=contract_type|doc_type)。
+    -- 审计失败仅 warn 不阻断主流程; 查询端点不做(spec 记候选), DB 可查。created_at 为 UTC ISO。
+    CREATE TABLE IF NOT EXISTS correction_audit (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      target TEXT NOT NULL,
+      old_value TEXT,
+      new_value TEXT NOT NULL,
+      user_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+
     -- Execution flows (六向执行流水): 合同绑定确认后物化的流水明细
     -- ('资金流' | '货物流' | '发票流' x 'in' | 'out')。UNIQUE(binding_id, user_id)
     -- 是 upsertExecutionFlow 幂等的兜底 -- 同一绑定重复物化就地更新而非重复行。
@@ -878,6 +890,17 @@ export async function migratePostgres(pool: Pool): Promise<void> {
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_ledger_no_user ON contract_ledger(contract_no, user_id)`,
     // 合同类型维度(spec 2026-08-20 §3): 存量库补列(SQLite 侧同款 guarded ALTER)。
     `ALTER TABLE contract_ledger ADD COLUMN IF NOT EXISTS contract_type TEXT`,
+    // 修正动作审计(W8 T5): mirror of the SQLite correction_audit; timestamptz per pg
+    // 惯例。kind=contract_type|doc_type 人工修正留痕, 审计失败仅 warn 不阻断主流程。
+    `CREATE TABLE IF NOT EXISTS correction_audit (
+       id TEXT PRIMARY KEY,
+       kind TEXT NOT NULL,
+       target TEXT NOT NULL,
+       old_value TEXT,
+       new_value TEXT NOT NULL,
+       user_id TEXT NOT NULL DEFAULT '',
+       created_at timestamptz NOT NULL DEFAULT NOW()
+     )`,
     // Execution flows (六向执行流水): mirror of the SQLite execution_flows.
     // amount/quantity_ton 用 double precision(对应 SQLite REAL), confidence 沿用
     // numeric(5,4) pg 惯例, created_at timestamptz。UNIQUE 索引支撑 ON CONFLICT upsert。

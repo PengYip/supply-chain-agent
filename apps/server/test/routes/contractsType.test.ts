@@ -151,6 +151,18 @@ describe('PATCH /api/contracts/:contractNo/type', () => {
     expect(body.failed).toBe(0);
     expect(body.skipped.map((s) => s.reason)).not.toContain('direction-undeterminable');
     expect((await findContractLedgerByNo(ctx, 'CJXC-1', 'u1'))?.contractType).toBe('采购');
+    // W8 T5: 修正动作审计落一行(kind=contract_type, old=修正前 null, new=采购, UTC ISO)。
+    const audit = ctx.sqlite.prepare('SELECT * FROM correction_audit').all() as Array<{
+      id: string; kind: string; target: string; old_value: string | null; new_value: string;
+      user_id: string; created_at: string;
+    }>;
+    expect(audit).toHaveLength(1);
+    expect(audit[0]!.kind).toBe('contract_type');
+    expect(audit[0]!.target).toBe('CJXC-1');
+    expect(audit[0]!.old_value).toBeNull();
+    expect(audit[0]!.new_value).toBe('采购');
+    expect(audit[0]!.user_id).toBe('u1');
+    expect(audit[0]!.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
 
   it('非 合同 粗类台账行: docType 不设限, 仍允许修正', async () => {

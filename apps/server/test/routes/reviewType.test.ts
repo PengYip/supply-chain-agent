@@ -106,6 +106,18 @@ describe('PATCH /api/documents/:docId/type', () => {
     expect(refreshMock).toHaveBeenCalledWith(ctx, docId, 'u1');
     // F3: 图同步以新 docType 调用。
     expect(syncMock).toHaveBeenCalledWith(docId, '发票');
+    // W8 T5: 修正动作审计落一行(kind=doc_type, old=修正前 其他, new=发票)。
+    const audit = ctx.sqlite.prepare('SELECT * FROM correction_audit').all() as Array<{
+      id: string; kind: string; target: string; old_value: string | null; new_value: string;
+      user_id: string; created_at: string;
+    }>;
+    expect(audit).toHaveLength(1);
+    expect(audit[0]!.kind).toBe('doc_type');
+    expect(audit[0]!.target).toBe(docId);
+    expect(audit[0]!.old_value).toBe('其他');
+    expect(audit[0]!.new_value).toBe('发票');
+    expect(audit[0]!.user_id).toBe('u1');
+    expect(audit[0]!.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
 
   it('图同步失败(best-effort) -> PATCH 仍 200, 不阻断修正', async () => {
