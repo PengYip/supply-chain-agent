@@ -1,8 +1,9 @@
 // apps/server/src/ontology/projection.ts
 // 台账只读投影(roadmap 2026-09-07 Item 3)。铁律：本模块只含 SELECT，绝不写
 // contract_ledger/documents/trade_facts 任何源表(验收 3，代码审查确认无写路径)。
-// 映射 v1(理由见计划「摸底结论」；2026-09-08 起静态主数据可经表单直写 trade_facts)：
-//   TradeContract                 <- contract_ledger
+// 映射 v2(2026-09-23, v1 决策见 trade-ledger 计划「摸底结论」；2026-09-08 起静态
+// 主数据可经表单直写 trade_facts)：
+//   TradeContract                 <- contract_ledger(含 fields 中文键→注册表词汇翻译, 见 mapContractRow)
 //   Goods{Receipt,Delivery}Event  <- documents(doc_type 收货单/发货单) ∪ trade_facts
 //   其余 5 事件 + TradeGoods/Counterparty/OrgUnit <- trade_facts
 //     (静态 3 类主数据源=POST /api/ontology/master-data 手工登记, 列表口径=最新口径)
@@ -65,21 +66,131 @@ function normalizeLegacyDt(v: unknown): string | null {
 
 // ---------------------------------------------------------------------------
 // TradeContract <- contract_ledger
+//
+// 字段映射 v2(2026-09-23): v1 只映射 contractNo/title/contractType/currency 四键,
+// direction/signDate/expireDate/buyerName/sellerName/contractAmount 结构性恒空。
+// v2 把 fields JSON 的中文开放键按候选键序翻译成注册表词汇; 候选键集 = dev 库
+// (10.10.0.2 sca-pgvector) contract_ledger.fields 的实测键清单, 新变体键只改下方
+// 候选表。单价族键(合同价/合同价格/单价/基准价格/结算单价*)刻意排除在
+// contractAmount 之外——是单价不是合同金额。
 // ---------------------------------------------------------------------------
+
+/** fields 值解包候选键(键序即优先级, 与 contractSearch BUYER/SELLER_KEYS 约定同源)。 */
+const BUYER_NAME_KEYS = [
+  '买方', '甲方', '甲方名称', '买受人', '买受方', '购买方名称', '受让方', '需方',
+  '甲方（买方）', '买受人（买方）', '买受人（甲方）',
+] as const;
+const SELLER_NAME_KEYS = [
+  '卖方', '乙方', '乙方名称', '出卖人', '出卖方', '销售方名称', '转让方', '供方',
+  '乙方（卖方）', '出卖人（卖方）', '出卖人（乙方）',
+] as const;
+const SIGN_DATE_KEYS = ['签订日期', '签约日期', '签订日', '签订时间', '签约时间'] as const;
+const EXPIRE_DATE_KEYS = [
+  '合同有效期截止', '有效期至', '合同有效期', '合同有效期限', '协议有效期',
+  '合同期限', '履约期限', '履行期限',
+] as const;
+const AMOUNT_KEYS = [
+  '合同金额', '含税结算总价', '含税结算总价(元)', '总金额', '合计金额',
+  '含税总价_元', '含税总价（元）', '合计含税总价_元', '承付总金额', '金额',
+] as const;
+const CURRENCY_KEYS = ['币种', 'currency'] as const;
+const TITLE_FALLBACK_KEYS = ['合同名称', '标的物'] as const;
+
+/** contract_ledger.fields 的值是 {value, sourceSpans} 包装: 按键序取第一个非空
+ *  value(空串=原文缺失, spec 2026-08-28 不遮蔽回退链); 兼容值直存的裸形态。 */
+function unwrapFieldValue(
+  extracted: Record<string, unknown>, keys: readonly string[],
+): string | number | undefined {
+  for (const k of keys) {
+    const cell = extracted[k];
+    if (cell != null && typeof cell === 'object' && 'value' in cell) {
+      const v = (cell as { value: unknown }).value;
+      if (typeof v === 'number') return v;
+      if (typeof v === 'string' && v.trim() !== '') return v.trim();
+      continue;
+    }
+    if (typeof cell === 'string' && cell.trim() !== '') return cell.trim();
+    if (typeof cell === 'number') return cell;
+  }
+  return undefined;
+}
+
+function strField(extracted: Record<string, unknown>, keys: readonly string[]): string | null {
+  const v = unwrapFieldValue(extracted, keys);
+  return typeof v === 'string' ? v : null;
+}
+
+/** 宽松日期归一: 支持 'YYYY年M月D日' / 'YYYY-M-D' 及区间串('自X起至Y止'),
+ *  取最后一个合法日期(区间值的终点=到期日语义); 无法解析返回 null(不产出垃圾值)。 */
+function normalizeDateLoose(raw: string): string | null {
+  const s = raw.replace(/\s+/g, '');
+  const re = /(\d{4})年(\d{1,2})月(\d{1,2})日|(\d{4})-(\d{1,2})-(\d{1,2})/g;
+  let last: { y: string; m: number; d: number } | null = null;
+  for (const m of s.matchAll(re)) {
+    const y = m[1] ?? m[4]!;
+    const mo = Number(m[2] ?? m[5]);
+    const d = Number(m[3] ?? m[6]);
+    if (Number(y) >= 1900 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+      last = { y, m: mo, d };
+    }
+  }
+  return last ? `${last.y}-${String(last.m).padStart(2, '0')}-${String(last.d).padStart(2, '0')}` : null;
+}
+
+function dateField(extracted: Record<string, unknown>, keys: readonly string[]): string | null {
+  const v = unwrapFieldValue(extracted, keys);
+  return typeof v === 'string' ? normalizeDateLoose(v) : null;
+}
+
+/** 金额归一: number 直透; 字符串剥货币符/千分位/单位后数值化, 非数值返回 null。 */
+function parseAmountLoose(raw: string | number): number | null {
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+  const s = raw.replace(/[￥¥,，\s元]/g, '');
+  if (s === '') return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function amountField(extracted: Record<string, unknown>, keys: readonly string[]): number | null {
+  const v = unwrapFieldValue(extracted, keys);
+  return v == null ? null : parseAmountLoose(v);
+}
 
 function mapContractRow(r: Record<string, unknown>): ProjectedEntity {
   const extracted = parseJsonObj(r['fields']);
-  const currencyProbe = extracted['币种'] ?? extracted['currency'];
   const contractNo = String(r['contract_no'] ?? '');
+
+  // title: 台账列非空优先(写路径已做 合同名称/标的物 回退); 空列读侧兜底覆盖旧行。
+  const titleCol = r['title'] != null ? String(r['title']).trim() : '';
+  const titleFallback = strField(extracted, TITLE_FALLBACK_KEYS);
+  const title = titleCol !== '' ? titleCol : titleFallback;
+
+  const contractType = r['contract_type'] != null ? String(r['contract_type']) : null;
+  // direction: 注册表口径(采购/销售/代采)与 contract_type 的方向子集同源, 仅透传。
+  const direction = contractType === '采购' || contractType === '销售' ? contractType : null;
+
+  const buyerName = strField(extracted, BUYER_NAME_KEYS);
+  const sellerName = strField(extracted, SELLER_NAME_KEYS);
+  const signDate = dateField(extracted, SIGN_DATE_KEYS);
+  const expireDate = dateField(extracted, EXPIRE_DATE_KEYS);
+  const contractAmount = amountField(extracted, AMOUNT_KEYS);
+  const currency = strField(extracted, CURRENCY_KEYS);
+
   return {
     id: String(r['id']),
     entityType: 'TradeContract',
     label: contractNo || String(r['id']),
     fields: {
       contractNo,
-      ...(r['title'] != null && r['title'] !== '' ? { title: String(r['title']) } : {}),
-      ...(r['contract_type'] != null ? { contractType: String(r['contract_type']) } : {}),
-      ...(typeof currencyProbe === 'string' && currencyProbe !== '' ? { currency: currencyProbe } : {}),
+      ...(title != null ? { title } : {}),
+      ...(contractType != null ? { contractType } : {}),
+      ...(direction != null ? { direction } : {}),
+      ...(buyerName != null ? { buyerName } : {}),
+      ...(sellerName != null ? { sellerName } : {}),
+      ...(signDate != null ? { signDate } : {}),
+      ...(expireDate != null ? { expireDate } : {}),
+      ...(contractAmount != null ? { contractAmount } : {}),
+      ...(currency != null ? { currency } : {}),
     },
     source: 'contract_ledger',
     validAt: null,

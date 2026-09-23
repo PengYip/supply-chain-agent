@@ -116,6 +116,157 @@ describe('projection: TradeContract <- contract_ledger (read-only)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// 字段映射 v2(2026-09-23): fields 中文开放键 -> 注册表词汇。
+// 候选键/值形态均取自 dev 库 contract_ledger.fields 实测样本。
+// ---------------------------------------------------------------------------
+
+const insertContractWithFields = (
+  id: string, contractNo: string, contractType: string | null,
+  fields: Record<string, unknown>, title = '',
+) => {
+  ctx.sqlite.prepare(
+    `INSERT INTO contract_ledger (id, contract_no, display_contract_no, doc_type, document_id,
+        title, fields, field_meta, overall_confidence, needs_review, user_id, contract_type)
+     VALUES (?, ?, ?, '合同', 'doc-f', ?, ?, '{}', 1, 0, 'u1', ?)`,
+  ).run(id, contractNo, contractNo, title, JSON.stringify(fields), contractType);
+};
+
+describe('projection: TradeContract 字段映射 v2 (fields 中文键 -> 注册表词汇)', () => {
+  it('买卖双方: 买方/卖方直取, 缺失时回退 甲方/乙方 及变体键', async () => {
+    insertContractWithFields('F1', 'HT-F1', null, {
+      买方: { value: '华能荆门热电有限责任公司', sourceSpans: [] },
+      卖方: { value: '浩吉铁路经营开发有限公司', sourceSpans: [] },
+    });
+    insertContractWithFields('F2', 'HT-F2', null, {
+      甲方: { value: '甲方公司', sourceSpans: [] },
+      乙方: { value: '乙方公司', sourceSpans: [] },
+    });
+    insertContractWithFields('F3', 'HT-F3', null, {
+      '买受人（买方）': { value: '买受方公司', sourceSpans: [] },
+      '出卖人（卖方）': { value: '出卖方公司', sourceSpans: [] },
+    });
+    const res = await listProjectedEntities(ctx, 'TradeContract', {}, 'u1');
+    const byId = new Map(res.items.map((e) => [e.id, e.fields]));
+    expect(byId.get('F1')!.buyerName).toBe('华能荆门热电有限责任公司');
+    expect(byId.get('F1')!.sellerName).toBe('浩吉铁路经营开发有限公司');
+    expect(byId.get('F2')!.buyerName).toBe('甲方公司');
+    expect(byId.get('F2')!.sellerName).toBe('乙方公司');
+    expect(byId.get('F3')!.buyerName).toBe('买受方公司');
+    expect(byId.get('F3')!.sellerName).toBe('出卖方公司');
+  });
+
+  it('签约日期: 年月日/ISO/区间串归一为 ISO; 不完整日期不产出', async () => {
+    insertContractWithFields('D1', 'HT-D1', null, {
+      签订日期: { value: '2025年3月11日', sourceSpans: [] },
+    });
+    insertContractWithFields('D2', 'HT-D2', null, {
+      签约时间: { value: '2022-08-07', sourceSpans: [] },
+    });
+    insertContractWithFields('D3', 'HT-D3', null, {
+      签订日期: { value: '2022年 月 日', sourceSpans: [] },
+    });
+    // 键序优先: 签订日期 命中后不再取 签约时间
+    insertContractWithFields('D4', 'HT-D4', null, {
+      签订日期: { value: '2025年09月09日', sourceSpans: [] },
+      签约时间: { value: '2025年10月10日', sourceSpans: [] },
+    });
+    const res = await listProjectedEntities(ctx, 'TradeContract', {}, 'u1');
+    const byId = new Map(res.items.map((e) => [e.id, e.fields]));
+    expect(byId.get('D1')!.signDate).toBe('2025-03-11');
+    expect(byId.get('D2')!.signDate).toBe('2022-08-07');
+    expect(byId.get('D3')!.signDate).toBeUndefined();
+    expect(byId.get('D4')!.signDate).toBe('2025-09-09');
+  });
+
+  it('到期日期: 点值直取, 区间串取终点, 纯文本无日期不产出', async () => {
+    insertContractWithFields('E1', 'HT-E1', null, {
+      合同有效期截止: { value: '2022-08-16', sourceSpans: [] },
+    });
+    insertContractWithFields('E2', 'HT-E2', null, {
+      合同有效期: { value: '自2022-08-07起至2022-08-16止', sourceSpans: [] },
+    });
+    insertContractWithFields('E3', 'HT-E3', null, {
+      合同有效期限: { value: '2025年03月20日至2025年12月31日', sourceSpans: [] },
+    });
+    insertContractWithFields('E4', 'HT-E4', null, {
+      协议有效期: { value: '自本协议生效之日起至双方权利义务履行完毕止', sourceSpans: [] },
+    });
+    const res = await listProjectedEntities(ctx, 'TradeContract', {}, 'u1');
+    const byId = new Map(res.items.map((e) => [e.id, e.fields]));
+    expect(byId.get('E1')!.expireDate).toBe('2022-08-16');
+    expect(byId.get('E2')!.expireDate).toBe('2022-08-16');
+    expect(byId.get('E3')!.expireDate).toBe('2025-12-31');
+    expect(byId.get('E4')!.expireDate).toBeUndefined();
+  });
+
+  it('合同金额: 总价族数值化(含千分位/单位); 单价族键不映射', async () => {
+    insertContractWithFields('A1', 'HT-A1', null, {
+      总金额: { value: '24761756.81', sourceSpans: [] },
+    });
+    insertContractWithFields('A2', 'HT-A2', null, {
+      含税结算总价: { value: 5095620.96, sourceSpans: [] },
+    });
+    insertContractWithFields('A3', 'HT-A3', null, {
+      合计含税总价_元: { value: '1,234,567.89元', sourceSpans: [] },
+    });
+    insertContractWithFields('A4', 'HT-A4', null, {
+      合同价格: { value: '958.7元/吨', sourceSpans: [] },
+      合同价: { value: '16931', sourceSpans: [] },
+    });
+    const res = await listProjectedEntities(ctx, 'TradeContract', {}, 'u1');
+    const byId = new Map(res.items.map((e) => [e.id, e.fields]));
+    expect(byId.get('A1')!.contractAmount).toBe(24761756.81);
+    expect(byId.get('A2')!.contractAmount).toBe(5095620.96);
+    expect(byId.get('A3')!.contractAmount).toBe(1234567.89);
+    expect(byId.get('A4')!.contractAmount).toBeUndefined();
+  });
+
+  it('币种: fields 包装值解包(v1 探测包装对象恒失败的回归测试)', async () => {
+    insertContractWithFields('CU1', 'HT-CU1', null, {
+      币种: { value: 'CNY', sourceSpans: [] },
+    });
+    const res = await listProjectedEntities(ctx, 'TradeContract', {}, 'u1');
+    expect(res.items[0]!.fields['currency']).toBe('CNY');
+  });
+
+  it('direction: contract_type 的方向子集(采购/销售)透传, 非方向类型不产出', async () => {
+    insertContractWithFields('DR1', 'HT-DR1', '采购', {});
+    insertContractWithFields('DR2', 'HT-DR2', '销售', {});
+    insertContractWithFields('DR3', 'HT-DR3', '物流', {});
+    const res = await listProjectedEntities(ctx, 'TradeContract', {}, 'u1');
+    const byId = new Map(res.items.map((e) => [e.id, e.fields]));
+    expect(byId.get('DR1')!.direction).toBe('采购');
+    expect(byId.get('DR2')!.direction).toBe('销售');
+    expect(byId.get('DR3')!.direction).toBeUndefined();
+  });
+
+  it('title: 台账列为空时读侧兜底 fields.合同名称/标的物', async () => {
+    insertContractWithFields('T1', 'HT-T1', null, {
+      合同名称: { value: '煤炭买卖合同（市场）', sourceSpans: [] },
+    });
+    const res = await listProjectedEntities(ctx, 'TradeContract', {}, 'u1');
+    expect(res.items[0]!.fields['title']).toBe('煤炭买卖合同（市场）');
+  });
+
+  it('货转单样例(dev 实测形态): 只有单据级字段也能填充本体列', async () => {
+    insertContractWithFields('W1', '202609YY1586850250', null, {
+      买方: { value: '华能荆门热电有限责任公司', sourceSpans: [] },
+      卖方: { value: '浩吉铁路经营开发有限公司', sourceSpans: [] },
+      合同号: { value: '202609YY1586850250', sourceSpans: [] },
+      合计含税总价_元: { value: '3519600', sourceSpans: [] },
+      交货日期: { value: '2026年9月10日', sourceSpans: [] },
+    });
+    const res = await listProjectedEntities(ctx, 'TradeContract', {}, 'u1');
+    const f = res.items[0]!.fields;
+    expect(f['buyerName']).toBe('华能荆门热电有限责任公司');
+    expect(f['sellerName']).toBe('浩吉铁路经营开发有限公司');
+    expect(f['contractAmount']).toBe(3519600);
+    // 交货日期 != 签约日期, 不得映射 signDate
+    expect(f['signDate']).toBeUndefined();
+  });
+});
+
 const insertDoc = (id: string, docType: string) => {
   ctx.sqlite.prepare(
     `INSERT INTO documents (id, doc_type, modality, source_uri, block_model, user_id, review_status, parse_status)
