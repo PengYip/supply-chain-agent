@@ -275,6 +275,8 @@ export interface TreeCallbacks {
   setDeletingFolderPath: (path: string | null) => void;
   setDeletingFilePath: (key: string | null) => void;
   onOpenBindings?: (docId: string) => void;
+  /** 已挂合同徽标点击 -> 本体图谱(锚定到绑定合同, App 经 /graph/document 解析)。 */
+  onOpenDocInGraph?: (docId: string) => void;
   /** 单据组行「集中复核」入口: 跳全页复核工作台(#/review?docId=)。 */
   onOpenWorkbench?: (docId: string) => void;
   /** 触发解析: parsed 状态的重新处理需带 {force:true}(服务端终态短路放行)。 */
@@ -488,12 +490,27 @@ function FileRow(props: {
   // 显示「未挂合同」会误导跳转到一份没有绑定关系的文档。
   const unbound = file.bound !== true;
   const boundBadgeNode = isContainer ? null : !unbound ? (
-    <span
-      title="该文件已与合同建立确认绑定"
-      className="whitespace-nowrap rounded bg-success/10 px-1.5 py-px text-[10px] text-success"
-    >
-      已挂合同
-    </span>
+    file.docId && cb.onOpenDocInGraph ? (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (file.docId && cb.onOpenDocInGraph) cb.onOpenDocInGraph(file.docId);
+        }}
+        title="已与合同建立确认绑定，点击在图谱中查看"
+        aria-label="已与合同建立确认绑定，点击在图谱中查看"
+        className="cursor-pointer whitespace-nowrap rounded bg-success/10 px-1.5 py-px text-[10px] text-success transition-colors hover:bg-success/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+      >
+        已挂合同
+      </button>
+    ) : (
+      <span
+        title="该文件已与合同建立确认绑定"
+        className="whitespace-nowrap rounded bg-success/10 px-1.5 py-px text-[10px] text-success"
+      >
+        已挂合同
+      </span>
+    )
   ) : file.docId && cb.onOpenBindings ? (
     <button
       type="button"

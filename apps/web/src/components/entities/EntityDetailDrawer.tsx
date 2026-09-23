@@ -3,6 +3,7 @@ import { clsx } from 'clsx';
 import { getEntityDetail, type EntityDetailResult } from '../../api/ontology';
 import { edgeLabel } from '../graph/businessTypes';
 import { formatEdgeParams } from '../graph/OntologyExplorer';
+import { DocumentDetailDrawer } from '../graph/DocumentDetailDrawer';
 import { maskBankAccount } from '../../lib/mask';
 import { ContractFlowPanel } from '../ledger/ContractFlowPanel';
 import { ContractTypeCorrection } from '../ledger/ContractTypeCorrection';
@@ -30,6 +31,8 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
   // 对账面板重挂纪元(business-loop Wave 7): 合同类型修正成功后 +1, 让面板按
   // 重建后的执行流水重新拉取(面板自持数据, 用 key 重挂是最小侵入的刷新方式)。
   const [flowEpoch, setFlowEpoch] = useState(0);
+  // 血缘单据详情抽屉(2026-09-23): 关联单据行点击打开, 二级抽屉。
+  const [docDetailId, setDocDetailId] = useState<string | null>(null);
   // 过期响应守卫: 快速切换实体/口径时, 慢的旧响应不得覆盖新数据。
   const seqRef = useRef(0);
 
@@ -201,6 +204,40 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
               </tbody>
             </table>
           </div>
+        )}
+
+        {/* 关联单据（血缘，TradeContract 专属，2026-09-23 验收缺口）：绑定单据 +
+            合同原件，点击开单据详情抽屉（面包屑 + 原文件预览）。 */}
+        {detail && detail.documents != null && detail.documents.length > 0 && (
+          <div className="border-b border-line px-4 py-3">
+            <div className="mb-2 text-xs font-medium text-ink-soft">
+              关联单据（血缘，{detail.documents.length} 份）
+            </div>
+            <div className="space-y-1">
+              {detail.documents.map((doc) => (
+                <button
+                  key={doc.docId}
+                  type="button"
+                  onClick={() => setDocDetailId(doc.docId)}
+                  className="flex w-full items-center gap-2 rounded border border-line bg-white px-2 py-1.5 text-left text-sm transition-colors hover:border-primary/40"
+                >
+                  <span className="shrink-0 rounded bg-surface px-1.5 py-px text-[10px] text-ink">
+                    {doc.docType}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-ink" title={doc.filename}>
+                    {doc.filename}
+                  </span>
+                  <span className="shrink-0 text-xs text-ink-soft">
+                    {doc.relation}
+                    {doc.status === 'proposed' ? ' · 待确认' : ''}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {docDetailId && (
+          <DocumentDetailDrawer docId={docDetailId} onClose={() => setDocDetailId(null)} />
         )}
 
         {/* 本体关系(核销/分摊/红冲溯源等带参边；P4 关系入口补全的可见性配套) */}

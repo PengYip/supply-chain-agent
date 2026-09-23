@@ -106,6 +106,8 @@ export interface EntityDetailResult {
   netAmount: number | null;
   relations: EntityRelationDTO[];
   asOf: { mode: 'business' | 'system'; at: string };
+  /** TradeContract 专属: 血缘单据(bindings + 合同原件, 2026-09-23); 其余实体无。 */
+  documents?: ContractDocumentSummaryDTO[];
 }
 
 export function getEntityDetail(
@@ -127,6 +129,58 @@ export interface NeighborNodeDTO {
   label: string;
   source: 'contract_ledger' | 'documents' | 'trade_facts' | 'neo4j' | 'unresolved';
   props?: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// Document 节点详情(2026-09-23): 面包屑(项目\合同\单据类型\单据名称) + 预览锚点。
+// ---------------------------------------------------------------------------
+
+export interface DocumentContractRefDTO {
+  contractNo: string;
+  ledgerId: string | null;
+  title: string | null;
+  contractType: string | null;
+  relation: string;
+  status: string;
+}
+
+export interface DocumentProjectRefDTO {
+  code: string;
+  name: string;
+  status: string;
+}
+
+export interface DocumentDetailDTO {
+  docId: string;
+  docType: string;
+  filename: string;
+  parseStatus: string;
+  reviewStatus: string;
+  batchRole: string | null;
+  minioKey: string | null;
+  previewUrl: string | null;
+  createdAt: string | null;
+  contracts: DocumentContractRefDTO[];
+  projects: DocumentProjectRefDTO[];
+  breadcrumb: string;
+}
+
+export function fetchDocumentDetail(docId: string): Promise<DocumentDetailDTO> {
+  return request<DocumentDetailDTO>(
+    `/api/ontology/graph/document/${encodeURIComponent(docId)}`);
+}
+
+/** 合同台账详情附带的血缘单据行(2026-09-23 验收缺口配套)。 */
+export interface ContractDocumentSummaryDTO {
+  docId: string;
+  docType: string;
+  filename: string;
+  relation: string;
+  status: string;
+  parseStatus: string;
+  batchRole: string | null;
+  previewUrl: string | null;
+  ingestedAt: string | null;
 }
 
 export interface NeighborEdgeDTO {

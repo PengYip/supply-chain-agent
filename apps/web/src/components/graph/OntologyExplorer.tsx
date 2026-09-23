@@ -11,6 +11,7 @@ import {
 import type { GraphEdge, GraphNode, InspectTarget, Subgraph } from '../../hooks/useGraph';
 import { GraphCanvas } from './GraphCanvas';
 import { EntityDetailDrawer } from '../entities/EntityDetailDrawer';
+import { DocumentDetailDrawer } from './DocumentDetailDrawer';
 import { edgeLabel } from './businessTypes';
 
 export interface OntologyAnchorJump {
@@ -47,14 +48,6 @@ function toGraphEdge(e: NeighborEdgeDTO): GraphEdge {
     props: e.params,
     confidence: null,
   };
-}
-
-/** 节点可开的实体详情(台账抽屉)：带本体类型且非血缘 Document(D7, 无详情端点语义)才可开。 */
-function detailTarget(n: GraphNode): { type: string; id: string } | null {
-  const t = n.props?.['__type'];
-  const id = n.props?.['__id'];
-  if (typeof t !== 'string' || typeof id !== 'string' || t === 'Document') return null;
-  return { type: t, id };
 }
 
 const EDGE_PARAM_LABELS: Record<string, string> = {
@@ -98,6 +91,8 @@ export function OntologyExplorer({ initialAnchor }: Props) {
   const [truncated, setTruncated] = useState(false);
   const [selected, setSelected] = useState<InspectTarget | null>(null);
   const [detail, setDetail] = useState<{ type: string; id: string } | null>(null);
+  // 血缘 Document 节点详情抽屉(2026-09-23): 单击打开(面包屑+原文件预览)。
+  const [docDetailId, setDocDetailId] = useState<string | null>(null);
   // 单击节点开详情抽屉，但要避开双击展开：单击先挂 220ms 定时器，双击取消之。
   const clickTimer = useRef<number | null>(null);
   useEffect(() => () => { if (clickTimer.current) window.clearTimeout(clickTimer.current); }, []);
@@ -198,14 +193,21 @@ export function OntologyExplorer({ initialAnchor }: Props) {
       .finally(() => setLoading(false));
   }, []);
 
-  // 单击节点 = 直接开实体详情抽屉(本体节点)；血缘 Document 无详情端点语义(D7)，
-  // 退回底部摘要(selected)。定时器避开双击连击。
+  // 单击节点 = 直接开实体详情抽屉(本体节点)；血缘 Document(2026-09-23 起有
+  // /graph/document/:docId 详情端点)同样开抽屉；其余未解析引用退回底部摘要。
+  // 定时器避开双击连击。
   const handleNodeSelect = useCallback((node: GraphNode) => {
-    const t = detailTarget(node);
-    if (!t) { setSelected({ type: 'node', node }); return; }
-    setSelected(null);
+    const t = node.props?.['__type'];
+    const id = node.props?.['__id'];
+    if (typeof t !== 'string' || typeof id !== 'string') { setSelected({ type: 'node', node }); return; }
     if (clickTimer.current) window.clearTimeout(clickTimer.current);
-    clickTimer.current = window.setTimeout(() => { setDetail(t); clickTimer.current = null; }, 220);
+    if (t === 'Document') {
+      setSelected(null);
+      clickTimer.current = window.setTimeout(() => { setDocDetailId(id); clickTimer.current = null; }, 220);
+      return;
+    }
+    setSelected(null);
+    clickTimer.current = window.setTimeout(() => { setDetail({ type: t, id }); clickTimer.current = null; }, 220);
   }, []);
 
   const search = useCallback(async () => {
@@ -403,6 +405,9 @@ export function OntologyExplorer({ initialAnchor }: Props) {
           entityId={detail.id}
           onClose={() => setDetail(null)}
         />
+      )}
+      {docDetailId && (
+        <DocumentDetailDrawer docId={docDetailId} onClose={() => setDocDetailId(null)} />
       )}
     </div>
   );

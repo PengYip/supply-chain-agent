@@ -11,6 +11,7 @@ import {
   ontologySchemaJson, OntologyEntityNameSchema, ENTITY_NAMES, entitySchema,
 } from '../ontology/index.js';
 import { listProjectedEntities, getProjectedEntityDetail } from '../ontology/projection.js';
+import { getDocumentDetail, listContractDocuments } from '../ontology/documentDetail.js';
 import { getNeighbors } from '../ontology/neighbors.js';
 import { insertTradeFact, supersedeTradeFact } from '../ontology/repo.js';
 import { syncOntologyGraph, syncOntologyGraphSafe } from '../ontology/graphSync.js';
@@ -248,6 +249,21 @@ ontologyRoute.get('/entities/:type/:id', async (c) => {
       { mode: parsed.data.asOf, at: parsed.data.at }, user.id,
     );
     if (!detail) return c.json({ error: 'not found' }, 404);
+    // 合同详情附带血缘单据(2026-09-23 验收缺口): 台账只看投影字段无法验收
+    // 「这个合同挂了哪些单据」。故障隔离——血缘查询失败不拖垮详情本体部分。
+    if (parsedType.data === 'TradeContract') {
+      const contractNo = String(detail.entity.fields['contractNo'] ?? '');
+      if (contractNo !== '') {
+        try {
+          const documents = await listContractDocuments(
+            getDbContext(), { contractNo, ledgerRowId: detail.entity.id }, user.id,
+          );
+          return c.json({ ...detail, documents });
+        } catch (e) {
+          console.error('[ontology] contract lineage documents failed:', errDetail(e));
+        }
+      }
+    }
     return c.json(detail);
   } catch (e) {
     // normalizeIsoUtc 对非法 at 抛 'asof: invalid datetime' -> 400
@@ -256,6 +272,26 @@ ontologyRoute.get('/entities/:type/:id', async (c) => {
     }
     console.error('[ontology] entity detail failed:', errDetail(e));
     return c.json({ error: 'detail failed', detail: errDetail(e) }, 500);
+  }
+});
+
+/** GET /graph/document/:docId — 穿透图谱 Document 节点详情(2026-09-23):
+ *  人类可读面包屑(项目 \ 合同 \ 单据类型 \ 单据名称) + 原文件预览锚点
+ *  (/api/files/stream 同源流式, 会话鉴权) + 绑定合同/项目归属。
+ *  单据不存在或不属该用户 -> 404。 */
+ontologyRoute.get('/graph/document/:docId', async (c) => {
+  const user = c.get('user')!;
+  const docId = c.req.param('docId').trim();
+  if (!docId || docId.length > 100) {
+    return c.json({ error: 'invalid docId' }, 400);
+  }
+  try {
+    const detail = await getDocumentDetail(getDbContext(), docId, user.id);
+    if (!detail) return c.json({ error: 'not found' }, 404);
+    return c.json(detail);
+  } catch (e) {
+    console.error('[ontology] document detail failed:', errDetail(e));
+    return c.json({ error: 'document detail failed', detail: errDetail(e) }, 500);
   }
 });
 

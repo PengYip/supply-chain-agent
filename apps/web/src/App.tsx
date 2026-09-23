@@ -11,6 +11,7 @@ import { type FileEntry, type ContextFile, useFiles } from './hooks/useFiles';
 import { collectDropItems, useFolderDropUpload } from './hooks/useFolderDropUpload';
 import { usePageFileDrop } from './hooks/usePageFileDrop';
 import { processDocument, type DocParseState } from './api/process';
+import { fetchDocumentDetail } from './api/ontology';
 import { useSessions } from './hooks/useSessions';
 import { EvalWorkbenchView } from './components/eval/EvalWorkbenchView';
 import { BindingsView } from './components/bindings/BindingsView';
@@ -144,6 +145,22 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
     setBindingsFocus({ docId, nonce: bindingsFocusNonceRef.current });
     navigate('bindings');
   }, [navigate]);
+  // 文件抽屉「已挂合同」徽标 -> 本体图谱(2026-09-23): 经 /graph/document 解析该
+  // 单据的绑定合同, 锚定 TradeContract 台账行打开穿透图。解析失败(接口不可用/
+  // 绑定悬空无台账行)降级跳绑定工作台, 至少落在能处理该单据的页面。
+  const openDocInGraph = useCallback(async (docId: string) => {
+    try {
+      const d = await fetchDocumentDetail(docId);
+      const ct = d.contracts.find((c) => c.ledgerId != null);
+      if (ct?.ledgerId) {
+        openInGraph({ entityType: 'TradeContract', entityId: ct.ledgerId, label: ct.contractNo });
+        return;
+      }
+    } catch {
+      // fall through to bindings workbench
+    }
+    openBindingsForDoc(docId);
+  }, [openInGraph, openBindingsForDoc]);
   // 全局复核弹窗（App 层单例）： 文件树子单据行/复核卡拆分清单经
   // lib/reviewModal 通道请求打开；弹窗已开时切换目标（key 化重挂载）。
   const [reviewDocId, setReviewDocId] = useState<string | null>(null);
@@ -327,6 +344,7 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
           filesApi={filesApi}
           uploadQueue={uploadQueue}
           onOpenBindings={openBindingsForDoc}
+          onOpenDocInGraph={(docId) => { void openDocInGraph(docId); }}
           onOpenWorkbench={(docId) => navigate('review', { docId })}
           batchRefreshToken={batchRefreshToken}
         />
