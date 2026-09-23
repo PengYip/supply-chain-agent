@@ -30,6 +30,23 @@ export interface ContractLedgerEntry {
   userId: string;
 }
 
+/** 合同族 doc_type(2026-09-23 数据治理): 只有合同族单据拥有台账行的"合同口径"
+ *  (doc_type/document_id/title/fields)。凭证类单据(货转单/磅单/结算单...)带
+ *  合同号仍会建行(绑定/流水/图谱锚点都挂在行上), 但 ON CONFLICT 不得覆盖既有
+ *  合同族行——否则后录入的运单会把真合同的类型/字段整体clobber成运单口径
+ *  (dev 实测 5 行被污染)。本体台账投影(listContracts)也以此清单过滤。 */
+export const CONTRACT_FAMILY_DOC_TYPES: readonly string[] = ['合同', '补充合同'];
+
+/** 台账 upsert 守卫(SQL 片段, 2026-09-23 数据治理): 唯一禁止的更新方向 =
+ *  既有合同族行被非合同族单据覆盖(凭证带合同号仍建锚点行, 但不得把真合同的
+ *  doc_type/document_id/title/fields 整体clobber成运单口径, dev 实测 5 行被污染)。
+ *  其余方向保持既有 upsert 语义: 合同→合同刷新 / 凭证→凭证刷新 /
+ *  合同→凭证行 = 修复转化。PG/SQLite 均用小写别名(无引号标识符不区分大小写)。 */
+export function contractLedgerUpsertWhere(): string {
+  const list = CONTRACT_FAMILY_DOC_TYPES.map((t) => `'${t}'`).join(',');
+  return `contract_ledger.doc_type NOT IN (${list}) OR excluded.doc_type IN (${list})`;
+}
+
 /**
  * Normalize a raw contract number into its canonical lookup form:
  * trim; full-width ASCII (U+FF01..U+FF5E) mapped back to half-width; full-width

@@ -17,7 +17,7 @@
 
 import type { PostgresDbContext } from './client.js';
 import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
-import { normalizeContractNo } from '../contractLedger.js';
+import { normalizeContractNo, contractLedgerUpsertWhere } from '../contractLedger.js';
 import type { ContractLedgerEntry } from '../contractLedger.js';
 import { rankContractSearch, type ContractSearchItem } from '../contractSearch.js';
 import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.js';
@@ -2015,7 +2015,8 @@ export async function upsertContractLedgerEntryPg(
        overall_confidence = EXCLUDED.overall_confidence,
        needs_review = EXCLUDED.needs_review,
        contract_type = EXCLUDED.contract_type,
-       updated_at = NOW()`,
+       updated_at = NOW()
+       WHERE ${contractLedgerUpsertWhere()}`,
     [
       id,
       entry.contractNo,

@@ -3,7 +3,7 @@ import { documents, extractions, bindings, classifications } from './schema.js';
 import type { DbContext, SqliteDbContext } from './client.js';
 import type { BlockModel, DocType, Modality, SourceSpan } from '../types.js';
 import type { SpanMatchStrength } from '../spanValidator.js';
-import { normalizeContractNo } from '../contractLedger.js';
+import { normalizeContractNo, contractLedgerUpsertWhere } from '../contractLedger.js';
 import type { ContractLedgerEntry } from '../contractLedger.js';
 import { rankContractSearch, type ContractSearchItem } from '../contractSearch.js';
 import { deriveProposedEdges, deriveProposedRelationships } from '../extraction.js';
@@ -2971,7 +2971,8 @@ export async function upsertContractLedgerEntry(
          overall_confidence = excluded.overall_confidence,
          needs_review = excluded.needs_review,
          contract_type = excluded.contract_type,
-         updated_at = datetime('now')`,
+         updated_at = datetime('now')
+         WHERE ${contractLedgerUpsertWhere()}`,
     )
     .run(
       id,

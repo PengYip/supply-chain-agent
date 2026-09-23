@@ -3,12 +3,14 @@
 // contract_ledger/documents/trade_facts 任何源表(验收 3，代码审查确认无写路径)。
 // 映射 v2(2026-09-23, v1 决策见 trade-ledger 计划「摸底结论」；2026-09-08 起静态
 // 主数据可经表单直写 trade_facts)：
-//   TradeContract                 <- contract_ledger(含 fields 中文键→注册表词汇翻译, 见 mapContractRow)
+//   TradeContract                 <- contract_ledger(合同族 doc_type 过滤 + fields
+//                                    中文键→注册表词汇翻译 + meta 溯源, 见 mapContractRow)
 //   Goods{Receipt,Delivery}Event  <- documents(doc_type 收货单/发货单) ∪ trade_facts
 //   其余 5 事件 + TradeGoods/Counterparty/OrgUnit <- trade_facts
 //     (静态 3 类主数据源=POST /api/ontology/master-data 手工登记, 列表口径=最新口径)
 import type { DbContext, PostgresDbContext } from '../pipeline/db/client.js';
 import { effectiveUserId } from '../pipeline/db/repositories.js';
+import { CONTRACT_FAMILY_DOC_TYPES } from '../pipeline/contractLedger.js';
 import { asOfBusinessTime, numberPlaceholders, asOfSystemTime, normalizeIsoUtc, type AsOfPredicate } from './asof.js';
 import { ENTITY_BUSINESS_KEYS } from './index.js';
 import type { OntologyEntityName } from './index.js';
@@ -192,6 +194,12 @@ function mapContractRow(r: Record<string, unknown>): ProjectedEntity {
       ...(contractAmount != null ? { contractAmount } : {}),
       ...(currency != null ? { currency } : {}),
     },
+    // 溯源(2026-09-23 验收缺口): 台账行来自哪份单据(doc_type/document_id),
+    // 前端据此标注来源并可跳单据详情——被凭证污染的行一眼可辨。
+    meta: {
+      docType: r['doc_type'] == null ? null : String(r['doc_type']),
+      documentId: r['document_id'] == null ? null : String(r['document_id']),
+    },
     source: 'contract_ledger',
     validAt: null,
     invalidAt: null,
@@ -200,14 +208,21 @@ function mapContractRow(r: Record<string, unknown>): ProjectedEntity {
 }
 
 async function listContracts(ctx: DbContext, uid: string): Promise<ProjectedEntity[]> {
-  const sql = `SELECT id, contract_no, title, contract_type, fields, created_at
-                 FROM contract_ledger WHERE ${USER_SCOPE_LEGACY}
+  // 合同族过滤(2026-09-23 数据治理): 台账行是绑定/流水/图谱的锚点 SSOT(凭证带
+  // 合同号也建行), 但本体「贸易合同」视图只列真合同——凭证引用行(货转单/磅单/
+  // 结算单等)混入会让合同台账大面积失真(dev 实测 121 行里 83 行非合同族)。
+  // 锚点/对端解析(findContractRowById)不过滤: ALLOCATE_TO 边仍指向凭证行。
+  const family = CONTRACT_FAMILY_DOC_TYPES.map(() => '?').join(',');
+  const sql = `SELECT id, contract_no, title, contract_type, fields, doc_type, document_id, created_at
+                 FROM contract_ledger WHERE ${USER_SCOPE_LEGACY} AND doc_type IN (${family})
                 ORDER BY created_at DESC, id LIMIT ${SOURCE_ROW_CAP}`;
   if (ctx.backend === 'postgres') {
-    const res = await (ctx as PostgresDbContext).pool.query(numberPlaceholders(sql), [uid]);
+    const res = await (ctx as PostgresDbContext).pool.query(
+      numberPlaceholders(sql), [uid, ...CONTRACT_FAMILY_DOC_TYPES]);
     return (res.rows as Array<Record<string, unknown>>).map(mapContractRow);
   }
-  const rows = ctx.sqlite.prepare(sql).all(uid) as Array<Record<string, unknown>>;
+  const rows = ctx.sqlite.prepare(sql)
+    .all(uid, ...CONTRACT_FAMILY_DOC_TYPES) as Array<Record<string, unknown>>;
   return rows.map(mapContractRow);
 }
 
@@ -513,7 +528,7 @@ async function reverseOriginCluster(
 export async function findContractRowById(
   ctx: DbContext, id: string, uid: string,
 ): Promise<ProjectedEntity | null> {
-  const sql = `SELECT id, contract_no, title, contract_type, fields, created_at
+  const sql = `SELECT id, contract_no, title, contract_type, fields, doc_type, document_id, created_at
                  FROM contract_ledger WHERE id = ? AND ${USER_SCOPE_LEGACY}`;
   if (ctx.backend === 'postgres') {
     const res = await (ctx as PostgresDbContext).pool.query(numberPlaceholders(sql), [id, uid]);

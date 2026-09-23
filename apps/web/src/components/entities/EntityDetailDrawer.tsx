@@ -33,6 +33,8 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
   const [flowEpoch, setFlowEpoch] = useState(0);
   // 血缘单据详情抽屉(2026-09-23): 关联单据行点击打开, 二级抽屉。
   const [docDetailId, setDocDetailId] = useState<string | null>(null);
+  // 来源单据详情抽屉(2026-09-23): 字段表「来源单据」行点击打开。
+  const [sourceDocId, setSourceDocId] = useState<string | null>(null);
   // 过期响应守卫: 快速切换实体/口径时, 慢的旧响应不得覆盖新数据。
   const seqRef = useRef(0);
 
@@ -198,7 +200,17 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
                 {detail.entity.meta?.documentId && (
                   <tr className="border-t border-line/40">
                     <td className="py-1.5 text-xs text-ink-soft">来源单据</td>
-                    <td className="py-1.5 text-xs text-ink">{detail.entity.meta.documentId}</td>
+                    <td className="py-1.5 text-xs text-ink">
+                      <button
+                        type="button"
+                        onClick={() => setSourceDocId(detail.entity.meta?.documentId ?? null)}
+                        className="rounded border border-line px-1.5 py-px transition-colors hover:border-primary/40 hover:text-primary"
+                        title="打开单据详情（面包屑 + 原文件预览）"
+                      >
+                        {detail.entity.meta?.docType ? `${detail.entity.meta.docType} · ` : ''}
+                        {detail.entity.meta.documentId}
+                      </button>
+                    </td>
                   </tr>
                 )}
               </tbody>
@@ -238,6 +250,9 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
         )}
         {docDetailId && (
           <DocumentDetailDrawer docId={docDetailId} onClose={() => setDocDetailId(null)} />
+        )}
+        {sourceDocId && (
+          <DocumentDetailDrawer docId={sourceDocId} onClose={() => setSourceDocId(null)} />
         )}
 
         {/* 本体关系(核销/分摊/红冲溯源等带参边；P4 关系入口补全的可见性配套) */}

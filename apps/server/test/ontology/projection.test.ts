@@ -298,6 +298,48 @@ describe('projection: TradeContract 字段映射 v2 (fields 中文键 -> 注册�
   });
 });
 
+// ---------------------------------------------------------------------------
+// 合同族过滤 + 溯源(2026-09-23 数据治理): 凭证带合同号也建台账行(锚点 SSOT),
+// 但本体「贸易合同」视图只列 合同/补充合同; meta 透出来源单据供追溯。
+// ---------------------------------------------------------------------------
+
+const insertLedgerRow = (
+  id: string, contractNo: string, docType: string, documentId: string,
+) => {
+  ctx.sqlite.prepare(
+    `INSERT INTO contract_ledger (id, contract_no, display_contract_no, doc_type, document_id,
+        title, fields, field_meta, overall_confidence, needs_review, user_id, contract_type)
+     VALUES (?, ?, ?, ?, ?, '', '{}', '{}', 1, 0, 'u1', NULL)`,
+  ).run(id, contractNo, contractNo, docType, documentId);
+};
+
+describe('projection: TradeContract 合同族过滤 + 溯源 meta', () => {
+  it('列表只列 合同/补充合同 行; 凭证行(货转单/磅单/结算单)不进本体视图', async () => {
+    insertLedgerRow('K1', 'HT-K1', '合同', 'DOC-1');
+    insertLedgerRow('K2', 'HT-K2', '补充合同', 'DOC-2');
+    insertLedgerRow('K3', 'HT-K3', '货转单', 'DOC-3');
+    insertLedgerRow('K4', 'HT-K4', '汽运磅单', 'DOC-4');
+    insertLedgerRow('K5', 'HT-K5', '结算单', 'DOC-5');
+    const res = await listProjectedEntities(ctx, 'TradeContract', {}, 'u1');
+    expect(res.total).toBe(2);
+    expect(res.items.map((e) => e.id).sort()).toEqual(['K1', 'K2']);
+  });
+
+  it('meta 溯源: 台账行带 docType/documentId, 前端可标注来源并跳单据详情', async () => {
+    insertLedgerRow('K6', 'HT-K6', '合同', 'DOC-6');
+    const res = await listProjectedEntities(ctx, 'TradeContract', {}, 'u1');
+    expect(res.items[0]!.meta?.docType).toBe('合同');
+    expect(res.items[0]!.meta?.documentId).toBe('DOC-6');
+  });
+
+  it('锚点解析不过滤: findContractRowById 仍解析凭证行(ALLOCATE_TO 对端标签依赖)', async () => {
+    insertLedgerRow('K7', 'HT-K7', '货转单', 'DOC-7');
+    const detail = await getProjectedEntityDetail(ctx, 'TradeContract', 'K7', {}, 'u1');
+    expect(detail).not.toBeNull();
+    expect(detail!.entity.meta?.docType).toBe('货转单');
+  });
+});
+
 const insertDoc = (id: string, docType: string) => {
   ctx.sqlite.prepare(
     `INSERT INTO documents (id, doc_type, modality, source_uri, block_model, user_id, review_status, parse_status)

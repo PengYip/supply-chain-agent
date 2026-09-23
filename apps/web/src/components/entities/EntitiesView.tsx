@@ -279,7 +279,14 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
                           );
                         })}
                         <td className="hidden px-3 py-2 text-xs text-ink-soft xl:table-cell">
-                          <span className="block max-w-[140px] truncate" title={row.source}>{row.source}</span>
+                          {/* 溯源(2026-09-23): 合同行标注来源单据类型, 凭证污染一眼可辨 */}
+                          {row.meta?.docType ? (
+                            <span className="block max-w-[140px] truncate" title={`来源单据：${row.meta.docType}（${row.source}）`}>
+                              <span className="rounded bg-surface px-1 py-px text-ink">{row.meta.docType}</span>
+                            </span>
+                          ) : (
+                            <span className="block max-w-[140px] truncate" title={row.source}>{row.source}</span>
+                          )}
                         </td>
                         <td className="sticky right-0 z-10 border-l border-line/60 bg-white px-3 py-2 text-right group-hover:bg-surface/40">
                           <div className="flex items-center justify-end gap-1.5">
