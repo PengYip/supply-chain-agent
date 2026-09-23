@@ -69,21 +69,27 @@ async function listPolluted(ctx: DbContext): Promise<PollutedRow[]> {
   }));
 }
 
-/** 绑定到该合同号的合同族单据(confirmed 优先, 录入新者优先)。 */
+/** 绑定到该合同号的合同族单据(confirmed 优先, 录入新者优先)。
+ *  用户口径: 台账行 user_id 为空(legacy 行) => 不加过滤(unscoped 看全部,
+ *  与 effectiveUserId 约定一致); 非空 => 三路 OR(行主视角)。 */
 async function findBoundContractDoc(
   ctx: DbContext, contractNo: string, uid: string,
 ): Promise<BoundContractDoc | null> {
   const family = CONTRACT_FAMILY_DOC_TYPES.map(() => '?').join(',');
+  const bindScope = uid === '' ? '1=1' : "(b.user_id = ? OR b.user_id = '' OR b.user_id IS NULL)";
+  const docScope = uid === '' ? '1=1' : "(d.user_id = ? OR d.user_id = '' OR d.user_id IS NULL)";
   const sql = `SELECT b.document_id AS doc_id, d.doc_type, b.status, d.created_at
                  FROM bindings b JOIN documents d ON d.id = b.document_id
                 WHERE b.contract_no = ? AND b.target_kind = 'Contract'
                   AND d.doc_type IN (${family})
-                  AND (b.user_id = ? OR b.user_id = '' OR b.user_id IS NULL)
-                  AND (d.user_id = ? OR d.user_id = '' OR d.user_id IS NULL)
+                  AND ${bindScope}
+                  AND ${docScope}
                 ORDER BY CASE b.status WHEN 'confirmed' THEN 0 ELSE 1 END,
                          d.created_at DESC
                 LIMIT 1`;
-  const rows = await query(ctx, sql, [contractNo, uid, uid, ...CONTRACT_FAMILY_DOC_TYPES]);
+  const params = [contractNo, ...CONTRACT_FAMILY_DOC_TYPES];
+  if (uid !== '') params.push(uid, uid);
+  const rows = await query(ctx, sql, params);
   const r = rows[0];
   return r ? {
     docId: String(r['doc_id']),
