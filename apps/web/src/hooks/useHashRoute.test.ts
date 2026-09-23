@@ -55,3 +55,11 @@ describe('旧路由重定向（导航整合 2026-09-08）', () => {
     expect(isRoutableView('parties')).toBe(false);
   });
 });
+
+describe('tab 深链统一（菜单重构 2026-09-23）', () => {
+  it('approvals / governance / eval 的 tab 查询参数原样透传', () => {
+    expect(parseHash('#/approvals?tab=approved')).toEqual({ view: 'approvals', params: { tab: 'approved' } });
+    expect(parseHash('#/governance?tab=permissions')).toEqual({ view: 'governance', params: { tab: 'permissions' } });
+    expect(parseHash('#/eval?tab=datasets')).toEqual({ view: 'eval', params: { tab: 'datasets' } });
+  });
+});

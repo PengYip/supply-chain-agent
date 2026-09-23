@@ -26,6 +26,7 @@ import { OverviewView } from './components/overview/OverviewView';
 import { SharePage } from './components/share/SharePage';
 import { ReviewModal } from './components/ReviewModal';
 import { subscribeContainerRefreshes, subscribeReviewRequests, type ReviewQueueItem } from './lib/reviewModal';
+import { setApprovalPendingCount } from './lib/approvalPending';
 import type { GraphFocus, GraphFocusTarget } from './components/graph/focus';
 
 /** 免登录分享路由：pathname 匹配 /share/<token> 时在认证网关之前分流，
@@ -165,6 +166,32 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
     setReviewDocId(null);
     setReviewQueue(null);
     setBatchRefreshToken((t) => t + 1);
+  }, []);
+  // 审批待办角标（菜单重构 2026-09-23）：全局 30s 轮询 pending 总数写入外部
+  // store（lib/approvalPending.ts），供侧边栏/命令面板渲染。limit=1 只取 total，
+  // 失败静默保留上次值 —— 角标是增强信息，不应打断任何视图；用户在审批中心
+  // 处理完待办时由视图侧回写，即时生效。
+  useEffect(() => {
+    let alive = true;
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/approval/list?status=pending&limit=1');
+        if (!res.ok) return;
+        const data = (await res.json()) as { total?: number; items?: unknown[] };
+        if (!alive) return;
+        setApprovalPendingCount(
+          typeof data.total === 'number' ? data.total : (data.items?.length ?? 0),
+        );
+      } catch {
+        /* 网络抖动等场景静默降级，保留上次角标值 */
+      }
+    };
+    void poll();
+    const timer = setInterval(() => { void poll(); }, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
   }, []);
   // 导航入口的统一跳转：手动进入图谱/绑定页时清掉旧的外部定位，避免残留
   // 定位覆盖用户操作（openInGraph/openInBindings/openBindingsForDoc 直接调

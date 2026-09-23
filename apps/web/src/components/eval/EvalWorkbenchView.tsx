@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import clsx from 'clsx'
 import { PageHeader } from '../shell/PageHeader'
+import { useHashRoute } from '../../hooks/useHashRoute'
 import { EvalRunsList } from './EvalRunsList'
 import { EvalRunReport } from './EvalRunReport'
 import { EvalEpisodeDetail } from './EvalEpisodeDetail'
@@ -17,8 +18,13 @@ type Page =
 
 type Tab = 'results' | 'datasets'
 
+/** 评估工作台：tab 落 hash 参数（#/eval?tab=datasets，菜单重构 2026-09-23），
+ *  与 projects/ontology/approvals/governance 的深链口径统一；runs/report/episode
+ *  等结果内页仍为本地状态（面包屑回退式导航，不占浏览器历史）。 */
 export function EvalWorkbenchView() {
-  const [tab, setTab] = useState<Tab>('results')
+  const { route, navigate } = useHashRoute()
+  const tab: Tab = route.params['tab'] === 'datasets' ? 'datasets' : 'results'
+  const setTab = (t: Tab) => navigate('eval', t === 'results' ? {} : { tab: t }, { replace: true })
   const [nav, setNav] = useState<Page>({ page: 'runs' })
   const [pendingDataset, setPendingDataset] = useState<string | null>(null)
   const { runs, activeRunId, loading, error, refresh } = useEvalRuns()

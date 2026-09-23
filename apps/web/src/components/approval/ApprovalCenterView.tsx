@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
+import clsx from 'clsx';
 import { ApprovalDetailDrawer } from './ApprovalDetailDrawer';
+import { useHashRoute } from '../../hooks/useHashRoute';
+import { PageHeader } from '../shell/PageHeader';
+import { setApprovalPendingCount } from '../../lib/approvalPending';
 
 type Tab = 'pending' | 'approved' | 'denied';
 interface ApprovalItem {
@@ -17,8 +21,16 @@ const TABS: Array<{ id: Tab; label: string }> = [
 
 const fmt = (iso: string) => new Date(iso).toLocaleString('zh-CN', { hour12: false });
 
+/** 审批中心（菜单重构 2026-09-23）：tab 落 hash 参数（#/approvals?tab=approved，
+ *  与 projects/ontology 的深链口径统一，replace 切换不灌爆历史）；加载 pending
+ *  tab 时把 total 回写审批待办角标 store，处理完即时刷新侧边栏角标。 */
 export function ApprovalCenterView() {
-  const [tab, setTab] = useState<Tab>('pending');
+  const { route, navigate } = useHashRoute();
+  const tab: Tab = TABS.some((t) => t.id === route.params['tab'])
+    ? (route.params['tab'] as Tab)
+    : 'pending';
+  const setTab = (t: Tab) =>
+    navigate('approvals', t === 'pending' ? {} : { tab: t }, { replace: true });
   const [items, setItems] = useState<ApprovalItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -29,7 +41,13 @@ export function ApprovalCenterView() {
     try {
       const res = await fetch(`/api/approval/list?status=${tab}&limit=100`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setItems((await res.json()).items ?? []);
+      const data = (await res.json()) as { items?: ApprovalItem[]; total?: number };
+      setItems(data.items ?? []);
+      if (tab === 'pending') {
+        setApprovalPendingCount(
+          typeof data.total === 'number' ? data.total : (data.items?.length ?? 0),
+        );
+      }
       setError(null);
     } catch (e) {
       // 轮询场景下静默失败会让用户对着过期列表毫无察觉, 必须显式提示。
@@ -44,19 +62,33 @@ export function ApprovalCenterView() {
   }, [load]);
 
   return (
-    <div className="flex h-full flex-col gap-4 p-6">
-      <div className="flex items-center gap-2">
-        {TABS.map((t) => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className={`rounded-md px-3 py-1.5 text-sm ${tab === t.id ? 'bg-primary text-white' : 'bg-surface text-ink-soft hover:bg-line/30'}`}>
-            {t.label}
-          </button>
-        ))}
-        {loading && <span className="text-xs text-ink-soft">刷新中...</span>}
-        {error && <span className="text-xs text-danger">刷新失败: {error}</span>}
-      </div>
-
-      <div className="flex-1 overflow-y-auto">
+    <div className="flex h-full flex-col bg-surface">
+      <PageHeader
+        tabs={
+          <div className="flex items-center gap-1 rounded-lg bg-surface p-0.5">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={clsx(
+                  'rounded-md px-3 py-1 text-xs transition-colors',
+                  tab === t.id ? 'bg-white font-medium text-primary shadow-sm' : 'text-ink-soft hover:text-ink',
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        }
+        actions={
+          <>
+            {loading && <span className="text-xs text-ink-soft">刷新中...</span>}
+            {error && <span className="text-xs text-danger">刷新失败: {error}</span>}
+          </>
+        }
+      />
+      <div className="flex-1 overflow-y-auto p-6">
         {items.length === 0 && <p className="py-10 text-center text-sm text-ink-soft">暂无票据</p>}
         {items.map((it) => (
           <button key={it.id} onClick={() => setSelectedId(it.id)}
