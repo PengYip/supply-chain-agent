@@ -18,6 +18,18 @@ const PAGE_SIZE = 20; // 模块级常量
 /** 事件实体基础过滤(2026-09-08)：业务时间范围 + 金额范围(仅注册表含 amount 字段与否决定显隐)。 */
 const EMPTY_FILTERS = { validFrom: '', validTo: '', amountMin: '', amountMax: '' };
 
+/* -- 台账表格列宽策略（2026-09-23 宽表修复，反馈：1366 笔记本下 13 列合同表超宽截断）--
+ * 短枚举/日期列 nowrap 防折行；长文本列（合同号/标题/名称类）内容截断 + title
+ * 悬浮全显（完整值在详情抽屉始终可查）；expireDate 与来源列 xl 以下隐藏。
+ * 标识列左冻结 + 操作列右冻结：表格横向滚动时行身份与操作永远可见。 */
+const NOWRAP_FIELDS = new Set([
+  'contractType', 'direction', 'currency', 'payType', 'eventBizType', 'allocateMethod', 'unit',
+]);
+const LONG_TEXT_FIELDS = new Set([
+  'contractNo', 'title', 'buyerName', 'sellerName', 'name', 'uscc', 'spec', 'remark', 'counterparty', 'projectNo',
+]);
+const isDateField = (f: string) => /date|At$/.test(f);
+
 export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocusTarget) => void }) {
   const [schema, setSchema] = useState<OntologyEntitySchemaDTO[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -206,15 +218,24 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
               </div>
             )}
             <div className="overflow-x-auto rounded-lg border border-line bg-white">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[880px] text-sm">
                 <thead>
                   <tr className="border-b border-line text-left text-xs text-ink-soft">
-                    <th className="px-3 py-2 font-medium">标识</th>
+                    <th className="sticky left-0 z-10 border-r border-line/60 bg-white px-3 py-2 font-medium">标识</th>
                     {active.ownFields.map((f) => (
-                      <th key={f} className="px-3 py-2 font-medium">{f}</th>
+                      <th
+                        key={f}
+                        className={clsx(
+                          'px-3 py-2 font-medium',
+                          (NOWRAP_FIELDS.has(f) || isDateField(f)) && 'whitespace-nowrap',
+                          f === 'expireDate' && 'hidden xl:table-cell',
+                        )}
+                      >
+                        {f}
+                      </th>
                     ))}
-                    <th className="px-3 py-2 font-medium">来源</th>
-                    <th className="px-3 py-2 font-medium" aria-label="操作" />
+                    <th className="hidden px-3 py-2 font-medium xl:table-cell">来源</th>
+                    <th className="sticky right-0 z-10 bg-white px-3 py-2 font-medium" aria-label="操作" />
                   </tr>
                 </thead>
                 <tbody>
@@ -224,11 +245,11 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
                       ? (row.fields['formerNames'] as unknown[]).filter((v): v is string => typeof v === 'string')
                       : [];
                     return (
-                      <tr key={row.id} onClick={() => setDetailId(row.id)} className={clsx('cursor-pointer border-b border-line/60 last:border-b-0 hover:bg-surface/40')}>
-                        <td className="px-3 py-2 font-medium text-ink">
-                          {row.label}
+                      <tr key={row.id} onClick={() => setDetailId(row.id)} className={clsx('group cursor-pointer border-b border-line/60 last:border-b-0 hover:bg-surface/40')}>
+                        <td className="sticky left-0 z-10 border-r border-line/60 bg-white px-3 py-2 font-medium text-ink group-hover:bg-surface/40">
+                          <div className="max-w-[180px] truncate" title={row.label}>{row.label}</div>
                           {formerNames.length > 0 && (
-                            <div className="mt-0.5 text-xs font-normal text-ink-soft" title="曾用名（supersede 更名史）">
+                            <div className="mt-0.5 max-w-[180px] truncate text-xs font-normal text-ink-soft" title={`曾用名（supersede 更名史）：${formerNames.join('、')}`}>
                               曾用名：{formerNames.join('、')}
                             </div>
                           )}
@@ -238,20 +259,35 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
                           const isNegAmount = f === 'amount' && negative;
                           // 敏感字段列脱敏（spec 主体身份 §3b，统一走 mask helper）
                           const shown = f === 'bankAccount' ? maskBankAccount(v) : v;
+                          const text = shown == null || shown === '' ? '—' : String(shown);
                           return (
-                            <td key={f} className={clsx('px-3 py-2 tabular-nums', isNegAmount ? 'text-danger' : 'text-ink')}>
-                              {shown == null || shown === '' ? '—' : String(shown)}
+                            <td
+                              key={f}
+                              className={clsx(
+                                'px-3 py-2 tabular-nums',
+                                isNegAmount ? 'text-danger' : 'text-ink',
+                                (NOWRAP_FIELDS.has(f) || isDateField(f) || f === 'amount') && 'whitespace-nowrap',
+                                f === 'expireDate' && 'hidden xl:table-cell',
+                              )}
+                            >
+                              {LONG_TEXT_FIELDS.has(f) ? (
+                                <span className="block max-w-[160px] truncate" title={text}>{text}</span>
+                              ) : (
+                                text
+                              )}
                             </td>
                           );
                         })}
-                        <td className="px-3 py-2 text-xs text-ink-soft">{row.source}</td>
-                        <td className="px-3 py-2 text-right">
+                        <td className="hidden px-3 py-2 text-xs text-ink-soft xl:table-cell">
+                          <span className="block max-w-[140px] truncate" title={row.source}>{row.source}</span>
+                        </td>
+                        <td className="sticky right-0 z-10 border-l border-line/60 bg-white px-3 py-2 text-right group-hover:bg-surface/40">
                           <div className="flex items-center justify-end gap-1.5">
                             {activeMaster?.name === 'Counterparty' && (
                               <button
                                 type="button"
                                 onClick={(e) => { e.stopPropagation(); setChangeRow(row); }}
-                                className="rounded border border-line px-2 py-0.5 text-xs text-ink-soft transition-colors hover:border-primary/40 hover:text-primary"
+                                className="whitespace-nowrap rounded border border-line px-2 py-0.5 text-xs text-ink-soft transition-colors hover:border-primary/40 hover:text-primary"
                               >
                                 变更
                               </button>
@@ -259,7 +295,7 @@ export function EntitiesView({ onOpenInGraph }: { onOpenInGraph?: (t: GraphFocus
                             <button
                               type="button"
                               onClick={(e) => { e.stopPropagation(); askAgent(row); }}
-                              className="rounded border border-line px-2 py-0.5 text-xs text-ink-soft transition-colors hover:border-primary/40 hover:text-primary"
+                              className="whitespace-nowrap rounded border border-line px-2 py-0.5 text-xs text-ink-soft transition-colors hover:border-primary/40 hover:text-primary"
                             >
                               问 Agent
                             </button>
