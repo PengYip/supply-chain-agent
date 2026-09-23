@@ -376,6 +376,7 @@ describe('projection: events <- trade_facts + receipt/delivery docs', () => {
     const docRow = res.items.find((e) => e.id === 'D1')!;
     expect(docRow.source).toBe('documents');
     expect(docRow.meta?.['sourceUri']).toBe('/ingest/x.pdf');
+    expect(docRow.meta?.['docType']).toBe('收货单'); // 溯源标注(2026-09-23): 行 id 即 docId, 抽屉据此开单据详情
     expect(docRow.fields).toEqual({}); // documents 无事件字段 -> 留空渲染
     expect(res.items.some((e) => e.id === 'D2')).toBe(false);
     expect(res.items.some((e) => e.id === 'D3')).toBe(false);

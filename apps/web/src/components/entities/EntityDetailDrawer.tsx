@@ -58,6 +58,13 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
   useEffect(() => { void load(); }, [load]);
 
   const hasTimeline = detail != null && detail.timeline.length > 0;
+  // 事件溯源(2026-09-23): 事实行挂 meta.documentId -> 来源单据; 单据直投事件行
+  // (source='documents', 收货单/发货单本身)实体 id 即 docId -> 原始单据(自身)。
+  const sourceDocRef = detail?.entity.meta?.documentId
+    ?? (detail?.entity.source === 'documents' ? detail.entity.id : null)
+    ?? null;
+  const sourceDocIsSelf = detail?.entity.meta?.documentId == null && sourceDocRef != null;
+  const sourceDocLabel = detail?.entity.meta?.docType ?? null;
   // attributes 受控袋（TradeGoods，spec 决策 #8） -> 扩展属性键值区渲染。
   const attributesEntries = Object.entries(
     detail != null && detail.entity.fields['attributes'] != null
@@ -197,18 +204,18 @@ export function EntityDetailDrawer({ type, typeLabel, typeDescription, ownFields
                   <td className="py-1.5 text-xs text-ink-soft">ingestedAt</td>
                   <td className="py-1.5 text-xs text-ink-soft">{detail.entity.ingestedAt ?? '—'}</td>
                 </tr>
-                {detail.entity.meta?.documentId && (
+                {sourceDocRef != null && (
                   <tr className="border-t border-line/40">
-                    <td className="py-1.5 text-xs text-ink-soft">来源单据</td>
+                    <td className="py-1.5 text-xs text-ink-soft">{sourceDocIsSelf ? '原始单据' : '来源单据'}</td>
                     <td className="py-1.5 text-xs text-ink">
                       <button
                         type="button"
-                        onClick={() => setSourceDocId(detail.entity.meta?.documentId ?? null)}
+                        onClick={() => setSourceDocId(sourceDocRef)}
                         className="rounded border border-line px-1.5 py-px transition-colors hover:border-primary/40 hover:text-primary"
                         title="打开单据详情（面包屑 + 原文件预览）"
                       >
-                        {detail.entity.meta?.docType ? `${detail.entity.meta.docType} · ` : ''}
-                        {detail.entity.meta.documentId}
+                        {sourceDocLabel ? `${sourceDocLabel} · ` : ''}
+                        {sourceDocRef}
                       </button>
                     </td>
                   </tr>

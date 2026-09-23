@@ -273,12 +273,15 @@ function mapDocRow(
   const docType = String(r['doc_type'] ?? '');
   const id = String(r['id']);
   // documents 表无金额/数量列：事件自有字段源缺失 -> 不出现，列表列渲染空。
+  // meta.docType(2026-09-23): 单据直投事件行的溯源标注(行 id 即 docId,
+  // 详情抽屉据此打开单据详情——事件溯源缺口的修复)。
   return {
     id,
     entityType,
     label: `${docType} ${id.slice(0, 8)}`,
     fields: {},
     meta: {
+      docType: docType !== '' ? docType : null,
       sourceUri: r['source_uri'] == null ? null : String(r['source_uri']),
       reviewStatus: r['review_status'] == null ? null : String(r['review_status']),
     },
