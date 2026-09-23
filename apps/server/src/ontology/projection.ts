@@ -308,10 +308,14 @@ export function businessKeyOf(entityType: string, p: Record<string, unknown>): s
 
 /** Item 4 起邻接穿透复用：trade_facts 行 -> 展示实体。 */
 export function factToEntity(row: TradeFactRow): ProjectedEntity {
+  // 收/发货事件无注册表业务键(ENTITY_BUSINESS_KEYS 未登记, 数量是 number 不宜作键)
+  // -> 裸 TF id 在台账/图谱不可读(2026-09-23 验收: 中间事件层看不懂, 误读为
+  // "轨道衡直接绑合同")。合成可读 label: 方向 + 数量单位 + 业务日期。
+  const label = receiptDeliveryLabel(row) ?? businessKeyOf(row.entityType, row.payload) ?? row.id;
   return {
     id: row.id,
     entityType: row.entityType as OntologyEntityName,
-    label: businessKeyOf(row.entityType, row.payload) ?? row.id,
+    label,
     fields: row.payload,
     source: 'trade_facts',
     // P3 凭证据源: 来源单据 id 走 meta(非注册表实体字段, 详情抽屉单列展示)。
@@ -320,6 +324,22 @@ export function factToEntity(row: TradeFactRow): ProjectedEntity {
     invalidAt: row.invalidAt,
     ingestedAt: row.ingestedAt,
   };
+}
+
+/** 收/发货事件可读 label: "收货 3021.6吨 2026-09-12"; 数量缺失退日期, 全缺退方向词。 */
+export function receiptDeliveryLabel(row: TradeFactRow): string | null {
+  if (row.entityType !== 'GoodsReceiptEvent' && row.entityType !== 'GoodsDeliveryEvent') {
+    return null;
+  }
+  const dir = row.entityType === 'GoodsReceiptEvent' ? '收货' : '发货';
+  const qty = row.payload['quantity'];
+  const unit = typeof row.payload['unit'] === 'string' && row.payload['unit'] !== ''
+    ? row.payload['unit'] : '';
+  const date = row.validAt != null ? row.validAt.slice(0, 10) : '';
+  if (typeof qty === 'number') {
+    return `${dir} ${qty}${unit} ${date}`.trim();
+  }
+  return `${dir} ${date}`.trim();
 }
 
 async function listFacts(ctx: DbContext, type: OntologyEntityName, uid: string): Promise<ProjectedEntity[]> {

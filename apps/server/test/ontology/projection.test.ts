@@ -265,6 +265,37 @@ describe('projection: TradeContract 字段映射 v2 (fields 中文键 -> 注册�
     // 交货日期 != 签约日期, 不得映射 signDate
     expect(f['signDate']).toBeUndefined();
   });
+
+  it('收/发货事件可读 label(2026-09-23): 方向+数量单位+日期, 替代裸 TF id', async () => {
+    await insertTradeFact(ctx, {
+      entityType: 'GoodsReceiptEvent',
+      payload: { eventBizType: '正向', quantity: 3021.6, unit: '吨' },
+      validAt: '2026-09-12T00:00:00.000Z', createdBy: 'materializer',
+    }, 'u1');
+    await insertTradeFact(ctx, {
+      entityType: 'GoodsDeliveryEvent',
+      payload: { eventBizType: '正向', quantity: 800, unit: '吨' },
+      validAt: '2026-09-15T00:00:00.000Z', createdBy: 'materializer',
+    }, 'u1');
+    await insertTradeFact(ctx, {
+      // 数量缺失(amount/currency 配对合法): label 退 方向+日期
+      entityType: 'GoodsReceiptEvent',
+      payload: { eventBizType: '正向', quantity: 5, unit: '吨' },
+      validAt: '2026-09-18T00:00:00.000Z', createdBy: 'materializer',
+    }, 'u1');
+    const res = await listProjectedEntities(ctx, 'GoodsReceiptEvent', {}, 'u1');
+    expect(res.items.some((e) => e.label === '收货 3021.6吨 2026-09-12')).toBe(true);
+    const del = await listProjectedEntities(ctx, 'GoodsDeliveryEvent', {}, 'u1');
+    expect(del.items.some((e) => e.label === '发货 800吨 2026-09-15')).toBe(true);
+    // 其余实体不受影响: 付款事件 label 仍是业务键(contractNo)
+    await insertTradeFact(ctx, {
+      entityType: 'PaymentEvent',
+      payload: { eventBizType: '正向', amount: 100, currency: 'CNY', payType: '预付', contractNo: 'HT-L1' },
+      validAt: '2026-09-12', createdBy: 't',
+    }, 'u1');
+    const pay = await listProjectedEntities(ctx, 'PaymentEvent', {}, 'u1');
+    expect(pay.items[0]!.label).toBe('HT-L1');
+  });
 });
 
 const insertDoc = (id: string, docType: string) => {
