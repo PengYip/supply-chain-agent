@@ -14,7 +14,6 @@ import type { Anchors, ContractOption, OverviewDoc } from '../../hooks/useBindin
 import type { TemplateContext } from '../../api/templateContext';
 import type { WorkbenchRow } from './BindingsView';
 import { TemplateBindingForm } from './TemplateBindingForm';
-import { LegacyManualForm } from './LegacyManualForm';
 
 function RouteBadge({ route }: { route: 'auto_rule' | 'human' | 'none' }) {
   const cfg =
@@ -329,7 +328,7 @@ export function CandidatePanel({
               <>
                 {!compatNoticeDismissed && (
                   <div className="flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-ink">
-                    <span className="min-w-0 flex-1">模板上下文加载失败，已切换到兼容模式</span>
+                    <span className="min-w-0 flex-1">模板上下文加载失败</span>
                     <button
                       type="button"
                       onClick={onRetryTemplate}
@@ -347,37 +346,12 @@ export function CandidatePanel({
                     </button>
                   </div>
                 )}
-                {/* Legacy 降级路径: 旧表单只能绑合同, 台账空仍应提示 */}
-                {contracts.length === 0 ? (
-                  contractsError ? (
-                    <div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] leading-5 text-ink">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="min-w-0 flex-1 break-all">台账加载失败：{contractsError}</span>
-                        <button
-                          type="button"
-                          onClick={onRetryContracts}
-                          className="flex shrink-0 items-center gap-1 text-primary hover:underline"
-                        >
-                          <RefreshCw className="h-3 w-3" aria-hidden />
-                          重试
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="rounded-md bg-surface px-3 py-2 text-[12px] leading-5 text-ink-soft">
-                      合同台账为空，请先上传合同类文档并完成抽取
-                    </div>
-                  )
-                ) : (
-                  <LegacyManualForm
-                    contracts={contracts}
-                    establishedContracts={establishedContracts}
-                    isExecutionDoc={isExecutionDoc}
-                    pending={manualPending}
-                    onManualCreate={onManualCreate}
-                    onCancel={() => setManualOpen(false)}
-                  />
-                )}
+                {/* 兼容模式旧表单已下线（菜单重构 2026-09-23 二期）：手动绑定依赖
+                    模板上下文，失败只能重试；仍失败时可到「对话」让 Agent 建立绑定。 */}
+                <div className="rounded-md bg-surface px-3 py-2 text-[12px] leading-5 text-ink-soft">
+                  手动绑定需要模板上下文，请点击上方「重试」重新加载；
+                  仍失败时可在「对话」中让 Agent 建立绑定。
+                </div>
               </>
             ) : templateLoading ? (
               <div className="space-y-2">

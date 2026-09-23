@@ -13,7 +13,9 @@ import { PageHeader } from '../shell/PageHeader'
 
 /** 用量审计页（2026-08-31 spec）：LLM 与 OCR/解析调用的统计与明细。
  *  - 顶部：7d/30d 切换 + LLM/OCR 汇总卡片
- *  - 下部：两张明细表（LLM 行可展开看截断正文；OCR 行展示后端/页数/耗时） */
+ *  - 下部：两张明细表（LLM 行可展开看截断正文；OCR 行展示后端/页数/耗时）
+ *  - embedded（菜单重构 2026-09-23 二期）：作为治理后台 usage tab 内嵌时
+ *    隐藏自身标题/副标题，只保留范围切换与刷新工具条。 */
 
 const PAGE_SIZE = 50
 
@@ -59,7 +61,7 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
   )
 }
 
-export const AuditView: React.FC = () => {
+export const AuditView: React.FC<{ embedded?: boolean }> = ({ embedded = false }) => {
   const [range, setRange] = useState<'7d' | '30d'>('7d')
   const [summary, setSummary] = useState<AuditSummary | null>(null)
   const [loading, setLoading] = useState(true)
@@ -139,8 +141,8 @@ export const AuditView: React.FC = () => {
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-surface h-full">
       <PageHeader
-        title="用量审计"
-        subtitle="LLM 与 OCR 调用统计及明细"
+        title={embedded ? undefined : '用量审计'}
+        subtitle={embedded ? undefined : 'LLM 与 OCR 调用统计及明细'}
         actions={
           <div className="flex items-center gap-2">
             <div className="flex rounded-lg border overflow-hidden text-xs">

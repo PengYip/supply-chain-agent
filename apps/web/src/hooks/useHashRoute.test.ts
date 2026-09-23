@@ -20,7 +20,7 @@ describe('parseHash 默认视图（roadmap Item 7）', () => {
   });
 });
 
-describe('旧路由重定向（导航整合 2026-09-08）', () => {
+describe('旧路由重定向（导航整合 2026-09-08 / 菜单重构 2026-09-23 二期）', () => {
   it('#/entities 与 #/graph 重定向到本体视图对应 tab', () => {
     expect(parseHash('#/entities')).toEqual({ view: 'ontology', params: { tab: 'ledger' } });
     expect(parseHash('#/graph')).toEqual({ view: 'ontology', params: { tab: 'graph' } });
@@ -61,5 +61,25 @@ describe('tab 深链统一（菜单重构 2026-09-23）', () => {
     expect(parseHash('#/approvals?tab=approved')).toEqual({ view: 'approvals', params: { tab: 'approved' } });
     expect(parseHash('#/governance?tab=permissions')).toEqual({ view: 'governance', params: { tab: 'permissions' } });
     expect(parseHash('#/eval?tab=datasets')).toEqual({ view: 'eval', params: { tab: 'datasets' } });
+  });
+});
+
+describe('菜单重构二期平移（2026-09-23）', () => {
+  it('#/ontology?tab=gaps 参数级平移到勾稽视图（tab 丢弃，其余透传）', () => {
+    expect(parseHash('#/ontology?tab=gaps')).toEqual({ view: 'gaps', params: {} });
+    expect(parseHash('#/ontology?tab=gaps&type=Contract')).toEqual({ view: 'gaps', params: { type: 'Contract' } });
+    expect(canonicalHash('#/ontology?tab=gaps')).toBe('#/gaps');
+    // 本体视图自身不受影响：其他 tab 值照常解析
+    expect(parseHash('#/ontology?tab=graph')).toEqual({ view: 'ontology', params: { tab: 'graph' } });
+  });
+  it('#/audit 重定向到治理后台用量 tab，audit 不再是一级视图', () => {
+    expect(parseHash('#/audit')).toEqual({ view: 'governance', params: { tab: 'usage' } });
+    expect(canonicalHash('#/audit')).toBe('#/governance?tab=usage');
+    expect(isRoutableView('audit')).toBe(false);
+    expect(isRoutableView('gaps')).toBe(true);
+  });
+  it('canonicalHash 对规范 hash 返回 null（幂等不重写）', () => {
+    expect(canonicalHash('#/chat?session=s1')).toBeNull();
+    expect(canonicalHash('#/gaps')).toBeNull();
   });
 });

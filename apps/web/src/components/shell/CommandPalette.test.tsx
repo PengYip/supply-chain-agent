@@ -27,10 +27,11 @@ describe('CommandPalette', () => {
     render(<CommandPalette open current="overview" onClose={vi.fn()} onNavigate={onNavigate} />);
 
     const input = screen.getByPlaceholderText('搜索视图，如：审批 / 图谱 / 核销');
+    // 用量审计并入治理后台（2026-09-23 二期）：OCR/LLM 检索词随迁移
     fireEvent.change(input, { target: { value: 'OCR' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
-    expect(onNavigate).toHaveBeenCalledWith('audit');
+    expect(onNavigate).toHaveBeenCalledWith('governance');
     cleanup();
   });
 

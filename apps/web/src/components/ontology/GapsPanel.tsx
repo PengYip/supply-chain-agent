@@ -6,9 +6,10 @@ import {
   type GapContractRowDTO, type GapGroupDTO, type GapItemDTO, type GapsReportDTO,
 } from '../../api/ontology';
 
-/** 勾稽缺口面板（business-loop Wave 4，2026-09-20）：GET /api/ontology/gaps 的只读投影，
- *  挂在本体视图「勾稽缺口」tab。三段式：四块 tiles 摘要 -> 四组可折叠明细（行=勾稽项）
- *  -> 按合同下钻（Wave 8：合同号/侧别/收发量/结算票款累计，默认收起）-> 勾稽校验说明
+/** 勾稽缺口面板（business-loop Wave 4，2026-09-20；菜单重构 2026-09-23 二期
+ *  自本体 tab 提级为顶层视图 #/gaps）：GET /api/ontology/gaps 的只读投影。
+ *  三段式：四块 tiles 摘要 -> 四组可折叠明细（行=勾稽项）-> 按合同下钻
+ *  （Wave 8：合同号/侧别/收发量/结算票款累计，默认收起）-> 勾稽校验说明
  *  （默认收起）。qty/amt 为 null 表示该口径数据未登记（missingInputs 说明原因），
  *  显示「待登记」弱化态，不造数（后端 R19 口径的前端承诺）。 */
 

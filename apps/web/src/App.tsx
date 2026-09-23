@@ -16,9 +16,9 @@ import { EvalWorkbenchView } from './components/eval/EvalWorkbenchView';
 import { BindingsView } from './components/bindings/BindingsView';
 import { WriteoffView } from './components/writeoff/WriteoffView';
 import { FavoritesView } from './components/favorites/FavoritesView';
-import { AuditView } from './components/audit/AuditView';
 import { ProjectsView } from './components/projects/ProjectsView';
 import { OntologyView } from './components/ontology/OntologyView';
+import { GapsPanel } from './components/ontology/GapsPanel';
 import { ReviewWorkbench } from './components/review-workbench/ReviewWorkbench';
 import { ApprovalCenterView } from './components/approval/ApprovalCenterView';
 import { GovernanceView } from './components/governance/GovernanceView';
@@ -112,12 +112,15 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
   // activeSessionId 的旧双源已消除，popstate 时自动从 hash 恢复。
   const { route, navigate } = useHashRoute();
   const view = route.view;
-  // 文件面板常驻右栏（open 只控宽不卸载），仅对话视图默认展开：进入 chat 自动
-  // 展开，切到其他视图自动收起；同视图内仍可用顶栏按钮手动开合。
-  const [fileDrawerOpen, setFileDrawerOpen] = useState(() => view === 'chat');
+  // 文件面板常驻右栏（open 只控宽不卸载）：仅对话视图默认展开；任务中心
+  // 「录入新单据」经 #/bindings?files=1 哨兵联动展开（parties=1 同模式，
+  // 菜单重构 2026-09-23 二期），进入绑定页即可直接上传。同视图内仍可用
+  // 顶栏按钮手动开合；切到其他视图自动收起。
+  const filesSentinel = view === 'bindings' && route.params.files === '1';
+  const [fileDrawerOpen, setFileDrawerOpen] = useState(() => view === 'chat' || filesSentinel);
   useEffect(() => {
-    setFileDrawerOpen(view === 'chat');
-  }, [view]);
+    setFileDrawerOpen(view === 'chat' || (view === 'bindings' && route.params.files === '1'));
+  }, [view, route.params.files]);
   // 'new' 是「从台账/外部跳入待新建」哨兵：归一为无活动会话，首条消息由 ask 注入。
   const activeSessionId =
     route.params.session && route.params.session !== 'new' ? route.params.session : null;
@@ -370,8 +373,8 @@ function AppSession({ user, onSignOut }: { user: SessionUser; onSignOut: () => v
         <GovernanceView />
       ) : view === 'eval' ? (
         <EvalWorkbenchView />
-      ) : view === 'audit' ? (
-        <AuditView />
+      ) : view === 'gaps' ? (
+        <GapsPanel />
       ) : view === 'review' ? (
         <ReviewWorkbench docId={route.params.docId} />
       ) : null}

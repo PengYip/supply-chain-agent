@@ -3,23 +3,21 @@ import { useHashRoute } from '../../hooks/useHashRoute';
 import { PageHeader } from '../shell/PageHeader';
 import { EntitiesView } from '../entities/EntitiesView';
 import { GraphView } from '../graph/GraphView';
-import { GapsPanel } from './GapsPanel';
 import type { GraphFocus, GraphFocusTarget } from '../graph/focus';
 
-type OntologyTab = 'ledger' | 'graph' | 'gaps';
+type OntologyTab = 'ledger' | 'graph';
 
 const TABS: Array<{ key: OntologyTab; label: string }> = [
   { key: 'ledger', label: '台账' },
   { key: 'graph', label: '图谱' },
-  { key: 'gaps', label: '勾稽缺口' },
 ];
 
 /** 本体视图（导航整合 2026-09-08）：实体台账与图谱合一的 tab 容器，
  *  tab 落 hash 参数（#/ontology?tab=graph，缺省台账）；旧 /entities 与 /graph
  *  路由在 parseHash 重定向至此。图谱 tab 迁入完整 GraphView，保留
  *  文档图谱/本体穿透双模式并按 focus 类型自动切换（协调者定案 2026-09-08）。
- *  勾稽缺口 tab（business-loop Wave 4，2026-09-20）：四组勾稽缺口报表只读视图，
- *  与台账同源（trade_facts/ontology_edges），挂此处不新增顶层导航。 */
+ *  勾稽缺口 tab 已提级为顶层视图 #/gaps（菜单重构 2026-09-23 二期），
+ *  旧 #/ontology?tab=gaps 由 parseHash 参数级平移不断链。 */
 export function OntologyView({
   graphFocus = null,
   onOpenInGraph,
@@ -30,11 +28,7 @@ export function OntologyView({
   onOpenInBindings?: (docId: string) => void;
 }) {
   const { route, navigate } = useHashRoute();
-  const tab: OntologyTab = route.params['tab'] === 'graph'
-    ? 'graph'
-    : route.params['tab'] === 'gaps'
-      ? 'gaps'
-      : 'ledger';
+  const tab: OntologyTab = route.params['tab'] === 'graph' ? 'graph' : 'ledger';
   const setTab = (t: OntologyTab) => navigate('ontology', { tab: t }, { replace: true });
 
   return (
@@ -63,7 +57,6 @@ export function OntologyView({
       <div className="min-h-0 flex-1">
         {tab === 'ledger' && <EntitiesView onOpenInGraph={onOpenInGraph} />}
         {tab === 'graph' && <GraphView focus={graphFocus} onOpenInBindings={onOpenInBindings} />}
-        {tab === 'gaps' && <GapsPanel />}
       </div>
     </div>
   );
